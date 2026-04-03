@@ -1,6 +1,6 @@
 # Atlas Architecture
 
-**Last updated: 2026-04-03**
+**Last updated: 2026-04-03** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md)
 
 Atlas is a local AI operator. A Go binary runs as a launchd daemon (`Atlas`), serves a web UI, and connects to any supported AI provider. A Bubbletea TUI (`atlas`) provides a terminal interface. No Swift required.
 
@@ -65,7 +65,8 @@ Atlas/
 │       ├── forge/
 │       │   ├── types.go                # ForgeProposal, ResearchingItem, ProposeRequest
 │       │   ├── store.go                # forge-proposals.json + forge-installed.json
-│       │   └── service.go              # AI research pipeline, in-memory researching list
+│       │   ├── service.go              # AI research pipeline, in-memory researching list
+│       │   └── codegen.go              # GenerateAndInstallCustomSkill — skill.json + Python run script
 │       ├── logstore/
 │       │   ├── sink.go                 # In-memory ring buffer (500 entries) — backs GET /logs
 │       │   └── action_log.go           # ActionLogEntry type, WriteAction helper
@@ -239,7 +240,8 @@ success/failure, artifacts, warnings, and dry-run support. Use one or the other.
 | **Custom** | User-installed executable (`~/…/ProjectAtlas/skills/<id>/run`), called via subprocess JSON protocol | `custom` |
 
 Custom skills are registered at startup by `LoadCustomSkills()` and appear in
-`GET /skills` with `"source": "custom"`. The model cannot distinguish them from built-ins.
+`GET /skills` with `"source": "custom"` or `"source": "forge"` (for Forge-generated
+skills). The model cannot distinguish them from built-ins.
 
 **Subprocess protocol (custom skills):**
 ```
@@ -248,6 +250,9 @@ stdout: {"success": true,  "output": "…"}               ← one JSON line
 stdout: {"success": false, "error":  "…"}               ← on failure
 ```
 Process is spawned fresh per call with a 30s deadline. Output is capped at 1 MB.
+
+See **[`docs/custom-skills.md`](custom-skills.md)** for the full authoring guide, manifest
+reference, credential patterns, and worked examples (Linear, GitHub, shell, Slack).
 
 **Built-in skills (16 groups, 90+ actions):**
 
@@ -365,7 +370,23 @@ forge.Service.Propose — background goroutine
 POST /forge/proposals/:id/install
     → UpdateProposalStatus → "installed"
     → BuildInstalledRecord → forge-installed.json
+    → GenerateAndInstallCustomSkill (forge/codegen.go)
+         ├── Parse SpecJSON → ForgeSkillSpec
+         ├── Parse PlansJSON → []ForgeActionPlan
+         ├── Parse ContractJSON → APIResearchContract (parameter hints)
+         ├── Generate skill.json  (source: "forge", actions with JSON Schema)
+         ├── Generate Python run  (stdlib urllib, auth, URL-template substitution)
+         └── Write to skills/<skillID>/  → picked up at next LoadCustomSkills()
+
+POST /forge/installed/:skillID/uninstall
+    → DeleteInstalled → forge-installed.json
+    → RemoveCustomSkillDir → skills/<skillID>/  (skill disappears from registry)
+    → SetForgeSkillState → "uninstalled"
 ```
+
+Forge-generated skills appear in `GET /skills` with `"source": "forge"` and are
+shown in the **Custom Skills** group with a purple Forge badge. The agent calls them
+identically to any other custom skill — one JSON line in, one JSON line out.
 
 ---
 
@@ -480,8 +501,7 @@ Significance gate  — YES/NO: did this turn reveal something meaningfully new?
 |---------|--------|
 | Dashboard AI planning + widget execution | 501 — POST `/dashboards/proposals`, install, reject, pin, access, widgets all stub |
 | Multi-agent supervisor | Not built — single-agent loop handles all turns |
-| Custom skill live-reload | Daemon restart required after `POST /skills/install` |
+| Custom skill live-reload | Daemon restart required after install or remove |
 | Custom skill ZIP/URL install | Local path only; URL download deferred |
-| Custom skill credential injection | Skills read credentials from own environment; vault injection deferred |
-| Custom skill install UI | API available; web UI install flow deferred |
-| Embedding-based memory retrieval | Keyword search only; vector retrieval deferred (T3.5) |
+| Custom skill vault credential injection | Skills read credentials from env; direct vault injection deferred |
+| Embedding-based memory retrieval | Keyword search only; vector retrieval deferred |
