@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"atlas-runtime-go/internal/logstore"
@@ -226,39 +227,54 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		// All tool calls can run without approval.
 		messages = append(messages, assistantMsg)
 
-		for _, tc := range canRun {
+		// Execute tool calls with parallelism for stateless tools.
+		// Stateful tools (browser.*) run serially to protect shared Chrome state.
+		// Results are collected into an index-preserving slice so the final
+		// message assembly loop always appends in the original call order —
+		// a requirement of the OpenAI tool-result protocol.
+		results := make([]*toolExecResult, len(canRun))
+
+		// Pass 1 — run all stateless tools concurrently.
+		var wg sync.WaitGroup
+		for i, tc := range canRun {
+			if l.Skills.IsStateful(tc.Function.Name) {
+				continue
+			}
+			wg.Add(1)
+			go func(idx int, tc OAIToolCall) {
+				defer wg.Done()
+				results[idx] = l.execTool(ctx, tc)
+			}(i, tc)
+		}
+		wg.Wait()
+
+		// Pass 2 — run stateful tools serially, in original order.
+		for i, tc := range canRun {
+			if !l.Skills.IsStateful(tc.Function.Name) {
+				continue
+			}
+			results[i] = l.execTool(ctx, tc)
+		}
+
+		// Pass 3 — emit events and append tool result messages in original order.
+		for i, tc := range canRun {
+			r := results[i]
 			actionClass := string(l.Skills.GetActionClass(tc.Function.Name))
 			redactedArgs := skills.RedactArgs(json.RawMessage(tc.Function.Arguments))
 
 			logstore.Write("info", "Tool call: "+tc.Function.Name, map[string]string{
-				"conv":  shortConv,
-				"class": actionClass,
-				"args":  redactedArgs,
+				"conv":    shortConv,
+				"class":   actionClass,
+				"args":    redactedArgs,
+				"elapsed": fmt.Sprintf("%dms", r.elapsedMs),
 			})
-			l.BC.Emit(convID, EmitEvent{
-				Type:       "tool_call",
-				ToolName:   tc.Function.Name,
-				ToolCallID: tc.ID,
-				ConvID:     convID,
-			})
-
-			toolStart := time.Now()
-			// Browser actions need extra time for page loads and interactions.
-			toolTimeout := 30 * time.Second
-			if strings.HasPrefix(tc.Function.Name, "browser.") || strings.HasPrefix(tc.Function.Name, "browser__") {
-				toolTimeout = 90 * time.Second
-			}
-			toolCtx, cancel := context.WithTimeout(ctx, toolTimeout)
-			result, execErr := l.Skills.Execute(toolCtx, tc.Function.Name, json.RawMessage(tc.Function.Arguments))
-			cancel()
-			elapsedMs := time.Since(toolStart).Milliseconds()
 
 			// Accumulate tool summaries for post-turn reflection.
 			allToolSummaries = append(allToolSummaries, tc.Function.Name)
-			if execErr != nil {
-				allResultSummaries = append(allResultSummaries, "error: "+execErr.Error())
+			if r.execErr != nil {
+				allResultSummaries = append(allResultSummaries, "error: "+r.execErr.Error())
 			} else {
-				allResultSummaries = append(allResultSummaries, sanitizeLogOutcome(result))
+				allResultSummaries = append(allResultSummaries, sanitizeLogOutcome(r.result))
 			}
 
 			// Structured action log entry.
@@ -267,19 +283,19 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 				ActionClass:  actionClass,
 				ConvID:       shortConv,
 				InputSummary: redactedArgs,
-				Success:      result.Success,
-				ElapsedMs:    elapsedMs,
-				DryRun:       result.DryRun,
-				Outcome:      sanitizeLogOutcome(result),
-				Warnings:     result.Warnings,
+				Success:      r.result.Success,
+				ElapsedMs:    r.elapsedMs,
+				DryRun:       r.result.DryRun,
+				Outcome:      sanitizeLogOutcome(r.result),
+				Warnings:     r.result.Warnings,
 			}
-			for k, v := range result.Artifacts {
+			for k, v := range r.result.Artifacts {
 				entry.Artifacts = append(entry.Artifacts, fmt.Sprintf("%s=%v", k, v))
 			}
 
-			if execErr != nil {
+			if r.execErr != nil {
 				entry.Success = false
-				entry.Errors = []string{execErr.Error()}
+				entry.Errors = []string{r.execErr.Error()}
 				logstore.WriteAction(entry)
 
 				l.BC.Emit(convID, EmitEvent{
@@ -287,11 +303,11 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 					ToolName:   tc.Function.Name,
 					ToolCallID: tc.ID,
 					ConvID:     convID,
-					Error:      execErr.Error(),
+					Error:      r.execErr.Error(),
 				})
 				messages = append(messages, OAIMessage{
 					Role:       "tool",
-					Content:    buildErrorContent(tc.Function.Name, execErr, result),
+					Content:    buildErrorContent(tc.Function.Name, r.execErr, r.result),
 					ToolCallID: tc.ID,
 					Name:       tc.Function.Name,
 				})
@@ -305,7 +321,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 				})
 				messages = append(messages, OAIMessage{
 					Role:       "tool",
-					Content:    buildToolContent(cfg.Provider, result.FormatForModel()),
+					Content:    buildToolContent(cfg.Provider, r.result.FormatForModel()),
 					ToolCallID: tc.ID,
 					Name:       tc.Function.Name,
 				})
@@ -508,6 +524,36 @@ func sanitizeLogOutcome(r skills.ToolResult) string {
 		return string(runes[:maxRunes]) + "…"
 	}
 	return s
+}
+
+// ── Tool execution helper ─────────────────────────────────────────────────────
+
+// toolExecResult holds the outcome of a single tool call.
+// Safe to write from a goroutine and read after WaitGroup.Wait().
+type toolExecResult struct {
+	result    skills.ToolResult
+	execErr   error
+	elapsedMs int64
+}
+
+// execTool runs one tool call and returns a toolExecResult.
+// It applies the correct timeout (90s for browser, 30s for everything else)
+// and is safe to call from multiple goroutines simultaneously for stateless tools.
+func (l *Loop) execTool(ctx context.Context, tc OAIToolCall) *toolExecResult {
+	toolTimeout := 30 * time.Second
+	if strings.HasPrefix(tc.Function.Name, "browser.") || strings.HasPrefix(tc.Function.Name, "browser__") {
+		toolTimeout = 90 * time.Second
+	}
+	toolCtx, cancel := context.WithTimeout(ctx, toolTimeout)
+	defer cancel()
+
+	start := time.Now()
+	result, execErr := l.Skills.Execute(toolCtx, tc.Function.Name, json.RawMessage(tc.Function.Arguments))
+	return &toolExecResult{
+		result:    result,
+		execErr:   execErr,
+		elapsedMs: time.Since(start).Milliseconds(),
+	}
 }
 
 // ── UUID generation ───────────────────────────────────────────────────────────

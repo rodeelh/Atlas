@@ -369,6 +369,15 @@ func (r *Registry) NeedsApproval(actionID string) bool {
 	return base
 }
 
+// IsStateful returns true for tools that share process-level state and must
+// not run concurrently with other calls in the same batch. Currently covers
+// all browser.* tools, which share a single go-rod Chrome session.
+// Add new entries here whenever a skill holds exclusive locks or shared sessions.
+func (r *Registry) IsStateful(actionID string) bool {
+	actionID = r.normalise(actionID)
+	return strings.HasPrefix(actionID, "browser.")
+}
+
 // GetActionClass returns the ActionClass for actionID.
 // Returns ActionClassExternalSideEffect for unknown actions.
 func (r *Registry) GetActionClass(actionID string) ActionClass {
