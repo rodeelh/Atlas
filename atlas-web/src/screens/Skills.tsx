@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'preact/hooks'
+import { useState, useEffect } from 'preact/hooks'
 import { api, SkillRecord, FsRoot } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
@@ -43,50 +43,6 @@ const ChevronUp = () => (
     <polyline points="2,8 6,4 10,8" />
   </svg>
 )
-const SaveIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M11 12H3a1 1 0 01-1-1V3a1 1 0 011-1h6.5L12 4.5V11a1 1 0 01-1 1z" />
-    <rect x="4.5" y="7.5" width="5" height="4.5" rx=".5" /><path d="M4.5 2v3h4" />
-  </svg>
-)
-const EditIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M9.5 2.5l2 2L4 12H2v-2L9.5 2.5z" />
-  </svg>
-)
-
-/* ── Skill Memory parsers ────────────────────────────────── */
-
-function parsePrinciples(content: string): string[] {
-  const match = content.match(/##\s+Orchestration Principles\s*\n([\s\S]*?)(?=\n##|\n---|\s*$)/)
-  if (!match) return []
-  return match[1].split('\n').map(l => l.trim()).filter(l => l.length > 0 && !l.startsWith('_'))
-}
-
-function parseDontWork(content: string): string[] {
-  const match = content.match(/##\s+Things That Don't Work\s*\n([\s\S]*?)(?=\n##|\n---|\s*$)/)
-  if (!match) return []
-  return match[1].split('\n').map(l => l.replace(/^-\s*/, '').trim()).filter(l => l.length > 0 && !l.startsWith('_'))
-}
-
-interface Routine { name: string; triggers: string[]; steps: string[]; learned: string }
-
-function parseRoutines(content: string): Routine[] {
-  const section = content.match(/##\s+Learned Routines\s*\n([\s\S]*?)(?=\n##\s+[^#]|\n---\s*$|\s*$)/)
-  if (!section) return []
-  return section[1].split(/\n###\s+/).filter(b => b.trim()).map(block => {
-    const lines = block.split('\n')
-    const name = lines[0].trim()
-    const triggers: string[] = []; const steps: string[] = []; let learned = ''
-    for (const line of lines.slice(1)) {
-      const t = line.match(/\*\*Triggers:\*\*\s*(.+)/)
-      if (t) triggers.push(...t[1].split(',').map(x => x.replace(/"/g, '').trim()).filter(Boolean))
-      const s = line.match(/^\d+\.\s+(.+)/); if (s) steps.push(s[1].trim())
-      const l = line.match(/\*\*Learned:\*\*\s*(.+)/); if (l) learned = l[1].trim()
-    }
-    return { name, triggers, steps, learned }
-  }).filter(r => r.name)
-}
 
 /* ── Policy labels ──────────────────────────────────────── */
 
@@ -191,15 +147,6 @@ export function Skills() {
     catch (e: unknown) { setFsRootError(e instanceof Error ? e.message : 'Failed to remove folder.') }
   }
 
-  // Memory state
-  const [memContent, setMemContent] = useState<string | null>(null)
-  const [editMode, setEditMode] = useState(false)
-  const [draft, setDraft] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
-  const [saveOk, setSaveOk] = useState(false)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-
   const loadSkills = async () => {
     try {
       const [skillsResult, policiesResult] = await Promise.allSettled([api.skills(), api.actionPolicies()])
@@ -216,7 +163,6 @@ export function Skills() {
   useEffect(() => {
     loadSkills()
     loadFsRoots()
-    api.skillsMemory().then(r => { setMemContent(r.content); setDraft(r.content) }).catch(() => setMemContent(''))
   }, [])
 
   const toggleExpand = (id: string) => {
@@ -258,23 +204,6 @@ export function Skills() {
     }
   }
 
-  const handleEdit = () => {
-    setDraft(memContent ?? ''); setEditMode(true); setSaveError(null); setSaveOk(false)
-    setTimeout(() => textareaRef.current?.focus(), 50)
-  }
-
-  const handleSave = async () => {
-    setSaving(true); setSaveError(null); setSaveOk(false)
-    try {
-      await api.updateSkillsMemory(draft); setMemContent(draft); setEditMode(false)
-      setSaveOk(true); setTimeout(() => setSaveOk(false), 2000)
-    } catch (e: any) {
-      setSaveError(e?.message ?? 'Save failed')
-    } finally {
-      setSaving(false)
-    }
-  }
-
   if (loading) {
     return (
       <div class="screen">
@@ -283,10 +212,6 @@ export function Skills() {
       </div>
     )
   }
-
-  const principles = memContent ? parsePrinciples(memContent) : []
-  const routines   = memContent ? parseRoutines(memContent) : []
-  const dontWork   = memContent ? parseDontWork(memContent) : []
 
   return (
     <div class="screen">
@@ -474,93 +399,6 @@ export function Skills() {
         )
       })()}
 
-      {/* Memory section */}
-      <div class="section-divider">
-        <div class="section-divider-label">
-          <span>Memory</span>
-          <p class="section-divider-sub">How Atlas has learned to use skills for you</p>
-        </div>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          {saveOk   && <span style={{ color: 'var(--c-green)', fontSize: '12px' }}>Saved</span>}
-          {saveError && <span style={{ color: 'var(--c-red)',   fontSize: '12px' }}>{saveError}</span>}
-          {editMode ? (
-            <>
-              <button class="btn btn-ghost" onClick={() => setEditMode(false)} disabled={saving}>Cancel</button>
-              <button class="btn btn-primary" onClick={handleSave} disabled={saving}>
-                <SaveIcon />{saving ? 'Saving…' : 'Save'}
-              </button>
-            </>
-          ) : (
-            <button class="btn btn-ghost" onClick={handleEdit}><EditIcon />Edit SKILLS.md</button>
-          )}
-        </div>
-      </div>
-
-      {memContent === null ? (
-        <div style={{ padding: '24px 0', color: 'var(--text-2)', fontSize: '13px' }}>Loading…</div>
-      ) : editMode ? (
-        <textarea
-          ref={textareaRef}
-          class="mind-raw-editor"
-          value={draft}
-          onInput={e => setDraft((e.target as HTMLTextAreaElement).value)}
-          style={{ width: '100%', minHeight: '360px', marginTop: '4px' }}
-        />
-      ) : (
-        <div class="card">
-          {/* Orchestration Principles */}
-          <div>
-            <div style={{ padding: '14px 20px 10px', fontSize: '12px', fontWeight: 600, color: 'var(--text-2)' }}>Orchestration Principles</div>
-            {principles.length === 0
-              ? <div style={{ padding: '0 20px 16px', color: 'var(--text-2)', fontSize: '12.5px' }}>No principles yet — they'll appear as Atlas learns your preferences.</div>
-              : <div style={{ padding: '0 20px 16px' }}>
-                  {principles.map((p, i) => (
-                    <div key={i} style={{ padding: '6px 0', borderBottom: i < principles.length - 1 ? '1px solid var(--border)' : 'none', fontSize: '13px', color: 'var(--text)' }}>{p}</div>
-                  ))}
-                </div>
-            }
-          </div>
-
-          {/* Learned Routines */}
-          <div style={{ borderTop: '1px solid var(--border)' }}>
-            <div style={{ padding: '14px 20px 10px', fontSize: '12px', fontWeight: 600, color: 'var(--text-2)' }}>Learned Routines</div>
-            {routines.length === 0
-              ? <div style={{ padding: '0 20px 16px', color: 'var(--text-2)', fontSize: '12.5px' }}>No routines yet — Atlas learns them after you repeat the same skill sequence 3 times.</div>
-              : <div style={{ padding: '0 20px 16px' }}>
-                  {routines.map((r, i) => (
-                    <div key={i} style={{ padding: '8px 0', borderBottom: i < routines.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                      <div style={{ fontWeight: 500, fontSize: '13px', marginBottom: '4px' }}>{r.name}</div>
-                      {r.triggers.length > 0 && (
-                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: '4px' }}>
-                          {r.triggers.map((t, j) => <span key={j} class="badge badge-gray">"{t}"</span>)}
-                        </div>
-                      )}
-                      {r.steps.length > 0 && (
-                        <ol style={{ margin: '4px 0 0 16px', fontSize: '12.5px', color: 'var(--text-2)' }}>
-                          {r.steps.map((s, j) => <li key={j}>{s}</li>)}
-                        </ol>
-                      )}
-                      {r.learned && <div style={{ marginTop: '4px', fontSize: '12px', color: 'var(--text-2)', fontStyle: 'italic' }}>{r.learned}</div>}
-                    </div>
-                  ))}
-                </div>
-            }
-          </div>
-
-          {/* Things That Don't Work */}
-          <div style={{ borderTop: '1px solid var(--border)' }}>
-            <div style={{ padding: '14px 20px 10px', fontSize: '12px', fontWeight: 600, color: 'var(--text-2)' }}>Things That Don't Work</div>
-            {dontWork.length === 0
-              ? <div style={{ padding: '0 20px 16px', color: 'var(--text-2)', fontSize: '12.5px' }}>Nothing logged yet.</div>
-              : <div style={{ padding: '0 20px 16px' }}>
-                  {dontWork.map((d, i) => (
-                    <div key={i} style={{ padding: '6px 0', borderBottom: i < dontWork.length - 1 ? '1px solid var(--border)' : 'none', fontSize: '13px', color: 'var(--text)' }}>{d}</div>
-                  ))}
-                </div>
-            }
-          </div>
-        </div>
-      )}
     </div>
   )
 }
