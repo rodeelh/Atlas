@@ -1,8 +1,108 @@
 import { useState, useEffect, useRef } from 'preact/hooks'
 import { api } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
+import { ErrorBanner } from '../components/ErrorBanner'
 
-// ── SKILLS.md parsers ────────────────────────────────────────────────────────
+// ── Icons ─────────────────────────────────────────────────────────────────────
+
+const RefreshIcon = () => (
+  <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.5 8a5.5 5.5 0 0 1 9.5-3.8" /><polyline points="13.5,2.5 13.5,6 10,6" />
+    <path d="M13.5 8a5.5 5.5 0 0 1-9.5 3.8" /><polyline points="2.5,13.5 2.5,10 6,10" />
+  </svg>
+)
+const EditIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10 2l2 2-7 7H3v-2L10 2z" />
+  </svg>
+)
+
+// ── MIND.md renderer ──────────────────────────────────────────────────────────
+
+interface MindSection { title: string; body: string; special: string | null }
+
+function parseMindSections(content: string): MindSection[] {
+  const sections: MindSection[] = []
+  const parts = content.split(/\n(?=## )/)
+  for (const part of parts) {
+    const lines = part.split('\n')
+    const first = lines[0]
+    if (first.startsWith('# ') || !first.startsWith('## ')) continue // skip doc title
+    const title = first.slice(3).trim()
+    const body = lines.slice(1).join('\n').trim()
+    let special: string | null = null
+    if (title === "Today's Read") special = 'todays-read'
+    if (title === 'Active Theories') special = 'theories'
+    sections.push({ title, body, special })
+  }
+  return sections
+}
+
+function BodyText({ text }: { text: string }) {
+  const paras = text.split(/\n\n+/).map(p => p.trim()).filter(p => p && p !== '---')
+  if (!paras.length) return null
+  return (
+    <>
+      {paras.map((p, i) => (
+        <p key={i} style={{ fontSize: '13.5px', lineHeight: 1.65, color: 'var(--text)', marginBottom: i < paras.length - 1 ? '8px' : 0 }}>{p}</p>
+      ))}
+    </>
+  )
+}
+
+function TheoriesBlock({ body }: { body: string }) {
+  const lines = body.split('\n').map(l => l.replace(/^-\s*/, '').trim()).filter(Boolean)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      {lines.map((line, i) => {
+        const isTest    = /\(testing\)/i.test(line)
+        const isLikely  = /\(likely\)/i.test(line)
+        const isConf    = /\(confirmed\)/i.test(line)
+        const isRefuted = /\(refuted\)/i.test(line)
+        const clean = line.replace(/\((testing|likely|confirmed|refuted)\)/gi, '').trim()
+
+        let badge: preact.ComponentChild = null
+        if (isTest)    badge = <span class="theory-badge testing">testing</span>
+        if (isLikely)  badge = <span class="theory-badge likely">likely</span>
+        if (isConf)    badge = <span class="theory-badge confirmed">confirmed</span>
+        if (isRefuted) badge = <span class="theory-badge refuted">refuted</span>
+
+        return (
+          <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '13.5px', lineHeight: 1.5, color: isRefuted ? 'var(--text-3)' : 'var(--text)', textDecoration: isRefuted ? 'line-through' : 'none' }}>
+            {badge}<span>{clean}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function MindSectionCard({ section }: { section: MindSection }) {
+  if (section.special === 'todays-read') {
+    return (
+      <div style={{ borderLeft: '2px solid var(--border-2)', paddingLeft: '14px', opacity: 0.7 }}>
+        <div class="mind-section-label">{section.title}</div>
+        <BodyText text={section.body} />
+      </div>
+    )
+  }
+
+  return (
+    <div class="card">
+      <div style={{ padding: '14px 20px 12px', borderBottom: '1px solid var(--border)' }}>
+        <span class="mind-section-label">{section.title}</span>
+      </div>
+      <div style={{ padding: '14px 20px 16px' }}>
+        {section.special === 'theories'
+          ? <TheoriesBlock body={section.body} />
+          : <BodyText text={section.body} />
+        }
+      </div>
+    </div>
+  )
+}
+
+// ── SKILLS.md parsers ─────────────────────────────────────────────────────────
 
 function parsePrinciples(content: string): string[] {
   const match = content.match(/##\s+Orchestration Principles\s*\n([\s\S]*?)(?=\n##|\n---|\s*$)/)
@@ -35,111 +135,7 @@ function parseRoutines(content: string): Routine[] {
   }).filter(r => r.name)
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function formatMarkdown(content: string): preact.ComponentChild[] {
-  const sections = content.split(/\n(?=## )/)
-  return sections.map((section, i) => {
-    const lines = section.split('\n')
-    const firstLine = lines[0]
-
-    if (firstLine.startsWith('# ')) {
-      return (
-        <div key={i} class="mind-doc-title">
-          <h1>{firstLine.slice(2)}</h1>
-          <div class="mind-doc-meta">{lines.slice(1).filter(l => l.trim()).join(' ')}</div>
-        </div>
-      )
-    }
-
-    if (firstLine.startsWith('## ')) {
-      const title = firstLine.slice(3)
-      const body = lines.slice(1).join('\n').trim()
-      const isTodaysRead = title === "Today's Read"
-      const isWhoIAm = title === 'Who I Am'
-      const isTheories = title === 'Active Theories'
-
-      return (
-        <div key={i} class={`mind-section${isTodaysRead ? ' todays-read' : ''}${isWhoIAm ? ' who-i-am' : ''}`}>
-          <h2 class="mind-section-title">{title}</h2>
-          {isTheories
-            ? <TheoriesBlock content={body} />
-            : <div class="mind-section-body">{renderBody(body)}</div>
-          }
-        </div>
-      )
-    }
-
-    return <div key={i} class="mind-section-body">{renderBody(section)}</div>
-  })
-}
-
-function renderBody(text: string): preact.ComponentChild {
-  if (!text.trim()) return null
-  const paragraphs = text.split(/\n\n+/)
-  return (
-    <>
-      {paragraphs.map((para, i) => {
-        const trimmed = para.trim()
-        if (!trimmed || trimmed === '---') return null
-        return <p key={i}>{trimmed}</p>
-      })}
-    </>
-  )
-}
-
-function TheoriesBlock({ content }: { content: string }) {
-  const lines = content.split('\n').filter(l => l.trim())
-  return (
-    <div class="theories-list">
-      {lines.map((line, i) => {
-        const testingMatch = line.match(/\(testing\)/i)
-        const likelyMatch  = line.match(/\(likely\)/i)
-        const confirmedMatch = line.match(/\(confirmed\)/i)
-        const refutedMatch = line.match(/\(refuted\)/i)
-
-        let badge: preact.ComponentChild = null
-        if (testingMatch)  badge = <span class="theory-badge testing">testing</span>
-        if (likelyMatch)   badge = <span class="theory-badge likely">likely</span>
-        if (confirmedMatch) badge = <span class="theory-badge confirmed">confirmed</span>
-        if (refutedMatch)  badge = <span class="theory-badge refuted">refuted</span>
-
-        const cleanLine = line
-          .replace(/\(testing\)/gi, '')
-          .replace(/\(likely\)/gi, '')
-          .replace(/\(confirmed\)/gi, '')
-          .replace(/\(refuted\)/gi, '')
-          .trim()
-
-        return (
-          <div key={i} class={`theory-item${refutedMatch ? ' refuted' : ''}`}>
-            {badge}
-            <span>{cleanLine}</span>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── Icons ────────────────────────────────────────────────────────────────────
-
-const RefreshIcon = () => (
-  <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M2.5 8a5.5 5.5 0 0 1 9.5-3.8" />
-    <polyline points="13.5,2.5 13.5,6 10,6" />
-    <path d="M13.5 8a5.5 5.5 0 0 1-9.5 3.8" />
-    <polyline points="2.5,13.5 2.5,10 6,10" />
-  </svg>
-)
-
-const EditIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M10 2l2 2-7 7H3v-2L10 2z" />
-  </svg>
-)
-
-// ── Main screen ──────────────────────────────────────────────────────────────
+// ── Main screen ───────────────────────────────────────────────────────────────
 
 export function Mind() {
   // MIND.md
@@ -179,6 +175,17 @@ export function Mind() {
     } catch { setSkillsMem('') }
   }
 
+  async function saveEdit() {
+    setSaving(true); setError(null)
+    try {
+      await api.updateMind(editText)
+      setContent(editText)
+      setEditing(false)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Save failed.')
+    } finally { setSaving(false) }
+  }
+
   async function saveSkillsMem() {
     setSkillsSaving(true); setSkillsError(null)
     try {
@@ -198,160 +205,168 @@ export function Mind() {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
   }, [])
 
-  function openEdit() {
-    setEditText(content)
-    setEditing(true)
-  }
-
-  async function saveEdit() {
-    setSaving(true)
-    setError(null)
-    try {
-      await api.updateMind(editText)
-      setContent(editText)
-      setEditing(false)
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Save failed.')
-    } finally {
-      setSaving(false)
-    }
-  }
+  const sections = content ? parseMindSections(content) : []
+  const principles = skillsMem ? parsePrinciples(skillsMem) : []
+  const routines   = skillsMem ? parseRoutines(skillsMem)   : []
+  const dontWork   = skillsMem ? parseDontWork(skillsMem)   : []
+  const hasSkills  = principles.length > 0 || routines.length > 0 || dontWork.length > 0
 
   return (
-    <div class="screen mind-screen">
+    <div class="screen">
       <PageHeader
         title="Mind"
-        subtitle="Atlas's living inner world — updated after every conversation."
+        subtitle="Atlas's living inner world — updated after every conversation"
         actions={<>
-          <button class="btn btn-ghost btn-sm" onClick={openEdit}><EditIcon /> Edit</button>
-          <button class="btn btn-primary btn-sm" onClick={load}><RefreshIcon /> Refresh</button>
+          {!editing && (
+            <button class="btn btn-ghost btn-sm" onClick={() => { setEditText(content); setEditing(true) }}>
+              <EditIcon /> Edit MIND.md
+            </button>
+          )}
+          <button class="btn btn-primary btn-sm" onClick={load} disabled={loading}>
+            <RefreshIcon /> Refresh
+          </button>
         </>}
       />
 
-      {error && <p class="error-banner">{error}</p>}
+      <ErrorBanner error={error} onDismiss={() => setError(null)} />
 
-      {loading && <p class="empty-state">Loading MIND.md…</p>}
-
-      {!loading && !content && (
-        <p class="empty-state">MIND.md is empty. Atlas will seed it on the next daemon start.</p>
-      )}
-
-      {!loading && content && !editing && (
-        <div class="mind-document">
-          {formatMarkdown(content)}
+      {/* Loading */}
+      {loading && (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
+          <span class="spinner" />
         </div>
       )}
 
+      {/* Empty */}
+      {!loading && !content && !editing && (
+        <div class="empty-state">
+          <p>MIND.md is empty — Atlas will seed it on the next daemon start.</p>
+        </div>
+      )}
+
+      {/* ── MIND.md edit mode ── */}
       {editing && (
-        <div class="mind-editor">
+        <>
           <textarea
             class="mind-raw-editor"
             value={editText}
             onInput={(e) => setEditText((e.target as HTMLTextAreaElement).value)}
-            rows={30}
+            style={{ width: '100%', minHeight: '520px' }}
           />
-          <div class="mind-editor-footer">
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '10px' }}>
             <button class="btn btn-ghost btn-sm" onClick={() => setEditing(false)} disabled={saving}>Cancel</button>
             <button class="btn btn-primary btn-sm" onClick={saveEdit} disabled={saving}>
               {saving ? 'Saving…' : 'Save'}
             </button>
           </div>
+        </>
+      )}
+
+      {/* ── MIND.md sections ── */}
+      {!loading && content && !editing && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {sections.map((s, i) => <MindSectionCard key={i} section={s} />)}
         </div>
       )}
 
-      {/* ── SKILLS.md ── */}
-      {!loading && (() => {
-        const principles = skillsMem ? parsePrinciples(skillsMem) : []
-        const routines   = skillsMem ? parseRoutines(skillsMem)   : []
-        const dontWork   = skillsMem ? parseDontWork(skillsMem)   : []
-        const hasContent = principles.length > 0 || routines.length > 0 || dontWork.length > 0
-
-        return (
-          <>
-            <div class="section-divider" style={{ marginTop: '32px' }}>
-              <div class="section-divider-label">
-                <span>Skill Memory</span>
-                <p class="section-divider-sub">How Atlas has learned to use its tools for you</p>
-              </div>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                {skillsSaveOk  && <span style={{ color: 'var(--c-green)', fontSize: '12px' }}>Saved</span>}
-                {skillsError   && <span style={{ color: 'var(--c-red)',   fontSize: '12px' }}>{skillsError}</span>}
-                {skillsEditing ? (
-                  <>
-                    <button class="btn btn-ghost btn-sm" onClick={() => setSkillsEditing(false)} disabled={skillsSaving}>Cancel</button>
-                    <button class="btn btn-primary btn-sm" onClick={saveSkillsMem} disabled={skillsSaving}>
-                      {skillsSaving ? 'Saving…' : 'Save'}
-                    </button>
-                  </>
-                ) : (
-                  <button class="btn btn-ghost btn-sm" onClick={() => { setSkillsDraft(skillsMem ?? ''); setSkillsEditing(true) }}>
-                    <EditIcon /> Edit SKILLS.md
-                  </button>
-                )}
-              </div>
+      {/* ── Skill Memory ── */}
+      {!loading && !editing && (
+        <>
+          <div class="section-divider" style={{ marginTop: '32px' }}>
+            <div class="section-divider-label">
+              <span>Skill Memory</span>
+              <p class="section-divider-sub">How Atlas has learned to use its tools for you</p>
             </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              {skillsSaveOk && <span style={{ fontSize: '12px', color: 'var(--green)' }}>Saved</span>}
+              {skillsError  && <span style={{ fontSize: '12px', color: 'var(--red)' }}>{skillsError}</span>}
+              {skillsEditing ? (
+                <>
+                  <button class="btn btn-ghost btn-sm" onClick={() => setSkillsEditing(false)} disabled={skillsSaving}>Cancel</button>
+                  <button class="btn btn-primary btn-sm" onClick={saveSkillsMem} disabled={skillsSaving}>
+                    {skillsSaving ? 'Saving…' : 'Save'}
+                  </button>
+                </>
+              ) : (
+                <button class="btn btn-ghost btn-sm" onClick={() => { setSkillsDraft(skillsMem ?? ''); setSkillsEditing(true) }}>
+                  <EditIcon /> Edit SKILLS.md
+                </button>
+              )}
+            </div>
+          </div>
 
-            {skillsEditing ? (
-              <textarea
-                class="mind-raw-editor"
-                value={skillsDraft}
-                onInput={e => setSkillsDraft((e.target as HTMLTextAreaElement).value)}
-                style={{ width: '100%', minHeight: '320px', marginTop: '4px' }}
-              />
-            ) : !hasContent ? (
-              <div style={{ padding: '20px 0', color: 'var(--text-2)', fontSize: '13px' }}>
-                Nothing learned yet — Atlas builds this automatically as it uses skills for you.
-              </div>
-            ) : (
-              <div class="card">
-                {principles.length > 0 && (
+          {skillsEditing ? (
+            <textarea
+              class="mind-raw-editor"
+              value={skillsDraft}
+              onInput={e => setSkillsDraft((e.target as HTMLTextAreaElement).value)}
+              style={{ width: '100%', minHeight: '320px' }}
+            />
+          ) : !hasSkills ? (
+            <div style={{ padding: '8px 0 24px', fontSize: '13px', color: 'var(--text-2)' }}>
+              Nothing learned yet — Atlas builds this automatically as it uses skills for you.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {principles.length > 0 && (
+                <div class="card">
+                  <div style={{ padding: '12px 20px 10px', borderBottom: '1px solid var(--border)' }}>
+                    <span class="mind-section-label">Orchestration Principles</span>
+                  </div>
                   <div>
-                    <div style={{ padding: '14px 20px 10px', fontSize: '12px', fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Orchestration Principles</div>
-                    <div style={{ padding: '0 20px 16px' }}>
-                      {principles.map((p, i) => (
-                        <div key={i} style={{ padding: '6px 0', borderBottom: i < principles.length - 1 ? '1px solid var(--border)' : 'none', fontSize: '13px', color: 'var(--text)' }}>{p}</div>
-                      ))}
-                    </div>
+                    {principles.map((p, i) => (
+                      <div key={i} class="row" style={{ padding: '10px 20px', fontSize: '13.5px', color: 'var(--text)', borderBottom: i < principles.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                        {p}
+                      </div>
+                    ))}
                   </div>
-                )}
-                {routines.length > 0 && (
-                  <div style={{ borderTop: principles.length > 0 ? '1px solid var(--border)' : 'none' }}>
-                    <div style={{ padding: '14px 20px 10px', fontSize: '12px', fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Learned Routines</div>
-                    <div style={{ padding: '0 20px 16px' }}>
-                      {routines.map((r, i) => (
-                        <div key={i} style={{ padding: '8px 0', borderBottom: i < routines.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                          <div style={{ fontWeight: 500, fontSize: '13px', marginBottom: '4px' }}>{r.name}</div>
-                          {r.triggers.length > 0 && (
-                            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: '4px' }}>
-                              {r.triggers.map((t, j) => <span key={j} class="badge badge-gray">"{t}"</span>)}
-                            </div>
-                          )}
-                          {r.steps.length > 0 && (
-                            <ol style={{ margin: '4px 0 0 16px', fontSize: '12.5px', color: 'var(--text-2)' }}>
-                              {r.steps.map((s, j) => <li key={j}>{s}</li>)}
-                            </ol>
-                          )}
-                          {r.learned && <div style={{ marginTop: '4px', fontSize: '12px', color: 'var(--text-2)', fontStyle: 'italic' }}>{r.learned}</div>}
-                        </div>
-                      ))}
-                    </div>
+                </div>
+              )}
+              {routines.length > 0 && (
+                <div class="card">
+                  <div style={{ padding: '12px 20px 10px', borderBottom: '1px solid var(--border)' }}>
+                    <span class="mind-section-label">Learned Routines</span>
                   </div>
-                )}
-                {dontWork.length > 0 && (
-                  <div style={{ borderTop: '1px solid var(--border)' }}>
-                    <div style={{ padding: '14px 20px 10px', fontSize: '12px', fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Things That Don't Work</div>
-                    <div style={{ padding: '0 20px 16px' }}>
-                      {dontWork.map((d, i) => (
-                        <div key={i} style={{ padding: '6px 0', borderBottom: i < dontWork.length - 1 ? '1px solid var(--border)' : 'none', fontSize: '13px', color: 'var(--text)' }}>{d}</div>
-                      ))}
-                    </div>
+                  <div>
+                    {routines.map((r, i) => (
+                      <div key={i} style={{ padding: '12px 20px', borderBottom: i < routines.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                        <div style={{ fontWeight: 500, fontSize: '13.5px', color: 'var(--text)', marginBottom: '6px' }}>{r.name}</div>
+                        {r.triggers.length > 0 && (
+                          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                            {r.triggers.map((t, j) => <span key={j} class="badge badge-gray">"{t}"</span>)}
+                          </div>
+                        )}
+                        {r.steps.length > 0 && (
+                          <ol style={{ margin: '0 0 0 16px', fontSize: '13px', color: 'var(--text-2)', lineHeight: 1.6 }}>
+                            {r.steps.map((s, j) => <li key={j}>{s}</li>)}
+                          </ol>
+                        )}
+                        {r.learned && (
+                          <div style={{ marginTop: '6px', fontSize: '12.5px', color: 'var(--text-2)', fontStyle: 'italic' }}>{r.learned}</div>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                )}
-              </div>
-            )}
-          </>
-        )
-      })()}
+                </div>
+              )}
+              {dontWork.length > 0 && (
+                <div class="card">
+                  <div style={{ padding: '12px 20px 10px', borderBottom: '1px solid var(--border)' }}>
+                    <span class="mind-section-label">Things That Don't Work</span>
+                  </div>
+                  <div>
+                    {dontWork.map((d, i) => (
+                      <div key={i} class="row" style={{ padding: '10px 20px', fontSize: '13.5px', color: 'var(--text-2)', borderBottom: i < dontWork.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                        {d}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }

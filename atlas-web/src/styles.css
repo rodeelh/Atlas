@@ -4281,48 +4281,13 @@ input.field-input {
 
 /* ─── Mind screen ───────────────────────────────────────── */
 
-
-.mind-document {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.mind-doc-title {
-  margin-bottom: 4px;
-}
-
-.mind-doc-title h1 {
-  font-size: 23px;
-  font-weight: 600;
-  letter-spacing: -0.5px;
-}
-
-.mind-doc-meta {
-  font-size: 12.5px;
-  color: var(--text-3);
-  font-style: italic;
-  margin-top: 4px;
-}
-
-.mind-section {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px 16px;
-}
-
-.mind-section.todays-read {
-  background: transparent;
-  border-color: transparent;
-  border-left: 2px solid var(--border-2);
-  border-radius: 0;
-  padding-left: 14px;
-  opacity: 0.75;
-}
-
-.mind-section.who-i-am {
-  border-color: rgba(59,130,246,0.15);
+/* Section label inside a card header — uppercase, subdued */
+.mind-section-label {
+  font-size: 11.5px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-2);
 }
 
 .section-divider {
@@ -4406,47 +4371,7 @@ input.field-input {
   padding: 24px 24px 26px;
 }
 
-.mind-section-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-2);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 10px;
-}
-
-.mind-section-body p {
-  font-size: 14.5px;
-  line-height: 1.65;
-  color: var(--text);
-  margin-bottom: 8px;
-}
-
-.mind-section-body p:last-child {
-  margin-bottom: 0;
-}
-
 /* Theories */
-
-.theories-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.theory-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--text);
-}
-
-.theory-item.refuted {
-  color: var(--text-3);
-  text-decoration: line-through;
-}
 
 .theory-badge {
   flex-shrink: 0;
@@ -4463,14 +4388,7 @@ input.field-input {
 .theory-badge.confirmed { background: var(--green-dim); color: var(--green); }
 .theory-badge.refuted  { background: rgba(255,255,255,0.05); color: var(--text-3); }
 
-/* Mind editor */
-
-.mind-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  flex: 1;
-}
+/* Mind raw editor */
 
 .mind-raw-editor {
   flex: 1;
@@ -4492,11 +4410,6 @@ input.field-input {
   border-color: var(--focus-ring);
 }
 
-.mind-editor-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
 
 /* ─── Skill Memory screen ───────────────────────────────── */
 
