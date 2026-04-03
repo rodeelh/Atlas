@@ -110,7 +110,9 @@ const SKILL_GROUPS: Array<{ key: SkillGroupKey; label: string; sub: string }> = 
 function classifySkill(skill: SkillRecord): SkillGroupKey | 'hidden' {
   const { id, isUserVisible, category, source } = skill.manifest
   if (!isUserVisible || id === 'websearch-api') return 'hidden'
-  if (source === 'custom') return 'custom'
+  // Both user-installed and forge-generated custom skills land in the custom group.
+  // Forge-generated skills show the purple Forge badge; user-installed show teal Custom badge.
+  if (source === 'custom' || source === 'forge') return 'custom'
   if (id === 'gremlin-management') return 'automation'
   if (id === 'atlas.info') return 'diagnostics'
   if (category === 'system' || category === 'productivity') return 'system'
@@ -133,6 +135,39 @@ export function Skills() {
   const [acting, setActing] = useState<Set<string>>(new Set())
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [policies, setPolicies] = useState<Record<string, string>>({})
+
+  // Custom skill install state
+  const [customInstalling, setCustomInstalling] = useState(false)
+  const [customInstallMsg, setCustomInstallMsg] = useState<string | null>(null)
+  const [customInstallErr, setCustomInstallErr] = useState<string | null>(null)
+  const [customRemoving, setCustomRemoving] = useState<Set<string>>(new Set())
+
+  const installCustomSkill = async () => {
+    setCustomInstalling(true); setCustomInstallMsg(null); setCustomInstallErr(null)
+    try {
+      const result = await api.pickFsFolder()
+      if (!result?.path) { setCustomInstalling(false); return }
+      const res = await api.installCustomSkill(result.path)
+      setCustomInstallMsg(res.message ?? 'Skill installed. Restart Atlas to activate it.')
+      await loadSkills()
+    } catch (e: unknown) {
+      setCustomInstallErr(e instanceof Error ? e.message : 'Install failed.')
+    } finally {
+      setCustomInstalling(false)
+    }
+  }
+
+  const removeCustomSkill = async (id: string) => {
+    setCustomRemoving(prev => new Set(prev).add(id))
+    try {
+      await api.removeCustomSkill(id)
+      await loadSkills()
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to remove skill.')
+    } finally {
+      setCustomRemoving(prev => { const s = new Set(prev); s.delete(id); return s })
+    }
+  }
 
   // File system roots state
   const [fsRoots, setFsRoots] = useState<FsRoot[]>([])
@@ -313,6 +348,17 @@ export function Skills() {
                   <button class="btn btn-sm btn-icon" disabled={acting.has(`v:${id}`)} onClick={() => validate(id)} title="Re-validate">
                     {acting.has(`v:${id}`) ? <span class="spinner" style={{ width: '11px', height: '11px' }} /> : <RefreshIcon />}
                   </button>
+                  {skill.manifest.source === 'custom' && (
+                    <button
+                      class="btn btn-sm btn-ghost"
+                      style={{ color: 'var(--c-red)', fontSize: '11px', padding: '2px 7px' }}
+                      disabled={customRemoving.has(id)}
+                      onClick={() => removeCustomSkill(id)}
+                      title="Remove this custom skill"
+                    >
+                      {customRemoving.has(id) ? <span class="spinner" style={{ width: '11px', height: '11px' }} /> : 'Remove'}
+                    </button>
+                  )}
                   {skill.actions.length > 0 && (
                     <button class="btn btn-sm btn-icon" onClick={() => toggleExpand(id)} title="Show actions">
                       {isExpanded ? <ChevronUp /> : <ChevronDown />}
@@ -379,16 +425,62 @@ export function Skills() {
           <>
             {SKILL_GROUPS.map(group => {
               const groupSkills = grouped[group.key] ?? []
-              if (!groupSkills.length) return null
+              const isCustomGroup = group.key === 'custom'
+
+              // Custom group always renders so the install panel is always visible.
+              if (!groupSkills.length && !isCustomGroup) return null
+
               return (
                 <div key={group.key} style={{ marginBottom: '20px' }}>
-                  <div class="skill-group-header">
-                    <span>{group.label}</span>
-                    {group.sub && <p class="skill-group-sub">{group.sub}</p>}
+                  <div class="skill-group-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                    <div>
+                      <span>{group.label}</span>
+                      {group.sub && <p class="skill-group-sub">{group.sub}</p>}
+                    </div>
+                    {isCustomGroup && (
+                      <button
+                        class="btn btn-primary btn-sm"
+                        disabled={customInstalling}
+                        onClick={installCustomSkill}
+                        style={{ flexShrink: 0, marginTop: '2px' }}
+                      >
+                        {customInstalling
+                          ? <span class="spinner" style={{ width: '11px', height: '11px' }} />
+                          : '+ Install Skill'}
+                      </button>
+                    )}
                   </div>
-                  <div class="card">
-                    {groupSkills.map((skill, i) => renderSkillRow(skill, i, groupSkills.length))}
-                  </div>
+
+                  {/* Install feedback */}
+                  {isCustomGroup && customInstallMsg && (
+                    <div style={{ fontSize: '12.5px', color: 'var(--c-green)', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span>{customInstallMsg}</span>
+                      <button class="btn btn-sm btn-ghost" onClick={() => setCustomInstallMsg(null)}>✕</button>
+                    </div>
+                  )}
+                  {isCustomGroup && customInstallErr && (
+                    <div style={{ fontSize: '12.5px', color: 'var(--c-red)', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span>{customInstallErr}</span>
+                      <button class="btn btn-sm btn-ghost" onClick={() => setCustomInstallErr(null)}>✕</button>
+                    </div>
+                  )}
+
+                  {isCustomGroup && groupSkills.length === 0 ? (
+                    <div class="card" style={{ padding: '24px 20px', textAlign: 'center' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text)', marginBottom: '6px' }}>No custom skills installed</div>
+                      <div style={{ fontSize: '12.5px', color: 'var(--text-2)', marginBottom: '16px', maxWidth: '400px', margin: '0 auto 16px' }}>
+                        Custom skills are executables in their own folder with a <code style={{ fontFamily: 'monospace', fontSize: '11.5px' }}>skill.json</code> manifest.
+                        Forge-generated skills also appear here once installed.
+                      </div>
+                      <button class="btn btn-primary btn-sm" disabled={customInstalling} onClick={installCustomSkill}>
+                        {customInstalling ? <span class="spinner" style={{ width: '11px', height: '11px' }} /> : 'Install from Folder'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div class="card">
+                      {groupSkills.map((skill, i) => renderSkillRow(skill, i, groupSkills.length))}
+                    </div>
+                  )}
                 </div>
               )
             })}
