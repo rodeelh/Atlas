@@ -11,6 +11,42 @@ Keep the Engine LM tab up to date with the latest models and tooling.
 
 ---
 
+## UI Bugs
+
+### ✅ Safari — Chat Copy Button Hover Persists — WORKAROUND SHIPPED 2026-04-05
+
+The copy button beside chat bubbles works correctly in Chrome but persists (doesn't disappear on mouse leave) in Safari. Multiple approaches attempted:
+- CSS `:hover` on `chat-bubble-wrap` with `width: fit-content` / `-webkit-fit-content` — Safari ignores fit-content on flex items
+- CSS `:hover` with `display: inline-flex` — gets blockified inside flex parent, same issue
+- JS `onMouseEnter`/`onMouseLeave` on `chat-bubble-wrap` — Safari doesn't fire leave reliably
+- JS `onPointerEnter`/`onPointerLeave` on `chat-message-row` — still persists
+- JS hover on `chat-bubble` + `chat-message-actions` with 80ms delayed leave — still persists
+
+**Constraints:**
+- Button must be beside the bubble (right for assistant, left for user)
+- Hover zone should be limited to bubble content + button area
+- Must NOT use `position: relative` + `z-index` inside the scroll container (breaks header `backdrop-filter` glass effect)
+
+**Resolution shipped:**
+- Keep the copy hover behavior on desktop Chrome/other browsers
+- Hide the copy hover control on Safari instead of relying on broken hover invalidation
+- Preserve the original beside-bubble placement and chat alignment
+
+**Files:** `atlas-web/src/screens/Chat.tsx`, `atlas-web/src/styles.css`
+
+### ✅ Mobile Web Shell Polish — SHIPPED 2026-04-05
+
+The mobile web UI now behaves like a fixed app shell instead of a scrolling document.
+
+- Page header owns the mobile nav button; removed the separate floating mobile top bar
+- iPhone safe areas respected for header and composer
+- App shell locked to the visible viewport; only the chat region scrolls
+- Mobile pinch/double-tap zoom disabled to keep header and composer in view
+- Header actions simplified to icon buttons on mobile
+- Sidebar drawer spacing, active-tab shape, and accent rail unified with desktop styling
+
+---
+
 ## Architecture Improvements
 
 ---

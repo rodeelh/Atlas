@@ -1,4 +1,7 @@
-import { ComponentChildren } from 'preact'
+import { ComponentChildren, createContext } from 'preact'
+import { useContext } from 'preact/hooks'
+
+export const HeaderChromeContext = createContext<ComponentChildren>(null)
 
 interface PageHeaderProps {
   title: string
@@ -13,8 +16,11 @@ interface PageHeaderProps {
  * naturally as a flex sibling.
  */
 export function PageHeader({ title, subtitle, actions }: PageHeaderProps) {
+  const mobileLead = useContext(HeaderChromeContext)
+
   return (
     <div class="page-header">
+      {mobileLead && <div class="page-header-mobile-lead">{mobileLead}</div>}
       <div class="page-header-left">
         <div class="page-header-title">
           <span class="page-header-prefix">Atlas</span>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks'
-import { type ThemeMode, type ThemePreset, type ThemeConfig, type DensityMode, type ChatFontSize, type ChatRadius, type ChatFont, type ChatAvatarStyle, loadTheme, saveTheme, applyTheme, watchSystemTheme } from './theme'
+import { type ThemeMode, type ThemePreset, type ThemeConfig, type DensityMode, type ChatFontSize, type ChatRadius, type ChatFont, type ChatAvatarStyle, loadTheme, saveTheme, applyTheme, watchSystemTheme, THEME_PRESETS } from './theme'
 import { Chat } from './screens/Chat'
 import { Communications } from './screens/Communications'
 import { Approvals } from './screens/Approvals'
@@ -16,7 +16,10 @@ import { Dashboards } from './screens/Dashboards'
 import { DashboardView } from './screens/DashboardView'
 import { Docs } from './screens/Docs'
 import { AtlasEngine } from './screens/AtlasEngine'
+import { Usage } from './screens/Usage'
 import { Onboarding } from './screens/Onboarding'
+import { Toaster } from './components/Toaster'
+import { HeaderChromeContext } from './components/PageHeader'
 import { api, type DashboardSpec, RuntimeStatus } from './api/client'
 
 type Screen =
@@ -36,12 +39,13 @@ type Screen =
   | 'dashboards'
   | 'dashboard-view'
   | 'atlas-engine'
+  | 'usage'
   | 'docs'
 
 const VALID_SCREENS: Screen[] = [
   'chat', 'onboarding', 'communications', 'approvals', 'skills', 'forge', 'mind',
   'automations', 'workflows', 'activity', 'settings', 'api-keys', 'theme',
-  'dashboards', 'atlas-engine',
+  'dashboards', 'atlas-engine', 'usage',
   'docs',
 ]
 
@@ -164,6 +168,13 @@ const Icon = {
       <circle cx="8" cy="8.5" r="1.5" />
     </svg>
   ),
+  usage: (
+    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="1.5" y="9" width="3" height="5.5" rx="0.75" />
+      <rect x="6.5" y="5.5" width="3" height="9" rx="0.75" />
+      <rect x="11.5" y="1.5" width="3" height="13" rx="0.75" />
+    </svg>
+  ),
   docs: (
     <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">
       <path d="M3 2.5h7.5a2 2 0 0 1 2 2V13H5a2 2 0 0 0-2 2z" />
@@ -220,6 +231,7 @@ const SCREEN_LABELS: Partial<Record<Screen, string>> = {
   dashboards: 'Dashboards',
   'dashboard-view': 'Dashboard',
   'atlas-engine': 'Engine LM',
+  usage: 'Usage',
   docs: 'Docs',
 }
 
@@ -239,6 +251,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: 'workflows',   icon: Icon.workflows,   label: 'Workflows' },
       { id: 'dashboards',  icon: Icon.dashboards,  label: 'Dashboards' },
       { id: 'approvals',   icon: Icon.approvals,   label: 'Approvals' },
+      { id: 'usage',       icon: Icon.usage,       label: 'Usage' },
     ],
   },
   {
@@ -258,12 +271,10 @@ const NAV_GROUPS: NavGroup[] = [
     defaultExpanded: false,
     items: [
       { id: 'settings',        icon: Icon.settings,        label: 'General' },
-      { id: 'onboarding',      icon: Icon.onboarding,      label: 'Onboarding' },
       { id: 'api-keys',        icon: Icon.apiKeys,         label: 'Credentials' },
       { id: 'theme',           icon: Icon.theme,           label: 'Appearance' },
       { id: 'communications',  icon: Icon.communications,  label: 'Communications' },
       { id: 'activity',        icon: Icon.activity,        label: 'Activity' },
-      { id: 'docs',            icon: Icon.docs,            label: 'Docs' },
     ],
   },
 ]
@@ -283,16 +294,36 @@ export function App() {
   )
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [isMobile, setIsMobile]           = useState(() => window.innerWidth <= 480)
-  const [expandedGroups, setExpandedGroups] = useState<Record<NavGroupID, boolean>>(() =>
-    NAV_GROUPS.reduce((acc, group) => ({ ...acc, [group.id]: group.defaultExpanded }), {} as Record<NavGroupID, boolean>)
-  )
+  const [expandedGroups, setExpandedGroups] = useState<Record<NavGroupID, boolean>>(() => {
+    // Start from defaults
+    const defaults = NAV_GROUPS.reduce((acc, g) => ({ ...acc, [g.id]: g.defaultExpanded }), {} as Record<NavGroupID, boolean>)
+    // Restore persisted expand/collapse state if available
+    try {
+      const stored = localStorage.getItem('sidebarGroups')
+      if (stored) Object.assign(defaults, JSON.parse(stored))
+    } catch { /* ignore */ }
+    // Always expand the group containing the currently active screen
+    const activeGroup = NAV_GROUPS.find(g => g.items.some(item => item.id === getInitialScreen()))
+    if (activeGroup) defaults[activeGroup.id] = true
+    return defaults
+  })
   const [themeConfig, setThemeConfig] = useState<ThemeConfig>(loadTheme)
 
   const setActiveTheme = (mode: ThemeMode) =>
     setThemeConfig(prev => ({ ...prev, mode }))
 
-  const setActivePreset = (preset: ThemePreset) =>
-    setThemeConfig(prev => ({ ...prev, preset }))
+  const setActivePreset = (preset: ThemePreset) => {
+    const presetOption = THEME_PRESETS.find(p => p.id === preset)
+    const resolvedMode = themeConfig.mode === 'system'
+      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      : themeConfig.mode
+    const presetAccent = presetOption?.preview[resolvedMode].accent
+    setThemeConfig(prev => ({
+      ...prev,
+      preset,
+      ...(presetAccent ? { accent: presetAccent } : {}),
+    }))
+  }
 
   const setActiveAccent = (accent: string) =>
     setThemeConfig(prev => ({ ...prev, accent }))
@@ -358,6 +389,16 @@ export function App() {
   const navigate = (s: Screen) => {
     setScreen(s)
     window.location.hash = s
+    // Auto-expand the group containing this screen
+    const activeGroup = NAV_GROUPS.find(g => g.items.some(item => item.id === s))
+    if (activeGroup) {
+      setExpandedGroups(prev => {
+        if (prev[activeGroup.id]) return prev
+        const next = { ...prev, [activeGroup.id]: true }
+        try { localStorage.setItem('sidebarGroups', JSON.stringify(next)) } catch { /* ignore */ }
+        return next
+      })
+    }
     if (mobileNavOpen) closeMobileNav()
   }
 
@@ -375,7 +416,11 @@ export function App() {
   }
 
   const toggleGroup = (groupID: NavGroupID) => {
-    setExpandedGroups((current) => ({ ...current, [groupID]: !current[groupID] }))
+    setExpandedGroups((current) => {
+      const next = { ...current, [groupID]: !current[groupID] }
+      try { localStorage.setItem('sidebarGroups', JSON.stringify(next)) } catch { /* ignore */ }
+      return next
+    })
   }
 
   const openMobileNav = () => {
@@ -446,14 +491,6 @@ export function App() {
 
   return (
     <div class="app">
-      {/* Mobile top bar — only visible at ≤480px via CSS */}
-      <div class="mobile-topbar">
-        <button class="mobile-menu-btn" onClick={openMobileNav} aria-label="Open navigation">
-          {Icon.hamburger}
-        </button>
-        <span class="mobile-topbar-title">{SCREEN_LABELS[screen] ?? 'Atlas'}</span>
-      </div>
-
       {/* Mobile backdrop — closes sidebar overlay on tap */}
       {mobileNavOpen && (
         <div class="mobile-backdrop" onClick={closeMobileNav} />
@@ -464,7 +501,7 @@ export function App() {
           {!collapsed && <div class="sidebar-control-glyph">{Icon.controlCenter}</div>}
           {!collapsed && (
             <div class="sidebar-wordmark">
-              <div class="sidebar-wordmark-name">Control Center</div>
+              <div class="sidebar-wordmark-name">Atlas</div>
             </div>
           )}
           <button
@@ -481,7 +518,6 @@ export function App() {
 
           {/* ── Chat ───────────────────────────────────────── */}
           <div class="nav-group">
-            {!collapsed && <div class="nav-group-label">Chat</div>}
             <a
               class={`nav-item${screen === 'chat' ? ' active' : ''}`}
               onClick={(e) => { e.preventDefault(); navigate('chat') }}
@@ -493,15 +529,23 @@ export function App() {
             </a>
           </div>
 
-          {NAV_GROUPS.map((group, gi) => (
+          {NAV_GROUPS.map((group) => {
+            const isGroupActive = group.items.some(i => i.id === screen)
+            const groupBadge    = group.id === 'operator' ? pendingApprovals + pendingProposals : 0
+            return (
             <div class="nav-group" key={group.label}>
               {!collapsed && (
                 <button
-                  class="nav-group-toggle"
+                  class={`nav-group-toggle${isGroupActive ? ' nav-group-toggle--active' : ''}`}
                   onClick={() => toggleGroup(group.id)}
                   aria-expanded={expandedGroups[group.id]}
                 >
-                  <span>{group.label}</span>
+                  <span>
+                    {group.label}
+                    {!expandedGroups[group.id] && groupBadge > 0 && (
+                      <span class="nav-badge" style={{ marginLeft: '6px' }}>{groupBadge}</span>
+                    )}
+                  </span>
                   <span class={`nav-group-caret${expandedGroups[group.id] ? ' expanded' : ''}`}>⌃</span>
                 </button>
               )}
@@ -580,7 +624,22 @@ export function App() {
                 </div>
               ))}
             </div>
-          ))}
+          )})}
+
+          {/* ── Docs ───────────────────────────────────────── */}
+          <div class="nav-group">
+            {!collapsed && <div class="nav-group-sep" />}
+            {collapsed && <div class="nav-group-sep" />}
+            <a
+              class={`nav-item${screen === 'docs' ? ' active' : ''}`}
+              onClick={(e) => { e.preventDefault(); navigate('docs') }}
+              href="#docs"
+              data-tooltip="Docs"
+            >
+              <span class="nav-icon">{Icon.docs}</span>
+              {!collapsed && 'Docs'}
+            </a>
+          </div>
 
         </nav>
 
@@ -647,8 +706,8 @@ export function App() {
             </div>
           ) : (
             <div class="runtime-status">
-              <span style={{ color: 'var(--text-3)', letterSpacing: '0.01em' }}>v0.2</span>
-              <span style={{ color: 'var(--text-3)' }}>—</span>
+              <span style={{ color: 'var(--theme-text-muted)', letterSpacing: '0.01em' }}>v0.2</span>
+              <span style={{ color: 'var(--theme-text-muted)' }}>—</span>
               <span class={dotClass} />
               <span>{statusLabel}</span>
             </div>
@@ -656,6 +715,13 @@ export function App() {
         </div>
       </aside>
 
+      <HeaderChromeContext.Provider
+        value={isMobile ? (
+          <button class="mobile-menu-btn" onClick={openMobileNav} aria-label="Open navigation">
+            {Icon.hamburger}
+          </button>
+        ) : null}
+      >
       <main>
         {/* Chat is always mounted so its EventSource survives navigation */}
         <div style={{ display: screen === 'chat' ? 'contents' : 'none' }}>
@@ -674,6 +740,7 @@ export function App() {
         {screen === 'api-keys'    && <APIKeys />}
         {screen === 'theme'       && <Theme activePreset={themeConfig.preset} onPresetChange={setActivePreset} activeTheme={activeTheme} onThemeChange={setActiveTheme} activeAccent={themeConfig.accent} onAccentChange={setActiveAccent} activeDensity={themeConfig.density} onDensityChange={setActiveDensity} activeChatFontSize={themeConfig.chatFontSize} onChatFontSizeChange={setChatFontSize} activeChatRadius={themeConfig.chatRadius} onChatRadiusChange={setChatRadius} activeChatFont={themeConfig.chatFont} onChatFontChange={setChatFont} activeChatAvatarStyle={themeConfig.chatAvatarStyle} onChatAvatarStyleChange={setChatAvatarStyle} />}
         {screen === 'atlas-engine' && <AtlasEngine />}
+        {screen === 'usage'       && <Usage />}
         {screen === 'docs'        && <Docs />}
         {screen === 'dashboards'  && (
           <Dashboards
@@ -693,6 +760,9 @@ export function App() {
           />
         )}
       </main>
+      </HeaderChromeContext.Provider>
+
+      <Toaster />
     </div>
   )
 }

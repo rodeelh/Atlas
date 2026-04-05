@@ -3,6 +3,7 @@ import type { JSX } from 'preact/jsx-runtime'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { api, MessageAttachment, LinkPreview, ConversationSummary, ConversationDetail } from '../api/client'
+import { toast } from '../toast'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { formatAtlasModelName } from '../modelName'
@@ -243,6 +244,19 @@ const MicIcon = () => (
   </svg>
 )
 
+const CopyIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="5" y="5" width="9" height="9" rx="1.5" />
+    <path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" />
+  </svg>
+)
+
+const CheckIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 8l4 4 6-7" />
+  </svg>
+)
+
 const AvatarGlyph = () => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
     <circle cx="8" cy="5.5" r="3" />
@@ -271,6 +285,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
   const [error, setError]                     = useState<string | null>(null)
   const [attachments, setAttachments]         = useState<MessageAttachment[]>([])
   const [agentName, setAgentName]             = useState('Atlas')
+  const [userName, setUserName]               = useState('')
   const [activeProvider, setActiveProvider]   = useState<ChatProvider>('openai')
   const [modelByProvider, setModelByProvider] = useState<Record<ChatProvider, string>>({
     openai:    '',
@@ -290,6 +305,10 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
   const historyDebounceRef                      = useRef<ReturnType<typeof setTimeout> | null>(null)
   const historyContainerRef                     = useRef<HTMLDivElement>(null)
 
+  // Copy state — tracks which message bubble is showing the checkmark
+  const [copyFeedback, setCopyFeedback] = useState<{ id: string; status: 'copied' | 'failed' } | null>(null)
+  const copyFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   // Presence state — replaces spinner + tool banner entirely
   const [presenceText, setPresenceText]       = useState('Thinking…')
   const [presenceVisible, setPresenceVisible] = useState(false)
@@ -302,23 +321,51 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
   const activeMsgId = useRef<string | null>(null)
 
   const bottomRef      = useRef<HTMLDivElement>(null)
+  const messagesRef    = useRef<HTMLDivElement>(null)
   const esRef          = useRef<EventSource | null>(null)
   const textareaRef    = useRef<HTMLTextAreaElement>(null)
   const fileInputRef   = useRef<HTMLInputElement>(null)
   const conversationID = useRef<string>(getConversationID())
   const isInitialMount = useRef(true)
 
+  const scrollToBottom = (smooth: boolean) => {
+    requestAnimationFrame(() => {
+      const el = messagesRef.current
+      if (!el) return
+      if (smooth) {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+      } else {
+        el.scrollTop = el.scrollHeight
+      }
+    })
+  }
+
   useEffect(() => {
     saveMessages(messages)
-    bottomRef.current?.scrollIntoView({ behavior: isInitialMount.current ? 'instant' : 'smooth' })
+    scrollToBottom(!isInitialMount.current)
     isInitialMount.current = false
   }, [messages])
 
+  // Scroll to bottom on mount (page load or tab switch back)
   useEffect(() => {
+    scrollToBottom(false)
     return () => {
       esRef.current?.close()
       if (presenceTimer.current) clearTimeout(presenceTimer.current)
+      if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current)
     }
+  }, [])
+
+  // ⌘K / Ctrl+K — focus the chat input from anywhere
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        textareaRef.current?.focus()
+      }
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
   }, [])
 
   const resolveModelLabel = useCallback(async (provider: ChatProvider, selectedModel?: string | null) => {
@@ -342,6 +389,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
   useEffect(() => {
     api.config().then(async (s) => {
       if (s.personaName) setAgentName(s.personaName)
+      if (s.userName) setUserName(s.userName)
       if (s.activeAIProvider) setActiveProvider(s.activeAIProvider as ChatProvider)
       setModelByProvider({
         openai:    s.selectedOpenAIPrimaryModel?.trim() || '',
@@ -743,6 +791,27 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
 
+  const copyMessage = async (id: string, content: string) => {
+    if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current)
+
+    try {
+      await navigator.clipboard.writeText(content)
+      setCopyFeedback({ id, status: 'copied' })
+      toast.success('Copied')
+      copyFeedbackTimer.current = setTimeout(() => {
+        setCopyFeedback(prev => prev?.id === id ? null : prev)
+        copyFeedbackTimer.current = null
+      }, 1800)
+    } catch {
+      setCopyFeedback({ id, status: 'failed' })
+      toast.error('Could not copy')
+      copyFeedbackTimer.current = setTimeout(() => {
+        setCopyFeedback(prev => prev?.id === id ? null : prev)
+        copyFeedbackTimer.current = null
+      }, 1800)
+    }
+  }
+
   const newConversation = () => {
     const id = uuid()
     localStorage.setItem(STORAGE_ID_KEY, id)
@@ -806,10 +875,10 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
                   {/* Results dropdown */}
                   <div style={{
                     position: 'absolute', top: 'calc(100% + 6px)', right: 0, width: '100%',
-                    background: 'var(--bg, var(--theme-surface-overlay))',
-                    border: '1px solid var(--border, var(--theme-border-strong))',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border-2)',
                     borderRadius: '12px',
-                    boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.28)',
                     overflow: 'hidden',
                     zIndex: 300,
                     maxHeight: '340px',
@@ -841,8 +910,15 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
                               onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--control-bg-hover)' }}
                               onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '' }}
                             >
-                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
-                                <span style={{ fontSize: '11px', color: 'var(--text-2)' }}>{rel}</span>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                  <span style={{ fontSize: '11px', color: 'var(--text-2)' }}>{rel}</span>
+                                  {s.platform && s.platform !== 'web' && (
+                                    <span style={{ fontSize: '10px', fontWeight: 600, letterSpacing: '0.03em', textTransform: 'uppercase', padding: '1px 5px', borderRadius: '4px', background: 'var(--theme-accent-subtle, rgba(99,102,241,0.12))', color: 'var(--theme-accent, #6366f1)' }}>
+                                      {s.platform}
+                                    </span>
+                                  )}
+                                </div>
                                 <span style={{ fontSize: '11px', color: 'var(--text-2)' }}>{s.messageCount} msgs</span>
                               </div>
                               <div style={{ fontSize: '13px', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -876,9 +952,10 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
                 </>
               ) : (
                 <button
-                  class="btn btn-sm btn-icon"
+                  class="btn btn-sm btn-icon chat-header-action-btn"
                   onClick={() => setHistoryOpen(true)}
                   title="Search conversations"
+                  aria-label="Search conversations"
                 >
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="6.5" cy="6.5" r="4.5" /><line x1="10" y1="10" x2="14" y2="14" />
@@ -887,13 +964,22 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
               )}
             </div>
 
-            <button class="btn btn-primary btn-sm" onClick={newConversation}>New Chat</button>
+            <button
+              class="btn btn-sm btn-icon chat-header-action-btn"
+              onClick={newConversation}
+              title="New chat"
+              aria-label="New chat"
+            >
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+                <path d="M8 3v10M3 8h10" />
+              </svg>
+            </button>
           </>
         }
       />
 
       {/* Messages */}
-      <div class="chat-messages">
+      <div ref={messagesRef} class="chat-messages">
         <div class="chat-thread">
           {messages.length === 0 && (
             <div class="empty-state">
@@ -906,24 +992,62 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
           )}
 
           {messages.map(msg => (
-            <div key={msg.id} class={`chat-message-row ${msg.role}${msg.isTyping ? ' typing' : ''}`}>
+            <div
+              key={msg.id}
+              class={`chat-message-row ${msg.role}${msg.isTyping ? ' typing' : ''}`}
+            >
               <div class={`chat-avatar chat-avatar-${msg.role}`}>
                 <span class="chat-avatar-content chat-avatar-content-glyph"><AvatarGlyph /></span>
-                <span class="chat-avatar-content chat-avatar-content-initial">{msg.role === 'assistant' ? 'A' : 'Y'}</span>
+                <span class="chat-avatar-content chat-avatar-content-initial">{msg.role === 'assistant' ? agentName[0]?.toUpperCase() ?? 'A' : userName[0]?.toUpperCase() ?? 'Y'}</span>
                 <span class="chat-avatar-content chat-avatar-content-minimal"><span class="chat-avatar-minimal-dot" /></span>
               </div>
-              <div class="chat-bubble">
-                {msg.content
-                  // Assistant messages: linkify URLs and anchor preview cards inline.
-                  // User messages: plain text (user already knows the links they typed).
-                  ? (msg.role === 'assistant'
-                      ? renderMessageContent(msg.content, msg.linkPreviews)
-                      : msg.content)
-                  // No content yet — show typing dots while the turn is active.
-                  : (msg.isTyping || msg.id === activeMsgId.current)
-                      ? <TypingDots working={presenceWorking} />
-                      : null
-                }
+              <div class="chat-bubble-wrap">
+                <div class="chat-bubble">
+                  {msg.content
+                    ? (msg.role === 'assistant'
+                        ? renderMessageContent(msg.content, msg.linkPreviews)
+                        : msg.content)
+                    : (msg.isTyping || msg.id === activeMsgId.current)
+                        ? <TypingDots working={presenceWorking} />
+                        : null
+                  }
+                </div>
+                {msg.content && !msg.isTyping && (
+                  <div class="chat-message-actions">
+                    {(() => {
+                      const copyState = copyFeedback?.id === msg.id ? copyFeedback.status : 'idle'
+                      const copyStateStyle = copyState === 'idle'
+                        ? undefined
+                        : {
+                            background: 'transparent',
+                            backgroundImage: 'none',
+                            border: '1px solid transparent',
+                            boxShadow: 'none',
+                            backdropFilter: 'none',
+                            WebkitBackdropFilter: 'none',
+                            opacity: '1',
+                            appearance: 'none',
+                            WebkitAppearance: 'none',
+                          } as const
+                      return (
+                    <button
+                      class="chat-copy-btn"
+                      data-copy-state={copyState}
+                      onClick={() => {
+                        if (copyState === 'copied') return
+                        copyMessage(msg.id, msg.content)
+                      }}
+                      title="Copy"
+                      aria-label="Copy message"
+                      aria-disabled={copyState === 'copied' ? 'true' : 'false'}
+                      style={copyStateStyle}
+                    >
+                      {copyState === 'copied' ? <CheckIcon /> : <CopyIcon />}
+                    </button>
+                      )
+                    })()}
+                  </div>
+                )}
               </div>
             </div>
           ))}
