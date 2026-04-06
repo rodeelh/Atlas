@@ -178,7 +178,12 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
           eyebrow="Docs Portal"
           title="Welcome to the Atlas handbook"
           summary="Everything here is designed to feel like an extension of the control center: practical, visual, and built around real Atlas workflows."
-          graphic={<DocsFlowGraphic mode="atlas" />}
+          graphic={<DocsSequencePanel title="Atlas at a glance" items={[
+            { label: 'Chat', copy: 'Start work in the main conversation surface.' },
+            { label: 'Skills', copy: 'Atlas chooses capabilities it needs for the task.' },
+            { label: 'Workflows', copy: 'Repeatable operator flows package common jobs.' },
+            { label: 'Delivery', copy: 'Replies and outputs route back to the right place.' },
+          ]} />}
         >
           <DocsSection title="Start Here">
             <p>
@@ -241,7 +246,12 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
           eyebrow="Introduction"
           title="How Atlas Works"
           summary="Atlas runs as a local runtime with a web UI layered on top. Messages and workflows move through skills, approvals, and communication channels before results are delivered."
-          graphic={<DocsFlowGraphic mode="runtime" />}
+          graphic={<DocsSequencePanel title="Runtime path" items={[
+            { label: 'Message', copy: 'A user request arrives from chat or an external channel.' },
+            { label: 'Skills', copy: 'Atlas determines which tools or workflows to use.' },
+            { label: 'Approvals', copy: 'Risky actions pause for human review when needed.' },
+            { label: 'Result', copy: 'The completed output returns to the active conversation.' },
+          ]} />}
         >
           <DocsSection title="High-level flow">
             <DocsStepList
@@ -288,7 +298,12 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
           eyebrow="Getting Started"
           title="Getting Started"
           summary="The quickest path to a useful Atlas setup is: configure keys, connect a chat agent, confirm routing, then test a live conversation."
-          graphic={<DocsFlowGraphic mode="getting-started" />}
+          graphic={<DocsSequencePanel title="First useful setup" items={[
+            { label: 'Provider key', copy: 'Add an OpenAI key so Atlas can respond.' },
+            { label: 'Chat agent', copy: 'Connect Telegram or Discord for remote access.' },
+            { label: 'Communications', copy: 'Validate the platform and discover the channel.' },
+            { label: 'Test message', copy: 'Send one real message and confirm the reply path.' },
+          ]} />}
         >
           <DocsSection title="Recommended setup order">
             <DocsStepList
@@ -491,7 +506,12 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
           eyebrow="Integrations"
           title="How Atlas Chat Integrations Work"
           summary="Chat integrations are a chain, not a single toggle. Users need to understand credentials, platform validation, channel discovery, and delivery routing as separate steps."
-          graphic={<DocsFlowGraphic mode="integrations" />}
+          graphic={<DocsSequencePanel title="Integration chain" items={[
+            { label: 'Credential', copy: 'Atlas authenticates with the platform using saved keys.' },
+            { label: 'Validation', copy: 'Communications confirms the service is actually reachable.' },
+            { label: 'Discovery', copy: 'Channels or sessions appear after a real message lands.' },
+            { label: 'Reply', copy: 'Atlas routes the answer back through the correct destination.' },
+          ]} />}
         >
           <DocsSection title="The integration chain">
             <DocsDefinitionList
@@ -522,7 +542,12 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
           eyebrow="Integrations"
           title="Telegram Setup"
           summary="Telegram is usually the fastest remote chat path into Atlas. The core flow is: create a bot with BotFather, add the token to Atlas, then send the bot a message so Communications can discover the chat."
-          graphic={<DocsFlowGraphic mode="telegram" />}
+          graphic={<DocsSequencePanel title="Telegram setup path" items={[
+            { label: 'BotFather', copy: 'Create the bot and capture the issued token.' },
+            { label: 'API Keys', copy: 'Paste the token into Atlas under Telegram Bot.' },
+            { label: 'First chat', copy: 'Send the bot one real message from Telegram.' },
+            { label: 'Discovery', copy: 'Refresh Communications and confirm the session appears.' },
+          ]} />}
         >
           <DocsSection title="Before you start">
             <DocsChecklistCard
@@ -574,7 +599,12 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
           eyebrow="Integrations"
           title="Discord Setup"
           summary="Discord setup takes a few more platform steps than Telegram, but it gives Atlas a strong home in shared servers and structured channels."
-          graphic={<DocsFlowGraphic mode="discord" />}
+          graphic={<DocsSequencePanel title="Discord setup path" items={[
+            { label: 'Developer app', copy: 'Create the app, bot, and required permissions.' },
+            { label: 'Token', copy: 'Store the bot token in Atlas credentials.' },
+            { label: 'Invite', copy: 'Add the bot to the target server or DM route.' },
+            { label: 'Test', copy: 'Send a message and confirm Communications sees it.' },
+          ]} />}
         >
           <DocsSection title="Before you start">
             <DocsChecklistCard
@@ -959,33 +989,27 @@ function DocsConceptMap() {
   )
 }
 
-function DocsFlowGraphic({ mode }: { mode: 'atlas' | 'runtime' | 'getting-started' | 'integrations' | 'telegram' | 'discord' }) {
-  const labels = (() => {
-    switch (mode) {
-      case 'runtime':
-        return ['Message', 'Skills', 'Approvals', 'Result']
-      case 'getting-started':
-        return ['OpenAI Key', 'Chat Agent', 'Communications', 'Test Message']
-      case 'integrations':
-        return ['Token', 'API Keys', 'Communications', 'Reply']
-      case 'telegram':
-        return ['BotFather', 'Bot Token', 'Atlas', 'Telegram Chat']
-      case 'discord':
-        return ['Discord App', 'Bot Token', 'Atlas', 'Server Channel']
-      case 'atlas':
-      default:
-        return ['Chat', 'Skills', 'Workflows', 'Delivery']
-    }
-  })()
-
+function DocsSequencePanel({
+  title,
+  items,
+}: {
+  title: string
+  items: Array<{ label: string; copy: string }>
+}) {
   return (
-    <div class="docs-flow-graphic">
-      {labels.map((label, index) => (
-        <div class="docs-flow-node" key={label}>
-          <span>{label}</span>
-          {index < labels.length - 1 && <div class="docs-flow-link" />}
-        </div>
-      ))}
+    <div class="docs-sequence-panel">
+      <div class="docs-signal-title">{title}</div>
+      <div class="docs-sequence-list">
+        {items.map((item, index) => (
+          <div class="docs-sequence-item" key={item.label}>
+            <span class="docs-sequence-index">{index + 1}</span>
+            <div class="docs-sequence-copy">
+              <div class="docs-sequence-label">{item.label}</div>
+              <div class="docs-sequence-text">{item.copy}</div>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

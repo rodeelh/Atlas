@@ -4,7 +4,10 @@ Automatically loaded at the start of every session. Navigation map only — read
 
 Current source of truth:
 - System design: `Atlas/docs/architecture.md`
+- Agent boundary: `Atlas/docs/agent-boundary.md`
 - Internal module contract: `Atlas/docs/internal-modules.md`
+- Migration verification: `Atlas/docs/migration-verification.md`
+- Manual smoke checklist: `Atlas/docs/manual-smoke-checklist.md`
 - API reference: `Atlas/docs/runtime-api-v1.md`
 - Migration history: `archive/MIGRATION.md`
 - This file: contributor navigation and workflow shortcuts
@@ -30,7 +33,7 @@ Swift packages are archived at `archive/swift/`. They are not built and not refe
 | `cmd/atlas-runtime` | Binary entry point — flags, service wiring, `http.ListenAndServe` |
 | `internal/agent` | OpenAI/Anthropic/Gemini/LM Studio provider calls, agent loop (tool dispatch, approval deferral, SSE emission) |
 | `internal/auth` | Session auth — bootstrap, token issuance, HMAC session validation |
-| `internal/chat` | `Service` (message handling, agent loop orchestration), `Broadcaster` (SSE fan-out) |
+| `internal/chat` | Atlas Agent subsystem in current package form: `Service` (turn orchestration), `Broadcaster` (SSE fan-out) |
 | `internal/comms` | Telegram + Discord bridge lifecycle, channel management |
 | `internal/config` | `RuntimeConfigSnapshot`, `Store` (atomic JSON read/write), `GoRuntimeConfig` |
 | `internal/creds` | Keychain credential bundle reader (`security` CLI) |

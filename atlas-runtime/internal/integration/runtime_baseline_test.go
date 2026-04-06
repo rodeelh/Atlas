@@ -240,6 +240,29 @@ func TestWorkflowRunRoute_CurrentShape(t *testing.T) {
 	if body["workflowID"] != "wf-shape" {
 		t.Fatalf("unexpected workflow run payload: %+v", body)
 	}
+	runID, _ := body["id"].(string)
+	if runID == "" {
+		t.Fatalf("expected workflow run id, got %+v", body)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		runs := features.ListWorkflowRuns(h.support, "wf-shape")
+		for _, raw := range runs {
+			var run map[string]any
+			if err := json.Unmarshal(raw, &run); err != nil {
+				continue
+			}
+			if run["id"] == runID {
+				if status, _ := run["status"].(string); status != "" && status != "running" {
+					return
+				}
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for workflow run %s to finish", runID)
 }
 
 func TestEngineStatusRoute_CurrentShape(t *testing.T) {

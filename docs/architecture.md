@@ -1,8 +1,13 @@
 # Atlas Architecture
 
-**Last updated: 2026-04-05** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md) · Internal modules: [`docs/internal-modules.md`](internal-modules.md)
+**Last updated: 2026-04-06** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md) · Internal modules: [`docs/internal-modules.md`](internal-modules.md) · Agent boundary: [`docs/agent-boundary.md`](agent-boundary.md) · Migration verification: [`docs/migration-verification.md`](migration-verification.md) · Manual smoke: [`docs/manual-smoke-checklist.md`](manual-smoke-checklist.md)
 
 Atlas is a local AI operator. A Go binary runs as a launchd daemon (`Atlas`), serves a web UI, and connects to any supported AI provider. A Bubbletea TUI (`atlas`) provides a terminal interface. No Swift required.
+
+Note: the package currently named `internal/chat` is architecturally the Atlas **Agent** subsystem. See [`docs/agent-boundary.md`](agent-boundary.md).
+
+Future delegated multi-agent work should follow this rule:
+**Agent owns delegation decisions. Teams owns delegated execution.**
 
 ---
 
