@@ -1171,6 +1171,10 @@ main {
   border-radius: 20px;
 }
 
+.docs-hero-card--copy-only {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .docs-hero-copy {
   display: flex;
   flex-direction: column;
@@ -1200,6 +1204,40 @@ main {
 
 .docs-hero-graphic > * {
   width: 100%;
+}
+
+.docs-mini-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-height: 100%;
+}
+
+.docs-mini-card {
+  min-width: 0;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--theme-border-subtle) 76%, transparent);
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--theme-surface-interactive) 84%, white 16%),
+      color-mix(in srgb, var(--theme-bg-elevated) 96%, transparent));
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+}
+
+.docs-mini-card-title {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--theme-text-primary);
+}
+
+.docs-mini-card-copy {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--theme-text-secondary);
 }
 
 .docs-section {
@@ -1551,6 +1589,10 @@ main {
     position: static;
     max-height: none;
     order: -1;
+  }
+
+  .docs-mini-card-grid {
+    grid-template-columns: 1fr;
   }
 }
 

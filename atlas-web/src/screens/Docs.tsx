@@ -178,11 +178,11 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
           eyebrow="Docs Portal"
           title="Welcome to the Atlas handbook"
           summary="Everything here is designed to feel like an extension of the control center: practical, visual, and built around real Atlas workflows."
-          graphic={<DocsSequencePanel title="Atlas at a glance" items={[
-            { label: 'Chat', copy: 'Start work in the main conversation surface.' },
-            { label: 'Skills', copy: 'Atlas chooses capabilities it needs for the task.' },
-            { label: 'Workflows', copy: 'Repeatable operator flows package common jobs.' },
-            { label: 'Delivery', copy: 'Replies and outputs route back to the right place.' },
+          graphic={<DocsMiniCardGrid items={[
+            { title: 'Chat', copy: 'Main working surface for messages and files.' },
+            { title: 'Skills', copy: 'Capability layer Atlas can invoke for tasks.' },
+            { title: 'Workflows', copy: 'Reusable operator flows with trust scope.' },
+            { title: 'Delivery', copy: 'Replies and outputs route to the right place.' },
           ]} />}
         >
           <DocsSection title="Start Here">
@@ -246,12 +246,6 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
           eyebrow="Introduction"
           title="How Atlas Works"
           summary="Atlas runs as a local runtime with a web UI layered on top. Messages and workflows move through skills, approvals, and communication channels before results are delivered."
-          graphic={<DocsSequencePanel title="Runtime path" items={[
-            { label: 'Message', copy: 'A user request arrives from chat or an external channel.' },
-            { label: 'Skills', copy: 'Atlas determines which tools or workflows to use.' },
-            { label: 'Approvals', copy: 'Risky actions pause for human review when needed.' },
-            { label: 'Result', copy: 'The completed output returns to the active conversation.' },
-          ]} />}
         >
           <DocsSection title="High-level flow">
             <DocsStepList
@@ -298,11 +292,11 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
           eyebrow="Getting Started"
           title="Getting Started"
           summary="The quickest path to a useful Atlas setup is: configure keys, connect a chat agent, confirm routing, then test a live conversation."
-          graphic={<DocsSequencePanel title="First useful setup" items={[
-            { label: 'Provider key', copy: 'Add an OpenAI key so Atlas can respond.' },
-            { label: 'Chat agent', copy: 'Connect Telegram or Discord for remote access.' },
-            { label: 'Communications', copy: 'Validate the platform and discover the channel.' },
-            { label: 'Test message', copy: 'Send one real message and confirm the reply path.' },
+          graphic={<DocsMiniCardGrid items={[
+            { title: 'Provider key', copy: 'Start with OpenAI so Atlas can answer.' },
+            { title: 'Chat agent', copy: 'Connect Telegram or Discord for remote access.' },
+            { title: 'Communications', copy: 'Validate the platform and discover the route.' },
+            { title: 'Test message', copy: 'Confirm one real end-to-end reply.' },
           ]} />}
         >
           <DocsSection title="Recommended setup order">
@@ -506,11 +500,11 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
           eyebrow="Integrations"
           title="How Atlas Chat Integrations Work"
           summary="Chat integrations are a chain, not a single toggle. Users need to understand credentials, platform validation, channel discovery, and delivery routing as separate steps."
-          graphic={<DocsSequencePanel title="Integration chain" items={[
-            { label: 'Credential', copy: 'Atlas authenticates with the platform using saved keys.' },
-            { label: 'Validation', copy: 'Communications confirms the service is actually reachable.' },
-            { label: 'Discovery', copy: 'Channels or sessions appear after a real message lands.' },
-            { label: 'Reply', copy: 'Atlas routes the answer back through the correct destination.' },
+          graphic={<DocsMiniCardGrid items={[
+            { title: 'Credential', copy: 'Store the platform token or key in Atlas.' },
+            { title: 'Validation', copy: 'Confirm the service is reachable in Communications.' },
+            { title: 'Discovery', copy: 'Wait for the first real message to expose the route.' },
+            { title: 'Reply', copy: 'Atlas sends the answer back through the discovered destination.' },
           ]} />}
         >
           <DocsSection title="The integration chain">
@@ -542,12 +536,6 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
           eyebrow="Integrations"
           title="Telegram Setup"
           summary="Telegram is usually the fastest remote chat path into Atlas. The core flow is: create a bot with BotFather, add the token to Atlas, then send the bot a message so Communications can discover the chat."
-          graphic={<DocsSequencePanel title="Telegram setup path" items={[
-            { label: 'BotFather', copy: 'Create the bot and capture the issued token.' },
-            { label: 'API Keys', copy: 'Paste the token into Atlas under Telegram Bot.' },
-            { label: 'First chat', copy: 'Send the bot one real message from Telegram.' },
-            { label: 'Discovery', copy: 'Refresh Communications and confirm the session appears.' },
-          ]} />}
         >
           <DocsSection title="Before you start">
             <DocsChecklistCard
@@ -599,12 +587,6 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
           eyebrow="Integrations"
           title="Discord Setup"
           summary="Discord setup takes a few more platform steps than Telegram, but it gives Atlas a strong home in shared servers and structured channels."
-          graphic={<DocsSequencePanel title="Discord setup path" items={[
-            { label: 'Developer app', copy: 'Create the app, bot, and required permissions.' },
-            { label: 'Token', copy: 'Store the bot token in Atlas credentials.' },
-            { label: 'Invite', copy: 'Add the bot to the target server or DM route.' },
-            { label: 'Test', copy: 'Send a message and confirm Communications sees it.' },
-          ]} />}
         >
           <DocsSection title="Before you start">
             <DocsChecklistCard
@@ -844,18 +826,18 @@ function DocsPageLayout({
   eyebrow: string
   title: string
   summary: string
-  graphic: preact.ComponentChild
+  graphic?: preact.ComponentChild
   children: preact.ComponentChild
 }) {
   return (
     <div class="docs-page">
-      <section class="card docs-hero-card">
+      <section class={`card docs-hero-card${graphic ? '' : ' docs-hero-card--copy-only'}`}>
         <div class="docs-hero-copy">
           <div class="surface-eyebrow">{eyebrow}</div>
           <h2 class="docs-hero-title">{title}</h2>
           <p class="docs-hero-summary">{summary}</p>
         </div>
-        <div class="docs-hero-graphic">{graphic}</div>
+        {graphic && <div class="docs-hero-graphic">{graphic}</div>}
       </section>
       {children}
     </div>
@@ -1010,6 +992,23 @@ function DocsSequencePanel({
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+function DocsMiniCardGrid({
+  items,
+}: {
+  items: Array<{ title: string; copy: string }>
+}) {
+  return (
+    <div class="docs-mini-card-grid">
+      {items.map((item) => (
+        <div class="docs-mini-card" key={item.title}>
+          <div class="docs-mini-card-title">{item.title}</div>
+          <div class="docs-mini-card-copy">{item.copy}</div>
+        </div>
+      ))}
     </div>
   )
 }
