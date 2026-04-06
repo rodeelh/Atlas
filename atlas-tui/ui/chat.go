@@ -114,7 +114,7 @@ type ChatModel struct {
 	masked  textinput.Model // EchoPassword mode for API keys
 	spinner spinner.Model
 
-	messages    []chatMsg
+	messages   []chatMsg
 	streaming  bool
 	statusLine string // shown below viewport during tool use (e.g. "Browsing...")
 	convID     string
@@ -134,10 +134,10 @@ type ChatModel struct {
 	chatTyping bool   // tick loop is active
 
 	// Onboarding.
-	onboarding    bool
-	maskedMode    bool // true while collecting an API key
-	obState       onboarding.State
-	obScreenStart int // index in messages where the current onboarding screen starts
+	onboarding     bool
+	maskedMode     bool // true while collecting an API key
+	obState        onboarding.State
+	obScreenStart  int // index in messages where the current onboarding screen starts
 	checkboxCursor int
 
 	err string

@@ -31,15 +31,22 @@ type CustomSkillAction struct {
 
 // CustomSkillManifest is the full content of a skill.json file.
 type CustomSkillManifest struct {
-	ID          string              `json:"id"`
-	Name        string              `json:"name"`
-	Version     string              `json:"version"`
-	Description string              `json:"description"`
-	Author      string              `json:"author,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Description string `json:"description"`
+	Author      string `json:"author,omitempty"`
 	// Source, when set in skill.json, overrides the default "custom" source tag
 	// returned by features.ListSkills. Forge-generated skills set this to "forge"
 	// so they continue to appear with the Forge badge in the UI.
-	Source  string              `json:"source,omitempty"`
+	Source string `json:"source,omitempty"`
+	// RiskLevel mirrors ForgeSkillSpec.RiskLevel. Valid values: low, medium, high.
+	// Defaults to "medium" when absent.
+	RiskLevel string `json:"risk_level,omitempty"`
+	// Category mirrors ForgeSkillSpec.Category for UI grouping.
+	Category string `json:"category,omitempty"`
+	// Tags are freeform labels used for discovery.
+	Tags    []string            `json:"tags,omitempty"`
 	Actions []CustomSkillAction `json:"actions"`
 	// SkillDir is populated by ListCustomManifests — not present in skill.json.
 	SkillDir string `json:"-"`

@@ -12,15 +12,13 @@ import { Automations } from './screens/Automations'
 import { Workflows } from './screens/Workflows'
 import { APIKeys } from './screens/APIKeys'
 import { Theme } from './screens/Theme'
-import { Dashboards } from './screens/Dashboards'
-import { DashboardView } from './screens/DashboardView'
 import { Docs } from './screens/Docs'
 import { AtlasEngine } from './screens/AtlasEngine'
 import { Usage } from './screens/Usage'
 import { Onboarding } from './screens/Onboarding'
 import { Toaster } from './components/Toaster'
 import { HeaderChromeContext } from './components/PageHeader'
-import { api, type DashboardSpec, RuntimeStatus } from './api/client'
+import { api, RuntimeStatus } from './api/client'
 
 type Screen =
   | 'chat'
@@ -36,8 +34,6 @@ type Screen =
   | 'settings'
   | 'api-keys'
   | 'theme'
-  | 'dashboards'
-  | 'dashboard-view'
   | 'atlas-engine'
   | 'usage'
   | 'docs'
@@ -45,7 +41,7 @@ type Screen =
 const VALID_SCREENS: Screen[] = [
   'chat', 'onboarding', 'communications', 'approvals', 'skills', 'forge', 'mind',
   'automations', 'workflows', 'activity', 'settings', 'api-keys', 'theme',
-  'dashboards', 'atlas-engine', 'usage',
+  'atlas-engine', 'usage',
   'docs',
 ]
 
@@ -135,21 +131,6 @@ const Icon = {
       <circle cx="5.5" cy="11" r="0.8" fill="currentColor" stroke="none" />
     </svg>
   ),
-  dashboards: (
-    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="1.5" y="1.5" width="5.5" height="5.5" rx="1" />
-      <rect x="9" y="1.5" width="5.5" height="5.5" rx="1" />
-      <rect x="1.5" y="9" width="5.5" height="5.5" rx="1" />
-      <rect x="9" y="9" width="5.5" height="5.5" rx="1" />
-    </svg>
-  ),
-  // Individual installed dashboard item — simpler card shape
-  dashboardItem: (
-    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="2" y="3" width="12" height="10" rx="1.5" />
-      <line x1="2" y1="6.5" x2="14" y2="6.5" />
-    </svg>
-  ),
   controlCenter: (
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
       <rect x="3.5" y="4" width="17" height="16" rx="4" />
@@ -228,8 +209,6 @@ const SCREEN_LABELS: Partial<Record<Screen, string>> = {
   settings: 'General',
   'api-keys': 'Credentials',
   theme: 'Appearance',
-  dashboards: 'Dashboards',
-  'dashboard-view': 'Dashboard',
   'atlas-engine': 'Engine LM',
   usage: 'Usage',
   docs: 'Docs',
@@ -249,7 +228,6 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'automations', icon: Icon.automations, label: 'Automations' },
       { id: 'workflows',   icon: Icon.workflows,   label: 'Workflows' },
-      { id: 'dashboards',  icon: Icon.dashboards,  label: 'Dashboards' },
       { id: 'approvals',   icon: Icon.approvals,   label: 'Approvals' },
       { id: 'usage',       icon: Icon.usage,       label: 'Usage' },
     ],
@@ -286,8 +264,6 @@ export function App() {
   const [pendingApprovals, setPendingApprovals] = useState(0)
   const [pendingProposals, setPendingProposals] = useState(0)
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
-  const [activeDashboardID, setActiveDashboardID] = useState<string | null>(null)
-  const [installedDashboards, setInstalledDashboards] = useState<DashboardSpec[]>([])
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null)
   const [collapsed, setCollapsed]         = useState<boolean>(() =>
     localStorage.getItem('sidebarCollapsed') === 'true'
@@ -355,8 +331,8 @@ export function App() {
   useEffect(() => {
     const poll = async () => {
       try {
-        const [approvals, status, proposals, dashboards] = await Promise.allSettled([
-          api.approvals(), api.status(), api.forgeProposals(), api.installedDashboards()
+        const [approvals, status, proposals] = await Promise.allSettled([
+          api.approvals(), api.status(), api.forgeProposals()
         ])
         if (approvals.status === 'fulfilled') {
           setPendingApprovals(approvals.value.filter(a => a.status === 'pending').length)
@@ -366,9 +342,6 @@ export function App() {
         }
         if (proposals.status === 'fulfilled') {
           setPendingProposals(proposals.value.filter(p => p.status === 'pending').length)
-        }
-        if (dashboards.status === 'fulfilled') {
-          setInstalledDashboards(dashboards.value)
         }
       } catch {
         // daemon may not be running
@@ -508,6 +481,8 @@ export function App() {
             class="sidebar-collapse-btn"
             onClick={isMobile && mobileNavOpen ? closeMobileNav : toggleCollapsed}
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            data-tooltip={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             style={{ marginLeft: collapsed ? undefined : 'auto' }}
           >
             {collapsed ? Icon.expand : Icon.collapse}
@@ -523,6 +498,7 @@ export function App() {
               onClick={(e) => { e.preventDefault(); navigate('chat') }}
               href="#chat"
               data-tooltip="Chat"
+              aria-label="Chat"
             >
               <span class="nav-icon">{Icon.chat}</span>
               {!collapsed && 'Chat'}
@@ -557,6 +533,7 @@ export function App() {
                     onClick={(e) => { e.preventDefault(); navigate(item.id) }}
                     href={`#${item.id}`}
                     data-tooltip={item.label}
+                    aria-label={item.label}
                   >
                     <span class="nav-icon">{item.icon}</span>
                     {!collapsed && item.label}
@@ -572,55 +549,6 @@ export function App() {
                     )}
                   </a>
 
-                  {!collapsed && group.id === 'operator' && item.id === 'dashboards' && (
-                    <div class="nav-sublist">
-                      {[...installedDashboards]
-                        .sort((a, b) => {
-                          if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1
-                          const ta = a.lastAccessedAt ? new Date(a.lastAccessedAt).getTime() : 0
-                          const tb = b.lastAccessedAt ? new Date(b.lastAccessedAt).getTime() : 0
-                          return tb - ta
-                        })
-                        .slice(0, 4)
-                        .map(dash => (
-                          <a
-                            key={dash.id}
-                            class={`nav-item nav-item-sub${screen === 'dashboard-view' && activeDashboardID === dash.id ? ' active' : ''}`}
-                            onClick={(e) => {
-                              e.preventDefault()
-                              setActiveDashboardID(dash.id)
-                              setScreen('dashboard-view')
-                              window.location.hash = 'dashboard-view'
-                              api.recordDashboardAccess(dash.id).catch(() => {})
-                            }}
-                            href="#dashboard-view"
-                            data-tooltip={dash.title}
-                          >
-                            <span class="nav-icon">{Icon.dashboardItem}</span>
-                            <span class="nav-item-label-truncate">{dash.title}</span>
-                            {dash.isPinned && (
-                              <svg class="nav-pin-icon" width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" title="Pinned">
-                                <line x1="8" y1="10" x2="8" y2="15" />
-                                <path d="M5 9.5C3.5 8.5 3 6.5 4 5l1-1h6l1 1c1 1.5.5 3.5-1 4.5H5z" />
-                                <line x1="8" y1="4" x2="8" y2="1.5" />
-                              </svg>
-                            )}
-                          </a>
-                        ))}
-
-                      {installedDashboards.length > 4 && (
-                        <a
-                          class="nav-item nav-item-sub nav-item--more"
-                          onClick={(e) => { e.preventDefault(); navigate('dashboards') }}
-                          href="#dashboards"
-                          data-tooltip={`View all ${installedDashboards.length} dashboards`}
-                        >
-                          <span class="nav-item--more-dots">···</span>
-                          <span>View more ({installedDashboards.length})</span>
-                        </a>
-                      )}
-                    </div>
-                  )}
                 </div>
               ))}
             </div>
@@ -635,6 +563,7 @@ export function App() {
               onClick={(e) => { e.preventDefault(); navigate('docs') }}
               href="#docs"
               data-tooltip="Docs"
+              aria-label="Docs"
             >
               <span class="nav-icon">{Icon.docs}</span>
               {!collapsed && 'Docs'}
@@ -701,8 +630,25 @@ export function App() {
 
           {/* Version + status */}
           {collapsed ? (
-            <div class="runtime-status-collapsed" title={`v0.2 — ${statusLabel}`}>
-              <span class={dotClass} />
+            <div class="sidebar-collapsed-utilities">
+              <div
+                class="runtime-status-collapsed"
+                title={`Runtime ${statusLabel}`}
+                data-tooltip={`Runtime ${statusLabel}`}
+                aria-label={`Runtime ${statusLabel}`}
+              >
+                <span class={dotClass} />
+              </div>
+              {(pendingApprovals + pendingProposals) > 0 && (
+                <div
+                  class="collapsed-utility-pill"
+                  title={`${pendingApprovals + pendingProposals} pending items`}
+                  data-tooltip={`${pendingApprovals + pendingProposals} pending items`}
+                  aria-label={`${pendingApprovals + pendingProposals} pending items`}
+                >
+                  <span>{pendingApprovals + pendingProposals}</span>
+                </div>
+              )}
             </div>
           ) : (
             <div class="runtime-status">
@@ -742,23 +688,6 @@ export function App() {
         {screen === 'atlas-engine' && <AtlasEngine />}
         {screen === 'usage'       && <Usage />}
         {screen === 'docs'        && <Docs />}
-        {screen === 'dashboards'  && (
-          <Dashboards
-            onOpenDashboard={(id) => {
-              setActiveDashboardID(id)
-              setScreen('dashboard-view')
-            }}
-          />
-        )}
-        {screen === 'dashboard-view' && activeDashboardID && (
-          <DashboardView
-            dashboardID={activeDashboardID}
-            onBack={() => {
-              setActiveDashboardID(null)
-              setScreen('dashboards')
-            }}
-          />
-        )}
       </main>
       </HeaderChromeContext.Provider>
 

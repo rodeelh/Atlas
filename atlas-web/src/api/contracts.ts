@@ -33,6 +33,7 @@ export interface APIKeyStatus {
   ollamaKeySet: boolean
   finnhubKeySet: boolean
   customKeys: string[]
+  customKeyLabels: Record<string, string>
 }
 
 export interface RuntimeConfig {
@@ -55,6 +56,7 @@ export interface RuntimeConfig {
   maxRetrievedMemoriesPerTurn: number
   memoryAutoSaveThreshold: number
   personaName: string
+  userName?: string
   actionSafetyMode: string
   activeImageProvider: string
   activeAIProvider: string
@@ -81,9 +83,11 @@ export interface RuntimeConfig {
   atlasEngineMaxAgentIterations: number
   atlasEngineCtxSize: number
   atlasEngineKVCacheQuant: string
+  atlasEngineMlock: boolean
   atlasEngineRouterPort: number
   atlasEngineRouterModel: string
   atlasEngineRouterForAll: boolean
+  atlasEngineDraftModel: string
   enableSmartToolSelection: boolean
   toolSelectionMode: string
   enableMultiAgentOrchestration: boolean
@@ -328,12 +332,16 @@ export interface ForgeResearchingItem {
 
 export interface EngineStatus {
   running: boolean
+  loading?: boolean
   loadedModel: string
   port: number
   binaryReady: boolean
   buildVersion?: string
   lastError?: string
   lastTPS?: number
+  promptTPS?: number
+  genTimeSec?: number
+  activeRequests?: number
   contextTokens?: number
 }
 
@@ -344,6 +352,15 @@ export interface EngineModelInfo {
 }
 
 export interface EngineDownloadProgress {
+  downloaded: number
+  total: number
+  percent: number
+}
+
+export interface EngineDownloadStatus {
+  active: boolean
+  filename: string
+  url?: string
   downloaded: number
   total: number
   percent: number
@@ -456,6 +473,7 @@ export interface ConversationSummary {
   lastAssistantMessage?: string
   createdAt: string
   updatedAt: string
+  platform: string
   platformContext?: string
 }
 
@@ -478,87 +496,44 @@ export interface LinkPreview {
   domain?: string
 }
 
-export interface WidgetField {
-  key: string
-  label: string
-  type: 'text' | 'number' | 'select' | 'date'
-  required: boolean
-  options?: string[]
+export interface TokenUsageSummary {
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalTokens: number
+  totalCostUSD: number
+  turnCount: number
+  byModel: ModelUsageBreakdown[]
+  dailySeries: DailyUsageSeries[]
 }
 
-export interface DashboardWidgetBinding {
-  valuePath?: string
-  itemsPath?: string
-  rowsPath?: string
-  primaryTextPath?: string
-  secondaryTextPath?: string
-  tertiaryTextPath?: string
-  linkPath?: string
-  imagePath?: string
-  summaryPath?: string
+export interface ModelUsageBreakdown {
+  provider: string
+  model: string
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  totalCostUSD: number
+  turnCount: number
 }
 
-export interface DashboardWidget {
+export interface DailyUsageSeries {
+  date: string
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  costUSD: number
+  turnCount: number
+}
+
+export interface TokenUsageEvent {
   id: string
-  type: 'stat_card' | 'summary' | 'list' | 'table' | 'form' | 'search'
-  title: string
-  skillID: string
-  action?: string
-  dataKey?: string
-  defaultInputs?: Record<string, string>
-  binding?: DashboardWidgetBinding
-  fields?: WidgetField[]
-  columns?: string[]
-  emptyMessage?: string
-}
-
-export interface DashboardDisplayItem {
-  primaryText: string
-  secondaryText?: string
-  tertiaryText?: string
-  linkURL?: string
-  imageURL?: string
-}
-
-export interface DashboardDisplayTableRow {
-  values: string[]
-}
-
-export interface DashboardDisplayPayload {
-  value?: string
-  summary?: string
-  items?: DashboardDisplayItem[]
-  rows?: DashboardDisplayTableRow[]
-}
-
-export interface WidgetExecutionResult {
-  widgetID: string
-  rawOutput: string
-  extractedValue?: string
-  displayPayload?: DashboardDisplayPayload
-  success: boolean
-  error?: string
-}
-
-export interface DashboardSpec {
-  id: string
-  title: string
-  icon: string
-  description: string
-  sourceSkillIDs: string[]
-  widgets: DashboardWidget[]
-  emptyState?: string
-  isPinned: boolean
-  lastAccessedAt?: string
-}
-
-export interface DashboardProposal {
-  proposalID: string
-  spec: DashboardSpec
-  summary: string
-  rationale: string
-  linkedSkillID?: string
-  linkedProposalID?: string
-  status: 'pending' | 'installed' | 'rejected'
-  createdAt: string
+  conversationId: string
+  provider: string
+  model: string
+  inputTokens: number
+  outputTokens: number
+  inputCostUSD: number
+  outputCostUSD: number
+  totalCostUSD: number
+  recordedAt: string
 }

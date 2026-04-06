@@ -45,11 +45,11 @@ func defaultMindContent() string {
 	today := time.Now().Format("2006-01-02")
 	return strings.TrimSpace(`# Mind of Atlas
 
-_Last deep reflection: `+today+`_
+_Last updated: `+today+`_
 
 ---
 
-## Who I Am
+## Identity
 
 I am Atlas — a local AI operator that lives on your machine. I run natively on
 macOS, with direct access to your system, files, and apps. I remember you across
@@ -58,33 +58,39 @@ spite of it.
 
 ---
 
-## My Understanding of You
+## Current Frame
+
+_(Generating context for first interaction.)_
+
+---
+
+## You
 
 _(Nothing recorded yet — I'll learn as we work together.)_
 
 ---
 
-## Patterns I've Noticed
+## How You Work
 
-_(None yet.)_
-
----
-
-## Active Theories
-
-_(None yet.)_
+_(Nothing recorded yet — I'll calibrate as I observe your patterns.)_
 
 ---
 
-## Our Story
+## Commitments
 
-_(We're just getting started.)_
+_(No explicit commitments recorded yet.)_
 
 ---
 
-## What I'm Curious About
+## What's Active
 
-_(Nothing yet — ask me something.)_
+_(Nothing active yet.)_
+
+---
+
+## What I've Learned
+
+_(Nothing yet.)_
 
 ---
 
@@ -115,8 +121,8 @@ _(None yet — Atlas learns routines from repeated multi-skill workflows.)_
 
 ---
 
-## Things That Don't Work
+## Synthesized Tool Notes
 
-_(None recorded yet.)_
+_(None yet — generated from observed tool outcomes.)_
 `) + "\n"
 }

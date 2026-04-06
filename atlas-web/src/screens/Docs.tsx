@@ -73,7 +73,7 @@ const DEFAULT_EXPANDED: Record<DocsGroupID, boolean> = {
   'getting-started': true,
   'web-ui': false,
   integrations: true,
-  resources: false,
+  resources: true,
 }
 
 export function Docs() {
@@ -731,18 +731,38 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
         <DocsPageLayout
           eyebrow="Resources"
           title="GitHub"
-          summary="Use this space to point users toward the source repository, issue tracking, release notes, and contribution guidance once the public repo details are finalized."
-          graphic={<DocsComingSoonCard title="Repository Link Pending" copy="Add the production GitHub URL here when the repo destination is finalized for users." />}
+          summary="Project Atlas is hosted on GitHub. Use the repository to file issues, track releases, and follow development."
+          graphic={<DocsSignalPanel title="Repository" lines={['Source code', 'Issue tracker', 'Release notes', 'Contribution guide']} />}
         >
-          <DocsSection title="What this page should eventually include">
+          <DocsSection title="Repository">
+            <p>
+              The primary repository for Project Atlas is at{' '}
+              <a
+                href="https://github.com/rodeelh/Project-Atlas"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="chat-link"
+              >
+                github.com/rodeelh/Project-Atlas
+              </a>
+              . All three components — <code>atlas-runtime</code>, <code>atlas-web</code>, and <code>atlas-tui</code> — live in the same monorepo.
+            </p>
+          </DocsSection>
+          <DocsSection title="Quick links">
             <DocsChecklistCard
               items={[
-                'Primary GitHub repository link.',
-                'Issue reporting guidance.',
-                'Release notes or changelog entry point.',
-                'Contribution guidelines if the project becomes public.',
+                'Issues — file bugs or request features via GitHub Issues.',
+                'Releases — runtime binaries and changelogs are published as GitHub Releases.',
+                'Discussions — general questions and ideas about Atlas development.',
+                'CLAUDE.md — contributor navigation map for the codebase.',
               ]}
             />
+          </DocsSection>
+          <DocsSection title="Reporting an issue">
+            <p>
+              When filing a bug, include: macOS version, which component (runtime / web / TUI), steps to reproduce, and the relevant output from{' '}
+              <strong>Activity → Logs</strong> or <code>~/Library/Logs/Atlas/runtime.log</code>.
+            </p>
           </DocsSection>
         </DocsPageLayout>
       )

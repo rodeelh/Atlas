@@ -18,20 +18,6 @@ import (
 func (r *Registry) registerWeb() {
 	r.register(SkillEntry{
 		Def: ToolDef{
-			Name:        "web.search",
-			Description: "Searches the web using Brave Search. Returns top results with titles and URLs.",
-			Properties: map[string]ToolParam{
-				"query": {Description: "Search query", Type: "string"},
-				"count": {Description: "Number of results to return (default 5)", Type: "integer"},
-			},
-			Required: []string{"query"},
-		},
-		PermLevel: "read",
-		Fn:        webSearch,
-	})
-
-	r.register(SkillEntry{
-		Def: ToolDef{
 			Name:        "web.fetch_page",
 			Description: "Fetches a web page and returns the text content (first 3000 characters).",
 			Properties: map[string]ToolParam{
@@ -201,42 +187,6 @@ func braveSearch(ctx context.Context, apiKey, query string, count int, extraPara
 		})
 	}
 	return results, nil
-}
-
-// ── web.search ────────────────────────────────────────────────────────────────
-
-func webSearch(ctx context.Context, args json.RawMessage) (string, error) {
-	var p struct {
-		Query string `json:"query"`
-		Count int    `json:"count"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil || p.Query == "" {
-		return "", fmt.Errorf("query is required")
-	}
-	if p.Count <= 0 {
-		p.Count = 5
-	}
-
-	bundle, _ := creds.Read()
-	if bundle.BraveSearchAPIKey == "" {
-		return "Web search is unavailable: Brave Search API key not configured. Add your Brave API key in Atlas Settings → Skills → Web Research.", nil
-	}
-
-	results, err := braveSearch(ctx, bundle.BraveSearchAPIKey, p.Query, p.Count, "")
-	if err != nil {
-		return "", err
-	}
-
-	if len(results) == 0 {
-		return "No results found for: " + p.Query, nil
-	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Search results for \"%s\":\n", p.Query))
-	for i, r := range results {
-		sb.WriteString(fmt.Sprintf("%d. %s\n   %s\n   %s\n", i+1, r.Title, r.URL, r.Description))
-	}
-	return strings.TrimRight(sb.String(), "\n"), nil
 }
 
 // ── web.fetch_page ────────────────────────────────────────────────────────────

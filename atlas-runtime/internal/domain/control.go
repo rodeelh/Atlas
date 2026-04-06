@@ -16,7 +16,9 @@ import (
 	"atlas-runtime-go/internal/agent"
 	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/engine"
+	"atlas-runtime-go/internal/location"
 	"atlas-runtime-go/internal/logstore"
+	"atlas-runtime-go/internal/preferences"
 	"atlas-runtime-go/internal/runtime"
 	"atlas-runtime-go/internal/storage"
 )
@@ -117,6 +119,11 @@ func (d *ControlDomain) Register(r chi.Router) {
 	r.Post("/api-keys/invalidate-cache", d.postAPIKeysInvalidateCache)
 	r.Delete("/api-keys", d.deleteAPIKeys)
 	r.Get("/link-preview", d.getLinkPreview)
+	r.Get("/location", d.getLocation)
+	r.Put("/location", d.putLocation)
+	r.Post("/location/detect", d.postLocationDetect)
+	r.Get("/preferences", d.getPreferences)
+	r.Put("/preferences", d.putPreferences)
 }
 
 // ── Status ────────────────────────────────────────────────────────────────────
@@ -219,20 +226,20 @@ func (d *ControlDomain) putOnboarding(w http.ResponseWriter, r *http.Request) {
 func (d *ControlDomain) getModels(w http.ResponseWriter, r *http.Request) {
 	snap := d.cfgStore.Load()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"activeAIProvider":            snap.ActiveAIProvider,
-		"selectedOpenAIPrimaryModel": snap.SelectedOpenAIPrimaryModel,
-		"selectedOpenAIFastModel":    snap.SelectedOpenAIFastModel,
-		"selectedAnthropicModel":     snap.SelectedAnthropicModel,
-		"selectedAnthropicFastModel": snap.SelectedAnthropicFastModel,
-		"selectedGeminiModel":        snap.SelectedGeminiModel,
-		"selectedGeminiFastModel":    snap.SelectedGeminiFastModel,
-		"selectedLMStudioModel":      snap.SelectedLMStudioModel,
-		"selectedLMStudioModelFast":  snap.SelectedLMStudioModelFast,
-		"selectedOllamaModel":        snap.SelectedOllamaModel,
-		"selectedOllamaModelFast":    snap.SelectedOllamaModelFast,
+		"activeAIProvider":             snap.ActiveAIProvider,
+		"selectedOpenAIPrimaryModel":   snap.SelectedOpenAIPrimaryModel,
+		"selectedOpenAIFastModel":      snap.SelectedOpenAIFastModel,
+		"selectedAnthropicModel":       snap.SelectedAnthropicModel,
+		"selectedAnthropicFastModel":   snap.SelectedAnthropicFastModel,
+		"selectedGeminiModel":          snap.SelectedGeminiModel,
+		"selectedGeminiFastModel":      snap.SelectedGeminiFastModel,
+		"selectedLMStudioModel":        snap.SelectedLMStudioModel,
+		"selectedLMStudioModelFast":    snap.SelectedLMStudioModelFast,
+		"selectedOllamaModel":          snap.SelectedOllamaModel,
+		"selectedOllamaModelFast":      snap.SelectedOllamaModelFast,
 		"selectedAtlasEngineModel":     snap.SelectedAtlasEngineModel,
 		"selectedAtlasEngineModelFast": snap.SelectedAtlasEngineModelFast,
-		"lastRefreshed":              nil,
+		"lastRefreshed":                nil,
 	})
 }
 
@@ -824,7 +831,9 @@ func topFastAndPrimary(models []modelRecord, n int) []modelRecord {
 // No specific model IDs are referenced — new families (gpt-5, o5 …) rank automatically.
 //
 // Scale: gpt-4=400, gpt-4.1=410, gpt-4o(4.5)=450, gpt-5=500
-//        o1=200,   o2=300,   o3=400,   o4=500,    o5=600
+//
+//	o1=200,   o2=300,   o3=400,   o4=500,    o5=600
+//
 // Mini/nano variants score 1 point lower than their base.
 func openAIModelScore(id string) int {
 	lower := strings.ToLower(id)
@@ -1016,23 +1025,23 @@ func fetchOllamaModels(baseURL, apiKey string) []modelRecord {
 	return models
 }
 
-
 // ── API Keys ──────────────────────────────────────────────────────────────────
 
 // APIKeyStatus matches the contracts.ts APIKeyStatus interface.
 type APIKeyStatus struct {
-	OpenAIKeySet      bool     `json:"openAIKeySet"`
-	OllamaKeySet      bool     `json:"ollamaKeySet"`
-	TelegramTokenSet  bool     `json:"telegramTokenSet"`
-	DiscordTokenSet   bool     `json:"discordTokenSet"`
-	SlackBotTokenSet  bool     `json:"slackBotTokenSet"`
-	SlackAppTokenSet  bool     `json:"slackAppTokenSet"`
-	BraveSearchKeySet bool     `json:"braveSearchKeySet"`
-	AnthropicKeySet   bool     `json:"anthropicKeySet"`
-	GeminiKeySet      bool     `json:"geminiKeySet"`
-	LMStudioKeySet    bool     `json:"lmStudioKeySet"`
-	FinnhubKeySet     bool     `json:"finnhubKeySet"`
-	CustomKeys        []string `json:"customKeys"`
+	OpenAIKeySet      bool              `json:"openAIKeySet"`
+	OllamaKeySet      bool              `json:"ollamaKeySet"`
+	TelegramTokenSet  bool              `json:"telegramTokenSet"`
+	DiscordTokenSet   bool              `json:"discordTokenSet"`
+	SlackBotTokenSet  bool              `json:"slackBotTokenSet"`
+	SlackAppTokenSet  bool              `json:"slackAppTokenSet"`
+	BraveSearchKeySet bool              `json:"braveSearchKeySet"`
+	AnthropicKeySet   bool              `json:"anthropicKeySet"`
+	GeminiKeySet      bool              `json:"geminiKeySet"`
+	LMStudioKeySet    bool              `json:"lmStudioKeySet"`
+	FinnhubKeySet     bool              `json:"finnhubKeySet"`
+	CustomKeys        []string          `json:"customKeys"`
+	CustomKeyLabels   map[string]string `json:"customKeyLabels"`
 }
 
 func (d *ControlDomain) getAPIKeys(w http.ResponseWriter, r *http.Request) {
@@ -1045,6 +1054,7 @@ func (d *ControlDomain) postAPIKeys(w http.ResponseWriter, r *http.Request) {
 		Provider string `json:"provider"`
 		Key      string `json:"key"`
 		Name     string `json:"name"`
+		Label    string `json:"label"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
@@ -1053,7 +1063,7 @@ func (d *ControlDomain) postAPIKeys(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Missing 'provider' field.")
 		return
 	}
-	if err := storeAPIKey(req.Provider, req.Key, req.Name); err != nil {
+	if err := storeAPIKey(req.Provider, req.Key, req.Name, req.Label); err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to store key: "+err.Error())
 		return
 	}
@@ -1197,7 +1207,7 @@ func (d *ControlDomain) deleteAPIKeys(w http.ResponseWriter, r *http.Request) {
 // readCredentialBundle reads the Atlas credential bundle from the macOS Keychain
 // using the `security` CLI tool and returns an APIKeyStatus.
 func readCredentialBundle() APIKeyStatus {
-	status := APIKeyStatus{CustomKeys: []string{}}
+	status := APIKeyStatus{CustomKeys: []string{}, CustomKeyLabels: map[string]string{}}
 
 	out, err := execSecurityInDomain(
 		"find-generic-password",
@@ -1210,18 +1220,19 @@ func readCredentialBundle() APIKeyStatus {
 	}
 
 	var bundle struct {
-		OpenAIAPIKey      string            `json:"openAIAPIKey"`
-		TelegramBotToken  string            `json:"telegramBotToken"`
-		DiscordBotToken   string            `json:"discordBotToken"`
-		SlackBotToken     string            `json:"slackBotToken"`
-		SlackAppToken     string            `json:"slackAppToken"`
-		BraveSearchAPIKey string            `json:"braveSearchAPIKey"`
-		AnthropicAPIKey   string            `json:"anthropicAPIKey"`
-		GeminiAPIKey      string            `json:"geminiAPIKey"`
-		LMStudioAPIKey    string            `json:"lmStudioAPIKey"`
-		OllamaAPIKey      string            `json:"ollamaAPIKey"`
-		FinnhubAPIKey     string            `json:"finnhubAPIKey"`
-		CustomSecrets     map[string]string `json:"customSecrets"`
+		OpenAIAPIKey       string            `json:"openAIAPIKey"`
+		TelegramBotToken   string            `json:"telegramBotToken"`
+		DiscordBotToken    string            `json:"discordBotToken"`
+		SlackBotToken      string            `json:"slackBotToken"`
+		SlackAppToken      string            `json:"slackAppToken"`
+		BraveSearchAPIKey  string            `json:"braveSearchAPIKey"`
+		AnthropicAPIKey    string            `json:"anthropicAPIKey"`
+		GeminiAPIKey       string            `json:"geminiAPIKey"`
+		LMStudioAPIKey     string            `json:"lmStudioAPIKey"`
+		OllamaAPIKey       string            `json:"ollamaAPIKey"`
+		FinnhubAPIKey      string            `json:"finnhubAPIKey"`
+		CustomSecrets      map[string]string `json:"customSecrets"`
+		CustomSecretLabels map[string]string `json:"customSecretLabels"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &bundle); err != nil {
 		return status
@@ -1240,6 +1251,9 @@ func readCredentialBundle() APIKeyStatus {
 	status.FinnhubKeySet = bundle.FinnhubAPIKey != ""
 	for k := range bundle.CustomSecrets {
 		status.CustomKeys = append(status.CustomKeys, k)
+		if lbl, ok := bundle.CustomSecretLabels[k]; ok && lbl != "" {
+			status.CustomKeyLabels[k] = lbl
+		}
 	}
 
 	return status
@@ -1289,7 +1303,8 @@ func writeRawBundle(m map[string]interface{}) error {
 
 // storeAPIKey writes a single credential into the Keychain bundle.
 // provider values match the web UI's providerID strings.
-func storeAPIKey(provider, key, name string) error {
+// label is the human-readable display name for custom keys; ignored for built-ins.
+func storeAPIKey(provider, key, name, label string) error {
 	m, ok := readRawBundle()
 	if !ok {
 		// Bundle couldn't be read. Check whether the item exists at all.
@@ -1338,9 +1353,114 @@ func storeAPIKey(provider, key, name string) error {
 		}
 		customs[keyName] = key
 		m["customSecrets"] = customs
+
+		// Store the human-readable label if provided.
+		if label != "" {
+			labels, _ := m["customSecretLabels"].(map[string]interface{})
+			if labels == nil {
+				labels = map[string]interface{}{}
+			}
+			labels[keyName] = label
+			m["customSecretLabels"] = labels
+		}
 	}
 
 	return writeRawBundle(m)
+}
+
+// ── Location ──────────────────────────────────────────────────────────────────
+
+type locationResponse struct {
+	City      string  `json:"city"`
+	Country   string  `json:"country"`
+	Timezone  string  `json:"timezone"`
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+	Source    string  `json:"source"`
+	UpdatedAt string  `json:"updatedAt"`
+}
+
+func locationToResponse(loc location.Info) locationResponse {
+	updatedAt := ""
+	if !loc.UpdatedAt.IsZero() {
+		updatedAt = loc.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	return locationResponse{
+		City:      loc.City,
+		Country:   loc.Country,
+		Timezone:  loc.Timezone,
+		Latitude:  loc.Latitude,
+		Longitude: loc.Longitude,
+		Source:    loc.Source,
+		UpdatedAt: updatedAt,
+	}
+}
+
+func (d *ControlDomain) getLocation(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, locationToResponse(location.Get()))
+}
+
+func (d *ControlDomain) putLocation(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		City    string `json:"city"`
+		Country string `json:"country"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.City) == "" {
+		http.Error(w, "city is required", http.StatusBadRequest)
+		return
+	}
+	if err := location.SetManual(strings.TrimSpace(body.City), strings.TrimSpace(body.Country)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, locationToResponse(location.Get()))
+}
+
+func (d *ControlDomain) postLocationDetect(w http.ResponseWriter, r *http.Request) {
+	if err := location.DetectFromIP(); err != nil {
+		http.Error(w, "Location detection failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, locationToResponse(location.Get()))
+}
+
+// ── Preferences ───────────────────────────────────────────────────────────────
+
+func (d *ControlDomain) getPreferences(w http.ResponseWriter, r *http.Request) {
+	p := preferences.Get()
+	writeJSON(w, http.StatusOK, map[string]string{
+		"temperatureUnit": p.TemperatureUnit,
+		"currency":        p.Currency,
+		"unitSystem":      p.UnitSystem,
+	})
+}
+
+func (d *ControlDomain) putPreferences(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TemperatureUnit string `json:"temperatureUnit"`
+		Currency        string `json:"currency"`
+		UnitSystem      string `json:"unitSystem"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	p := preferences.Get()
+	if body.TemperatureUnit != "" {
+		p.TemperatureUnit = body.TemperatureUnit
+	}
+	if body.Currency != "" {
+		p.Currency = strings.ToUpper(body.Currency)
+	}
+	if body.UnitSystem != "" {
+		p.UnitSystem = body.UnitSystem
+	}
+	preferences.Set(p)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"temperatureUnit": p.TemperatureUnit,
+		"currency":        p.Currency,
+		"unitSystem":      p.UnitSystem,
+	})
 }
 
 // deleteCustomKey removes a custom key from the bundle's customSecrets map.
@@ -1355,6 +1475,11 @@ func deleteCustomKey(name string) error {
 	if customs != nil {
 		delete(customs, name)
 		m["customSecrets"] = customs
+	}
+	labels, _ := m["customSecretLabels"].(map[string]interface{})
+	if labels != nil {
+		delete(labels, name)
+		m["customSecretLabels"] = labels
 	}
 	return writeRawBundle(m)
 }

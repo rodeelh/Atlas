@@ -32,9 +32,9 @@ func (r *Registry) registerBrowser() {
 			Name:        "browser.navigate",
 			Description: "Navigate the controlled browser to a URL. Returns the page title, final URL, and whether a login wall was detected. Stored session cookies are automatically injected before navigation.",
 			Properties: map[string]ToolParam{
-				"url":          {Description: "Full URL to navigate to, including scheme (e.g. https://github.com)", Type: "string"},
-				"wait_for":     {Description: "CSS selector to wait for after navigation before returning — optional", Type: "string"},
-				"timeout_ms":   {Description: "Navigation timeout in milliseconds (default 15000)", Type: "integer"},
+				"url":        {Description: "Full URL to navigate to, including scheme (e.g. https://github.com)", Type: "string"},
+				"wait_for":   {Description: "CSS selector to wait for after navigation before returning — optional", Type: "string"},
+				"timeout_ms": {Description: "Navigation timeout in milliseconds (default 15000)", Type: "integer"},
 			},
 			Required: []string{"url"},
 		},
@@ -451,9 +451,9 @@ func (r *Registry) registerBrowser() {
 
 func (r *Registry) browserNavigate(ctx context.Context, args json.RawMessage) (string, error) {
 	var p struct {
-		URL        string `json:"url"`
-		WaitFor    string `json:"wait_for"`
-		TimeoutMs  int    `json:"timeout_ms"`
+		URL       string `json:"url"`
+		WaitFor   string `json:"wait_for"`
+		TimeoutMs int    `json:"timeout_ms"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", fmt.Errorf("browser.navigate: invalid args: %w", err)
@@ -691,7 +691,7 @@ func (r *Registry) browserTypeText(ctx context.Context, args json.RawMessage) (s
 
 func (r *Registry) browserFillForm(ctx context.Context, args json.RawMessage) (string, error) {
 	var p struct {
-		Fields         string `json:"fields"`          // JSON object: selector → value
+		Fields         string `json:"fields"` // JSON object: selector → value
 		SubmitSelector string `json:"submit_selector"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {

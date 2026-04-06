@@ -3,6 +3,20 @@ import { api, LogEntry, RuntimeStatus, RuntimeConfig, EngineStatus } from '../ap
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { formatAtlasModelName } from '../modelName'
+import { toast } from '../toast'
+
+const LogCopyIcon = () => (
+  <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="5" y="5" width="9" height="9" rx="1.5" />
+    <path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" />
+  </svg>
+)
+
+const LogCheckIcon = () => (
+  <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 8l4 4 6-7" />
+  </svg>
+)
 
 // ── Formatters ─────────────────────────────────────────────────────────────────
 
@@ -52,15 +66,28 @@ function stateBadge(state: string) {
   }
 }
 
+
+function formatProvider(p: string | null | undefined): string {
+  switch (p) {
+    case 'openai':       return 'OpenAI'
+    case 'anthropic':    return 'Anthropic'
+    case 'gemini':       return 'Gemini'
+    case 'lm_studio':    return 'LM Studio'
+    case 'ollama':       return 'Ollama'
+    case 'atlas_engine': return 'Atlas Engine'
+    default:             return p ?? '—'
+  }
+}
+
 function activeModelName(cfg: RuntimeConfig | null): string {
   if (!cfg) return '—'
   switch (cfg.activeAIProvider) {
-    case 'anthropic':    return cfg.selectedAnthropicModel       || 'claude'
-    case 'gemini':       return cfg.selectedGeminiModel          || 'gemini'
-    case 'lm_studio':   return cfg.selectedLMStudioModel         || 'LM Studio'
-    case 'ollama':       return cfg.selectedOllamaModel          || 'ollama'
-    case 'atlas_engine': return formatAtlasModelName(cfg.selectedAtlasEngineModel || '') || 'Engine LM'
-    default:             return cfg.selectedOpenAIPrimaryModel   || 'gpt-4.1-mini'
+    case 'anthropic':    return cfg.selectedAnthropicModel?.trim()    || '—'
+    case 'gemini':       return cfg.selectedGeminiModel?.trim()       || '—'
+    case 'lm_studio':    return cfg.selectedLMStudioModel?.trim()     || '—'
+    case 'ollama':       return cfg.selectedOllamaModel?.trim()       || '—'
+    case 'atlas_engine': return formatAtlasModelName(cfg.selectedAtlasEngineModel?.trim() || '') || '—'
+    default:             return cfg.selectedOpenAIPrimaryModel?.trim() || '—'
   }
 }
 
@@ -76,6 +103,20 @@ export function Activity() {
   const [loading, setLoading]         = useState(true)
   const [error, setError]             = useState<string | null>(null)
   const [logFilter, setLogFilter]     = useState<LogFilter>('all')
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [copiedLogId, setCopiedLogId] = useState<string | null>(null)
+
+  const copyLog = async (entry: LogEntry, metaStr: string) => {
+    const text = `[${formatTime(entry.timestamp)}] [${entry.level}] ${entry.message}${metaStr}`
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedLogId(entry.id)
+      toast.success('Copied')
+      setTimeout(() => setCopiedLogId(prev => prev === entry.id ? null : prev), 1800)
+    } catch {
+      toast.error('Could not copy')
+    }
+  }
 
   const load = async () => {
     try {
@@ -86,6 +127,7 @@ export function Activity() {
       if (statusData.status === 'fulfilled')  setStatus(statusData.value)
       if (configData.status === 'fulfilled')  setConfig(configData.value)
       if (engineData.status === 'fulfilled')  setEngineStatus(engineData.value)
+      setLastUpdated(new Date())
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load activity.')
@@ -123,15 +165,7 @@ export function Activity() {
     <div class="screen">
       <PageHeader
         title="Activity"
-        subtitle="Daemon health and event log"
-        actions={
-          <button class="btn btn-ghost btn-sm btn-icon" onClick={load} title="Refresh">
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M1 4a7 7 0 0 1 13 2" /><path d="M15 12a7 7 0 0 1-13-2" />
-              <polyline points="1,1 1,4 4,4" /><polyline points="15,15 15,12 12,12" />
-            </svg>
-          </button>
-        }
+        subtitle={lastUpdated ? `Updated ${formatRelative(lastUpdated.toISOString())}` : 'Daemon health and event log'}
       />
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
@@ -150,51 +184,34 @@ export function Activity() {
           </div>
           <div class="stat-cell">
             <div class="stat-label">Port</div>
-            <div class="stat-value" style={{ fontFamily: 'var(--font-mono)', fontSize: '13.5px' }}>{status?.runtimePort ?? '—'}</div>
+            <div class="stat-value">{status?.runtimePort ?? '—'}</div>
           </div>
           {/* AI */}
           <div class="stat-cell">
-            <div class="stat-label">Model</div>
-            <div class="stat-value" style={{ fontFamily: 'var(--font-mono)', fontSize: '12px' }}>{activeModelName(config)}</div>
-            <div class="stat-note">{config?.activeAIProvider ?? '—'}</div>
+            <div class="stat-label">Active Model</div>
+            <div class="stat-value">{activeModelName(config)}</div>
+            <div class="stat-note">{formatProvider(config?.activeAIProvider)}</div>
           </div>
           <div class="stat-cell">
             <div class="stat-label">Tokens In</div>
-            <div class="stat-value" style={{ fontFamily: 'var(--font-mono)', fontSize: '13.5px' }}>
-              {status?.tokensIn != null ? status.tokensIn.toLocaleString() : '—'}
-            </div>
+            <div class="stat-value">{status?.tokensIn != null ? status.tokensIn.toLocaleString() : '—'}</div>
             <div class="stat-note">since restart</div>
           </div>
           <div class="stat-cell">
             <div class="stat-label">Tokens Out</div>
-            <div class="stat-value" style={{ fontFamily: 'var(--font-mono)', fontSize: '13.5px' }}>
-              {status?.tokensOut != null ? status.tokensOut.toLocaleString() : '—'}
-            </div>
+            <div class="stat-value">{status?.tokensOut != null ? status.tokensOut.toLocaleString() : '—'}</div>
             <div class="stat-note">since restart</div>
           </div>
-          {/* Engine LM — only when running */}
-          {engineStatus?.running && (
-            <div class="stat-cell">
-              <div class="stat-label">Engine tok/s</div>
-              <div class="stat-value" style={{ fontFamily: 'var(--font-mono)', fontSize: '13.5px' }}>
-                {engineStatus.lastTPS != null && engineStatus.lastTPS > 0
-                  ? engineStatus.lastTPS.toFixed(1)
-                  : '—'}
-              </div>
-              <div class="stat-note">decode speed</div>
+          {/* Engine LM — always shown; dims when not running */}
+          <div class="stat-cell" style={{ opacity: engineStatus?.running ? 1 : 0.4 }}>
+            <div class="stat-label">Engine tok/s</div>
+            <div class="stat-value">
+              {engineStatus?.running && engineStatus.lastTPS != null && engineStatus.lastTPS > 0
+                ? engineStatus.lastTPS.toFixed(1)
+                : '—'}
             </div>
-          )}
-          {engineStatus?.running && (
-            <div class="stat-cell">
-              <div class="stat-label">Engine ctx</div>
-              <div class="stat-value" style={{ fontFamily: 'var(--font-mono)', fontSize: '13.5px' }}>
-                {engineStatus.contextTokens != null && engineStatus.contextTokens > 0
-                  ? engineStatus.contextTokens.toLocaleString()
-                  : '—'}
-              </div>
-              <div class="stat-note">tokens in use</div>
-            </div>
-          )}
+            <div class="stat-note">decode speed</div>
+          </div>
           {/* Activity */}
           <div class="stat-cell">
             <div class="stat-label">Conversations</div>
@@ -251,6 +268,14 @@ export function Activity() {
                     <span class="log-time">{formatTime(entry.timestamp)}</span>
                     <span class={`log-level-dot ${levelClass(entry.level)}`} title={entry.level} style={{ marginTop: '7px' }} />
                     <span class="log-message" title={entry.message + metaStr}>{entry.message}</span>
+                    <button
+                      class={`log-copy-btn${copiedLogId === entry.id ? ' copied' : ''}`}
+                      onClick={() => copyLog(entry, metaStr)}
+                      title="Copy"
+                      aria-label="Copy log entry"
+                    >
+                      {copiedLogId === entry.id ? <LogCheckIcon /> : <LogCopyIcon />}
+                    </button>
                   </div>
                 )
               })}

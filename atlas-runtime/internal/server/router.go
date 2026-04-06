@@ -11,6 +11,7 @@ import (
 
 	"atlas-runtime-go/internal/auth"
 	"atlas-runtime-go/internal/domain"
+	"atlas-runtime-go/internal/platform"
 )
 
 // BuildRouter constructs the chi router with CORS, auth middleware, and all
@@ -22,11 +23,10 @@ func BuildRouter(
 	chatDomain *domain.ChatDomain,
 	approvalsDomain *domain.ApprovalsDomain,
 	commsDomain *domain.CommunicationsDomain,
-	featuresDomain *domain.FeaturesDomain,
-	engineDomain *domain.EngineDomain,
 	authSvc *auth.Service,
 	remoteEnabled func() bool,
 	tailscaleEnabled func() bool,
+	host *platform.RuntimeHost,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -69,6 +69,9 @@ func BuildRouter(
 	// that the browser can reach /auth/bootstrap (token exchange) without a
 	// session, and the menu bar app can reach /auth/token without one.
 	authDomain.RegisterPublic(r)
+	if host != nil {
+		host.ApplyPublic(r)
+	}
 
 	// ── Session-protected routes ──────────────────────────────────────────────
 	r.Group(func(protected chi.Router) {
@@ -80,10 +83,15 @@ func BuildRouter(
 		// All other domain routes.
 		controlDomain.Register(protected)
 		chatDomain.Register(protected)
-		approvalsDomain.Register(protected)
-		commsDomain.Register(protected)
-		featuresDomain.Register(protected)
-		engineDomain.Register(protected)
+		if approvalsDomain != nil {
+			approvalsDomain.Register(protected)
+		}
+		if commsDomain != nil {
+			commsDomain.Register(protected)
+		}
+		if host != nil {
+			host.ApplyProtected(protected)
+		}
 	})
 
 	return r

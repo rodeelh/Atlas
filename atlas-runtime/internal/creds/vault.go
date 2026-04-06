@@ -24,11 +24,11 @@ import (
 type VaultEntry struct {
 	ID          string `json:"id"`
 	Service     string `json:"service"`               // hostname or service name, e.g. "gmail.com"
-	Label       string `json:"label"`                // human name, e.g. "Gmail – Atlas Agent"
-	Username    string `json:"username"`             // email, username, or account ID
-	Password    string `json:"password"`             // password, token, or secret value
-	TOTPSecret  string `json:"totpSecret,omitempty"` // base32 TOTP seed (RFC 6238) — optional
-	Notes       string `json:"notes,omitempty"`      // free-form context
+	Label       string `json:"label"`                 // human name, e.g. "Gmail – Atlas Agent"
+	Username    string `json:"username"`              // email, username, or account ID
+	Password    string `json:"password"`              // password, token, or secret value
+	TOTPSecret  string `json:"totpSecret,omitempty"`  // base32 TOTP seed (RFC 6238) — optional
+	Notes       string `json:"notes,omitempty"`       // free-form context
 	SessionName string `json:"sessionName,omitempty"` // named session label for multi-account support
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`

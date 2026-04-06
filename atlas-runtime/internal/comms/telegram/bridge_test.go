@@ -357,8 +357,8 @@ func TestReactWithProcessing(t *testing.T) {
 		"what is the capital of France",
 		"thank you so much",
 		"how are you",
-		"search",     // verb but no target
-		"document",   // target but no verb
+		"search",   // verb but no target
+		"document", // target but no verb
 	}
 	for _, s := range yes {
 		if !reactWithProcessing(s) {

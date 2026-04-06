@@ -2,15 +2,6 @@ import { useEffect, useState } from 'preact/hooks'
 import { api, WorkflowDefinition, WorkflowRun } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 
-const RefreshIcon = () => (
-  <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M2.5 8a5.5 5.5 0 0 1 9.5-3.8" />
-    <polyline points="13.5,2.5 13.5,6 10,6" />
-    <path d="M13.5 8a5.5 5.5 0 0 1-9.5 3.8" />
-    <polyline points="2.5,13.5 2.5,10 6,10" />
-  </svg>
-)
-
 function formatDate(value?: string) {
   if (!value) return '—'
   try { return new Date(value).toLocaleString() } catch { return value }
@@ -86,6 +77,7 @@ function WorkflowModal({ workflow, onSave, onClose }: WorkflowModalProps) {
   return (
     <div class="modal-overlay" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-overlay')) onClose() }}>
       <div class="modal automation-modal" style={{ maxWidth: 820, width: '94vw' }}>
+
         <div class="modal-header">
           <div class="automation-modal-title-wrap">
             <div class="surface-eyebrow">Workflow</div>
@@ -154,11 +146,17 @@ function WorkflowModal({ workflow, onSave, onClose }: WorkflowModalProps) {
                 />
                 <div class="workflow-checkboxes">
                   <label class="workflow-checkbox-label">
-                    <input type="checkbox" checked={allowsSensitiveRead} onChange={(e) => setAllowsSensitiveRead((e.target as HTMLInputElement).checked)} />
+                    <label class="toggle">
+                      <input type="checkbox" checked={allowsSensitiveRead} onChange={(e) => setAllowsSensitiveRead((e.target as HTMLInputElement).checked)} />
+                      <span class="toggle-track" />
+                    </label>
                     Allow sensitive reads
                   </label>
                   <label class="workflow-checkbox-label">
-                    <input type="checkbox" checked={allowsLiveWrite} onChange={(e) => setAllowsLiveWrite((e.target as HTMLInputElement).checked)} />
+                    <label class="toggle">
+                      <input type="checkbox" checked={allowsLiveWrite} onChange={(e) => setAllowsLiveWrite((e.target as HTMLInputElement).checked)} />
+                      <span class="toggle-track" />
+                    </label>
                     Allow live writes
                   </label>
                 </div>
@@ -197,6 +195,7 @@ function WorkflowRunsPanel({ workflow, onClose }: { workflow: WorkflowDefinition
   return (
     <div class="modal-overlay" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-overlay')) onClose() }}>
       <div class="modal automation-modal" style={{ maxWidth: 760, width: '92vw' }}>
+
         <div class="modal-header">
           <div class="automation-modal-title-wrap">
             <div class="surface-eyebrow">Workflow Runs</div>
@@ -301,7 +300,6 @@ export function Workflows() {
         actions={
           <>
             <button class="btn btn-primary btn-sm" onClick={() => setEditing('new')}>+ New</button>
-            <button class="btn btn-primary btn-sm" onClick={load}><RefreshIcon /> Refresh</button>
           </>
         }
       />
@@ -322,7 +320,7 @@ export function Workflows() {
       {!loading && workflows.length > 0 && (
         <div class="automation-list">
           {workflows.map(workflow => (
-            <div key={workflow.id} class="automation-card">
+            <div key={workflow.id} class="card automation-card">
               <div class="automation-card-header">
                 <div class="automation-meta">
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

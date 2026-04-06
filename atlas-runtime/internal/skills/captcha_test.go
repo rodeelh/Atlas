@@ -396,4 +396,3 @@ func TestSmokeCaptcha_VisionFnError(t *testing.T) {
 	}
 	t.Logf("Vision failure propagated correctly: %v", err)
 }
-

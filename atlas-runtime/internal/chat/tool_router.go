@@ -98,9 +98,12 @@ func selectToolsWithLLM(
 		return registry.SelectiveToolDefs(message)
 	}
 
-	// Empty array → model says no tools needed; pass all tools so the agent can decide.
+	// Empty array → router determined no tools are needed for this message.
+	// Return the heuristic baseline (core + management + custom) so the model
+	// still has self-awareness and management tools, but not the full set.
 	if len(names) == 0 {
-		return allTools
+		logstore.Write("info", "Tool router: no tools selected — using heuristic baseline", nil)
+		return registry.SelectiveToolDefs(message)
 	}
 
 	nameSet := make(map[string]bool, len(names))

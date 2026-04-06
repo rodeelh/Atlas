@@ -7,6 +7,7 @@ import { toast } from '../toast'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { formatAtlasModelName } from '../modelName'
+import { browserSpeechSupported, startBrowserSpeech, type BrowserSpeechSession } from '../lib/browserSpeech'
 
 // Configure marked once — GFM tables, auto line-breaks, external links
 marked.use({
@@ -88,6 +89,22 @@ function getConversationID(): string {
   return id
 }
 
+function joinTranscriptParts(...parts: string[]): string {
+  return parts
+    .map(part => part.trim())
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function mergeTranscriptIntoInput(base: string, dictated: string): string {
+  const transcript = joinTranscriptParts(dictated)
+  if (!transcript) return base
+  if (!base.trim()) return transcript
+  return /[\s\n]$/.test(base) ? `${base}${transcript}` : `${base} ${transcript}`
+}
+
 function loadMessages(): Message[] {
   try {
     const raw = localStorage.getItem(STORAGE_MSG_KEY)
@@ -132,7 +149,6 @@ function humanizeToolName(raw: string): string {
   if (raw.startsWith('forge.orchestration.review'))   return 'Reviewing the plan…'
   if (raw.startsWith('forge.orchestration.validate')) return 'Verifying the details…'
   if (raw.startsWith('forge.'))                       return 'Building that for you…'
-  if (raw.startsWith('dashboard.'))                   return 'Updating your dashboard…'
   if (raw.startsWith('system.'))                      return 'Running that now…'
   if (raw.startsWith('applescript.'))                 return 'Working in your apps…'
   if (raw.startsWith('gremlin.'))                     return 'Managing automations…'
@@ -245,14 +261,14 @@ const MicIcon = () => (
 )
 
 const CopyIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <rect x="5" y="5" width="9" height="9" rx="1.5" />
     <path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" />
   </svg>
 )
 
 const CheckIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d="M3 8l4 4 6-7" />
   </svg>
 )
@@ -286,6 +302,8 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
   const [attachments, setAttachments]         = useState<MessageAttachment[]>([])
   const [agentName, setAgentName]             = useState('Atlas')
   const [userName, setUserName]               = useState('')
+  const [speechAvailable]                     = useState(() => browserSpeechSupported())
+  const [speechListening, setSpeechListening] = useState(false)
   const [activeProvider, setActiveProvider]   = useState<ChatProvider>('openai')
   const [modelByProvider, setModelByProvider] = useState<Record<ChatProvider, string>>({
     openai:    '',
@@ -298,16 +316,16 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
 
   // History search state
   const [historyOpen, setHistoryOpen]           = useState(false)
+  const [historyDropdownVisible, setHistoryDropdownVisible] = useState(false)
   const [historyQuery, setHistoryQuery]         = useState('')
   const [historySummaries, setHistorySummaries] = useState<ConversationSummary[]>([])
   const [historyLoading, setHistoryLoading]     = useState(false)
   const historySearchRef                        = useRef<HTMLInputElement>(null)
   const historyDebounceRef                      = useRef<ReturnType<typeof setTimeout> | null>(null)
   const historyContainerRef                     = useRef<HTMLDivElement>(null)
-
-  // Copy state — tracks which message bubble is showing the checkmark
-  const [copyFeedback, setCopyFeedback] = useState<{ id: string; status: 'copied' | 'failed' } | null>(null)
-  const copyFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [copyFeedback, setCopyFeedback]         = useState<{ id: string; status: 'copied' | 'failed' } | null>(null)
+  const copyFeedbackTimer                       = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [revealedCopyId, setRevealedCopyId]     = useState<string | null>(null)
 
   // Presence state — replaces spinner + tool banner entirely
   const [presenceText, setPresenceText]       = useState('Thinking…')
@@ -327,6 +345,9 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
   const fileInputRef   = useRef<HTMLInputElement>(null)
   const conversationID = useRef<string>(getConversationID())
   const isInitialMount = useRef(true)
+  const speechSessionRef = useRef<BrowserSpeechSession | null>(null)
+  const speechBaseInputRef = useRef('')
+  const speechCommittedRef = useRef('')
 
   const scrollToBottom = (smooth: boolean) => {
     requestAnimationFrame(() => {
@@ -351,8 +372,23 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     scrollToBottom(false)
     return () => {
       esRef.current?.close()
-      if (presenceTimer.current) clearTimeout(presenceTimer.current)
+      speechSessionRef.current?.stop()
       if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current)
+      if (presenceTimer.current) clearTimeout(presenceTimer.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    const handlePointerDown = (e: MouseEvent | TouchEvent) => {
+      const target = e.target as HTMLElement | null
+      if (target?.closest('.chat-bubble-wrap')) return
+      setRevealedCopyId(null)
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('touchstart', handlePointerDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('touchstart', handlePointerDown)
     }
   }, [])
 
@@ -410,6 +446,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     const handler = (e: MouseEvent) => {
       if (historyContainerRef.current && !historyContainerRef.current.contains(e.target as Node)) {
         setHistoryOpen(false)
+        setHistoryDropdownVisible(false)
         setHistoryQuery('')
       }
     }
@@ -426,7 +463,6 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
       .then(setHistorySummaries)
       .catch(() => setHistorySummaries([]))
       .finally(() => setHistoryLoading(false))
-    setTimeout(() => historySearchRef.current?.focus(), 50)
   }, [historyOpen])
 
   // Debounced search
@@ -457,6 +493,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     conversationID.current = id
     setError(null)
     setApprovalBanner(false)
+    setHistoryDropdownVisible(false)
     setAttachments([])
     hideStatus(0)
     setPresenceWorking(false)
@@ -485,6 +522,60 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
       setActiveProvider(previousProvider)
     }
   }
+
+  const syncSpeechInput = useCallback((interimText = '') => {
+    const dictated = joinTranscriptParts(speechCommittedRef.current, interimText)
+    setInput(mergeTranscriptIntoInput(speechBaseInputRef.current, dictated))
+    requestAnimationFrame(resizeTextarea)
+  }, [])
+
+  const stopSpeechInput = useCallback(() => {
+    speechSessionRef.current?.stop()
+  }, [])
+
+  const toggleSpeechInput = useCallback(() => {
+    if (speechListening) {
+      stopSpeechInput()
+      return
+    }
+
+    if (!speechAvailable) {
+      toast.info('Browser voice input is not available here yet.')
+      return
+    }
+
+    speechBaseInputRef.current = input
+    speechCommittedRef.current = ''
+
+    try {
+      speechSessionRef.current = startBrowserSpeech({
+        lang: navigator.language || 'en-US',
+        onStart: () => {
+          setSpeechListening(true)
+          toast.info('Listening in your browser. Tap the mic again to stop.')
+        },
+        onResult: ({ finalText, interimText }) => {
+          if (finalText.trim()) {
+            speechCommittedRef.current = joinTranscriptParts(speechCommittedRef.current, finalText)
+          }
+          syncSpeechInput(interimText)
+        },
+        onError: (message) => {
+          setError(message)
+        },
+        onEnd: () => {
+          speechSessionRef.current = null
+          setSpeechListening(false)
+          syncSpeechInput()
+          textareaRef.current?.focus()
+        },
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Browser voice input failed.'
+      setError(message)
+      setSpeechListening(false)
+    }
+  }, [input, speechAvailable, speechListening, stopSpeechInput, syncSpeechInput])
 
   // ── Presence helpers ─────────────────────────────────────────────────────────
 
@@ -793,23 +884,19 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
 
   const copyMessage = async (id: string, content: string) => {
     if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current)
+    setRevealedCopyId(id)
 
     try {
       await navigator.clipboard.writeText(content)
       setCopyFeedback({ id, status: 'copied' })
-      toast.success('Copied')
-      copyFeedbackTimer.current = setTimeout(() => {
-        setCopyFeedback(prev => prev?.id === id ? null : prev)
-        copyFeedbackTimer.current = null
-      }, 1800)
     } catch {
       setCopyFeedback({ id, status: 'failed' })
-      toast.error('Could not copy')
-      copyFeedbackTimer.current = setTimeout(() => {
-        setCopyFeedback(prev => prev?.id === id ? null : prev)
-        copyFeedbackTimer.current = null
-      }, 1800)
     }
+
+    copyFeedbackTimer.current = setTimeout(() => {
+      setCopyFeedback(prev => prev?.id === id ? null : prev)
+      copyFeedbackTimer.current = null
+    }, 1800)
   }
 
   const newConversation = () => {
@@ -821,6 +908,9 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     setError(null)
     setApprovalBanner(false)
     setAttachments([])
+    speechSessionRef.current?.stop()
+    speechSessionRef.current = null
+    setSpeechListening(false)
     hideStatus(0)
     setPresenceWorking(false)
     activeMsgId.current = null
@@ -843,48 +933,72 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
         actions={
           <>
             {/* Search — icon collapses to expanding search bar + dropdown */}
-            <div ref={historyContainerRef} style={{ position: 'relative' }}>
-              {historyOpen ? (
-                <>
-                  <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                    <svg style={{ position: 'absolute', left: '9px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--theme-text-muted)' }} width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                      <circle cx="6.5" cy="6.5" r="4.5" /><line x1="10" y1="10" x2="14" y2="14" />
-                    </svg>
-                    <input
-                      ref={historySearchRef}
-                      class="input"
-                      type="text"
-                      placeholder="Search conversations…"
-                      value={historyQuery}
-                      onInput={(e) => setHistoryQuery((e.target as HTMLInputElement).value)}
-                      onKeyDown={(e) => { if (e.key === 'Escape') { setHistoryOpen(false); setHistoryQuery('') } }}
-                      style={{ paddingLeft: '30px', paddingRight: '30px', fontSize: '13px', height: '30px', borderRadius: '10px', width: '220px' }}
-                    />
-                    <button
-                      class="btn btn-ghost btn-icon"
-                      style={{ position: 'absolute', right: '4px', minWidth: '20px', width: '20px', height: '20px', padding: 0, borderRadius: '6px' }}
-                      onClick={() => { setHistoryOpen(false); setHistoryQuery('') }}
-                      title="Close"
-                    >
-                      <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-                        <line x1="1" y1="1" x2="9" y2="9" /><line x1="9" y1="1" x2="1" y2="9" />
-                      </svg>
-                    </button>
-                  </div>
+            <div ref={historyContainerRef} class={`chat-history-search${historyOpen ? ' open' : ''}`}>
+              <button
+                class="chat-history-search-trigger"
+                onClick={() => {
+                  if (!historyOpen) {
+                    setHistoryOpen(true)
+                    setHistoryDropdownVisible(false)
+                    setTimeout(() => historySearchRef.current?.focus(), 180)
+                  }
+                }}
+                title="Search conversations"
+                aria-label="Search conversations"
+              >
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="6.5" cy="6.5" r="4.5" /><line x1="10" y1="10" x2="14" y2="14" />
+                </svg>
+              </button>
+              <input
+                ref={historySearchRef}
+                class="chat-history-search-input"
+                type="text"
+                placeholder="Search conversations…"
+                value={historyQuery}
+                onClick={() => setHistoryDropdownVisible(true)}
+                onInput={(e) => {
+                  setHistoryDropdownVisible(true)
+                  setHistoryQuery((e.target as HTMLInputElement).value)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    setHistoryOpen(false)
+                    setHistoryDropdownVisible(false)
+                    setHistoryQuery('')
+                  }
+                }}
+                tabIndex={historyOpen ? 0 : -1}
+              />
+              <button
+                class="chat-history-close-btn"
+                onClick={() => {
+                  setHistoryOpen(false)
+                  setHistoryDropdownVisible(false)
+                  setHistoryQuery('')
+                }}
+                title="Close"
+                tabIndex={historyOpen ? 0 : -1}
+                aria-hidden={historyOpen ? 'false' : 'true'}
+              >
+                <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                  <line x1="1" y1="1" x2="9" y2="9" /><line x1="9" y1="1" x2="1" y2="9" />
+                </svg>
+              </button>
 
-                  {/* Results dropdown */}
-                  <div style={{
-                    position: 'absolute', top: 'calc(100% + 6px)', right: 0, width: '100%',
-                    background: 'var(--surface-2)',
-                    border: '1px solid var(--border-2)',
-                    borderRadius: '12px',
-                    boxShadow: '0 8px 32px rgba(0,0,0,0.28)',
-                    overflow: 'hidden',
-                    zIndex: 300,
-                    maxHeight: '340px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                  }}>
+              {historyOpen && historyDropdownVisible && (
+                <div style={{
+                  position: 'absolute', top: 'calc(100% + 6px)', right: 0, width: '100%',
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--border-2)',
+                  borderRadius: '12px',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.28)',
+                  overflow: 'hidden',
+                  zIndex: 300,
+                  maxHeight: '340px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                }}>
                     {historyLoading && (
                       <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-2)', fontSize: '13px' }}>Loading…</div>
                     )}
@@ -948,19 +1062,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
                         </button>
                       </div>
                     )}
-                  </div>
-                </>
-              ) : (
-                <button
-                  class="btn btn-sm btn-icon chat-header-action-btn"
-                  onClick={() => setHistoryOpen(true)}
-                  title="Search conversations"
-                  aria-label="Search conversations"
-                >
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="6.5" cy="6.5" r="4.5" /><line x1="10" y1="10" x2="14" y2="14" />
-                  </svg>
-                </button>
+                </div>
               )}
             </div>
 
@@ -1001,8 +1103,15 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
                 <span class="chat-avatar-content chat-avatar-content-initial">{msg.role === 'assistant' ? agentName[0]?.toUpperCase() ?? 'A' : userName[0]?.toUpperCase() ?? 'Y'}</span>
                 <span class="chat-avatar-content chat-avatar-content-minimal"><span class="chat-avatar-minimal-dot" /></span>
               </div>
-              <div class="chat-bubble-wrap">
-                <div class="chat-bubble">
+              <div class={`chat-bubble-wrap${revealedCopyId === msg.id ? ' copy-revealed' : ''}`}>
+                <div
+                  class="chat-bubble"
+                  onClick={(e) => {
+                    const target = e.target as HTMLElement
+                    if (target.closest('a, button, input, textarea, select')) return
+                    setRevealedCopyId(current => current === msg.id ? null : msg.id)
+                  }}
+                >
                   {msg.content
                     ? (msg.role === 'assistant'
                         ? renderMessageContent(msg.content, msg.linkPreviews)
@@ -1016,34 +1125,23 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
                   <div class="chat-message-actions">
                     {(() => {
                       const copyState = copyFeedback?.id === msg.id ? copyFeedback.status : 'idle'
-                      const copyStateStyle = copyState === 'idle'
-                        ? undefined
-                        : {
-                            background: 'transparent',
-                            backgroundImage: 'none',
-                            border: '1px solid transparent',
-                            boxShadow: 'none',
-                            backdropFilter: 'none',
-                            WebkitBackdropFilter: 'none',
-                            opacity: '1',
-                            appearance: 'none',
-                            WebkitAppearance: 'none',
-                          } as const
+                      const label = copyState === 'copied'
+                        ? 'Copied'
+                        : copyState === 'failed'
+                          ? 'Retry copy'
+                          : 'Copy'
                       return (
-                    <button
-                      class="chat-copy-btn"
-                      data-copy-state={copyState}
-                      onClick={() => {
-                        if (copyState === 'copied') return
-                        copyMessage(msg.id, msg.content)
-                      }}
-                      title="Copy"
-                      aria-label="Copy message"
-                      aria-disabled={copyState === 'copied' ? 'true' : 'false'}
-                      style={copyStateStyle}
-                    >
-                      {copyState === 'copied' ? <CheckIcon /> : <CopyIcon />}
-                    </button>
+                        <button
+                          class={`chat-copy-btn${copyState !== 'idle' ? ` ${copyState}` : ''}`}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            copyMessage(msg.id, msg.content)
+                          }}
+                          title="Copy message"
+                          aria-label={label}
+                        >
+                          {copyState === 'copied' ? <CheckIcon /> : <CopyIcon />}
+                        </button>
                       )
                     })()}
                   </div>
@@ -1123,11 +1221,24 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
                 value={input}
                 onInput={(e) => { setInput((e.target as HTMLTextAreaElement).value); resizeTextarea() }}
                 onKeyDown={handleKeyDown}
-                disabled={sending}
+                disabled={sending || speechListening}
                 rows={1}
               />
-              {/* Mic — inside box, bottom-right, greyed out */}
-              <button class="chat-mic-btn" disabled title="Voice message (coming soon)">
+              <button
+                class={`chat-mic-btn${speechListening ? ' active' : ''}${!speechAvailable ? ' unsupported' : ''}`}
+                onClick={toggleSpeechInput}
+                disabled={sending}
+                type="button"
+                title={
+                  speechListening
+                    ? 'Stop browser voice input'
+                    : speechAvailable
+                      ? 'Use browser voice input (temporary bridge)'
+                      : 'Browser voice input unavailable'
+                }
+                aria-label={speechListening ? 'Stop voice input' : 'Start voice input'}
+                aria-pressed={speechListening ? 'true' : 'false'}
+              >
                 <MicIcon />
               </button>
 
@@ -1159,7 +1270,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
             <button
               class="chat-round-btn chat-round-btn-send"
               onClick={send}
-              disabled={sending || (!input.trim() && attachments.length === 0)}
+              disabled={sending || speechListening || (!input.trim() && attachments.length === 0)}
             >
               <SendIcon />
             </button>

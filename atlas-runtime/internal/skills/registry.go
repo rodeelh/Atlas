@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"atlas-runtime-go/internal/browser"
+	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/storage"
 )
 
@@ -173,9 +174,9 @@ func NewRegistry(supportDir string, db *storage.DB, browserMgr *browser.Manager)
 	r.registerGremlin()
 	r.registerWebSearch()
 	r.registerForge()
-	r.registerDiary()
 	r.registerVault()
 	r.registerBrowser()
+	r.registerMemory()
 	return r
 }
 
@@ -222,100 +223,180 @@ func (r *Registry) ToolDefinitions() []map[string]any {
 }
 
 // toolCapabilityGroup returns which capability group a tool name belongs to.
-// Groups drive selective injection when EnableSmartToolSelection is true.
+// Groups drive selective injection in SelectiveToolDefs.
+//
+// "core" is always-on. All other groups are scored against the user message
+// via scoreGroups() in heuristic.go and activated when they meet their threshold.
 func toolCapabilityGroup(name string) string {
 	switch {
+	// Always-on: time/date utilities only
+	case name == "info.current_time",
+		name == "info.current_date",
+		name == "info.timezone_convert":
+		return "core"
+
+	// Atlas runtime status — only when user asks about Atlas itself
+	case strings.HasPrefix(name, "atlas."):
+		return "meta"
+
+	// Scored groups
+	case strings.HasPrefix(name, "weather."):
+		return "weather"
+	case strings.HasPrefix(name, "web."), strings.HasPrefix(name, "websearch."):
+		return "web"
+	case strings.HasPrefix(name, "finance."),
+		name == "info.currency_for_location",
+		name == "info.currency_convert":
+		return "finance"
+	case strings.HasPrefix(name, "applescript.calendar_"),
+		strings.HasPrefix(name, "applescript.reminders_"),
+		strings.HasPrefix(name, "applescript.mail_"),
+		strings.HasPrefix(name, "applescript.contacts_"),
+		strings.HasPrefix(name, "applescript.notes_"):
+		return "office"
+	case strings.HasPrefix(name, "applescript.music_"),
+		strings.HasPrefix(name, "applescript.safari_"),
+		name == "applescript.system_info":
+		return "media"
+	case strings.HasPrefix(name, "system."):
+		return "mac"
+	case strings.HasPrefix(name, "terminal."),
+		name == "applescript.run_custom":
+		return "shell"
+	case strings.HasPrefix(name, "fs."):
+		return "files"
+	case strings.HasPrefix(name, "vault."):
+		return "vault"
 	case strings.HasPrefix(name, "browser."):
 		return "browser"
-	case strings.HasPrefix(name, "fs."):
-		return "filesystem"
-	case strings.HasPrefix(name, "system."), strings.HasPrefix(name, "terminal."):
-		return "system"
-	case strings.HasPrefix(name, "applescript."):
-		return "scripting"
-	case strings.HasPrefix(name, "weather."), strings.HasPrefix(name, "web."),
-		strings.HasPrefix(name, "websearch."), strings.HasPrefix(name, "finance."):
-		return "services"
-	case strings.HasPrefix(name, "vault."), strings.HasPrefix(name, "gremlin."),
-		strings.HasPrefix(name, "diary."), strings.HasPrefix(name, "image."),
-		strings.HasPrefix(name, "forge."):
-		return "management"
+	case strings.HasPrefix(name, "image."):
+		return "creative"
+	case strings.HasPrefix(name, "gremlin."):
+		return "automation"
+	case strings.HasPrefix(name, "forge."):
+		return "forge"
 	default:
-		return "core" // atlas.*, info.*, anything unrecognised
+		return "custom"
 	}
 }
 
-// groupKeywords maps each capability group to the trigger phrases that indicate
-// the user message may need that group's tools. Matching is case-insensitive
-// substring search — broad by design to avoid false negatives.
-var groupKeywords = map[string][]string{
-	"browser": {
-		"browse", "website", "web page", "navigate to", "open url", "visit ",
-		"http://", "https://", "click", "screenshot", "scroll", "login to",
-		"captcha", "session cookie", "download page", "web browser",
-	},
-	"filesystem": {
-		"file", "folder", "directory", "read file", "write file",
-		"patch file", "create file", "delete file", "list files",
-		"save to", "disk", "path", "mkdir",
-	},
-	"system": {
-		"run command", "terminal", "shell command", "process", "running app",
-		"kill process", "clipboard", "notification", "open app", "open folder",
-		"reveal in finder", "environment variable", "env var", "which command",
-		"working directory",
-	},
-	"scripting": {
-		"calendar", "reminder", "contact", "notes app", "apple notes",
-		"mail", "email", "safari", "music", "applescript", "custom script",
-		"schedule event", "add reminder", "upcoming event",
-	},
-	"services": {
-		"weather", "forecast", "stock", "finance", "market price", "share price",
-		"web search", "search online", "search the web", "look up",
-		"fetch url", "news", "currency", "exchange rate",
-	},
-	"management": {
-		"vault", "credential", "api key", "password", "secret",
-		"gremlin", "automation", "add automation", "diary entry",
-		"generate image", "forge", "install skill",
-	},
+// groupThresholds defines the minimum score a group must reach to be included.
+// Higher thresholds require stronger, more explicit intent signals.
+//
+//	≥ 1  most groups — any clear signal is enough
+//	≥ 2  files, browser — privacy-sensitive or large; reduce false positives
+//	≥ 3  shell — destructive; require unambiguous explicit intent
+//
+// "core" has no entry — it is always-on (no threshold needed).
+// "meta" covers atlas.* runtime-status tools — only injected when explicitly asked.
+var groupThresholds = map[string]int{
+	"meta":       1,
+	"weather":    1,
+	"web":        1,
+	"finance":    1,
+	"office":     1,
+	"media":      1,
+	"mac":        1,
+	"shell":      3,
+	"files":      2,
+	"vault":      1,
+	"browser":    2,
+	"creative":   1,
+	"automation": 1,
+	"forge":      1,
 }
 
-// SelectiveToolDefs returns the minimal tool set relevant to the given user
-// message. Core tools (atlas.*, info.*) are always included. Additional
-// capability groups are included when the message contains at least one keyword
-// from that group's trigger list.
+// SelectiveToolDefs returns a bounded tool set for the given user message.
 //
-// If no capability-specific group matches, all tools are returned so Atlas
-// is never silently incapable of handling an edge-case request.
+// Always-on (every turn):
+//   - "core" — info.current_time, info.current_date, info.timezone_convert
+//
+// Score-triggered (added when group score meets its threshold):
+//   - meta ≥1 (atlas.info — only when user asks about Atlas/runtime status)
+//   - weather ≥1, web ≥1, finance ≥1, office ≥1, media ≥1, mac ≥1
+//   - vault ≥1, creative ≥1, automation ≥1, forge ≥1
+//   - files ≥2, browser ≥2
+//   - shell ≥3
+//
+// Custom skills are scored individually: included when their name or
+// description shares a meaningful token with the user message.
+//
+// The hard cap in agent/loop.go (capToolsForProvider) is the final safety net.
 func (r *Registry) SelectiveToolDefs(userMessage string) []map[string]any {
-	lower := strings.ToLower(userMessage)
-
-	// Determine which groups are triggered by this message.
+	// core is always-on.
 	triggered := map[string]bool{"core": true}
-	for group, keywords := range groupKeywords {
-		for _, kw := range keywords {
-			if strings.Contains(lower, kw) {
-				triggered[group] = true
-				break
-			}
+
+	// Score all groups and activate those meeting their threshold.
+	scores := scoreGroups(userMessage)
+	for group, score := range scores {
+		threshold, ok := groupThresholds[group]
+		if ok && score >= threshold {
+			triggered[group] = true
 		}
 	}
 
-	// If no capability group matched (only core is triggered), fall back to
-	// all tools to avoid silently omitting needed capabilities.
-	if len(triggered) == 1 {
-		return r.ToolDefinitions()
+	// Build message token set once for custom skill scoring.
+	msgTokens := make(map[string]bool)
+	for _, t := range tokenize(userMessage) {
+		msgTokens[t] = true
 	}
 
 	out := make([]map[string]any, 0, len(r.entries))
+	var customIncluded, customTotal int
 	for _, e := range r.entries {
-		if triggered[toolCapabilityGroup(e.Def.Name)] {
+		group := toolCapabilityGroup(e.Def.Name)
+		if group != "custom" {
+			if triggered[group] {
+				out = append(out, e.Def.MarshalOpenAI())
+			}
+			continue
+		}
+		// Custom skill: include when name or description shares a meaningful
+		// token with the message. Avoids ballooning as forge skills accumulate.
+		customTotal++
+		if customSkillMatches(e.Def, msgTokens) {
 			out = append(out, e.Def.MarshalOpenAI())
+			customIncluded++
 		}
 	}
+
+	// Log which groups fired, their scores, and custom match rate.
+	activeGroups := make([]string, 0, len(triggered))
+	for g := range triggered {
+		activeGroups = append(activeGroups, g)
+	}
+	logstore.Write("debug",
+		fmt.Sprintf("Tool selection: %d tools | groups: %v | scores: %v | custom: %d/%d",
+			len(out), activeGroups, scores, customIncluded, customTotal),
+		map[string]string{"mode": "heuristic"})
+
 	return out
+}
+
+// customSkillMatches returns true when at least one meaningful word token from
+// the skill's name or description appears in the message token set.
+// Single-character tokens and very common stop words are skipped.
+func customSkillMatches(def ToolDef, msgTokens map[string]bool) bool {
+	// Stop words that appear in almost every skill description and carry no signal.
+	stopWords := map[string]bool{
+		"a": true, "an": true, "the": true, "and": true, "or": true,
+		"to": true, "of": true, "in": true, "for": true, "with": true,
+		"on": true, "at": true, "by": true, "it": true, "is": true,
+		"be": true, "as": true, "do": true, "get": true, "set": true,
+		"use": true, "can": true, "has": true, "run": true, "new": true,
+	}
+	check := func(s string) bool {
+		for _, t := range tokenize(s) {
+			if len(t) <= 1 || stopWords[t] {
+				continue
+			}
+			if msgTokens[t] {
+				return true
+			}
+		}
+		return false
+	}
+	return check(def.Name) || check(def.Description)
 }
 
 // Canonicalize converts an AI-facing action name (may use __ encoding) to the

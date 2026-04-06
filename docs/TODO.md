@@ -4,6 +4,37 @@ Tracked here: significant rewrites, cross-cutting features, and known gaps that 
 
 ---
 
+## LLM Tool Router as Default (Option 3)
+
+**Status:** Not started
+**Priority:** Medium
+**Scope:** `atlas-runtime/internal/chat/`
+
+### Context
+
+Tool selection currently uses a keyword heuristic (`SelectiveToolDefs`) with a hard cap safety net (`capToolsForProvider`). This works reliably but is coarse — the model occasionally won't see a tool it could have used.
+
+A smarter path already exists (`tool_router.go`) that asks a fast model to select the exact tools needed before the main agent turn. It's architecturally sound but not the default.
+
+### What this work covers
+
+1. **Make `"llm"` the default `ToolSelectionMode`** when a fast cloud model is configured (Anthropic haiku, Gemini flash, OpenAI mini) — the pre-turn latency is acceptable and accuracy is much higher than keywords.
+
+2. **Fix the fallback chain** — the LLM router currently falls back to `SelectiveToolDefs` on any failure, which is now the fixed heuristic. That's correct. But when the router returns an empty selection it falls back to `ToolDefinitions()` (all tools) — fix that to fall back to `SelectiveToolDefs` instead.
+
+3. **Router result caching** — for multi-turn conversations, tool selection for the same context rarely changes. Cache the selection for N seconds to avoid a pre-turn API call on every follow-up.
+
+4. **Observability** — log selected tool names (not just count) at debug level so the selection decision is auditable.
+
+### Files to touch
+| File | Change |
+|------|--------|
+| `internal/chat/tool_router.go` | Fix empty-array fallback; add optional result cache |
+| `internal/chat/service.go` | Change default ToolSelectionMode to `"llm"` when fast provider available |
+| `internal/config/snapshot.go` | No change needed — mode already configurable |
+
+---
+
 ## Vision Pipeline Rewrite
 
 **Status:** Not started

@@ -53,10 +53,10 @@ type OAIMessage struct {
 // ExtraContent carries provider-specific metadata that must be echoed back
 // verbatim. For Gemini thinking models this holds the thought_signature.
 type OAIToolCall struct {
-	ID           string              `json:"id"`
-	Type         string              `json:"type"`
-	Function     OAIFunctionCall     `json:"function"`
-	ExtraContent *OAIToolCallExtras  `json:"extra_content,omitempty"`
+	ID           string             `json:"id"`
+	Type         string             `json:"type"`
+	Function     OAIFunctionCall    `json:"function"`
+	ExtraContent *OAIToolCallExtras `json:"extra_content,omitempty"`
 }
 
 // OAIToolCallExtras mirrors the extra_content structure Gemini returns and
@@ -98,6 +98,33 @@ type RunResult struct {
 	ToolResultSummaries []string // short result summaries, one per tool call
 }
 
+// requestToolsName is the internal action ID for the lazy-mode meta-tool.
+// The model calls this when it determines it needs real capabilities; the loop
+// intercepts the call, upgrades the tool set, and continues transparently.
+const requestToolsName = "request_tools"
+
+// RequestToolsDef returns the single meta-tool injected in "lazy" tool selection
+// mode. It costs ~100 input tokens vs ~2,600 for the 26-tool heuristic baseline,
+// and lets the model opt-in to real tools only when it actually needs them.
+func RequestToolsDef() map[string]any {
+	return map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name": requestToolsName,
+			"description": "Call this ONLY if you need a real tool to answer — " +
+				"e.g. search the web, check weather, read a file, run a skill. " +
+				"Do NOT call it for conversational replies: greetings, acknowledgements ('ok', 'thanks', 'got it', 'sounds good'), " +
+				"casual chat, opinions, explanations, or anything you can answer from your own knowledge. " +
+				"After calling it you will receive the relevant tools and should proceed immediately.",
+			"parameters": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+				"required":   []string{},
+			},
+		},
+	}
+}
+
 // LoopConfig carries per-run configuration.
 type LoopConfig struct {
 	Provider      ProviderConfig
@@ -113,6 +140,10 @@ type LoopConfig struct {
 	// Used by EnableSmartToolSelection to inject only the relevant capability
 	// groups for the current user message.
 	Tools []map[string]any
+	// UserMessage is the original user text. Used by lazy tool selection:
+	// when the model calls request_tools, SelectiveToolDefs runs against this
+	// message to pick the right capability groups for the upgrade.
+	UserMessage string
 }
 
 // Loop is the multi-turn agent loop.
@@ -130,6 +161,62 @@ type deferralState struct {
 	ConvID    string        `json:"conv_id"`
 }
 
+// openAIToolLimit is the maximum number of tools OpenAI (and OpenAI-compatible)
+// providers accept in a single request. Requests with more tools are rejected
+// with HTTP 400 "array too long". Anthropic has no documented hard limit.
+const openAIToolLimit = 128
+
+// capToolsForProvider trims the tool list to the provider's maximum when
+// necessary. Trimming is priority-ordered so the most critical tools survive:
+//
+//  1. forge.* — always kept (the user may be in a skill-building flow)
+//  2. atlas.*, info.* — core self-awareness tools
+//  3. vault.*, gremlin.*, diary.*, image.* — management tools
+//  4. Everything else in registration order
+//
+// A warning is logged whenever the list is actually truncated.
+func capToolsForProvider(tools []map[string]any, providerType ProviderType) []map[string]any {
+	limit := 0
+	switch providerType {
+	case ProviderOpenAI, ProviderLMStudio, ProviderAtlasEngine:
+		limit = openAIToolLimit
+	}
+	if limit == 0 || len(tools) <= limit {
+		return tools
+	}
+
+	// Bucket tools by priority group.
+	var p1, p2, p3, p4 []map[string]any
+	for _, t := range tools {
+		fn, _ := t["function"].(map[string]any)
+		name, _ := fn["name"].(string)
+		switch {
+		case strings.HasPrefix(name, "forge__"):
+			p1 = append(p1, t)
+		case strings.HasPrefix(name, "atlas__"), strings.HasPrefix(name, "info__"):
+			p2 = append(p2, t)
+		case strings.HasPrefix(name, "vault__"), strings.HasPrefix(name, "gremlin__"),
+			strings.HasPrefix(name, "diary__"), strings.HasPrefix(name, "image__"):
+			p3 = append(p3, t)
+		default:
+			p4 = append(p4, t)
+		}
+	}
+
+	ordered := make([]map[string]any, 0, len(tools))
+	ordered = append(ordered, p1...)
+	ordered = append(ordered, p2...)
+	ordered = append(ordered, p3...)
+	ordered = append(ordered, p4...)
+
+	trimmed := ordered[:limit]
+	logstore.Write("warn",
+		fmt.Sprintf("Agent: tool list capped at %d (was %d) for %s provider — lowest-priority tools dropped",
+			limit, len(tools), providerType),
+		nil)
+	return trimmed
+}
+
 // Run executes the multi-turn agent loop for one user request.
 // Each iteration makes a single streaming API call that handles both text
 // and tool-call turns — no separate probe call is needed.
@@ -139,6 +226,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 	if tools == nil {
 		tools = l.Skills.ToolDefinitions()
 	}
+	tools = capToolsForProvider(tools, cfg.Provider.Type)
 
 	maxIter := cfg.MaxIterations
 	if maxIter <= 0 {
@@ -157,15 +245,30 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 	}
 
 	var (
-		totalUsage          TokenUsage
-		allToolSummaries    []string
-		allResultSummaries  []string
+		totalUsage         TokenUsage
+		allToolSummaries   []string
+		allResultSummaries []string
+		toolsUpgraded      bool // lazy mode: upgrade happens at most once per turn
+		compacted          bool // overflow recovery: compact at most once per turn
 	)
 
 	for i := 0; i < maxIter; i++ {
 		// Single streaming call — detects tool calls and emits text in one pass.
 		sr, err := streamWithToolDetection(ctx, cfg.Provider, messages, tools, convID, l.BC)
 		if err != nil {
+			// If the model's context window was exceeded and we haven't yet
+			// compacted this turn, trim old messages and retry immediately.
+			if !compacted && isContextOverflow(err) {
+				before := len(messages)
+				messages = compactMessages(messages)
+				compacted = true
+				logstore.Write("warn",
+					fmt.Sprintf("Agent: context overflow — compacted %d→%d messages, retrying (conv %s)",
+						before, len(messages), shortConv),
+					map[string]string{"conv": shortConv})
+				i-- // don't count compaction as an iteration
+				continue
+			}
 			logstore.Write("error", "Agent error: "+err.Error(), map[string]string{"conv": shortConv})
 			return RunResult{Status: "error", Error: err, TotalUsage: totalUsage}
 		}
@@ -181,6 +284,50 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 				TotalUsage:          totalUsage,
 				ToolCallSummaries:   allToolSummaries,
 				ToolResultSummaries: allResultSummaries,
+			}
+		}
+
+		// ── Lazy tool upgrade ────────────────────────────────────────────────
+		// In "lazy" mode the model is given only the request_tools meta-tool.
+		// When it calls it, we upgrade to the full heuristic tool set and
+		// continue the loop — completely transparent to the user.
+		if !toolsUpgraded {
+			for _, tc := range sr.ToolCalls {
+				if tc.Function.Name != requestToolsName {
+					continue
+				}
+				// Upgrade: heuristic selection based on the original user message.
+				// Sends only the relevant capability groups — keeps token usage low
+				// while ensuring the model gets the tools it actually needs.
+				// The 128-cap safety net handles provider limits.
+				upgraded := l.Skills.SelectiveToolDefs(cfg.UserMessage)
+				upgraded = capToolsForProvider(upgraded, cfg.Provider.Type)
+				tools = upgraded
+				toolsUpgraded = true
+
+				logstore.Write("info",
+					fmt.Sprintf("Lazy tool upgrade: %d tools selected (conv %s, msg: %.60q)",
+						len(tools), shortConv, cfg.UserMessage),
+					map[string]string{"conv": shortConv, "mode": "lazy→heuristic", "tools": fmt.Sprintf("%d", len(tools))})
+
+				// Protocol: the assistant message must contain the tool_call,
+				// and we must send a tool result before the next model turn.
+				messages = append(messages, OAIMessage{
+					Role:      "assistant",
+					Content:   sr.FinalText, // preserve any text streamed before the call
+					ToolCalls: sr.ToolCalls,
+				})
+				messages = append(messages, OAIMessage{
+					Role:       "tool",
+					Content:    "Tool capabilities are now available. Proceed to answer the user's request using the appropriate tools.",
+					ToolCallID: tc.ID,
+					Name:       requestToolsName,
+				})
+				break
+			}
+			if toolsUpgraded {
+				i--      // lazy upgrade doesn't count as an iteration
+				continue // re-enter loop with real tools
 			}
 		}
 
@@ -339,14 +486,35 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 	}
 }
 
+// toolResultMaxChars is the maximum character length for a single tool result
+// before head+tail truncation is applied. Keeps individual results from
+// exhausting the context window on large page reads or API dumps.
+const toolResultMaxChars = 40_000
+
+// capContent truncates a tool result string that exceeds toolResultMaxChars.
+// Head + tail strategy preserves the opening structure and the trailing
+// summary/conclusion, which are typically the most semantically dense parts.
+func capContent(s string) string {
+	if len(s) <= toolResultMaxChars {
+		return s
+	}
+	half := toolResultMaxChars / 2
+	head := s[:half]
+	tail := s[len(s)-half:]
+	dropped := len(s) - toolResultMaxChars
+	return head +
+		fmt.Sprintf("\n\n[...%d characters omitted — request a smaller chunk or use pagination if you need more...]\n\n", dropped) +
+		tail
+}
+
 // buildToolContent returns the appropriate content value for a tool result message.
 // When content is a screenshot (prefixed with __ATLAS_IMAGE__:), it builds a
 // vision content block array that OpenAI-compatible and Anthropic models understand.
-// For all other content, the string is returned as-is.
+// For all other content, the string is size-capped and returned as-is.
 func buildToolContent(provider ProviderConfig, content string) any {
 	const imagePrefix = "__ATLAS_IMAGE__:"
 	if !strings.HasPrefix(content, imagePrefix) {
-		return content
+		return capContent(content)
 	}
 
 	dataURI := content[len(imagePrefix):]
@@ -554,6 +722,58 @@ func (l *Loop) execTool(ctx context.Context, tc OAIToolCall) *toolExecResult {
 		execErr:   execErr,
 		elapsedMs: time.Since(start).Milliseconds(),
 	}
+}
+
+// ── Context overflow handling ─────────────────────────────────────────────────
+
+// keepRecentMessages is the number of most-recent messages retained after
+// compaction. The system message is always kept regardless of this limit.
+const keepRecentMessages = 20
+
+// isContextOverflow reports whether an API error indicates the request exceeded
+// the model's context window. Matches error strings from OpenAI, Anthropic,
+// and Gemini providers.
+func isContextOverflow(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "context_length_exceeded") ||
+		strings.Contains(s, "context length") ||
+		strings.Contains(s, "maximum context") ||
+		strings.Contains(s, "prompt is too long") ||
+		strings.Contains(s, "reduce the length") ||
+		strings.Contains(s, "tokens exceed") ||
+		strings.Contains(s, "token limit") ||
+		strings.Contains(s, "too many tokens")
+}
+
+// compactMessages trims a message slice to fit within context limits.
+// Strategy: keep the system message (always first) + the keepRecentMessages
+// most-recent messages, and insert a truncation notice at the join point so
+// the model knows history was omitted.
+func compactMessages(messages []OAIMessage) []OAIMessage {
+	// Locate system message (always index 0 when present).
+	systemEnd := 0
+	if len(messages) > 0 && messages[0].Role == "system" {
+		systemEnd = 1
+	}
+	remaining := messages[systemEnd:]
+	if len(remaining) <= keepRecentMessages {
+		return messages // nothing to trim
+	}
+
+	kept := remaining[len(remaining)-keepRecentMessages:]
+	notice := OAIMessage{
+		Role:    "user",
+		Content: "[Note: Earlier conversation history was omitted to stay within the model's context limit.]",
+	}
+
+	result := make([]OAIMessage, 0, systemEnd+1+len(kept))
+	result = append(result, messages[:systemEnd]...)
+	result = append(result, notice)
+	result = append(result, kept...)
+	return result
 }
 
 // ── UUID generation ───────────────────────────────────────────────────────────

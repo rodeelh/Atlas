@@ -32,19 +32,80 @@ type candidate struct {
 	tags            []string
 }
 
+// ExtractRegexOnly runs only the fast regex-based extraction pipeline (stage 1)
+// without any LLM calls. Used for pre-compaction memory flush on historical
+// messages that already had their chance at full extraction on their original turn.
+func ExtractRegexOnly(
+	cfg config.RuntimeConfigSnapshot,
+	userMsg, convID string,
+	db *storage.DB,
+) {
+	if !cfg.MemoryEnabled {
+		return
+	}
+	text := strings.TrimSpace(userMsg)
+	if text == "" {
+		return
+	}
+	threshold := cfg.MemoryAutoSaveThreshold
+	if threshold <= 0 {
+		threshold = 0.75
+	}
+	candidates := extractCandidates(text)
+	seen := map[string]bool{}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, c := range candidates {
+		if !c.isUserConfirmed && c.confidence < threshold {
+			continue
+		}
+		key := c.category + "|" + normalize(c.title)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		tagsJSON := "[]"
+		if len(c.tags) > 0 {
+			if b, err := json.Marshal(c.tags); err == nil {
+				tagsJSON = string(b)
+			}
+		}
+		existing, err := db.FindDuplicateMemory(c.category, c.title)
+		if err != nil || existing != nil {
+			continue // skip duplicates — don't overwrite existing memories from the original turn
+		}
+		row := storage.MemoryRow{
+			ID:                    newMemoryID(),
+			Category:              c.category,
+			Title:                 c.title,
+			Content:               c.content,
+			Source:                c.source,
+			Confidence:            c.confidence,
+			Importance:            c.importance,
+			CreatedAt:             now,
+			UpdatedAt:             now,
+			IsUserConfirmed:       c.isUserConfirmed,
+			TagsJSON:              tagsJSON,
+			RelatedConversationID: &convID,
+		}
+		db.SaveMemory(row) //nolint:errcheck
+	}
+}
+
 // ExtractAndPersist runs memory extraction on a completed turn and saves
 // qualifying candidates to the database. Safe to call in a goroutine.
 //
 // Two-stage pipeline:
 //  1. Regex-based extraction (fast, no API call) for known patterns.
 //  2. LLM-based extraction for novel facts from both user and assistant messages.
-//     Skipped when regex found an explicit "remember that" command.
+//     Also receives tool outcomes so it can detect suboptimal tool results and
+//     write tool_learning memories. Skipped when regex found a commitment command.
 func ExtractAndPersist(
 	ctx context.Context,
 	cfg config.RuntimeConfigSnapshot,
 	provider agent.ProviderConfig,
 	userMsg, assistantMsg string,
 	toolSummaries []string,
+	toolResultSummaries []string,
 	convID string,
 	db *storage.DB,
 ) {
@@ -155,18 +216,26 @@ func ExtractAndPersist(
 	// Skip when the user gave an explicit "remember" command (intent is clear)
 	// or when the provider has no API key (LM Studio is key-optional but we
 	// still need a provider to make the call).
-	if !hadExplicit && provider.Type != "" {
-		extractWithLLM(ctx, provider, userMsg, assistantMsg, toolSummaries, convID, db)
+	// Always runs when tool results are present (to capture tool_learning signals).
+	hasToolResults := len(toolResultSummaries) > 0
+	if (!hadExplicit || hasToolResults) && provider.Type != "" {
+		extractWithLLM(ctx, provider, userMsg, assistantMsg, toolSummaries, toolResultSummaries, convID, db)
 	}
 }
 
 // extractCandidates runs all extraction rules against the user message.
 // Explicit requests short-circuit all other extraction.
+// Commitment-class statements always run alongside other extraction.
 func extractCandidates(text string) []candidate {
 	if c := explicitCandidate(text); c != nil {
-		return []candidate{*c}
+		// Still check for commitments even on explicit remember commands.
+		var out []candidate
+		out = append(out, *c)
+		out = append(out, commitmentCandidates(text)...)
+		return out
 	}
 	var out []candidate
+	out = append(out, commitmentCandidates(text)...)
 	out = append(out, profileCandidates(text)...)
 	out = append(out, preferenceCandidates(text)...)
 	out = append(out, projectCandidates(text)...)
@@ -175,6 +244,38 @@ func extractCandidates(text string) []candidate {
 		out = append(out, *c)
 	}
 	return out
+}
+
+// ── Commitment ────────────────────────────────────────────────────────────────
+
+// commitmentPhrases are trigger phrases that signal a durable user directive.
+// These produce commitment-category memories with is_user_confirmed=true and
+// high importance — they survive dream cycle pruning and inject first in the
+// system prompt.
+var commitmentPhrases = []string{
+	"always ", "never ", "every time i ask", "from now on", "going forward",
+	"make sure you always", "make sure you never", "don't ever ", "please always",
+	"please never", "i want you to always", "i want you to never",
+}
+
+func commitmentCandidates(text string) []candidate {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	for _, phrase := range commitmentPhrases {
+		if strings.Contains(lower, phrase) {
+			title := titleFromContent(text)
+			return []candidate{{
+				category:        "commitment",
+				title:           title,
+				content:         strings.TrimSpace(text),
+				source:          "user_explicit",
+				confidence:      0.99,
+				importance:      0.99,
+				isUserConfirmed: true,
+				tags:            []string{"commitment", "directive"},
+			}}
+		}
+	}
+	return nil
 }
 
 // ── Explicit ──────────────────────────────────────────────────────────────────

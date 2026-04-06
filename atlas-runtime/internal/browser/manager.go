@@ -72,7 +72,7 @@ type loginAttemptRecord struct {
 // Manager owns the singleton Chrome process and all open pages (tabs).
 // All exported methods are safe for concurrent use.
 type Manager struct {
-	mu    sync.Mutex
+	mu      sync.Mutex
 	browser *rod.Browser
 	// Multi-tab: pages holds all open tabs; activeIdx is the currently active one.
 	pages     []*rod.Page

@@ -53,7 +53,7 @@ func AppendAuditRecord(supportDir string, rec AuditRecord) {
 		return
 	}
 	tmpPath := tmp.Name()
-	tmp.Write(data)  //nolint:errcheck
+	tmp.Write(data) //nolint:errcheck
 	tmp.Close()
 	os.Rename(tmpPath, path) //nolint:errcheck
 }

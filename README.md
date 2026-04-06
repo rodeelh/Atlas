@@ -76,7 +76,6 @@ Agent credentials (passwords, TOTP secrets) are stored in the vault under `com.p
 
 ## What's Deferred to V1.0
 
-- **Dashboard AI planning** — read routes work; all mutating dashboard routes return 501.
 - **Multi-agent supervisor** — single-agent loop only.
 
 ## Swift Archive

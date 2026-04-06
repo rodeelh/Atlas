@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'preact/hooks'
+import { useState, useEffect, useRef } from 'preact/hooks'
 import { api, RuntimeConfig, ModelSelectorInfo, AIModelRecord, APIKeyStatus } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
@@ -34,6 +34,16 @@ export function Settings() {
   const [keyStatus, setKeyStatus]       = useState<APIKeyStatus | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
 
+  // Location
+  const [location, setLocation]         = useState<{ city: string; country: string; timezone: string; source: string } | null>(null)
+  const [locationEdit, setLocationEdit] = useState('')
+  const [locationSaving, setLocationSaving] = useState(false)
+  const [locationError, setLocationError]   = useState<string | null>(null)
+
+  // Preferences
+  const [prefs, setPrefs]               = useState<{ temperatureUnit: string; currency: string; unitSystem: string } | null>(null)
+  const [prefsSaving, setPrefsSaving]   = useState(false)
+
   useEffect(() => {
     const init = async () => {
       try {
@@ -42,6 +52,8 @@ export function Settings() {
         if (k) setKeyStatus(k)
         // Fetch live model list for the active provider so dropdowns are populated on load
         api.modelsForProvider(c.activeAIProvider).then(setModels).catch(() => {})
+        api.location().then(loc => { setLocation(loc); setLocationEdit(loc.city ? (loc.city + (loc.country ? ', ' + loc.country : '')) : '') }).catch(() => {})
+        api.preferences().then(setPrefs).catch(() => {})
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load config.')
       } finally {
@@ -143,16 +155,70 @@ export function Settings() {
         </div>
       )}
 
-      {/* Persona */}
-      <SettingsGroup title="Persona">
-        <SettingsRow label="Name" sublabel="How Atlas identifies itself in conversation">
+      {/* Profile */}
+      <SettingsGroup title="Profile">
+        <SettingsRow label="Your name" sublabel="How Atlas addresses you in conversation">
+          <input class="input" placeholder="e.g. Rami" value={draft.userName ?? ''}
+            onInput={(e) => update('userName', (e.target as HTMLInputElement).value)} />
+        </SettingsRow>
+        <SettingsRow label="Assistant name" sublabel="How Atlas identifies itself in conversation">
           <input class="input" value={draft.personaName}
             onInput={(e) => update('personaName', (e.target as HTMLInputElement).value)} />
         </SettingsRow>
+        <SettingsRow label="Location" sublabel="Leave blank to auto-detect from IP">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '100%' }}>
+            <input
+              class="input"
+              placeholder={locationSaving ? 'Detecting…' : 'City, Country'}
+              value={locationEdit}
+              disabled={locationSaving}
+              onInput={(e) => setLocationEdit((e.target as HTMLInputElement).value)}
+              onBlur={async (e) => {
+                const val = e.currentTarget.value.trim()
+                setLocationError(null)
+                setLocationSaving(true)
+                try {
+                  if (!val) {
+                    const loc = await api.detectLocation()
+                    setLocation(loc)
+                    setLocationEdit(loc.city ? (loc.city + (loc.country ? ', ' + loc.country : '')) : '')
+                  } else {
+                    const parts = val.split(',').map((s: string) => s.trim())
+                    const city = parts[0] ?? ''
+                    const country = parts.slice(1).join(', ').trim()
+                    const loc = await api.setLocation(city, country)
+                    setLocation(loc)
+                  }
+                } catch (e) {
+                  setLocationError(e instanceof Error ? e.message : 'Failed')
+                } finally { setLocationSaving(false) }
+              }}
+            />
+            {locationError && <div style={{ fontSize: '12px', color: 'var(--theme-text-danger, #e05252)' }}>{locationError}</div>}
+          </div>
+        </SettingsRow>
+        {prefs && (
+          <SettingsRow label="Units" sublabel="Sets measurement system and temperature scale">
+            <select
+              class="input"
+              value={prefs.unitSystem}
+              onChange={async (e) => {
+                const v = (e.target as HTMLSelectElement).value
+                const tempUnit = v === 'imperial' ? 'fahrenheit' : 'celsius'
+                setPrefs(p => p ? { ...p, unitSystem: v, temperatureUnit: tempUnit } : p)
+                setPrefsSaving(true)
+                try { await api.setPreferences({ unitSystem: v, temperatureUnit: tempUnit }) } finally { setPrefsSaving(false) }
+              }}
+            >
+              <option value="metric">Metric (km, km/h, °C)</option>
+              <option value="imperial">Imperial (mi, mph, °F)</option>
+            </select>
+          </SettingsRow>
+        )}
       </SettingsGroup>
 
-      {/* Model */}
-      <SettingsGroup title="Model">
+      {/* Agent */}
+      <SettingsGroup title="Agent">
         <SettingsRow label="AI Provider" sublabel="Provider used for all agent conversations">
           <select class="input" value={draft.activeAIProvider ?? 'openai'}
             onChange={(e) => handleProviderChange((e.target as HTMLSelectElement).value)}>
@@ -381,36 +447,33 @@ export function Settings() {
                   </SettingsRow>
                 </>
               )}
-              <SettingsRow
-                label="Tool Selection"
-                sublabel="How Atlas narrows the tool list sent to the model each turn"
-                hint="Heuristic (default) — keyword-based group selection. Off — all tools every turn. LLM — routes through the router model configured in the Engine LM tab."
-              >
-                <select class="input input"
-                  value={draft.toolSelectionMode ?? 'heuristic'}
-                  onChange={(e) => update('toolSelectionMode', (e.target as HTMLSelectElement).value)}>
-                  <option value="heuristic">Heuristic (keyword-based)</option>
-                  <option value="off">Off — all tools every turn</option>
-                  <option value="llm">LLM — router model</option>
-                </select>
-              </SettingsRow>
-              <SettingsRow
-                label="Local model for all background tasks"
-                sublabel="Use Engine LM router for memory extraction, reflection, and dream cycle"
-                hint="Not advised — memory extraction and reflection quality may be lower with a small local model. Only enable if you want to avoid all cloud API calls."
-              >
-                <ToggleField
-                  checked={draft.atlasEngineRouterForAll ?? false}
-                  onChange={v => update('atlasEngineRouterForAll', v)}
-                />
-              </SettingsRow>
             </div>
           )}
         </div>
-      </SettingsGroup>
-
-      {/* Memory */}
-      <SettingsGroup title="Memory">
+        <SettingsRow
+          label="Tool Selection"
+          sublabel="Controls which tools Atlas makes available to the model each turn"
+          hint={"Smart: fast, low tokens.\nKeywords: topic pre-matched.\nAI Router: precise, needs Engine LM.\nOff: all tools, always."}
+        >
+          <select class="input input"
+            value={draft.toolSelectionMode ?? 'lazy'}
+            onChange={(e) => update('toolSelectionMode', (e.target as HTMLSelectElement).value)}>
+            <option value="lazy">Smart (default)</option>
+            <option value="heuristic">Keywords</option>
+            <option value="llm">AI Router</option>
+            <option value="off">Off</option>
+          </select>
+        </SettingsRow>
+        <SettingsRow
+          label="Local model for all background tasks"
+          sublabel="Use Engine LM router for memory extraction, reflection, and dream cycle"
+          hint="Not advised — memory extraction and reflection quality may be lower with a small local model. Only enable if you want to avoid all cloud API calls."
+        >
+          <ToggleField
+            checked={draft.atlasEngineRouterForAll ?? false}
+            onChange={v => update('atlasEngineRouterForAll', v)}
+          />
+        </SettingsRow>
         <SettingsRow label="Memory Enabled" sublabel="Extract and persist facts from conversations">
           <ToggleField checked={draft.memoryEnabled} onChange={v => update('memoryEnabled', v)} />
         </SettingsRow>
@@ -419,10 +482,6 @@ export function Settings() {
             value={draft.maxRetrievedMemoriesPerTurn}
             onInput={(e) => update('maxRetrievedMemoriesPerTurn', Number((e.target as HTMLInputElement).value))} />
         </SettingsRow>
-      </SettingsGroup>
-
-      {/* Approvals */}
-      <SettingsGroup title="Approvals">
         <SettingsRow label="Action Safety" sublabel="When Atlas asks before taking action">
           <select class="input input" value={draft.actionSafetyMode}
             onChange={(e) => update('actionSafetyMode', (e.target as HTMLSelectElement).value)}>
@@ -433,37 +492,39 @@ export function Settings() {
         </SettingsRow>
       </SettingsGroup>
 
-      {/* Remote Access */}
-      <RemoteAccessSection
-        enabled={draft.remoteAccessEnabled}
-        tailscaleEnabled={draft.tailscaleEnabled}
-        onToggle={async v => {
-          update('remoteAccessEnabled', v)
-          try {
-            const result = await api.updateConfig({ ...(draft ?? config ?? {}), remoteAccessEnabled: v })
-            setConfig(result.config)
-            setDraft(result.config)
-            setRestartRequired(result.restartRequired)
-            setSaved(true)
-          } catch (err) {
-            update('remoteAccessEnabled', !v)
-            setError(err instanceof Error ? err.message : 'Failed to update remote access.')
-          }
-        }}
-        onTailscaleToggle={async v => {
-          update('tailscaleEnabled', v)
-          try {
-            const result = await api.updateConfig({ ...(draft ?? config ?? {}), tailscaleEnabled: v })
-            setConfig(result.config)
-            setDraft(result.config)
-            setRestartRequired(result.restartRequired)
-            setSaved(true)
-          } catch (err) {
-            update('tailscaleEnabled', !v)
-            setError(err instanceof Error ? err.message : 'Failed to update Tailscale setting.')
-          }
-        }}
-      />
+      {/* Access */}
+      <SettingsGroup title="Access">
+        <RemoteAccessSection
+          enabled={draft.remoteAccessEnabled}
+          tailscaleEnabled={draft.tailscaleEnabled}
+          onToggle={async v => {
+            update('remoteAccessEnabled', v)
+            try {
+              const result = await api.updateConfig({ ...(draft ?? config ?? {}), remoteAccessEnabled: v })
+              setConfig(result.config)
+              setDraft(result.config)
+              setRestartRequired(result.restartRequired)
+              setSaved(true)
+            } catch (err) {
+              update('remoteAccessEnabled', !v)
+              setError(err instanceof Error ? err.message : 'Failed to update remote access.')
+            }
+          }}
+          onTailscaleToggle={async v => {
+            update('tailscaleEnabled', v)
+            try {
+              const result = await api.updateConfig({ ...(draft ?? config ?? {}), tailscaleEnabled: v })
+              setConfig(result.config)
+              setDraft(result.config)
+              setRestartRequired(result.restartRequired)
+              setSaved(true)
+            } catch (err) {
+              update('tailscaleEnabled', !v)
+              setError(err instanceof Error ? err.message : 'Failed to update Tailscale setting.')
+            }
+          }}
+        />
+      </SettingsGroup>
 
     </div>
   )
@@ -479,6 +540,19 @@ function SettingsGroup({ title, children }: { title: string; children: preact.Co
   )
 }
 
+const CopyIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="5" y="5" width="9" height="9" rx="1.5" />
+    <path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" />
+  </svg>
+)
+
+const CheckIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 8l4 4 6-7" />
+  </svg>
+)
+
 function RemoteAccessSection({
   enabled, tailscaleEnabled, onToggle, onTailscaleToggle,
 }: {
@@ -492,7 +566,10 @@ function RemoteAccessSection({
     tailscaleIP: string | null; tailscaleURL: string | null; tailscaleConnected: boolean
   } | null>(null)
   const [accessToken, setAccessToken] = useState<string | null>(null)
-  const [tokenVisible, setTokenVisible] = useState(false)
+  const [tokenCopied, setTokenCopied] = useState(false)
+  const [tokenHovered, setTokenHovered] = useState(false)
+  const [tailscaleCopied, setTailscaleCopied] = useState(false)
+  const [tailscaleHovered, setTailscaleHovered] = useState(false)
   const [revoking, setRevoking] = useState(false)
   const [revoked, setRevoked] = useState(false)
 
@@ -512,7 +589,7 @@ function RemoteAccessSection({
       await api.revokeRemoteSessions()
       const r = await api.remoteAccessKey()
       setAccessToken(r.key)
-      setTokenVisible(false)
+
       setRevoked(true)
       setTimeout(() => setRevoked(false), 3000)
     } finally {
@@ -520,78 +597,98 @@ function RemoteAccessSection({
     }
   }
 
-  const copyToken = () => {
-    if (accessToken) navigator.clipboard.writeText(accessToken)
+  const copyToken = async () => {
+    if (!accessToken) return
+    await navigator.clipboard.writeText(accessToken)
+    setTokenCopied(true)
+    setTimeout(() => setTokenCopied(false), 1800)
+  }
+
+  const copyTailscale = async (url: string) => {
+    await navigator.clipboard.writeText(url)
+    setTailscaleCopied(true)
+    setTimeout(() => setTailscaleCopied(false), 1800)
   }
 
   const codeStyle: preact.JSX.CSSProperties = {
-    fontSize: '12px', background: 'var(--bg)', padding: '3px 7px', borderRadius: '4px',
-    border: '1px solid var(--border)', whiteSpace: 'nowrap', width: '220px',
-    display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis',
+    fontSize: '12px', background: 'var(--bg)', padding: '6px 10px', borderRadius: '8px',
+    border: '1px solid var(--border)', whiteSpace: 'nowrap', width: '240px',
+    display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', boxSizing: 'border-box',
   }
 
   return (
     <>
-      <SettingsGroup title="LAN Access">
-        <SettingsRow label="LAN Access" sublabel="Allow browsers on your local network to connect.">
-          <ToggleField checked={enabled} onChange={onToggle} />
+      <SettingsRow label="LAN Access" sublabel="Allow browsers on your local network to connect.">
+        <ToggleField checked={enabled} onChange={onToggle} />
+      </SettingsRow>
+      {enabled && (
+        <SettingsRow label="Local address" sublabel="Open this URL on any device on your network">
+          {status?.accessURL
+            ? <code style={{ ...codeStyle, userSelect: 'all' }}>{status.accessURL}</code>
+            : <span style={{ fontSize: '12px', color: 'var(--text-3)' }}>Detecting…</span>
+          }
         </SettingsRow>
-        {enabled && (
-          <SettingsRow label="This Mac's address" sublabel="Open this URL on any device on your network">
-            {status?.accessURL
-              ? <code style={{ ...codeStyle, userSelect: 'all' }}>{status.accessURL}</code>
+      )}
+      {enabled && (
+        <SettingsRow label="Access key" sublabel="Enter this key when connecting from another device">
+          {accessToken
+            ? <div
+                style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}
+                onMouseEnter={() => setTokenHovered(true)}
+                onMouseLeave={() => setTokenHovered(false)}
+              >
+                <code style={{ ...codeStyle, fontFamily: 'ui-monospace, monospace', userSelect: 'all', paddingRight: '28px' }}>
+                  {accessToken}
+                </code>
+                <button
+                  class={`chat-copy-btn${tokenCopied ? ' copied' : ''}`}
+                  style={{ position: 'absolute', right: '4px', opacity: tokenHovered || tokenCopied ? 1 : 0, pointerEvents: tokenHovered || tokenCopied ? 'auto' : 'none', transition: 'opacity 0.12s' }}
+                  onClick={copyToken} title="Copy" aria-label="Copy access key"
+                >
+                  {tokenCopied ? <CheckIcon /> : <CopyIcon />}
+                </button>
+              </div>
+            : <span style={{ fontSize: '12px', color: 'var(--text-3)' }}>Loading…</span>
+          }
+        </SettingsRow>
+      )}
+      {enabled && (
+        <SettingsRow label="Revoke sessions" sublabel="Sign out all remote devices immediately">
+          <button class="btn btn-sm" onClick={revokeAll} disabled={revoking}>
+            {revoked ? 'Revoked' : revoking ? 'Revoking…' : 'Revoke all'}
+          </button>
+        </SettingsRow>
+      )}
+      <SettingsRow
+        label="Tailscale Access"
+        sublabel="Allow devices on your Tailscale network to connect. No access key required."
+        hint="Every device on a Tailscale network is cryptographically enrolled by the account owner — network membership is the authentication. Tailscale must be installed and running on both devices."
+      >
+        <ToggleField checked={tailscaleEnabled} onChange={onTailscaleToggle} />
+      </SettingsRow>
+      {tailscaleEnabled && (
+        <SettingsRow label="Tailscale address" sublabel="Open directly on any device in your Tailscale network">
+          {status?.tailscaleConnected && status.tailscaleURL
+            ? <div
+                style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}
+                onMouseEnter={() => setTailscaleHovered(true)}
+                onMouseLeave={() => setTailscaleHovered(false)}
+              >
+                <code style={{ ...codeStyle, userSelect: 'all', paddingRight: '28px' }}>{status.tailscaleURL}</code>
+                <button
+                  class={`chat-copy-btn${tailscaleCopied ? ' copied' : ''}`}
+                  style={{ position: 'absolute', right: '4px', opacity: tailscaleHovered || tailscaleCopied ? 1 : 0, pointerEvents: tailscaleHovered || tailscaleCopied ? 'auto' : 'none', transition: 'opacity 0.12s' }}
+                  onClick={() => copyTailscale(status.tailscaleURL!)} title="Copy" aria-label="Copy Tailscale address"
+                >
+                  {tailscaleCopied ? <CheckIcon /> : <CopyIcon />}
+                </button>
+              </div>
+            : status !== null
+              ? <span style={{ fontSize: '12px', color: 'var(--text-3)' }}>Tailscale not detected — is it running?</span>
               : <span style={{ fontSize: '12px', color: 'var(--text-3)' }}>Detecting…</span>
-            }
-          </SettingsRow>
-        )}
-        {enabled && (
-          <SettingsRow label="Access key" sublabel="Enter this key when connecting from another device">
-            {accessToken
-              ? <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                  <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
-                    <button class="btn btn-sm" onClick={() => setTokenVisible(v => !v)} style={{ padding: '2px 8px', minWidth: 0 }}>
-                      {tokenVisible ? 'Hide' : 'Show'}
-                    </button>
-                    {tokenVisible && (
-                      <button class="btn btn-sm" onClick={copyToken} style={{ padding: '2px 8px', minWidth: 0 }}>Copy</button>
-                    )}
-                  </div>
-                  <code style={{ ...codeStyle, fontFamily: 'ui-monospace, monospace', userSelect: tokenVisible ? 'all' : 'none', filter: tokenVisible ? 'none' : 'blur(4px)', transition: 'filter 0.15s' }}>
-                    {accessToken}
-                  </code>
-                </div>
-              : <span style={{ fontSize: '12px', color: 'var(--text-3)' }}>Loading…</span>
-            }
-          </SettingsRow>
-        )}
-        {enabled && (
-          <SettingsRow label="Revoke sessions" sublabel="Sign out all remote devices immediately">
-            <button class="btn btn-sm" onClick={revokeAll} disabled={revoking}>
-              {revoked ? 'Revoked' : revoking ? 'Revoking…' : 'Revoke all'}
-            </button>
-          </SettingsRow>
-        )}
-      </SettingsGroup>
-
-      <SettingsGroup title="Tailscale">
-        <SettingsRow
-          label="Tailscale Access"
-          sublabel="Allow devices on your Tailscale network to connect. No access key required."
-          hint="Every device on a Tailscale network is cryptographically enrolled by the account owner — network membership is the authentication. Tailscale must be installed and running on both devices."
-        >
-          <ToggleField checked={tailscaleEnabled} onChange={onTailscaleToggle} />
+          }
         </SettingsRow>
-        {tailscaleEnabled && (
-          <SettingsRow label="Tailscale address" sublabel="Open directly on any device in your Tailscale network">
-            {status?.tailscaleConnected && status.tailscaleURL
-              ? <code style={{ ...codeStyle, userSelect: 'all' }}>{status.tailscaleURL}</code>
-              : status !== null
-                ? <span style={{ fontSize: '12px', color: 'var(--text-3)' }}>Tailscale not detected — is it running?</span>
-                : <span style={{ fontSize: '12px', color: 'var(--text-3)' }}>Detecting…</span>
-            }
-          </SettingsRow>
-        )}
-      </SettingsGroup>
+      )}
     </>
   )
 }
@@ -612,17 +709,26 @@ function SettingsRow({ label, sublabel, hint, children }: { label: string; subla
 }
 
 function InfoTip({ text }: { text: string }) {
-  const [visible, setVisible] = useState(false)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+
+  const show = () => {
+    if (!btnRef.current) return
+    const r = btnRef.current.getBoundingClientRect()
+    setPos({ top: r.top + r.height / 2, left: r.right + 8 })
+  }
+
   return (
-    <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center' }}>
       <button
+        ref={btnRef}
         style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '15px', height: '15px', borderRadius: '50%', background: 'var(--text-3)', color: 'var(--bg)', fontSize: '9px', fontWeight: 700, border: 'none', cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}
-        onMouseEnter={() => setVisible(true)}
-        onMouseLeave={() => setVisible(false)}
+        onMouseEnter={show}
+        onMouseLeave={() => setPos(null)}
       >?</button>
-      {visible && (
-        <span style={{ position: 'absolute', left: '20px', top: '50%', transform: 'translateY(-50%)', background: 'var(--card-bg, var(--bg))', border: '1px solid var(--border)', borderRadius: '6px', padding: '7px 10px', fontSize: '12px', color: 'var(--text-2)', width: '240px', zIndex: 200, lineHeight: 1.4, boxShadow: '0 4px 16px rgba(0,0,0,0.18)', pointerEvents: 'none', backdropFilter: 'none' }}>
-          {text}
+      {pos && (
+        <span style={{ position: 'fixed', top: pos.top, left: pos.left, transform: 'translateY(-50%)', background: 'var(--surface, var(--bg))', border: '1px solid var(--border)', borderRadius: '8px', padding: '8px 11px', fontSize: '12px', color: 'var(--text-2)', width: '260px', zIndex: 9999, lineHeight: 1.5, boxShadow: '0 4px 20px rgba(0,0,0,0.22)', pointerEvents: 'none' }}>
+          {text.split('\n').map((line, i) => <span key={i} style={{ display: 'block' }}>{line}</span>)}
         </span>
       )}
     </span>

@@ -4,15 +4,6 @@ import { PageHeader } from '../components/PageHeader'
 
 // ── Icons ────────────────────────────────────────────────────────────────────
 
-const RefreshIcon = () => (
-  <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M2.5 8a5.5 5.5 0 0 1 9.5-3.8" />
-    <polyline points="13.5,2.5 13.5,6 10,6" />
-    <path d="M13.5 8a5.5 5.5 0 0 1-9.5 3.8" />
-    <polyline points="2.5,13.5 2.5,10 6,10" />
-  </svg>
-)
-
 const PlayIcon = () => (
   <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
     <polygon points="3,1.5 10.5,6 3,10.5" fill="currentColor" stroke="none" />
@@ -115,6 +106,7 @@ function RunsPanel({ gremlin, onClose }: { gremlin: GremlinItem; onClose: () => 
   return (
     <div class="modal-overlay" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-overlay')) onClose() }}>
       <div class="modal automation-modal" style={{ maxWidth: 640, width: '90vw' }}>
+
         <div class="modal-header">
           <div class="automation-modal-title-wrap">
             <div class="surface-eyebrow">Automation History</div>
@@ -232,6 +224,7 @@ function EditModal({ gremlin, onSave, onClose }: EditModalProps) {
   return (
     <div class="modal-overlay" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-overlay')) onClose() }}>
       <div class="modal automation-modal" style={{ maxWidth: 820, width: '94vw' }}>
+
         <div class="modal-header">
           <div class="automation-modal-title-wrap">
             <div class="surface-eyebrow">Automation</div>
@@ -404,7 +397,6 @@ export function Automations() {
         subtitle="Scheduled prompts Atlas runs automatically."
         actions={<>
           <button class="btn btn-primary btn-sm" onClick={() => setEditTarget('new')}>+ New</button>
-          <button class="btn btn-primary btn-sm" onClick={load}><RefreshIcon /> Refresh</button>
         </>}
       />
 

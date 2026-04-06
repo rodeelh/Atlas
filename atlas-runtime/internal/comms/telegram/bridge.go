@@ -58,20 +58,20 @@ type ApprovalResolver func(toolCallID string, approved bool) error
 // ── Telegram API structs ──────────────────────────────────────────────────────
 
 type tgUpdate struct {
-	UpdateID      int64             `json:"update_id"`
-	Message       *tgMessage        `json:"message"`
-	CallbackQuery *tgCallbackQuery  `json:"callback_query"`
+	UpdateID      int64            `json:"update_id"`
+	Message       *tgMessage       `json:"message"`
+	CallbackQuery *tgCallbackQuery `json:"callback_query"`
 }
 
 type tgMessage struct {
-	MessageID int64          `json:"message_id"`
-	From      *tgUser        `json:"from"`
-	Chat      tgChat         `json:"chat"`
-	Text      string         `json:"text"`
-	Caption   string         `json:"caption"`
-	Photo     []tgPhotoSize  `json:"photo"`
-	Document  *tgDocument    `json:"document"`
-	Location  *tgLocation    `json:"location"`
+	MessageID int64         `json:"message_id"`
+	From      *tgUser       `json:"from"`
+	Chat      tgChat        `json:"chat"`
+	Text      string        `json:"text"`
+	Caption   string        `json:"caption"`
+	Photo     []tgPhotoSize `json:"photo"`
+	Document  *tgDocument   `json:"document"`
+	Location  *tgLocation   `json:"location"`
 }
 
 type tgPhotoSize struct {
@@ -130,11 +130,11 @@ type tgBotCommand struct {
 
 // Bridge implements Telegram HTTP long-polling.
 type Bridge struct {
-	token            string
-	db               *storage.DB
-	cfgFn            func() config.RuntimeConfigSnapshot
-	handler          ChatHandler
-	client           *http.Client
+	token   string
+	db      *storage.DB
+	cfgFn   func() config.RuntimeConfigSnapshot
+	handler ChatHandler
+	client  *http.Client
 
 	mu               sync.Mutex
 	offset           int64
@@ -210,13 +210,14 @@ func (b *Bridge) run() {
 
 	b.deleteWebhook()
 
-	// FIX #7: stop immediately if getMe fails — bad token = infinite 401 loop.
-	name, ok := b.getMe()
-	if !ok {
+	// Stop immediately if getMe fails — bad token = infinite 401 loop.
+	name, err := b.getMe()
+	if err != nil {
+		errMsg := "Telegram bridge: " + err.Error()
 		b.mu.Lock()
-		b.lastErr = "getMe failed — check bot token"
+		b.lastErr = errMsg
 		b.mu.Unlock()
-		logstore.Write("error", "Telegram bridge: getMe failed — bridge stopped", map[string]string{"platform": "telegram"})
+		logstore.Write("error", errMsg+" — bridge stopped", map[string]string{"platform": "telegram"})
 		return
 	}
 
@@ -354,7 +355,7 @@ func (b *Bridge) handleIncoming(chatID, msgID int64, from *tgUser, text string) 
 		b.sendReaction(chatID, msgID, "🤯")
 	case reactWithProcessing(text):
 		b.sendReaction(chatID, msgID, eyesEmoji)
-	// Conversational messages get no inbound reaction.
+		// Conversational messages get no inbound reaction.
 	}
 	b.sendChatAction(chatID, "typing")
 	b.processText(chatID, msgID, from, text, nil)
@@ -363,6 +364,7 @@ func (b *Bridge) handleIncoming(chatID, msgID int64, from *tgUser, text string) 
 // processText calls the Atlas handler, updates the session, and delivers the reply.
 // attachments carries any inbound images or documents for vision analysis.
 func (b *Bridge) processText(chatID, msgID int64, from *tgUser, text string, attachments []Attachment) {
+	logstore.Write("info", fmt.Sprintf("Telegram: message received from chat=%d", chatID), map[string]string{"platform": "telegram"})
 	session, err := b.db.FetchTelegramSession(chatID)
 	if err != nil {
 		logstore.Write("error", "Telegram: fetch session: "+err.Error(), map[string]string{"platform": "telegram"})
@@ -764,31 +766,42 @@ type tgGetMeResp struct {
 	Result *tgUser `json:"result"`
 }
 
-func (b *Bridge) getMe() (string, bool) {
+func (b *Bridge) getMe() (string, error) {
 	apiURL := fmt.Sprintf("%s%s/getMe", apiBase, b.token)
 	resp, err := b.client.Get(apiURL)
 	if err != nil {
-		return "", false
+		return "", fmt.Errorf("network error: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "", fmt.Errorf("invalid bot token (401 Unauthorized)")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected HTTP %d: %s", resp.StatusCode, string(body))
+	}
 	var result tgGetMeResp
-	if err := json.Unmarshal(body, &result); err != nil || !result.OK || result.Result == nil {
-		return "", false
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("parse getMe response: %w", err)
+	}
+	if !result.OK || result.Result == nil {
+		return "", fmt.Errorf("getMe not ok: %s", string(body))
 	}
 	name := result.Result.Username
 	if name == "" {
 		name = result.Result.FirstName
 	}
-	return name, true
+	return name, nil
 }
 
 func (b *Bridge) deleteWebhook() {
 	apiURL := fmt.Sprintf("%s%s/deleteWebhook", apiBase, b.token)
 	resp, err := b.client.Get(apiURL)
-	if err == nil {
-		resp.Body.Close()
+	if err != nil {
+		logstore.Write("warn", "Telegram: deleteWebhook: "+err.Error(), map[string]string{"platform": "telegram"})
+		return
 	}
+	resp.Body.Close()
 }
 
 // FIX #6: register command menu in the Telegram bot UI.
@@ -1053,34 +1066,81 @@ func (b *Bridge) sendFileMultipart(chatID int64, filePath, method, fieldName str
 
 // markdownToHTML converts markdown-style text to Telegram HTML.
 func markdownToHTML(text string) string {
-	// Escape HTML special chars first (before inserting tags).
+	// Processing order matters:
+	//   1. Extract code blocks (protect from all further transforms)
+	//   2. HTML-escape the remaining text
+	//   3. Headings  (before bold so # isn't left as literal #)
+	//   4. Bullet lists (before italic so leading * isn't treated as delimiter)
+	//   5. Inline code (protect before bold/italic regexes run)
+	//   6. Bold (**text**, __text__)
+	//   7. Italic (*text*, _text_)  — after list bullets are gone
+	//   8. Strikethrough
+	//   9. Restore code placeholders
+
+	type savedBlock struct{ tag, content string }
+	var blocks []savedBlock
+
+	// ── 1. Extract fenced code blocks ────────────────────────────────────────
+	fenceRe := regexp.MustCompile("(?s)```[a-zA-Z0-9]*\\n?(.*?)```")
+	text = fenceRe.ReplaceAllStringFunc(text, func(m string) string {
+		sub := fenceRe.FindStringSubmatch(m)
+		content := ""
+		if len(sub) >= 2 {
+			content = strings.TrimSpace(sub[1])
+		}
+		// HTML-escape the code content now so it survives step 2.
+		content = strings.ReplaceAll(content, "&", "&amp;")
+		content = strings.ReplaceAll(content, "<", "&lt;")
+		content = strings.ReplaceAll(content, ">", "&gt;")
+		ph := fmt.Sprintf("\x00BLK%d\x00", len(blocks))
+		blocks = append(blocks, savedBlock{"pre", content})
+		return ph
+	})
+
+	// ── 2. HTML-escape remaining text ────────────────────────────────────────
 	text = strings.ReplaceAll(text, "&", "&amp;")
 	text = strings.ReplaceAll(text, "<", "&lt;")
 	text = strings.ReplaceAll(text, ">", "&gt;")
 
-	// FIX #9: handle uppercase/mixed language tags (e.g. ```Go, ```JavaScript).
-	fenceRe := regexp.MustCompile("(?s)```[a-zA-Z0-9]*\\n?(.*?)```")
-	text = fenceRe.ReplaceAllStringFunc(text, func(m string) string {
-		inner := fenceRe.FindStringSubmatch(m)
-		if len(inner) < 2 {
-			return m
+	// ── 3. Headings (# / ## / ###) → <b>text</b> ────────────────────────────
+	headRe := regexp.MustCompile(`(?m)^#{1,6}[ \t]+(.+)$`)
+	text = headRe.ReplaceAllString(text, "<b>$1</b>")
+
+	// ── 4. Bullet list items → Unicode bullet ────────────────────────────────
+	// Must run before italic so a leading * isn't eaten as an italic delimiter.
+	bulletRe := regexp.MustCompile(`(?m)^[ \t]*[-*+][ \t]+`)
+	text = bulletRe.ReplaceAllString(text, "• ")
+
+	// ── 5. Inline code (protect before bold/italic) ──────────────────────────
+	inlineRe := regexp.MustCompile("`([^`\n]+)`")
+	text = inlineRe.ReplaceAllStringFunc(text, func(m string) string {
+		sub := inlineRe.FindStringSubmatch(m)
+		content := ""
+		if len(sub) >= 2 {
+			content = sub[1]
 		}
-		return "<pre>" + strings.TrimSpace(inner[1]) + "</pre>"
+		ph := fmt.Sprintf("\x00BLK%d\x00", len(blocks))
+		blocks = append(blocks, savedBlock{"code", content})
+		return ph
 	})
 
-	inlineRe := regexp.MustCompile("`([^`]+)`")
-	text = inlineRe.ReplaceAllString(text, "<code>$1</code>")
+	// ── 6. Bold (**text** and __text__) ──────────────────────────────────────
+	text = regexp.MustCompile(`\*\*(.+?)\*\*`).ReplaceAllString(text, "<b>$1</b>")
+	text = regexp.MustCompile(`__(.+?)__`).ReplaceAllString(text, "<b>$1</b>")
 
-	boldRe := regexp.MustCompile(`\*\*(.+?)\*\*`)
-	text = boldRe.ReplaceAllString(text, "<b>$1</b>")
+	// ── 7. Italic (*text* and _text_) ────────────────────────────────────────
+	// Use [^*\n] / [^_\n] to avoid crossing line boundaries or eating bold markers.
+	text = regexp.MustCompile(`\*([^*\n]+)\*`).ReplaceAllString(text, "<i>$1</i>")
+	text = regexp.MustCompile(`_([^_\n]+)_`).ReplaceAllString(text, "<i>$1</i>")
 
-	italicRe := regexp.MustCompile(`\*(.+?)\*`)
-	text = italicRe.ReplaceAllString(text, "<i>$1</i>")
-	italicUnderRe := regexp.MustCompile(`_(.+?)_`)
-	text = italicUnderRe.ReplaceAllString(text, "<i>$1</i>")
+	// ── 8. Strikethrough ─────────────────────────────────────────────────────
+	text = regexp.MustCompile(`~~(.+?)~~`).ReplaceAllString(text, "<s>$1</s>")
 
-	strikeRe := regexp.MustCompile(`~~(.+?)~~`)
-	text = strikeRe.ReplaceAllString(text, "<s>$1</s>")
+	// ── 9. Restore code placeholders ─────────────────────────────────────────
+	for i, blk := range blocks {
+		ph := fmt.Sprintf("\x00BLK%d\x00", i)
+		text = strings.ReplaceAll(text, ph, "<"+blk.tag+">"+blk.content+"</"+blk.tag+">")
+	}
 
 	return text
 }

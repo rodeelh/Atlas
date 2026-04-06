@@ -34,6 +34,36 @@ type Manager struct {
 	idleTimeout  time.Duration // zero = disabled
 	lastActivity time.Time
 	watcherStop  chan struct{} // closed to stop the idle watcher goroutine
+
+	mlock bool // --mlock: pin model in physical RAM (default true)
+
+	// Download progress — persisted across client reconnects (cleared only when
+	// a new download starts). Active=false after completion or interruption.
+	dlMu       sync.Mutex
+	dlProgress DownloadProgress
+}
+
+var supportedKVCacheQuant = map[string]struct{}{
+	"f32":    {},
+	"f16":    {},
+	"bf16":   {},
+	"q8_0":   {},
+	"q5_1":   {},
+	"q5_0":   {},
+	"q4_1":   {},
+	"q4_0":   {},
+	"iq4_nl": {},
+}
+
+func normalizeKVCacheQuant(v string) string {
+	if v == "" {
+		return "q4_0"
+	}
+	v = strings.TrimSpace(strings.ToLower(v))
+	if _, ok := supportedKVCacheQuant[v]; ok {
+		return v
+	}
+	return "q4_0"
 }
 
 // NewManager creates a Manager.
@@ -43,7 +73,17 @@ func NewManager(installDir, modelsDir string) *Manager {
 	return &Manager{
 		installDir: installDir,
 		modelsDir:  modelsDir,
+		mlock:      true, // pin model in RAM by default
 	}
+}
+
+// SetMlock controls whether the model is pinned in physical RAM (--mlock).
+// Enabled by default. Disable on machines with limited RAM (16GB or less)
+// when running large models.
+func (m *Manager) SetMlock(enabled bool) {
+	m.mu.Lock()
+	m.mlock = enabled
+	m.mu.Unlock()
 }
 
 // SetIdleTimeout configures automatic ejection after d of inactivity.
@@ -163,6 +203,40 @@ func (m *Manager) LastError() string {
 	return m.lastError
 }
 
+// ActiveDownload returns the progress of the current or most recently
+// interrupted model download. Filename is empty if no download has been started
+// this session.
+func (m *Manager) ActiveDownload() DownloadProgress {
+	m.dlMu.Lock()
+	defer m.dlMu.Unlock()
+	return m.dlProgress
+}
+
+// ClearDownload resets the stored download progress so dismissed downloads
+// don't reappear on page refresh.
+func (m *Manager) ClearDownload() {
+	m.dlMu.Lock()
+	m.dlProgress = DownloadProgress{}
+	m.dlMu.Unlock()
+}
+
+func (m *Manager) setDownloadProgress(filename, url string, downloaded, total int64, active bool) {
+	pct := 0.0
+	if total > 0 {
+		pct = float64(downloaded) / float64(total) * 100
+	}
+	m.dlMu.Lock()
+	m.dlProgress = DownloadProgress{
+		Active:     active,
+		Filename:   filename,
+		URL:        url,
+		Downloaded: downloaded,
+		Total:      total,
+		Percent:    pct,
+	}
+	m.dlMu.Unlock()
+}
+
 // Status returns a snapshot of the current engine state.
 func (m *Manager) Status(cfgPort int) EngineStatus {
 	m.mu.Lock()
@@ -182,10 +256,11 @@ func (m *Manager) Status(cfgPort int) EngineStatus {
 }
 
 // Start launches llama-server with the given model, port, context size, and KV cache quant level.
-// ctxSize is the KV-cache token limit passed via --ctx-size; defaults to 8192 if <= 0.
-// kvCacheQuant sets -ctk/-ctv quantisation ("q4_0", "q8_0", "f16"); defaults to "q4_0" if empty.
+// ctxSize is the KV-cache token limit passed via --ctx-size; defaults to 16384 if <= 0.
+// kvCacheQuant sets -ctk/-ctv quantisation (for example: "f32", "f16", "bf16", "q8_0", "q5_1",
+// "q5_0", "q4_1", "q4_0", "iq4_nl"); defaults to "q4_0" if empty.
 // If a server is already running it is stopped first.
-func (m *Manager) Start(modelName string, port int, ctxSize int, kvCacheQuant string) error {
+func (m *Manager) Start(modelName string, port int, ctxSize int, kvCacheQuant string, draftModel string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -199,37 +274,53 @@ func (m *Manager) Start(modelName string, port int, ctxSize int, kvCacheQuant st
 	}
 
 	if ctxSize <= 0 {
-		ctxSize = 8192
+		ctxSize = 16384
 	}
-	if kvCacheQuant == "" {
-		kvCacheQuant = "q4_0"
-	}
+	kvCacheQuant = normalizeKVCacheQuant(kvCacheQuant)
 
 	// Stop any existing process first.
 	m.stopLocked()
 
 	threads := fmt.Sprintf("%d", detectPCoreCount())
 
-	var stderrBuf bytes.Buffer
-	cmd := exec.Command(
-		m.BinaryPath(),
+	args := []string{
 		"--model", modelPath,
 		"--port", fmt.Sprintf("%d", port),
 		"--host", "127.0.0.1",
 		"--ctx-size", fmt.Sprintf("%d", ctxSize),
-		"--n-gpu-layers", "99",     // offload all layers to Metal GPU when available
-		"--flash-attn", "on",       // flash attention — cuts KV cache memory 2-4x, matches LM Studio default
-		"-ctk", kvCacheQuant,        // KV K-cache quantisation — configurable; q4_0 matched to Q4 models, q8_0 for Q8/f16 models
-		"-ctv", kvCacheQuant,        // KV V-cache quantisation — same level as K cache
-		"--cache-prompt",           // reuse KV cache for identical prompt prefixes (system prompt etc.)
-		"--no-mmap",                // load model fully into physical RAM — eliminates VM paging overhead during inference
-		"--defrag-thold", "0.1",    // KV cache defrag threshold — reclaim fragmented slots; prevents TPS drop in long convos
-		"-t", threads,              // inference threads — P-cores only, E-cores hurt llama.cpp throughput
-		"-tb", threads,             // batch threads — same P-core count
-		"--jinja",                  // enable Jinja chat templates — required for tool/function calling
-		"--log-disable",            // suppress verbose llama.cpp log noise
-		"--metrics",                // expose Prometheus metrics at /metrics for decode TPS tracking
-	)
+		"--n-gpu-layers", "99", // offload all layers to Metal GPU when available
+		"--flash-attn", "on", // flash attention — cuts KV cache memory 2-4x, matches LM Studio default
+		"-ctk", kvCacheQuant, // KV K-cache quantisation — see llama-server --help for allowed cache types in this build
+		"-ctv", kvCacheQuant, // KV V-cache quantisation — same level as K cache
+		"--parallel", "2", // 2 concurrent slots — primary chat + 1 background task without blocking
+		"-b", "4096", // prompt batch size — process more tokens per prefill batch (default 2048)
+		"-ub", "1024", // micro-batch size — balances latency vs throughput during prompt eval
+		"--cache-prompt",        // reuse KV cache for identical prompt prefixes (system prompt etc.)
+		"--defrag-thold", "0.1", // KV cache defrag threshold — reclaim fragmented slots; prevents TPS drop in long convos
+		"-t", threads, // inference threads — P-cores only, E-cores hurt llama.cpp throughput
+		"-tb", threads, // batch threads — same P-core count
+		"--jinja",       // enable Jinja chat templates — required for tool/function calling
+		"--log-disable", // suppress verbose llama.cpp log noise
+		"--metrics",     // expose Prometheus metrics at /metrics for decode TPS tracking
+	}
+	if m.mlock {
+		args = append(args, "--mlock") // pin model in physical RAM — prevents OS from paging under memory pressure
+	}
+
+	// Speculative decoding: use a smaller same-family model as draft.
+	if draftModel != "" {
+		draftPath := filepath.Join(m.modelsDir, draftModel)
+		if _, err := os.Stat(draftPath); err == nil {
+			args = append(args,
+				"--model-draft", draftPath,
+				"--draft-max", "16",
+				"--draft-min", "5",
+			)
+		}
+	}
+
+	var stderrBuf bytes.Buffer
+	cmd := exec.Command(m.BinaryPath(), args...)
 	cmd.Stdout = nil
 	cmd.Stderr = &stderrBuf
 
@@ -283,31 +374,63 @@ func (m *Manager) WaitUntilReady(port int, timeout time.Duration) error {
 	return fmt.Errorf("engine: llama-server did not become ready within %s", timeout)
 }
 
-// FetchDecodeTPS polls the llama-server /metrics endpoint and returns the
-// current decode throughput in tokens/sec from the pre-computed
-// llamacpp:predicted_tokens_seconds gauge. Returns 0 if the server is
-// unreachable or has produced no tokens yet.
-func (m *Manager) FetchDecodeTPS(port int) float64 {
+// MetricsSnapshot holds the parsed llama-server /metrics values.
+type MetricsSnapshot struct {
+	DecodeTPS      float64
+	PromptTPS      float64
+	GenTimeSec     float64 // total generation time in seconds
+	ActiveRequests int
+}
+
+// IsLoading checks the /health endpoint to determine if the model is still loading.
+func (m *Manager) IsLoading(port int) bool {
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/health", port))
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusServiceUnavailable
+}
+
+// FetchMetrics polls the llama-server /metrics Prometheus endpoint once and
+// returns all available performance stats in a single HTTP call.
+func (m *Manager) FetchMetrics(port int) MetricsSnapshot {
 	client := &http.Client{Timeout: 500 * time.Millisecond}
 	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/metrics", port))
 	if err != nil {
-		return 0
+		return MetricsSnapshot{}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0
+		return MetricsSnapshot{}
 	}
+	text := string(body)
 
-	tps := parsePrometheusCounter(string(body), "llamacpp:predicted_tokens_seconds")
-	if tps <= 0 {
-		return 0
+	snap := MetricsSnapshot{}
+	if v := parsePrometheusCounter(text, "llamacpp:predicted_tokens_seconds"); v > 0 {
+		snap.DecodeTPS = v
+		m.mu.Lock()
+		m.lastDecodeTPS = v
+		m.mu.Unlock()
 	}
+	if v := parsePrometheusCounter(text, "llamacpp:prompt_tokens_seconds"); v > 0 {
+		snap.PromptTPS = v
+	}
+	if v := parsePrometheusCounter(text, "llamacpp:tokens_predicted_seconds_total"); v >= 0 {
+		snap.GenTimeSec = v
+	}
+	if v := parsePrometheusCounter(text, "llamacpp:requests_processing"); v >= 0 {
+		snap.ActiveRequests = int(v)
+	}
+	return snap
+}
 
-	m.mu.Lock()
-	m.lastDecodeTPS = tps
-	m.mu.Unlock()
-	return tps
+// FetchDecodeTPS polls the llama-server /metrics endpoint and returns only
+// the decode TPS. Kept for callers that don't need the full snapshot.
+func (m *Manager) FetchDecodeTPS(port int) float64 {
+	return m.FetchMetrics(port).DecodeTPS
 }
 
 // FetchContextTokens is a stub — the n_past field was removed from the

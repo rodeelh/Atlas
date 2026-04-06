@@ -3,15 +3,6 @@ import { api, CommunicationChannel, CommunicationPlatformStatus, CommunicationsS
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
 
-const RefreshIcon = () => (
-  <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M2.5 8a5.5 5.5 0 0 1 9.5-3.8" />
-    <polyline points="13.5,2.5 13.5,6 10,6" />
-    <path d="M13.5 8a5.5 5.5 0 0 1-9.5 3.8" />
-    <polyline points="2.5,13.5 2.5,10 6,10" />
-  </svg>
-)
-
 type PlatformID = CommunicationPlatformStatus['platform']
 type SetupField = {
   id: string
@@ -345,11 +336,6 @@ export function Communications() {
       <PageHeader
         title="Communications"
         subtitle="Manage connected channels and complete setup for supported chat platforms."
-        actions={
-          <button class="btn btn-primary btn-sm" onClick={load} disabled={loading}>
-            {loading ? <><span class="spinner" style={{ width: '11px', height: '11px' }} /> Refresh</> : <><RefreshIcon /> Refresh</>}
-          </button>
-        }
       />
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
@@ -390,18 +376,22 @@ export function Communications() {
             {addablePlatforms.map(platform => (
               <button
                 key={platform.id}
-                class="communication-picker-row"
+                class="communication-picker-row communication-platform-row"
                 onClick={() => { void choosePlatform(platform.platform) }}
               >
                 <div class="communication-platform-summary">
                   <PlatformLogo platform={platform.platform} />
                   <div class="settings-label-col">
-                    <div class="settings-label">{platformLabel(platform.platform)}</div>
+                    <div class="communication-platform-heading">
+                      <div class="settings-label">{platformLabel(platform.platform)}</div>
+                    </div>
                     <div class="settings-sublabel">{platformSubtitle(platform.platform)}</div>
                   </div>
                 </div>
-                <div class="communication-platform-actions">
-                  <button type="button" class="btn btn-sm">Set up</button>
+                <div class="communication-platform-controls communication-platform-controls-bottom">
+                  <div class="communication-platform-actions">
+                    <span class="btn btn-sm communication-platform-action-btn">Set up</span>
+                  </div>
                 </div>
               </button>
             ))}
@@ -415,19 +405,23 @@ export function Communications() {
       <div>
         <div class="section-label">Routing</div>
         <div class="card communication-routing-card">
-          <div class="settings-row">
+          <div class="settings-row communication-routing-row">
             <div class="settings-label-col">
               <div class="settings-label">Inbound routing</div>
               <div class="settings-sublabel">All connected channels route into the same Atlas runtime.</div>
             </div>
-            <div class="badge badge-green">Unified</div>
+            <div class="communication-routing-badge-row">
+              <div class="badge badge-green">Unified</div>
+            </div>
           </div>
-          <div class="settings-row">
+          <div class="settings-row communication-routing-row">
             <div class="settings-label-col">
               <div class="settings-label">Outbound automations</div>
               <div class="settings-sublabel">Automation results can target any notification-capable ready channel.</div>
             </div>
-            <div class="badge badge-gray">{channels.filter(channel => channel.canReceiveNotifications).length} channels</div>
+            <div class="communication-routing-badge-row">
+              <div class="badge badge-gray">{channels.filter(channel => channel.canReceiveNotifications).length} channels</div>
+            </div>
           </div>
         </div>
       </div>
@@ -479,23 +473,27 @@ function ConnectedPlatformRow({
   onValidate: () => void
 }) {
   return (
-    <div class="settings-row" style={{ borderBottom: last ? 'none' : undefined }}>
+    <div class="settings-row communication-platform-row" style={{ borderBottom: last ? 'none' : undefined }}>
       <div class="communication-platform-summary">
         <PlatformLogo platform={platform.platform} />
         <div class="settings-label-col">
-          <div class="settings-label">{platformLabel(platform.platform)}</div>
+          <div class="communication-platform-heading">
+            <div class="settings-label">{platformLabel(platform.platform)}</div>
+            <span class={setupBadgeClass(platform)}>{platform.statusLabel}</span>
+          </div>
           <div class="settings-sublabel communication-bot-label">{platformBotLabel(platform)}</div>
           {platform.blockingReason && <div class="settings-sublabel" style={{ color: 'var(--text-2)', marginTop: '4px' }}>{platform.blockingReason}</div>}
         </div>
       </div>
-      <div class="communication-platform-actions">
-        <span class={setupBadgeClass(platform)}>{platform.statusLabel}</span>
-        <button class="btn btn-sm" onClick={onValidate} disabled={busy}>
-          {busy ? 'Working…' : 'Validate'}
-        </button>
-        <button class="btn btn-sm btn-danger" onClick={onDisable} disabled={busy}>
-          Disable
-        </button>
+      <div class="communication-platform-controls">
+        <div class="communication-platform-actions">
+          <button class="btn btn-sm communication-platform-action-btn" onClick={onValidate} disabled={busy}>
+            {busy ? 'Working…' : 'Validate'}
+          </button>
+          <button class="btn btn-sm btn-danger communication-platform-action-btn" onClick={onDisable} disabled={busy}>
+            Disable
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -602,20 +600,26 @@ function QuickSetupModal({
 
 function CommunicationChannelRow({ channel, last }: { channel: CommunicationChannel; last: boolean }) {
   return (
-    <div class="settings-row" style={{ borderBottom: last ? 'none' : undefined }}>
-      <div class="settings-label-col">
-        <div class="settings-label">
-          {platformLabel(channel.platform)} · {channel.channelName ?? channel.channelID}
-        </div>
-        <div class="settings-sublabel">
-          Conversation {channel.activeConversationID.slice(0, 8)}
-          {channel.threadID ? ` · thread ${channel.threadID}` : ''}
-          {' · '}
-          last active {new Date(channel.updatedAt).toLocaleString()}
+    <div class="settings-row communication-session-row" style={{ borderBottom: last ? 'none' : undefined }}>
+      <div class="communication-platform-summary">
+        <PlatformLogo platform={channel.platform} />
+        <div class="settings-label-col">
+          <div class="communication-platform-heading">
+            <div class="settings-label">{platformLabel(channel.platform)}</div>
+          </div>
+          <div class="settings-sublabel">
+            Chat {channel.channelName ?? channel.channelID}
+          </div>
+          <div class="settings-sublabel">
+            Conv {channel.activeConversationID.slice(0, 8)}
+          </div>
         </div>
       </div>
-      <div class="communication-channel-trailing">
+      <div class="communication-session-meta">
         {channel.canReceiveNotifications && <span class="badge badge-green">Notifications</span>}
+        <div class="settings-sublabel">
+          Last active {new Date(channel.updatedAt).toLocaleString()}
+        </div>
       </div>
     </div>
   )

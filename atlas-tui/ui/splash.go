@@ -61,12 +61,12 @@ func maxRuneWidth(lines []string) int {
 // ── renderAtlasBanner — pinned onboarding header ──────────────────────────────
 
 func renderAtlasBanner(width int) string {
-	artStyle    := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Italic(true)
+	artStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Italic(true)
 	shadowStyle := lipgloss.NewStyle().Foreground(ColorShadow)
-	subStyle    := lipgloss.NewStyle().Foreground(ColorMuted)
+	subStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 
 	artLen := len(atlasArtLines)
-	artW   := maxRuneWidth(atlasArtLines)
+	artW := maxRuneWidth(atlasArtLines)
 
 	center := func(lineWidth int) string {
 		pad := (width - lineWidth) / 2
@@ -110,10 +110,10 @@ func compositeRow(artLine, shadowLine string) string {
 	if artLine == "" {
 		return ""
 	}
-	artStyle    := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Italic(true)
+	artStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Italic(true)
 	shadowStyle := lipgloss.NewStyle().Foreground(ColorShadow)
 
-	artRunes    := []rune(artLine)
+	artRunes := []rune(artLine)
 	shadowRunes := []rune(shadowLine)
 	shadowShift := 2
 

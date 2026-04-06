@@ -20,8 +20,8 @@ import (
 const (
 	gatewayURL = "wss://gateway.discord.gg/?v=10&encoding=json"
 	// Intents: GUILDS(0) | GUILD_MESSAGES(9) | GUILD_MESSAGE_CONTENT(15) | DIRECT_MESSAGES(12)
-	intents = (1 << 0) | (1 << 9) | (1 << 15) | (1 << 12)
-	apiBase = "https://discord.com/api/v10"
+	intents  = (1 << 0) | (1 << 9) | (1 << 15) | (1 << 12)
+	apiBase  = "https://discord.com/api/v10"
 	maxChunk = 1900
 )
 
@@ -335,6 +335,8 @@ func (b *Bridge) handleMessage(ev messageCreateEvent) {
 		text = strings.TrimSpace(strings.ReplaceAll(text, "<@"+botID+">", ""))
 		text = strings.TrimSpace(strings.ReplaceAll(text, "<@!"+botID+">", ""))
 	}
+
+	logstore.Write("info", fmt.Sprintf("Discord: message received in channel=%s", ev.ChannelID), map[string]string{"platform": "discord"})
 
 	// Command dispatch.
 	if strings.HasPrefix(text, "!") {

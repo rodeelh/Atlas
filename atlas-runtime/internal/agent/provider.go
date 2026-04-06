@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // TokenUsage holds the input and output token counts from a single AI call.
@@ -31,13 +32,19 @@ type streamResult struct {
 type ProviderType string
 
 const (
-	ProviderOpenAI    ProviderType = "openai"
-	ProviderAnthropic ProviderType = "anthropic"
-	ProviderGemini    ProviderType = "gemini"
-	ProviderLMStudio  ProviderType = "lm_studio"
-	ProviderOllama       ProviderType = "ollama"
-	ProviderAtlasEngine  ProviderType = "atlas_engine"
+	ProviderOpenAI      ProviderType = "openai"
+	ProviderAnthropic   ProviderType = "anthropic"
+	ProviderGemini      ProviderType = "gemini"
+	ProviderLMStudio    ProviderType = "lm_studio"
+	ProviderOllama      ProviderType = "ollama"
+	ProviderAtlasEngine ProviderType = "atlas_engine"
 )
+
+// isLocalProvider returns true for providers backed by a local inference server
+// that may return 503 while loading a model.
+func isLocalProvider(t ProviderType) bool {
+	return t == ProviderAtlasEngine || t == ProviderLMStudio || t == ProviderOllama
+}
 
 // ProviderConfig carries everything the agent loop needs to call an AI backend.
 type ProviderConfig struct {
@@ -194,6 +201,92 @@ func nonStreamingAsStream(
 	}, nil
 }
 
+// coalesceForLocalProvider ensures strict user/assistant alternation required
+// by Jinja chat templates in llama-server and Ollama. It:
+//  1. Keeps the system message as-is (index 0).
+//  2. Merges "tool" role messages into the preceding assistant message.
+//  3. Merges adjacent same-role messages by concatenating their text content.
+//  4. Ensures the sequence after system is user, assistant, user, assistant, ...
+//     by dropping messages that would violate alternation.
+func coalesceForLocalProvider(messages []OAIMessage) []OAIMessage {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	var out []OAIMessage
+
+	// Preserve system message.
+	start := 0
+	if messages[0].Role == "system" {
+		out = append(out, messages[0])
+		start = 1
+	}
+
+	// First pass: strip non-user/assistant messages. Tool-role messages are
+	// dropped entirely — their verbose JSON results would inflate token count
+	// and the model already processed them on the original turn.
+	var filtered []OAIMessage
+	for i := start; i < len(messages); i++ {
+		m := messages[i]
+		if m.Role == "user" || m.Role == "assistant" {
+			filtered = append(filtered, m)
+		}
+	}
+
+	// Second pass: coalesce adjacent same-role messages.
+	for _, m := range filtered {
+		text, _ := m.Content.(string)
+		if len(out) > 0 && out[len(out)-1].Role == m.Role {
+			prev := &out[len(out)-1]
+			prevText, _ := prev.Content.(string)
+			if text != "" {
+				if prevText != "" {
+					prevText += "\n"
+				}
+				prev.Content = prevText + text
+			}
+			continue
+		}
+		out = append(out, OAIMessage{Role: m.Role, Content: text})
+	}
+
+	// Third pass: ensure alternation starts with user after system.
+	// Drop any leading assistant messages (they'd violate the template).
+	final := out[:0]
+	for i, m := range out {
+		if i == 0 && m.Role == "system" {
+			final = append(final, m)
+			continue
+		}
+		expectedRole := "user"
+		nonSystemCount := 0
+		for _, f := range final {
+			if f.Role != "system" {
+				nonSystemCount++
+			}
+		}
+		if nonSystemCount%2 == 1 {
+			expectedRole = "assistant"
+		}
+		if m.Role == expectedRole {
+			final = append(final, m)
+		}
+		// Skip messages that don't match expected role — they were already
+		// coalesced or are orphaned.
+	}
+
+	// Drop a trailing assistant message. llama-server (and Ollama) treat a
+	// sequence ending with an assistant turn as a response prefill, which
+	// conflicts with enable_thinking when the model's Jinja template enables
+	// extended thinking. This happens after tool-call round-trips where the
+	// tool-role result was stripped, leaving assistant as the last message.
+	for len(final) > 0 && final[len(final)-1].Role == "assistant" {
+		final = final[:len(final)-1]
+	}
+
+	return final
+}
+
 // ── OpenAI-compatible (OpenAI, Gemini, LM Studio) ─────────────────────────────
 
 func oaiCompatBaseURL(p ProviderConfig) string {
@@ -240,6 +333,13 @@ func callOpenAICompatNonStreaming(
 	messages []OAIMessage,
 	tools []map[string]any,
 ) (OAIMessage, string, TokenUsage, error) {
+	// Local providers (llama-server, Ollama) use Jinja chat templates that
+	// enforce strict user/assistant alternation. Coalesce adjacent same-role
+	// messages and strip tool-role messages that these backends don't support.
+	if p.Type == ProviderAtlasEngine || p.Type == ProviderLMStudio || p.Type == ProviderOllama {
+		messages = coalesceForLocalProvider(messages)
+	}
+
 	reqBody := map[string]any{
 		"model":    p.Model,
 		"messages": messages,
@@ -267,6 +367,31 @@ func callOpenAICompatNonStreaming(
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return OAIMessage{}, "", TokenUsage{}, fmt.Errorf("AI non-streaming request failed (%s): %w", p.Type, err)
+	}
+
+	// Retry on 503 (model loading) for local providers — up to 30s with 2s backoff.
+	if resp.StatusCode == http.StatusServiceUnavailable && isLocalProvider(p.Type) {
+		resp.Body.Close()
+		for attempt := 0; attempt < 15; attempt++ {
+			select {
+			case <-ctx.Done():
+				return OAIMessage{}, "", TokenUsage{}, ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+			retryReq, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+			retryReq.Header.Set("Content-Type", "application/json")
+			if p.APIKey != "" {
+				retryReq.Header.Set("Authorization", "Bearer "+p.APIKey)
+			}
+			resp, err = http.DefaultClient.Do(retryReq)
+			if err != nil {
+				return OAIMessage{}, "", TokenUsage{}, fmt.Errorf("AI non-streaming request failed (%s): %w", p.Type, err)
+			}
+			if resp.StatusCode != http.StatusServiceUnavailable {
+				break
+			}
+			resp.Body.Close()
+		}
 	}
 	defer resp.Body.Close()
 
@@ -364,6 +489,31 @@ func streamOpenAICompatWithToolDetection(
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return streamResult{}, fmt.Errorf("AI streaming request failed (%s): %w", p.Type, err)
+	}
+
+	// Retry on 503 (model loading) for local providers — up to 30s with 2s backoff.
+	if resp.StatusCode == http.StatusServiceUnavailable && isLocalProvider(p.Type) {
+		resp.Body.Close()
+		for attempt := 0; attempt < 15; attempt++ {
+			select {
+			case <-ctx.Done():
+				return streamResult{}, ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+			retryReq, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+			retryReq.Header.Set("Content-Type", "application/json")
+			if p.APIKey != "" {
+				retryReq.Header.Set("Authorization", "Bearer "+p.APIKey)
+			}
+			resp, err = http.DefaultClient.Do(retryReq)
+			if err != nil {
+				return streamResult{}, fmt.Errorf("AI streaming request failed (%s): %w", p.Type, err)
+			}
+			if resp.StatusCode != http.StatusServiceUnavailable {
+				break
+			}
+			resp.Body.Close()
+		}
 	}
 	defer resp.Body.Close()
 
@@ -572,11 +722,11 @@ func anthropicCachedTools(tools []map[string]any) []map[string]any {
 //
 //   - string → returned as-is (Anthropic accepts plain string content).
 //   - []map[string]any content parts (built by buildUserContent in chat/service.go):
-//     • {"type":"text","text":"..."} → {"type":"text","text":"..."}
-//     • {"type":"image_url","image_url":{"url":"data:image/*;base64,..."}} →
-//       {"type":"image","source":{"type":"base64","media_type":"image/*","data":"..."}}
-//     • {"type":"image_url","image_url":{"url":"data:application/pdf;base64,..."}} →
-//       {"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"..."}}
+//   - {"type":"text","text":"..."} → {"type":"text","text":"..."}
+//   - {"type":"image_url","image_url":{"url":"data:image/*;base64,..."}} →
+//     {"type":"image","source":{"type":"base64","media_type":"image/*","data":"..."}}
+//   - {"type":"image_url","image_url":{"url":"data:application/pdf;base64,..."}} →
+//     {"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"..."}}
 func convertContentToAnthropic(content any) any {
 	if s, ok := content.(string); ok {
 		return s

@@ -12,9 +12,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 
+	"atlas-runtime-go/internal/creds"
+	"atlas-runtime-go/internal/customskills"
 	"atlas-runtime-go/internal/validate"
 )
 
@@ -23,12 +29,12 @@ import (
 // APIResearchContract exactly. Keep in sync with forge/types.go.
 
 type forgeSpec struct {
-	ID          string           `json:"id"`
-	Name        string           `json:"name"`
-	Description string           `json:"description"`
-	Category    string           `json:"category"`
-	RiskLevel   string           `json:"riskLevel"`
-	Tags        []string         `json:"tags"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Category    string            `json:"category"`
+	RiskLevel   string            `json:"riskLevel"`
+	Tags        []string          `json:"tags"`
 	Actions     []forgeActionSpec `json:"actions"`
 }
 
@@ -37,12 +43,19 @@ type forgeActionSpec struct {
 	Name            string `json:"name"`
 	Description     string `json:"description"`
 	PermissionLevel string `json:"permissionLevel"`
+	ActionClass     string `json:"actionClass,omitempty"`
 }
 
 type forgePlan struct {
-	ActionID    string           `json:"actionID"`
-	Type        string           `json:"type"`
+	ActionID    string            `json:"actionID"`
+	Type        string            `json:"type"`
 	HTTPRequest *forgeHTTPRequest `json:"httpRequest"`
+	LocalPlan   *forgeLocalPlan   `json:"localPlan"`
+}
+
+type forgeLocalPlan struct {
+	Interpreter string `json:"interpreter"`
+	Script      string `json:"script"`
 }
 
 type forgeHTTPRequest struct {
@@ -88,37 +101,77 @@ func (r *Registry) registerForge() {
 	r.register(SkillEntry{
 		Def: ToolDef{
 			Name: "forge.orchestration.propose",
-			Description: "Propose a new Forge skill. For API skills you MUST research the API first " +
-				"and provide contract_json — the proposal is refused if the contract fails quality gates. " +
-				"For non-API skills (composed/transform/workflow) contract_json is not required.",
+			Description: "Propose a new Forge skill. " +
+				"VALIDATION RULES — the proposal is REJECTED if any rule is violated: " +
+				"(1) spec.id must be lowercase-hyphenated starting with a letter, e.g. 'cat-facts'. " +
+				"(2) spec.id must not conflict with any already-installed skill. " +
+				"(3) spec.riskLevel must be exactly: low, medium, or high — no other values accepted. " +
+				"(4) spec.category must be exactly one of: system, utility, creative, communication, automation, research, developer, productivity. " +
+				"(5) Each action id must be lowercase-hyphenated and must exactly match an actionID entry in plans_json — orphaned actions (no matching plan) are rejected. " +
+				"(6) permissionLevel must be exactly: read, draft, or execute — no other values (not 'readonly', not 'AUTO_APPROVE', not 'write'). " +
+				"(7) actionClass (optional) must be one of: read, local_write, destructive_local, external_side_effect, send_publish_delete. " +
+				"(8) Every plan URL must be a valid absolute HTTPS URL (placeholders like {param} are allowed). " +
+				"(9) For api skills, contract_json is required and must pass quality gates (docsQuality>=medium, mappingConfidence=high). " +
+				"(10) All referenced Keychain credential keys must already exist in Settings → Credentials.",
 			Properties: map[string]ToolParam{
 				"kind": {
 					Description: "Skill kind: 'api' (calls external HTTP API), 'composed' (chains Atlas skills), " +
-						"'transform' (converts data), 'workflow' (sequences steps). Defaults to 'api'.",
+						"'transform' (converts data), 'workflow' (sequences steps), " +
+						"'local' (runs a macOS-native script via osascript/bash/python3 — use for Apple Music, Calendar, Reminders, system automation). " +
+						"Defaults to 'api'. IMPORTANT: use 'local' for any macOS app control — do NOT fabricate an HTTP API for local app automation.",
 					Type: "string",
-					Enum: []string{"api", "composed", "transform", "workflow"},
+					Enum: []string{"api", "composed", "transform", "workflow", "local"},
 				},
 				"contract_json": {
-					Description: "Required for api skills. JSON-encoded APIResearchContract capturing what you " +
-						"learned from researching the API: providerName, docsURL, docsQuality (low/medium/high), " +
-						"baseURL, endpoint, method, authType, requiredParams, optionalParams, paramLocations, " +
-						"exampleRequest, exampleResponse, expectedResponseFields, " +
-						"mappingConfidence (must be 'high'), validationStatus, notes.",
+					Description: "Required for api skills. JSON-encoded APIResearchContract. " +
+						"Fields: providerName (string), docsURL (string), docsQuality (must be 'medium' or 'high'), " +
+						"baseURL (e.g. 'https://api.example.com'), endpoint (path, e.g. '/v1/facts'), " +
+						"method ('GET'|'POST'|'PUT'|'PATCH'|'DELETE'), " +
+						"authType (exactly: 'none'|'apiKeyHeader'|'apiKeyQuery'|'bearerTokenStatic'|'basicAuth'|'oauth2ClientCredentials'), " +
+						"requiredParams ([]string), optionalParams ([]string), " +
+						"paramLocations (map of param→'path'|'query'|'body' for EVERY required param), " +
+						"exampleRequest (string), exampleResponse (string), expectedResponseFields ([]string), " +
+						"mappingConfidence (must be 'high'), validationStatus (string), notes (string).",
 					Type: "string",
 				},
 				"spec_json": {
-					Description: "JSON-encoded ForgeSkillSpec. Must include: id (lowercase-hyphenated), name, " +
-						"description, category, riskLevel (low/medium/high), tags, and actions " +
-						"(array with id, name, description, permissionLevel).",
+					Description: "JSON-encoded ForgeSkillSpec. " +
+						"Required fields: " +
+						"id (lowercase-hyphenated, unique, e.g. 'cat-facts'), " +
+						"name (human-readable, e.g. 'Cat Facts'), " +
+						"description (one sentence), " +
+						"category (exactly one of: system/utility/creative/communication/automation/research/developer/productivity), " +
+						"riskLevel (exactly: low, medium, or high), " +
+						"tags ([]string, e.g. [\"cats\",\"fun\"]), " +
+						"actions (array — each action must have: " +
+						"id (lowercase-hyphenated, MUST match an actionID in plans_json exactly), " +
+						"name (human-readable label), " +
+						"description (one sentence), " +
+						"permissionLevel (exactly: read | draft | execute — use read for GET-only, draft for local writes, execute for external side effects), " +
+						"actionClass (optional — exactly: read | local_write | destructive_local | external_side_effect | send_publish_delete; " +
+						"omit to auto-infer from HTTP method: GET→read, POST/PUT/PATCH/DELETE→external_side_effect)). " +
+						`Example: {"id":"cat-facts","name":"Cat Facts","description":"Fetches random cat facts.","category":"utility","riskLevel":"low","tags":["cats"],"actions":[{"id":"get-fact","name":"Get Fact","description":"Returns a random cat fact.","permissionLevel":"read"}]}`,
 					Type: "string",
 				},
 				"plans_json": {
-					Description: "JSON-encoded array of ForgeActionPlan. Each element: " +
-						`{"actionID":"<id>","type":"http","httpRequest":{"method":"GET|POST|PUT|PATCH|DELETE",` +
-						`"url":"https://...","authType":"none|apiKeyHeader|apiKeyQuery|bearerTokenStatic|basicAuth|oauth2ClientCredentials",` +
-						`"authSecretKey":"com.projectatlas.myapi","authHeaderName":"X-API-Key",...}}. ` +
-						"Use {paramName} in the URL for path substitution. For GET: remaining inputs become " +
-						"query params. For POST/PUT/PATCH: use bodyFields to map input params to API body keys.",
+					Description: "JSON-encoded array of ForgeActionPlan — one entry per action in spec_json. " +
+						"For API skills (type 'http'): {\"actionID\":\"<id>\",\"type\":\"http\"," +
+						"\"httpRequest\":{\"method\":\"GET|POST|PUT|PATCH|DELETE\"," +
+						"\"url\":\"https://real-api.com/v1/endpoint/{param}\"," +
+						"\"authType\":\"none|apiKeyHeader|apiKeyQuery|bearerTokenStatic|basicAuth|oauth2ClientCredentials\"," +
+						"\"authSecretKey\":\"com.projectatlas.myapi\" (Keychain key, required when authType is not 'none')," +
+						"\"authHeaderName\":\"X-API-Key\" (required for apiKeyHeader)," +
+						"\"authQueryParamName\":\"api_key\" (required for apiKeyQuery)," +
+						"\"headers\":{\"X-Custom-Header\":\"value\"} (static request headers)," +
+						"\"query\":{\"limit\":\"10\"} (static query params)," +
+						"\"bodyFields\":{\"q\":\"{query}\"} (maps action params to POST body keys)," +
+						"\"staticBodyFields\":{\"format\":\"json\"}}}. " +
+						"For local skills (type 'local'): {\"actionID\":\"<id>\",\"type\":\"local\"," +
+						"\"localPlan\":{\"interpreter\":\"osascript|bash|sh|python3\"," +
+						"\"script\":\"<inline script with {param} placeholders>\"}}. " +
+						"osascript example: {\"interpreter\":\"osascript\",\"script\":\"tell application \\\"Music\\\"\\nplay track \\\"{query}\\\"\\nend tell\"}. " +
+						"IMPORTANT: URL hostname must match the contract baseURL — never use example.com or placeholder domains. " +
+						"Every actionID must match a spec action id exactly.",
 					Type: "string",
 				},
 				"summary": {
@@ -128,7 +181,7 @@ func (r *Registry) registerForge() {
 				},
 				"rationale": {
 					Description: "Optional: why you are proposing this skill now — what user request triggered it.",
-					Type: "string",
+					Type:        "string",
 				},
 			},
 			Required: []string{"spec_json", "plans_json", "summary"},
@@ -182,11 +235,26 @@ func (r *Registry) forgeOrchestrationPropose(ctx context.Context, args json.RawM
 
 	var persistedContractJSON string
 
+	// Phase 1: spec structural validation (all kinds).
+	if msg := forgeValidateSpec(spec, plans); msg != "" {
+		return msg, nil
+	}
+
+	// Phase 2: URL syntax + placeholder domain check on all HTTP plans.
+	if msg := forgeValidatePlanURLs(plans); msg != "" {
+		return msg, nil
+	}
+
+	// Phase 2: skill ID uniqueness against installed forge skills and custom skills.
+	if msg := forgeSkillIDConflict(r.supportDir, spec.ID); msg != "" {
+		return msg, nil
+	}
+
 	if p.Kind == "api" {
 		if strings.TrimSpace(p.ContractJSON) == "" {
 			return "forge.orchestration.propose requires 'contract_json' for API skills. " +
 				"Research the target API first, then provide a populated APIResearchContract. " +
-				"Set kind to 'composed', 'transform', or 'workflow' if this is not an HTTP API skill.", nil
+				"Set kind to 'composed', 'transform', 'workflow', or 'local' if this is not an HTTP API skill.", nil
 		}
 
 		var contract forgeContract
@@ -201,12 +269,17 @@ func (r *Registry) forgeOrchestrationPropose(ctx context.Context, args json.RawM
 			return msg, nil
 		}
 
+		// Gate: plan URL hostnames must match contract baseURL hostname.
+		if msg := forgeValidatePlanHostnames(plans, contract.BaseURL); msg != "" {
+			return msg, nil
+		}
+
 		// Gate 7: auth plan field completeness.
 		if msg := forgeValidatePlansAuth(plans); msg != "" {
 			return msg, nil
 		}
 
-		// Gate 8: credential readiness.
+		// Gate 8: credential readiness (API skills).
 		if msg := forgeValidateCredentials(plans); msg != "" {
 			return msg, nil
 		}
@@ -218,16 +291,22 @@ func (r *Registry) forgeOrchestrationPropose(ctx context.Context, args json.RawM
 
 		persistedContractJSON = p.ContractJSON
 
+	} else if p.Kind == "local" {
+		// Local skills: validate each plan has a supported interpreter and non-empty script.
+		// No HTTP URLs, no contract, no API validation, no credentials required.
+		if msg := forgeValidateLocalPlans(plans); msg != "" {
+			return msg, nil
+		}
+
 	} else {
-		// Non-API kinds: still check auth field completeness.
+		// Composed / transform / workflow: check auth field completeness and credential
+		// readiness for any plans that happen to reference secrets.
 		if msg := forgeValidatePlansAuth(plans); msg != "" {
 			return msg, nil
 		}
-	}
-
-	// Spec structural validation (all kinds).
-	if msg := forgeValidateSpec(spec); msg != "" {
-		return msg, nil
+		if msg := forgeValidateCredentials(plans); msg != "" {
+			return msg, nil
+		}
 	}
 
 	// Guard: persistence callback must be injected.
@@ -341,7 +420,12 @@ func forgeValidatePlansAuth(plans []forgePlan) string {
 }
 
 // forgeValidateCredentials checks Gate 8 — all referenced Keychain secrets exist.
+// Keys may be standalone Keychain items OR custom keys stored inside the Atlas
+// credential bundle (com.projectatlas.credentials → customSecrets).
 func forgeValidateCredentials(plans []forgePlan) string {
+	// Read the credential bundle once so we can check custom keys.
+	bundle, _ := creds.Read()
+
 	checked := map[string]bool{}
 	for _, plan := range plans {
 		h := plan.HTTPRequest
@@ -356,7 +440,9 @@ func forgeValidateCredentials(plans []forgePlan) string {
 			if !isValidKeychainServiceName(key) {
 				return fmt.Sprintf("Forge refused: credential key '%s' contains invalid characters. Use only alphanumeric characters, dots, hyphens, and underscores.", key)
 			}
-			if !forgeKeychainExists(key) {
+			// Accept the key if it exists as a standalone Keychain item OR as
+			// a custom secret inside the Atlas credential bundle.
+			if !forgeKeychainExists(key) && bundle.CustomSecret(key) == "" {
 				return fmt.Sprintf("Forge refused: credential '%s' is not in the Keychain. Add it in Settings → Credentials before proposing this skill.", key)
 			}
 		}
@@ -388,15 +474,19 @@ func forgeKeychainExists(service string) bool {
 	return exec.Command("security", "find-generic-password", "-s", service, "-w").Run() == nil
 }
 
-// forgeReadKeychain reads a Keychain generic-password value by service name.
-// Callers must validate the service name with isValidKeychainServiceName before
+// forgeReadKeychain reads a credential value by key name.
+// It first tries a standalone Keychain item, then falls back to the Atlas
+// credential bundle's customSecrets map.
+// Callers must validate the key name with isValidKeychainServiceName before
 // calling this function.
 func forgeReadKeychain(service string) string {
 	out, err := exec.Command("security", "find-generic-password", "-s", service, "-w").Output()
-	if err != nil {
-		return ""
+	if err == nil {
+		return strings.TrimSpace(string(out))
 	}
-	return strings.TrimSpace(string(out))
+	// Fall back to the Atlas credential bundle.
+	bundle, _ := creds.Read()
+	return bundle.CustomSecret(service)
 }
 
 // forgeValidateAPI runs a live pre-validation against the primary GET plan via
@@ -448,37 +538,107 @@ func (r *Registry) forgeValidateAPI(ctx context.Context, contract forgeContract,
 		return fmt.Sprintf("API validation completed but the response needs attention.\n\n%s\n\nConfidence: %.0f%%\n\nReview the API configuration and try again.", result.Summary, result.Confidence*100)
 	}
 	// RecommendationUsable or RecommendationSkipped — proceed.
+	// Skipped with write actions is noted in the proposal summary but is not a hard block:
+	// write-only endpoints cannot be live-tested without side effects, and many legitimate
+	// APIs (Slack, Gmail, Linear, etc.) have no safe read endpoint to validate against.
 	return ""
 }
 
+// slugRe matches valid lowercase-hyphenated identifiers: starts with a letter,
+// contains only lowercase letters, digits, and hyphens.
+var slugRe = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
 // forgeValidateSpec checks the spec structure for all skill kinds.
-func forgeValidateSpec(spec forgeSpec) string {
+// Phase 1: enum validation, format validation, and no-orphan cross-check with plans.
+func forgeValidateSpec(spec forgeSpec, plans []forgePlan) string {
 	var issues []string
 
+	// ── Skill ID ──────────────────────────────────────────────────────────────
 	if strings.TrimSpace(spec.ID) == "" {
 		issues = append(issues, "spec.id is required (lowercase-hyphenated, e.g. 'my-skill')")
+	} else if !slugRe.MatchString(spec.ID) {
+		issues = append(issues, fmt.Sprintf(
+			"spec.id %q is not valid — must be lowercase-hyphenated starting with a letter (e.g. 'cat-facts')", spec.ID))
 	}
+
 	if strings.TrimSpace(spec.Name) == "" {
 		issues = append(issues, "spec.name is required")
 	}
-	if len(spec.Actions) == 0 {
-		issues = append(issues, "spec.actions must contain at least one action")
-	}
-	for _, a := range spec.Actions {
-		if strings.TrimSpace(a.ID) == "" {
-			issues = append(issues, fmt.Sprintf("action '%s' is missing an id", a.Name))
-		}
-		if strings.TrimSpace(a.Name) == "" {
-			issues = append(issues, fmt.Sprintf("action '%s' is missing a name", a.ID))
-		}
+
+	// ── riskLevel enum ────────────────────────────────────────────────────────
+	switch spec.RiskLevel {
+	case "low", "medium", "high", "":
+		// "" is allowed; codegen defaults to "medium"
+	default:
+		issues = append(issues, fmt.Sprintf(
+			"spec.riskLevel %q is not valid — must be exactly: low, medium, or high", spec.RiskLevel))
 	}
 
+	// ── category enum ─────────────────────────────────────────────────────────
 	validCategories := map[string]bool{
 		"system": true, "utility": true, "creative": true, "communication": true,
 		"automation": true, "research": true, "developer": true, "productivity": true,
 	}
 	if spec.Category != "" && !validCategories[spec.Category] {
-		issues = append(issues, fmt.Sprintf("category '%s' is not valid — use: system, utility, creative, communication, automation, research, developer, productivity", spec.Category))
+		issues = append(issues, fmt.Sprintf(
+			"spec.category %q is not valid — must be one of: system, utility, creative, communication, automation, research, developer, productivity", spec.Category))
+	}
+
+	// ── actions ───────────────────────────────────────────────────────────────
+	if len(spec.Actions) == 0 {
+		issues = append(issues, "spec.actions must contain at least one action")
+	}
+
+	// Build a set of plan actionIDs for cross-check.
+	planIDs := make(map[string]bool, len(plans))
+	for _, p := range plans {
+		planIDs[p.ActionID] = true
+	}
+
+	seenActionIDs := make(map[string]bool, len(spec.Actions))
+	for _, a := range spec.Actions {
+		// id presence + format
+		if strings.TrimSpace(a.ID) == "" {
+			issues = append(issues, fmt.Sprintf("action '%s' is missing an id", a.Name))
+		} else {
+			if !slugRe.MatchString(a.ID) {
+				issues = append(issues, fmt.Sprintf(
+					"action id %q must be lowercase-hyphenated starting with a letter (e.g. 'get-fact')", a.ID))
+			}
+			// duplicate action IDs
+			if seenActionIDs[a.ID] {
+				issues = append(issues, fmt.Sprintf("duplicate action id %q — each action must have a unique id", a.ID))
+			}
+			seenActionIDs[a.ID] = true
+			// every action must have a matching plan
+			if !planIDs[a.ID] {
+				issues = append(issues, fmt.Sprintf(
+					"action %q has no matching plan in plans_json — add a plan with actionID %q", a.ID, a.ID))
+			}
+		}
+
+		if strings.TrimSpace(a.Name) == "" {
+			issues = append(issues, fmt.Sprintf("action '%s' is missing a name", a.ID))
+		}
+
+		// permissionLevel enum — reject, don't coerce
+		switch a.PermissionLevel {
+		case "read", "draft", "execute", "":
+			// "" is allowed; codegen defaults to "read" for Forge skills
+		default:
+			issues = append(issues, fmt.Sprintf(
+				"action %q has invalid permissionLevel %q — must be exactly: read, draft, or execute",
+				a.ID, a.PermissionLevel))
+		}
+
+		// actionClass enum (optional field)
+		switch a.ActionClass {
+		case "", "read", "local_write", "destructive_local", "external_side_effect", "send_publish_delete":
+		default:
+			issues = append(issues, fmt.Sprintf(
+				"action %q has invalid actionClass %q — must be one of: read, local_write, destructive_local, external_side_effect, send_publish_delete",
+				a.ID, a.ActionClass))
+		}
 	}
 
 	if len(issues) == 0 {
@@ -489,4 +649,158 @@ func forgeValidateSpec(spec forgeSpec) string {
 		bullets[i] = "• " + iss
 	}
 	return "Forge spec validation failed:\n" + strings.Join(bullets, "\n") + "\nFix these issues and call forge.orchestration.propose again."
+}
+
+// fabricatedDomains is a blocklist of hostnames that indicate a made-up or placeholder URL.
+// Any plan URL whose host appears here is rejected at proposal time.
+var fabricatedDomains = map[string]bool{
+	"example.com":     true,
+	"example.org":     true,
+	"example.net":     true,
+	"localhost":       true,
+	"placeholder.com": true,
+	"your-api.com":    true,
+	"yourdomain.com":  true,
+	"sample.com":      true,
+	"test.com":        true,
+	"fake.com":        true,
+	"api.example.com": true,
+	"local-skill":     true,
+	"local-api.com":   true,
+}
+
+// forgeValidatePlanURLs checks that every HTTP plan URL is well-formed and
+// does not use a placeholder/example domain.
+// Phase 2: catches malformed and fabricated URLs before they reach codegen.
+// Local-type plans are skipped — they have no URL.
+func forgeValidatePlanURLs(plans []forgePlan) string {
+	placeholderRe := regexp.MustCompile(`\{[^}]+\}`)
+	for _, plan := range plans {
+		if plan.Type == "local" {
+			continue // local plans have no HTTP URL
+		}
+		h := plan.HTTPRequest
+		if h == nil || strings.TrimSpace(h.URL) == "" {
+			continue
+		}
+		// Strip {param} placeholders before parsing so they don't invalidate the URL.
+		testURL := placeholderRe.ReplaceAllString(h.URL, "placeholder")
+		u, err := url.ParseRequestURI(testURL)
+		if err != nil {
+			return fmt.Sprintf(
+				"Forge refused: plan %q has a malformed URL %q — provide a valid absolute URL (e.g. https://api.real-service.com/v1/endpoint).",
+				plan.ActionID, h.URL)
+		}
+		// Reject placeholder/example/fabricated domains.
+		if fabricatedDomains[strings.ToLower(u.Hostname())] {
+			return fmt.Sprintf(
+				"Forge refused: plan %q uses the placeholder domain %q. "+
+					"Provide the real API base URL — do not use example.com or other stand-in domains.",
+				plan.ActionID, u.Hostname())
+		}
+	}
+	return ""
+}
+
+// baseDomain returns the registrable domain portion of a hostname.
+// "api.foo.com" → "foo.com", "foo.com" → "foo.com", "foo" → "foo".
+func baseDomain(host string) string {
+	parts := strings.Split(host, ".")
+	if len(parts) <= 2 {
+		return host
+	}
+	return strings.Join(parts[len(parts)-2:], ".")
+}
+
+// forgeValidatePlanHostnames verifies that every HTTP plan URL shares the same
+// registrable base domain as the contract's baseURL. Subdomains are allowed —
+// e.g. plan "api.foo.com" passes when contract says "foo.com" or "auth.foo.com".
+// This prevents entirely fabricated hostnames while permitting multi-subdomain APIs.
+func forgeValidatePlanHostnames(plans []forgePlan, contractBaseURL string) string {
+	if strings.TrimSpace(contractBaseURL) == "" {
+		return ""
+	}
+	cu, err := url.Parse(contractBaseURL)
+	if err != nil || cu.Hostname() == "" {
+		return ""
+	}
+	contractBase := baseDomain(strings.ToLower(cu.Hostname()))
+
+	placeholderRe := regexp.MustCompile(`\{[^}]+\}`)
+	for _, plan := range plans {
+		if plan.Type == "local" {
+			continue
+		}
+		h := plan.HTTPRequest
+		if h == nil || strings.TrimSpace(h.URL) == "" {
+			continue
+		}
+		testURL := placeholderRe.ReplaceAllString(h.URL, "placeholder")
+		u, err := url.ParseRequestURI(testURL)
+		if err != nil {
+			continue // already caught by forgeValidatePlanURLs
+		}
+		planBase := baseDomain(strings.ToLower(u.Hostname()))
+		if planBase != contractBase {
+			return fmt.Sprintf(
+				"Forge refused: plan %q URL domain %q does not match contract baseURL domain %q. "+
+					"The plan must call the same service documented in the contract.",
+				plan.ActionID, u.Hostname(), cu.Hostname())
+		}
+	}
+	return ""
+}
+
+// forgeValidateLocalPlans validates all local-type plans: each must specify a
+// supported interpreter and a non-empty script body.
+func forgeValidateLocalPlans(plans []forgePlan) string {
+	validInterpreters := map[string]bool{
+		"osascript": true, "bash": true, "sh": true, "python3": true,
+	}
+	for _, plan := range plans {
+		lp := plan.LocalPlan
+		if lp == nil {
+			return fmt.Sprintf(
+				"Forge refused: local plan %q is missing 'localPlan' — provide {\"interpreter\":\"osascript|bash|sh|python3\",\"script\":\"...\"}.",
+				plan.ActionID)
+		}
+		if !validInterpreters[lp.Interpreter] {
+			return fmt.Sprintf(
+				"Forge refused: plan %q has unsupported interpreter %q — must be one of: osascript, bash, sh, python3.",
+				plan.ActionID, lp.Interpreter)
+		}
+		if strings.TrimSpace(lp.Script) == "" {
+			return fmt.Sprintf("Forge refused: local plan %q has an empty script.", plan.ActionID)
+		}
+	}
+	return ""
+}
+
+// forgeSkillIDConflict returns a non-empty message if skillID already exists
+// in forge-installed.json or as a user-installed custom skill directory.
+// Phase 2: prevents silent overwrites.
+func forgeSkillIDConflict(supportDir, skillID string) string {
+	// Check forge-installed.json.
+	var installed []struct {
+		SkillID string `json:"skillID"`
+	}
+	if data, err := os.ReadFile(filepath.Join(supportDir, "forge-installed.json")); err == nil {
+		json.Unmarshal(data, &installed) //nolint:errcheck
+		for _, rec := range installed {
+			if rec.SkillID == skillID {
+				return fmt.Sprintf(
+					"Forge refused: a skill with id %q is already installed. Choose a different id or remove the existing skill first.", skillID)
+			}
+		}
+	}
+
+	// Check user-installed custom skill directories.
+	for _, m := range customskills.ListManifests(supportDir) {
+		if m.ID == skillID {
+			return fmt.Sprintf(
+				"Forge refused: a custom skill with id %q is already installed. Choose a different id or remove the existing skill first.", skillID)
+		}
+	}
+
+	return ""
 }

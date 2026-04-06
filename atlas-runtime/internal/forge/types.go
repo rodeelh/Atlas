@@ -49,12 +49,12 @@ type ProposeRequest struct {
 
 // ForgeSkillSpec is the agent-authored specification for a new skill.
 type ForgeSkillSpec struct {
-	ID          string           `json:"id"`
-	Name        string           `json:"name"`
-	Description string           `json:"description"`
-	Category    string           `json:"category"`
-	RiskLevel   string           `json:"riskLevel"`
-	Tags        []string         `json:"tags"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Category    string            `json:"category"`
+	RiskLevel   string            `json:"riskLevel"`
+	Tags        []string          `json:"tags"`
 	Actions     []ForgeActionSpec `json:"actions"`
 }
 
@@ -64,13 +64,26 @@ type ForgeActionSpec struct {
 	Name            string `json:"name"`
 	Description     string `json:"description"`
 	PermissionLevel string `json:"permissionLevel"`
+	// ActionClass overrides the class inferred from the HTTP method.
+	// Valid values: read, local_write, destructive_local, external_side_effect, send_publish_delete.
+	// Codegen falls back to method-based inference when this is empty.
+	ActionClass string `json:"actionClass,omitempty"`
 }
 
-// ForgeActionPlan is the HTTP execution plan for one action in a Forge skill.
+// ForgeActionPlan is the execution plan for one action in a Forge skill.
 type ForgeActionPlan struct {
 	ActionID    string           `json:"actionID"`
-	Type        string           `json:"type"` // "http"
-	HTTPRequest *HTTPRequestPlan `json:"httpRequest"`
+	Type        string           `json:"type"`                  // "http" | "local"
+	HTTPRequest *HTTPRequestPlan `json:"httpRequest,omitempty"` // set when Type == "http"
+	LocalPlan   *LocalPlan       `json:"localPlan,omitempty"`   // set when Type == "local"
+}
+
+// LocalPlan describes how to run a macOS-local script for a ForgeActionPlan.
+// Interpreter must be one of: "osascript", "bash", "sh", "python3".
+// Script is the inline script body; {param} placeholders are substituted at runtime.
+type LocalPlan struct {
+	Interpreter string `json:"interpreter"` // "osascript" | "bash" | "sh" | "python3"
+	Script      string `json:"script"`      // inline script body, may contain {param} placeholders
 }
 
 // HTTPRequestPlan describes how to make an HTTP call for a ForgeActionPlan.

@@ -14,27 +14,9 @@ Remaining stub implementations in the Go runtime as of the Phase 8/9 migration. 
 
 ---
 
-## Deferred — Dashboard Mutating Routes
-
-All 7 routes return HTTP 501. Read routes (`GET /dashboards/proposals`, `GET /dashboards/installed`) are fully implemented.
-
-| Route | File | Deferred To |
-|---|---|---|
-| `POST /dashboards/proposals` | `domain/features.go` | V1.0 rewrite |
-| `POST /dashboards/install` | `domain/features.go` | V1.0 rewrite |
-| `POST /dashboards/reject` | `domain/features.go` | V1.0 rewrite |
-| `DELETE /dashboards/installed` | `domain/features.go` | V1.0 rewrite |
-| `POST /dashboards/access` | `domain/features.go` | V1.0 rewrite |
-| `POST /dashboards/pin` | `domain/features.go` | V1.0 rewrite |
-| `POST /dashboards/widgets/execute` | `domain/features.go` | V1.0 rewrite |
-
-Dashboard AI planning and widget execution require a full redesign. The handler is `dashboardsDeferred()`.
-
----
-
 ## Deferred — Forge Skill Tool Calls
 
-The skill-callable forge actions in `skills/forge_skill.go` return informational redirect messages pointing users to the Forge web UI. They do not execute any AI logic themselves — the agent-loop-based forge pipeline lives in `domain/features.go` (`forgePropose`) and `forge/service.go`.
+The skill-callable forge actions in `skills/forge_skill.go` return informational redirect messages pointing users to the Forge web UI. They do not execute any AI logic themselves — the agent-loop-based forge pipeline lives in the private forge module and `forge/service.go`.
 
 | Skill Name | Handler | Deferred To |
 |---|---|---|
@@ -48,13 +30,3 @@ The skill-callable forge actions in `skills/forge_skill.go` return informational
 
 
 ---
-
-## Not Stubs (Guard Conditions)
-
-These were flagged during the initial stub audit but are correctly implemented. The `chatSvc == nil` check is a startup safety guard, not missing functionality.
-
-| Function | File | Note |
-|---|---|---|
-| `runAutomation()` | `domain/features.go` | Full implementation follows the nil guard |
-| `runWorkflow()` | `domain/features.go` | Full implementation follows the nil guard |
-| `forgePropose()` | `domain/features.go` | Full implementation follows the nil guard |

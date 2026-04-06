@@ -65,7 +65,9 @@ func financeQuote(_ context.Context, args json.RawMessage) (string, error) {
 	}
 	bundle, _ := creds.Read()
 	if bundle.FinnhubAPIKey != "" {
-		return finnhubQuote(p.Symbol, bundle.FinnhubAPIKey)
+		if result, err := finnhubQuote(p.Symbol, bundle.FinnhubAPIKey); err == nil {
+			return result, nil
+		}
 	}
 	return yahooQuote(p.Symbol)
 }
@@ -86,7 +88,9 @@ func financeHistory(_ context.Context, args json.RawMessage) (string, error) {
 	}
 	bundle, _ := creds.Read()
 	if bundle.FinnhubAPIKey != "" {
-		return finnhubHistory(p.Symbol, p.Days, bundle.FinnhubAPIKey)
+		if result, err := finnhubHistory(p.Symbol, p.Days, bundle.FinnhubAPIKey); err == nil {
+			return result, nil
+		}
 	}
 	return yahooHistory(p.Symbol, p.Days)
 }
@@ -110,7 +114,8 @@ func financePortfolio(_ context.Context, args json.RawMessage) (string, error) {
 		var err error
 		if bundle.FinnhubAPIKey != "" {
 			q, err = finnhubQuote(sym, bundle.FinnhubAPIKey)
-		} else {
+		}
+		if q == "" {
 			q, err = yahooQuote(sym)
 		}
 		if err != nil {
@@ -223,6 +228,9 @@ func finnhubGET(url, apiKey string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Finnhub error %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
 	return string(b), nil
 }
 
@@ -241,6 +249,9 @@ func financeGET(url string) (string, error) {
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 	if err != nil {
 		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("finance API error %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	return string(b), nil
 }

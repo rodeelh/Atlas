@@ -1,6 +1,6 @@
 # Atlas Architecture
 
-**Last updated: 2026-04-03** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md)
+**Last updated: 2026-04-05** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md) · Internal modules: [`docs/internal-modules.md`](internal-modules.md)
 
 Atlas is a local AI operator. A Go binary runs as a launchd daemon (`Atlas`), serves a web UI, and connects to any supported AI provider. A Bubbletea TUI (`atlas`) provides a terminal interface. No Swift required.
 
@@ -53,7 +53,6 @@ Atlas/
 │       │   ├── control.go              # /status, /config, /api-keys, /link-preview, /models
 │       │   ├── approvals.go            # /approvals, /action-policies
 │       │   ├── communications.go       # /communications, /channels, /platforms
-│       │   ├── features.go             # /skills, /automations, /workflows, /dashboards, /forge, /api-validation
 │       │   ├── handler.go              # Handler interface
 │       │   └── helpers.go              # writeJSON, writeError, decodeJSON
 │       ├── features/
@@ -61,7 +60,24 @@ Atlas/
 │       │   ├── diary.go                # Diary entry persistence
 │       │   ├── files.go                # Workflow JSON persistence helpers
 │       │   ├── skills.go               # builtInSkills catalog, ListSkills, SetSkillState
-│       │   └── dashboards.go           # Dashboard proposal + installed JSON reads
+│       ├── modules/
+│       │   ├── approvals/              # Private module — approvals routes + resolution
+│       │   ├── automations/            # Private module — automation routes + execution
+│       │   ├── communications/         # Private module — comms routes + bridge lifecycle
+│       │   ├── forge/                  # Private module — forge proposal/install flows
+│       │   ├── workflows/              # Private module — workflow routes + runs
+│       │   ├── skills/                 # Private module — skills routes + fs roots
+│       │   ├── engine/                 # Private module — engine control routes
+│       │   ├── usage/                  # Private module — usage reporting routes
+│       │   └── apivalidation/          # Private module — API validation history routes
+│       ├── platform/
+│       │   ├── host.go                 # Private module host + route mounts
+│       │   ├── module.go               # Internal module contract
+│       │   ├── registry.go             # Module registration + lifecycle ordering
+│       │   ├── bus.go                  # Selective in-process event bus
+│       │   ├── storage.go              # Scoped storage contracts for modules
+│       │   ├── agent.go                # Agent runtime contract
+│       │   └── context.go              # Context assembly seam
 │       ├── forge/
 │       │   ├── types.go                # ForgeProposal, ResearchingItem, ProposeRequest
 │       │   ├── store.go                # forge-proposals.json + forge-installed.json
@@ -120,7 +136,7 @@ Atlas/
 │
 └── atlas-web/                          # Preact + TypeScript web UI
     └── src/
-        ├── screens/                    # Chat, Dashboards, Forge, Skills, Approvals,
+        ├── screens/                    # Chat, Forge, Skills, Approvals,
         │                               #   Memory, Automations, Workflows, Comms, Settings
         ├── api/
         │   ├── client.ts               # Typed HTTP client
@@ -145,13 +161,15 @@ Atlas/
    ├── /message, /…     Chat            Agent loop, SSE streaming, memories
    ├── /approvals, /…   Approvals       Approval queue, action-policies
    ├── /communications  Comms           Telegram / Discord platform management
-   └── /skills, /forge, Features        Skills, automations, workflows, Forge
+   └── /skills, /forge, Modules         Private module-backed feature surfaces
        /automations, …
             │
             ├── internal/agent      ← OpenAI / Anthropic / Gemini / LM Studio
             ├── internal/skills     ← 16 built-in skill groups, 90+ actions + custom skills
             ├── internal/customskills ← manifest types + filesystem scanning (leaf pkg)
             ├── internal/browser    ← Headless Chrome via go-rod
+            ├── internal/platform   ← Private host, module registry, event bus, scoped storage
+            ├── internal/modules    ← First-party feature modules
             ├── internal/forge      ← Forge research pipeline
             ├── internal/validate   ← API validation gate
             ├── internal/mind       ← MIND.md reflection + SKILLS.md learning
@@ -410,9 +428,57 @@ Phase 3 — Audit
 
 ---
 
-## 9. MIND Reflection Pipeline
+## 9. Memory System
 
-`internal/mind` runs non-blocking after every agent turn via `ReflectNonBlocking`.
+Atlas maintains long-term memory across conversations through three coordinated subsystems: per-turn extraction, MIND.md reflection, and the nightly dream cycle.
+
+### 9.1 Post-Turn Flow
+
+After every agent turn completes, three non-blocking goroutines fire concurrently — the user's response is delivered immediately and none of these block it:
+
+```
+assistant message → store in SQLite → emit done SSE
+    │
+    ├── memory.ExtractAndPersist   (internal/memory/extractor.go)
+    ├── mind.ReflectNonBlocking    (internal/mind/reflection.go)
+    └── mind.LearnFromTurnNonBlocking  (internal/mind/skills.go)
+```
+
+### 9.2 Memory Extraction Pipeline
+
+`memory.ExtractAndPersist` runs a two-stage pipeline after each turn:
+
+```
+Stage 1 — Regex extraction (fast, no API call)
+    Seven category extractors run in order:
+      commitment  — "always", "never", "from now on" → confidence 0.99, is_user_confirmed=true
+      explicit    — "remember that …", "please remember …" → structured parse → profile/preference/…
+      profile     — name ("my name is"), location ("I live in"), environment signals
+      preference  — response style, approval visibility, temperature units
+      project     — Atlas context, active focus areas
+      workflow    — tool combos, feature sequencing preference
+      episodic    — success signals ("working perfectly", "validated successfully")
+
+    Threshold check: confidence ≥ cfg.MemoryAutoSaveThreshold (default 0.75) to save
+    Deduplication: FindDuplicateMemory(category, title) — merge (take max scores, union tags)
+    │
+Stage 2 — LLM extraction (skipped if explicit "remember" command found in Stage 1)
+    Runs when: novel facts may exist OR tool results are present
+    Catches facts the regex misses; also detects tool_learning signals from tool outcomes
+```
+
+**Memory categories:** `commitment`, `profile`, `preference`, `project`, `workflow`, `episodic`, `tool_learning`
+
+**Memory recall:** `RelevantMemories(query, limit)` — BM25 FTS5 keyword search on `memories_fts`, ranked by importance. Commitment memories receive a +0.20 importance boost so they always surface first. Injected into the system prompt before each turn. Invalidated memories (`valid_until` in the past) are excluded.
+
+**Opinion reinforcement** (dream cycle):
+- `reinforce` → +0.20 confidence
+- `weaken` → −0.20 confidence
+- `contradict` → −0.40 confidence + sets `valid_until = now` (memory excluded from future recall)
+
+### 9.3 MIND Reflection Pipeline
+
+`internal/mind` runs non-blocking after every agent turn via `ReflectNonBlocking`. Serialized via `reflectMu` (TryLock — drops rather than queues if another run is in progress).
 
 ```
 End of turn
@@ -433,17 +499,47 @@ Significance gate  — YES/NO: did this turn reveal something meaningfully new?
     │
     ├── NO  → done
     │
-    └── YES → Deep reflection
+    └── YES → Deep reflection (Tier 2)
                 Rewrite narrative sections (Understanding of You, Patterns,
                 Active Theories, Our Story, What I'm Curious About).
                 Validates size (≤ 50 KB) and header before committing.
                 Splices saved Today's Read back in — no extra AI call needed.
 ```
 
-**SKILLS.md learning** runs in parallel via `LearnFromTurnNonBlocking` (≥ 2 tool calls):
+**Protected MIND.md sections** (never overwritten by Tier 2): `## Identity`, `## Current Frame`, `## Commitments`, `## Today's Read`
+
+**SKILLS.md learning** runs in parallel via `LearnFromTurnNonBlocking` (fires when ≥ 2 tool calls in a turn):
 - Explicit phrases ("next time I ask", "always do") → immediate routine write
 - Repeated identical tool sequence (3+ turns) → routine write
 - On concurrent write conflict detected inside lock → **abort** (not overwrite)
+
+### 9.4 Dream Cycle
+
+`StartDreamCycle` (launched from `main.go`) runs a **5-phase consolidation cycle** daily at **3 AM local time**. If the daemon was offline at the scheduled time, a catch-up run fires 60s after startup. State is persisted in `dream-state.json`.
+
+```
+Phase 1 — Prune stale memories
+    Delete: confidence < 0.5 AND age > 30 days
+    Delete: never retrieved AND age > 60 days AND importance < 0.7
+
+Phase 2 — Merge near-duplicate memories (AI)
+    Scan memories by category + importance; LLM identifies near-duplicates;
+    merge content, union tags, take max scores, delete the weaker copy.
+
+Phase 3 — Tool outcome synthesis → SKILLS.md (AI)
+    Scan tool_learning memories; LLM synthesizes patterns into SKILLS.md routines.
+    Marks processed memories as synthesized.
+
+Phase 4 — Diary synthesis → memories (AI)
+    Read recent DIARY.md entries; LLM extracts structured memories;
+    saves to SQLite with tags: ["dream", "diary_synthesis"].
+
+Phase 5 — MIND.md refresh (AI)
+    Full MIND.md rewrite incorporating current memories + diary context.
+    Validates header + size before committing.
+```
+
+Phases 2–5 require an AI provider. Phases 1 (prune) always runs even if no provider is configured.
 
 ---
 
@@ -455,7 +551,7 @@ Significance gate  — YES/NO: did this turn reveal something meaningfully new?
 |-------|---------|
 | `conversations` | Conversation records |
 | `messages` | All messages (user + assistant + tool) |
-| `memories` | Extracted long-term memories |
+| `memories` | Extracted long-term memories (with `valid_until` for contradiction; `memories_fts` FTS5 index for BM25 recall) |
 | `gremlin_runs` | Automation run records |
 | `deferred_executions` | Pending approval tool calls |
 | `web_sessions` | HMAC session tokens |
@@ -467,9 +563,10 @@ Significance gate  — YES/NO: did this turn reveal something meaningfully new?
 |------|---------|
 | `config.json` | RuntimeConfigSnapshot |
 | `go-runtime-config.json` | Go-only sidecar config |
-| `MIND.md` | Agent system prompt — updated each turn by `internal/mind` reflection pipeline |
-| `SKILLS.md` | Skills-layer memory — learned routines appended by `internal/mind` skills learner |
+| `MIND.md` | Agent system prompt — updated each turn by `internal/mind` Tier 1/Tier 2 reflection pipeline |
+| `SKILLS.md` | Skills-layer memory — learned routines appended by `internal/mind` skills learner + dream Phase 3 |
 | `DIARY.md` | Per-day diary entries (max 3/day) — written by `diary.record` skill and reflection pipeline |
+| `dream-state.json` | Last successful dream cycle timestamp — used for catch-up detection at startup |
 | `GREMLINS.md` | Automation definitions |
 | `workflow-definitions.json` | Workflow definitions |
 | `workflow-runs.json` | Workflow run records |
@@ -499,9 +596,8 @@ Significance gate  — YES/NO: did this turn reveal something meaningfully new?
 
 | Feature | Status |
 |---------|--------|
-| Dashboard AI planning + widget execution | 501 — POST `/dashboards/proposals`, install, reject, pin, access, widgets all stub |
 | Multi-agent supervisor | Not built — single-agent loop handles all turns |
 | Custom skill live-reload | Daemon restart required after install or remove |
 | Custom skill ZIP/URL install | Local path only; URL download deferred |
 | Custom skill vault credential injection | Skills read credentials from env; direct vault injection deferred |
-| Embedding-based memory retrieval | Keyword search only; vector retrieval deferred |
+| Embedding-based memory retrieval | BM25 FTS5 keyword search implemented; vector/embedding retrieval deferred |

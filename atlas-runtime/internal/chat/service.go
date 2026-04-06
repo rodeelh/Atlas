@@ -11,10 +11,13 @@ import (
 
 	"atlas-runtime-go/internal/agent"
 	"atlas-runtime-go/internal/config"
+	"atlas-runtime-go/internal/creds"
 	"atlas-runtime-go/internal/features"
+	"atlas-runtime-go/internal/location"
 	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/memory"
 	"atlas-runtime-go/internal/mind"
+	"atlas-runtime-go/internal/preferences"
 	"atlas-runtime-go/internal/skills"
 	"atlas-runtime-go/internal/storage"
 )
@@ -66,23 +69,35 @@ type MessageItem struct {
 type EngineAutoStarter interface {
 	IsRunning() bool
 	LoadedModel() string
-	Start(modelName string, port int, ctxSize int, kvCacheQuant string) error
+	Start(modelName string, port int, ctxSize int, kvCacheQuant string, draftModel string) error
 	WaitUntilReady(port int, timeout time.Duration) error
 	RecordActivity()
 }
 
+// conversationSummary caches a compressed summary of trimmed history messages
+// for a given conversation so repeated turns don't recompute it.
+type conversationSummary struct {
+	summary   string
+	trimCount int       // number of messages that were summarized
+	createdAt time.Time // for TTL expiry
+}
+
+// summaryTTL is how long a cached conversation summary stays valid.
+const summaryTTL = 10 * time.Minute
+
 type Service struct {
-	db          *storage.DB
-	cfgStore    *config.Store
-	broadcaster *Broadcaster
-	registry    *skills.Registry
-	engine      EngineAutoStarter // optional — nil when Engine LM not in use
-	routerEngine EngineAutoStarter // optional — nil when router not in use
+	db           *storage.DB
+	cfgStore     *config.Store
+	broadcaster  *Broadcaster
+	registry     *skills.Registry
+	engine       EngineAutoStarter              // optional — nil when Engine LM not in use
+	routerEngine EngineAutoStarter              // optional — nil when router not in use
+	summaryCache map[string]conversationSummary // keyed by conversationID
 }
 
 // NewService returns a ready chat Service.
 func NewService(db *storage.DB, cfgStore *config.Store, bc *Broadcaster, reg *skills.Registry) *Service {
-	return &Service{db: db, cfgStore: cfgStore, broadcaster: bc, registry: reg}
+	return &Service{db: db, cfgStore: cfgStore, broadcaster: bc, registry: reg, summaryCache: make(map[string]conversationSummary)}
 }
 
 // SetEngineManager wires in the primary Engine LM manager so the chat service
@@ -163,39 +178,39 @@ func hasImageAttachments(attachments []MessageAttachment) bool {
 	return false
 }
 
-// maxSystemPromptRunes is the total rune budget for the assembled system prompt.
-// ~8000 runes ≈ 2000 tokens. When the total exceeds this budget, lower-priority
-// blocks (diary, then skills, then memories) are trimmed. MIND.md identity is
-// always included in full.
-const maxSystemPromptRunes = 8000
-
 // buildSystemPrompt assembles the system prompt for each agent turn with
-// budget-aware allocation. Blocks are added in priority order; if the total
-// exceeds maxSystemPromptRunes, lower-priority blocks are trimmed.
+// budget-aware allocation. The rune budget is derived from the model's context
+// window via cfg.SystemPromptRuneBudget() — 15% of context, clamped 4000–20000.
+// Blocks are added in priority order; if the total exceeds the budget,
+// lower-priority blocks are trimmed.
 //
 // Priority (highest first):
 //  1. MIND.md content (identity, personality, user model)
 //  2. Recalled memories (relevance-scored for current turn)
 //  3. SKILLS.md context (matched routines)
 //  4. Diary (last 3 days — trimmed first when over budget)
+//
 // mindAlwaysSections lists MIND.md section headers that are always injected.
 // Operational sections that directly affect Atlas's behaviour every turn.
 var mindAlwaysSections = map[string]bool{
-	"## Who I Am":              true,
-	"## What Matters Right Now": true,
-	"## Working Style":         true,
-	"## My Understanding of You": true,
-	"## Today's Read":          true,
+	"## Identity":      true, // static — voice, values, operating principles
+	"## Current Frame": true, // synthesised primer — active context + calibration + commitments
+	"## You":           true, // entity profile — who the user is
+	"## How You Work":  true, // behavioral calibration — how to respond
+	"## Commitments":   true, // explicit user directives — always injected, no exceptions
+	"## Today's Read":  true, // current turn state
 }
 
 // mindContextualKeywords maps contextual section headers to trigger phrases.
 // A contextual section is only injected when the user message matches at least
 // one of its keywords. This keeps MIND.md lean for routine operational turns.
 var mindContextualKeywords = map[string][]string{
-	"## Our Story":             {"story", "history", "how long", "when did", "how we", "remember when"},
-	"## Active Theories":       {"theory", "theor", "hypothesis", "pattern", "notice", "suspect"},
-	"## What I'm Curious About": {"curious", "wonder", "question", "speculate"},
-	"## Patterns I've Noticed": {"pattern", "habit", "tend to", "always", "notice", "recurring"},
+	// What's Active: inject when the turn is about current work, projects, or time-sensitive context.
+	"## What's Active": {"project", "working on", "current", "active", "sprint", "today", "this week",
+		"deadline", "building", "shipping", "launch", "status", "progress"},
+	// What I've Learned: inject when the turn touches patterns, preferences, or behavioral signals.
+	"## What I've Learned": {"pattern", "habit", "tend", "always", "prefer", "notice", "learned",
+		"usually", "typically", "remember", "you know"},
 }
 
 // selectiveMindContent filters a full MIND.md to only the sections relevant
@@ -271,7 +286,7 @@ func selectiveMindContent(content, userMessage string) string {
 }
 
 func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, supportDir, userMessage string) string {
-	budget := maxSystemPromptRunes
+	budget := cfg.SystemPromptRuneBudget()
 
 	// Load MIND.md and apply selective section filtering.
 	// Always-sections (Who I Am, Working Style, etc.) are always injected.
@@ -284,9 +299,25 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 		}
 	}
 
+	// Load custom credentials block — lets the model know which user-defined
+	// API keys are available and what key name to pass when using them in skills.
+	credsBlock := buildCredsBlock()
+
 	// Load optional blocks.
 	skillsBlock := mind.SkillsContext(userMessage, supportDir)
 	diary := features.DiaryContext(supportDir, 3)
+
+	// Load tool_learning notes — institutional knowledge about which skills Atlas
+	// should avoid or approach differently. Injected before skill schemas so the
+	// model sees learned lessons before deciding which tool to call.
+	var toolNotesBlock string
+	if toolNotes, err := db.ListMemories(6, "tool_learning"); err == nil && len(toolNotes) > 0 {
+		var nb strings.Builder
+		for _, n := range toolNotes {
+			nb.WriteString(fmt.Sprintf("- %s: %s\n", n.Title, n.Content))
+		}
+		toolNotesBlock = strings.TrimRight(nb.String(), "\n")
+	}
 
 	var mems []storage.MemoryRow
 	limit := cfg.MaxRetrievedMemoriesPerTurn
@@ -312,18 +343,21 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	}
 
 	// Calculate rune costs (including XML tags + separators).
-	identityCost := len([]rune(base)) + 40   // <atlas_identity>\n...\n</atlas_identity>
-	memCost := len([]rune(memText)) + 50      // \n\n<recalled_memories>\n...
+	identityCost := len([]rune(base)) + 40 // <atlas_identity>\n...\n</atlas_identity>
+	credsCost := len([]rune(credsBlock)) + 35
+	memCost := len([]rune(memText)) + 50 // \n\n<recalled_memories>\n...
 	skillsCost := len([]rune(skillsBlock)) + 40
 	diaryCost := len([]rune(diary)) + 35
+	toolNotesCost := len([]rune(toolNotesBlock)) + 40 // \n\n<tool_notes>\n...
 
-	total := identityCost + memCost + skillsCost + diaryCost
+	total := identityCost + credsCost + memCost + skillsCost + diaryCost + toolNotesCost
 
 	// Trim from lowest priority up until we're within budget.
+	// creds block is never trimmed — it's small and critical for tool use.
 
 	// Trim diary first (lowest priority).
 	if total > budget && diary != "" {
-		allowed := budget - (identityCost + memCost + skillsCost)
+		allowed := budget - (identityCost + credsCost + memCost + skillsCost + toolNotesCost)
 		if allowed < 100 {
 			diary = ""
 			diaryCost = 0
@@ -334,12 +368,19 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 				diaryCost = allowed + 35
 			}
 		}
-		total = identityCost + memCost + skillsCost + diaryCost
+		total = identityCost + credsCost + memCost + skillsCost + diaryCost + toolNotesCost
+	}
+
+	// Trim tool notes next (also low priority — they help but aren't critical).
+	if total > budget && toolNotesBlock != "" {
+		toolNotesBlock = ""
+		toolNotesCost = 0
+		total = identityCost + credsCost + memCost + skillsCost + diaryCost
 	}
 
 	// Trim skills next.
 	if total > budget && skillsBlock != "" {
-		allowed := budget - (identityCost + memCost + diaryCost)
+		allowed := budget - (identityCost + credsCost + memCost + diaryCost)
 		if allowed < 100 {
 			skillsBlock = ""
 			skillsCost = 0
@@ -350,7 +391,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 				skillsCost = allowed + 40
 			}
 		}
-		total = identityCost + memCost + skillsCost + diaryCost
+		total = identityCost + credsCost + memCost + skillsCost + diaryCost
 	}
 
 	// Trim memories last (reduce count, don't truncate content mid-sentence).
@@ -363,17 +404,80 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 			}
 			memText = mb.String()
 			memCost = len([]rune(memText)) + 50
-			total = identityCost + memCost + skillsCost + diaryCost
+			total = identityCost + credsCost + memCost + skillsCost + diaryCost
 		}
 	}
 
 	// Assemble final prompt.
+	//
+	// Block order is optimized for llama-server --cache-prompt: stable blocks
+	// first (identity, creds, context) so the KV cache prefix survives across
+	// turns. Volatile blocks (skills, diary, tool notes, memories) come last —
+	// they change per-turn and bust the cache at the point they diverge, but
+	// everything before that point is reused for free.
+	//
+	// Stable   (~1500 tokens, identical between turns):
+	//   1. atlas_identity  — MIND.md selective sections + persona/user name
+	//   2. user_credentials — Keychain secrets (rarely changes)
+	//   3. user_context    — location, timezone, prefs (changes on location update)
+	//
+	// Volatile (changes per-turn):
+	//   4. skills_context  — base + keyword-matched routines
+	//   5. recent_diary    — last 3 days (changes once/day)
+	//   6. tool_notes      — tool_learning memories (changes on extraction)
+	//   7. recalled_memories — BM25-scored, different each turn
 	var sb strings.Builder
 	sb.Grow(total + 100)
+
+	// ── Stable prefix (maximizes --cache-prompt KV reuse) ──────────────────
+
+	// Prepend a concise identity line so the model always knows its own name
+	// and the user's name — preventing it from confusing the persona name for
+	// the user's name.
+	if pn := cfg.PersonaName; pn != "" && pn != "Atlas" {
+		var identity strings.Builder
+		identity.WriteString(fmt.Sprintf("Your name is %s.", pn))
+		if un := cfg.UserName; un != "" {
+			identity.WriteString(fmt.Sprintf(" The person you serve is %s. Never address them as \"%s\" — that is your name, not theirs.", un, pn))
+		} else {
+			identity.WriteString(fmt.Sprintf(" Never address the user as \"%s\" — that is your own name.", pn))
+		}
+		base = identity.String() + "\n\n" + base
+	} else if un := cfg.UserName; un != "" {
+		base = fmt.Sprintf("The person you serve is %s.\n\n", un) + base
+	}
 
 	sb.WriteString("<atlas_identity>\n")
 	sb.WriteString(base)
 	sb.WriteString("\n</atlas_identity>")
+
+	if credsBlock != "" {
+		sb.WriteString("\n\n<user_credentials>\n")
+		sb.WriteString(credsBlock)
+		sb.WriteString("\n</user_credentials>")
+	}
+
+	if loc := location.Get(); loc.City != "" {
+		prefs := preferences.Get()
+		sb.WriteString("\n\n<user_context>")
+		sb.WriteString(fmt.Sprintf("\nUser location: %s, %s", loc.City, loc.Country))
+		if loc.Timezone != "" {
+			sb.WriteString(fmt.Sprintf(" (timezone: %s)", loc.Timezone))
+		}
+		if prefs.TemperatureUnit != "" {
+			sb.WriteString(fmt.Sprintf("\nTemperature unit: %s", prefs.TemperatureUnit))
+		}
+		if prefs.Currency != "" {
+			sb.WriteString(fmt.Sprintf("\nCurrency: %s", prefs.Currency))
+		}
+		if prefs.UnitSystem != "" {
+			sb.WriteString(fmt.Sprintf("\nUnit system: %s", prefs.UnitSystem))
+		}
+		sb.WriteString("\nWhen the user asks about weather, time, currency, or anything location-specific without specifying a place, use the above context.")
+		sb.WriteString("\n</user_context>")
+	}
+
+	// ── Volatile suffix (changes per-turn, busts cache from here) ──────────
 
 	if skillsBlock != "" {
 		sb.WriteString("\n\n<skills_context>\n")
@@ -387,6 +491,13 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 		sb.WriteString("\n</recent_diary>")
 	}
 
+	if toolNotesBlock != "" {
+		sb.WriteString("\n\n<tool_notes>\n")
+		sb.WriteString("Learned lessons about tool use — review before calling any skill:\n")
+		sb.WriteString(toolNotesBlock)
+		sb.WriteString("\n</tool_notes>")
+	}
+
 	if memText != "" {
 		sb.WriteString("\n\n<recalled_memories>\n")
 		sb.WriteString(memText)
@@ -394,6 +505,73 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	}
 
 	return sb.String()
+}
+
+// buildCredsBlock returns a short block listing the user's custom Keychain
+// secrets so the model knows which key names to reference when using skills.
+// Returns "" if no custom secrets are configured.
+func buildCredsBlock() string {
+	bundle, err := creds.Read()
+	if err != nil || len(bundle.CustomSecrets) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("The following custom API keys are stored in the user's Keychain.\n")
+	sb.WriteString("When a skill needs one of these, pass the exact key name shown below:\n")
+	for keyName := range bundle.CustomSecrets {
+		label := bundle.CustomSecretLabels[keyName]
+		if label != "" {
+			sb.WriteString(fmt.Sprintf("  - %s (%s)\n", keyName, label))
+		} else {
+			sb.WriteString(fmt.Sprintf("  - %s\n", keyName))
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+// buildTrimmedHistoryNote generates the compact context note prepended when
+// older messages are trimmed from the conversation window. Returns a cached
+// summary if available and still valid, otherwise builds an excerpt-based
+// summary (same as the original approach).
+func (s *Service) buildTrimmedHistoryNote(convID string, trimCount int, trimmed []storage.MessageRow, currentMsgID string) string {
+	// Check summary cache — reuse if the trim count matches and TTL is valid.
+	if cached, ok := s.summaryCache[convID]; ok && cached.trimCount == trimCount && time.Since(cached.createdAt) < summaryTTL {
+		return cached.summary
+	}
+
+	var excerpts []string
+	for _, m := range trimmed {
+		if m.Role == "user" && m.ID != currentMsgID {
+			exc := strings.Join(strings.Fields(m.Content), " ")
+			if len([]rune(exc)) > 80 {
+				exc = string([]rune(exc)[:80]) + "…"
+			}
+			excerpts = append(excerpts, exc)
+		}
+	}
+	if len(excerpts) > 3 {
+		excerpts = excerpts[len(excerpts)-3:]
+	}
+	if len(excerpts) == 0 {
+		return ""
+	}
+	note := fmt.Sprintf("[%d earlier messages omitted. Recent topics: %s]",
+		trimCount, strings.Join(excerpts, " / "))
+
+	// Cache for reuse on subsequent turns in the same conversation.
+	// Evict stale entries to prevent unbounded growth.
+	now := time.Now()
+	for k, v := range s.summaryCache {
+		if now.Sub(v.createdAt) > summaryTTL {
+			delete(s.summaryCache, k)
+		}
+	}
+	s.summaryCache[convID] = conversationSummary{
+		summary:   note,
+		trimCount: trimCount,
+		createdAt: now,
+	}
+	return note
 }
 
 // HandleMessage processes a message request end-to-end:
@@ -413,7 +591,11 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 	}
 
 	// Ensure conversation exists.
-	if err := s.db.SaveConversation(convID, now, now, nil); err != nil {
+	platform := req.Platform
+	if platform == "" {
+		platform = "web"
+	}
+	if err := s.db.SaveConversation(convID, now, now, platform, nil); err != nil {
 		return MessageResponse{}, fmt.Errorf("chat: save conversation: %w", err)
 	}
 
@@ -474,7 +656,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 				ctxSize = 8192
 			}
 			logstore.Write("info", "Engine LM not running — auto-starting model", map[string]string{"model": model})
-			if err := s.engine.Start(model, port, ctxSize, cfg.AtlasEngineKVCacheQuant); err != nil {
+			if err := s.engine.Start(model, port, ctxSize, cfg.AtlasEngineKVCacheQuant, cfg.AtlasEngineDraftModel); err != nil {
 				logstore.Write("warn", "Engine LM auto-start failed", map[string]string{"error": err.Error()})
 			} else if err := s.engine.WaitUntilReady(port, 90*time.Second); err != nil {
 				logstore.Write("warn", "Engine LM ready-wait timed out", map[string]string{"error": err.Error()})
@@ -535,25 +717,32 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 	}
 
 	// When older messages are trimmed, prepend a compact context note so the
-	// model knows the conversation has prior history. This costs ~20-50 tokens
-	// but prevents the model from treating the window as the full conversation.
+	// model knows the conversation has prior history. Uses a cached summary
+	// when available; falls back to excerpt-based approach otherwise.
+	//
+	// Pre-compaction flush: run memory extraction on trimmed user messages so
+	// insights are captured before they leave the context window.
 	if start > 0 {
-		var excerpts []string
-		for _, m := range history[:start] {
-			if m.Role == "user" && m.ID != userMsgID {
-				exc := strings.Join(strings.Fields(m.Content), " ")
-				if len([]rune(exc)) > 80 {
-					exc = string([]rune(exc)[:80]) + "…"
-				}
-				excerpts = append(excerpts, exc)
+		// Pre-compaction memory flush — extract memories from messages about
+		// to be dropped, in case they were never processed (daemon restart,
+		// memory system was disabled at the time, etc.).
+		if cfg.MemoryEnabled {
+			// Only flush messages that are newly trimmed — compare current trim
+			// count against the cached summary's trim count. If they match, these
+			// messages were already flushed on a previous turn.
+			if cached, ok := s.summaryCache[convID]; !ok || cached.trimCount < start {
+				go func(trimmed []storage.MessageRow) {
+					for _, m := range trimmed {
+						if m.Role == "user" {
+							memory.ExtractRegexOnly(cfg, m.Content, convID, s.db)
+						}
+					}
+				}(history[:start])
 			}
 		}
-		if len(excerpts) > 3 {
-			excerpts = excerpts[len(excerpts)-3:]
-		}
-		if len(excerpts) > 0 {
-			note := fmt.Sprintf("[%d earlier messages omitted. Recent topics: %s]",
-				start, strings.Join(excerpts, " / "))
+
+		note := s.buildTrimmedHistoryNote(convID, start, history[:start], userMsgID)
+		if note != "" {
 			oaiMessages = append(oaiMessages, agent.OAIMessage{Role: "user", Content: note})
 			oaiMessages = append(oaiMessages, agent.OAIMessage{Role: "assistant", Content: "Understood."})
 		}
@@ -595,25 +784,30 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 	}
 
 	// Select tools based on the configured tool-selection mode.
-	//   "off"       — always inject all tools (no filtering).
-	//   "heuristic" — keyword/group heuristic; falls back to all tools when no
-	//                 group matches. This was the original EnableSmartToolSelection=true
-	//                 behaviour and remains the default.
-	//   "llm"       — reserved for Phase 3 Tool Router (LLM-ranked selection);
-	//                 falls back to heuristic until the router is wired in.
 	//
-	// Legacy: if ToolSelectionMode is empty, honour the old boolean field so
-	// existing config files continue to behave as before the migration.
+	//   "lazy"      — sends only the request_tools meta-tool (~100 tokens).
+	//                 The model calls it when it needs real capabilities; the
+	//                 agent loop upgrades to heuristic selection transparently.
+	//                 Best for Telegram / chat-heavy workloads.
+	//   "heuristic" — always-on baseline (core + management + custom) plus
+	//                 keyword-triggered groups (~26–57 tools). Default.
+	//   "llm"       — Phase 3 Tool Router (see TODO.md); falls back to heuristic.
+	//   "off"       — inject all tools. Explicit opt-in only; never a default.
+	//
+	// Legacy migration: if ToolSelectionMode is absent from config.json, default
+	// to heuristic. "off" must be an explicit choice.
 	toolMode := cfg.ToolSelectionMode
 	if toolMode == "" {
-		if cfg.EnableSmartToolSelection {
-			toolMode = "heuristic"
-		} else {
-			toolMode = "off"
-		}
+		toolMode = "heuristic"
 	}
 	var selectedTools []map[string]any
 	switch toolMode {
+	case "lazy":
+		// Single meta-tool: the model calls request_tools if it needs capabilities.
+		// The agent loop intercepts the call and upgrades to heuristic selection.
+		selectedTools = []map[string]any{agent.RequestToolsDef()}
+		logstore.Write("debug", "Tool selection: lazy mode — 1 meta-tool injected",
+			map[string]string{"mode": "lazy"})
 	case "llm":
 		// Auto-start the router model if it isn't running yet.
 		if s.routerEngine != nil && !s.routerEngine.IsRunning() {
@@ -628,7 +822,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 					ctxSize = 8192
 				}
 				logstore.Write("info", "Tool router not running — auto-starting", map[string]string{"model": routerModel})
-				if err := s.routerEngine.Start(routerModel, port, ctxSize, cfg.AtlasEngineKVCacheQuant); err != nil {
+				if err := s.routerEngine.Start(routerModel, port, ctxSize, cfg.AtlasEngineKVCacheQuant, ""); err != nil {
 					logstore.Write("warn", "Router auto-start failed", map[string]string{"error": err.Error()})
 				} else {
 					_ = s.routerEngine.WaitUntilReady(port, 90*time.Second)
@@ -641,7 +835,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		}
 	case "heuristic":
 		selectedTools = s.registry.SelectiveToolDefs(req.Message)
-	// "off" → selectedTools stays nil → agent uses full tool list
+		// "off" → selectedTools stays nil → agent uses full tool list
 	}
 
 	loopCfg := agent.LoopConfig{
@@ -650,6 +844,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		SupportDir:    config.SupportDir(),
 		ConvID:        convID,
 		Tools:         selectedTools, // nil → loop uses full ToolDefinitions()
+		UserMessage:   req.Message,   // used by lazy tool upgrade in the agent loop
 	}
 
 	agentLoop := &agent.Loop{
@@ -662,11 +857,15 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 	if toolCount == 0 {
 		toolCount = s.registry.ToolCount()
 	}
-	logstore.Write("info", fmt.Sprintf("Turn started: %s via %s (%d tools)", provider.Model, provider.Type, toolCount),
-		map[string]string{"conv": convID[:8]})
+	logstore.Write("info",
+		fmt.Sprintf("Turn started: %s via %s (%d tools, mode=%s)", provider.Model, provider.Type, toolCount, toolMode),
+		map[string]string{"conv": convID[:8], "mode": toolMode})
 
 	turnStart := time.Now()
 	result := agentLoop.Run(ctx, loopCfg, oaiMessages, convID)
+
+	// Record token usage for this turn.
+	s.recordTokenUsage(convID, provider, result.TotalUsage)
 
 	// Reset idle timers after each turn so the model isn't ejected during active use.
 	if provider.Type == agent.ProviderAtlasEngine && s.engine != nil {
@@ -756,7 +955,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		// Post-turn memory extraction (non-blocking).
 		// Passes provider + assistant text for LLM-based extraction alongside regex.
 		go memory.ExtractAndPersist(bgCtx, cfg, heavyBgProvider, req.Message, assistantText,
-			result.ToolCallSummaries, convID, s.db)
+			result.ToolCallSummaries, result.ToolResultSummaries, convID, s.db)
 
 		// Post-turn MIND reflection and DIARY entry (non-blocking).
 		// Skip if the assistant produced no text — a pure tool-call turn with
@@ -1080,6 +1279,9 @@ func (s *Service) Resume(toolCallID string, approved bool) {
 	resumeStart := time.Now()
 	result := agentLoop.Run(ctx, loopCfg, messages, convID)
 
+	// Record token usage for this resumed turn.
+	s.recordTokenUsage(convID, provider, result.TotalUsage)
+
 	if result.Status == "complete" && result.FinalText != "" {
 		replyAt := time.Now().UTC().Format(time.RFC3339Nano)
 		assistantMsgID := newUUID()
@@ -1102,5 +1304,30 @@ func (s *Service) Resume(toolCallID string, approved bool) {
 			ConversationID: convID,
 		})
 		s.broadcaster.Finish(convID)
+	}
+}
+
+// recordTokenUsage computes cost and persists a token usage event for one turn.
+// Non-fatal — a failure here never surfaces to the user.
+func (s *Service) recordTokenUsage(convID string, provider agent.ProviderConfig, usage agent.TokenUsage) {
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
+		return
+	}
+	inputCost, outputCost, known := storage.ComputeCost(
+		string(provider.Type), provider.Model,
+		usage.InputTokens, usage.OutputTokens,
+	)
+	if !known {
+		logstore.Write("warn",
+			fmt.Sprintf("token usage: unknown pricing for model %q — cost recorded as $0", provider.Model),
+			map[string]string{"provider": string(provider.Type)})
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := s.db.RecordTokenUsage(
+		newUUID(), convID, string(provider.Type), provider.Model,
+		usage.InputTokens, usage.OutputTokens,
+		inputCost, outputCost, now,
+	); err != nil {
+		logstore.Write("warn", "token usage: failed to persist: "+err.Error(), nil)
 	}
 }

@@ -187,6 +187,44 @@ The native companion app should not own the canonical storage model. It may call
 5. Add migration logic only when introducing a second secret backend or a cross-platform path strategy.
 6. Keep macOS as the first validated platform while ensuring path names, secret identifiers, and interfaces are cross-platform from the start.
 
+## Memories Table
+
+The `memories` table is the primary long-term memory store. It is queried before every agent turn via BM25 FTS5 search and updated non-blocking after each turn.
+
+```sql
+CREATE TABLE memories (
+  memory_id              TEXT PRIMARY KEY,
+  category               TEXT NOT NULL,          -- commitment|profile|preference|project|workflow|episodic|tool_learning
+  title                  TEXT NOT NULL,
+  content                TEXT NOT NULL,
+  source                 TEXT,                   -- user_explicit|conversation_inference|assistant_observation|dream
+  confidence             REAL NOT NULL DEFAULT 0.8,
+  importance             REAL NOT NULL DEFAULT 0.5,
+  created_at             TEXT NOT NULL,          -- ISO8601
+  updated_at             TEXT NOT NULL,          -- ISO8601
+  is_user_confirmed      INTEGER NOT NULL DEFAULT 0,
+  is_sensitive           INTEGER NOT NULL DEFAULT 0,
+  tags_json              TEXT NOT NULL DEFAULT '[]',
+  related_conversation_id TEXT,
+  last_retrieved_at      TEXT,                   -- ISO8601, updated on each recall
+  retrieval_count        INTEGER NOT NULL DEFAULT 0,
+  valid_until            TEXT                    -- ISO8601; NULL = active, past = invalidated (contradicted)
+);
+
+-- FTS5 virtual table kept in sync via INSERT/UPDATE/DELETE triggers
+CREATE VIRTUAL TABLE memories_fts USING fts5(
+  memory_id UNINDEXED,
+  title, content, tags_json,
+  content='memories', content_rowid='rowid'
+);
+```
+
+**Key behaviors:**
+- `valid_until` — set to `now` when a memory is contradicted by the dream cycle (opinion: `contradict`). Excluded from all recall queries.
+- `last_retrieved_at` + `retrieval_count` — updated each time `RelevantMemories()` returns the memory. Used by the dream cycle to identify never-retrieved memories for pruning.
+- `memories_fts` — BM25 full-text index on `title`, `content`, `tags_json`. Recall query: OR of all keywords extracted from the user message, filtered to active memories (`valid_until IS NULL OR valid_until > now`).
+- Commitment memories (`category = 'commitment'`) receive +0.20 importance boost in `RelevantMemories()` so they always surface first in the system prompt.
+
 ## Non-Goals
 
 - Storing secrets in Markdown

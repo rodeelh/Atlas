@@ -4,12 +4,41 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"atlas-runtime-go/internal/preferences"
 )
+
+// tempParams returns the Open-Meteo temperature_unit query param and the
+// degree symbol to use in formatted output, based on user preferences.
+func tempParams() (apiUnit, symbol string) {
+	if preferences.TemperatureUnit() == "fahrenheit" {
+		return "fahrenheit", "°F"
+	}
+	return "celsius", "°C"
+}
+
+// windParams returns the Open-Meteo wind_speed_unit query param and display label.
+func windParams() (apiUnit, label string) {
+	if preferences.UnitSystem() == "imperial" {
+		return "mph", "mph"
+	}
+	return "kmh", "km/h"
+}
+
+// celsiusEquiv converts a temperature to Celsius for logic thresholds (outfit,
+// activity scoring) regardless of display unit, so thresholds stay consistent.
+func celsiusEquiv(t float64) float64 {
+	if preferences.TemperatureUnit() == "fahrenheit" {
+		return (t - 32) * 5 / 9
+	}
+	return t
+}
 
 func (r *Registry) registerWeather() {
 	r.register(SkillEntry{
@@ -121,6 +150,10 @@ func geocode(ctx context.Context, location string) (geoResult, error) {
 		return geoResult{}, fmt.Errorf("geocoding request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return geoResult{}, fmt.Errorf("geocoding API error %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
 
 	var result struct {
 		Results []geoResult `json:"results"`
@@ -184,20 +217,29 @@ func weatherCurrent(ctx context.Context, args json.RawMessage) (string, error) {
 		return "", err
 	}
 
+	tUnit, tSym := tempParams()
+	wUnit, wLabel := windParams()
 	u := fmt.Sprintf(
 		"https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"+
 			"&current=temperature_2m,apparent_temperature,wind_speed_10m,weathercode"+
-			"&temperature_unit=celsius&wind_speed_unit=kmh",
-		geo.Latitude, geo.Longitude,
+			"&temperature_unit=%s&wind_speed_unit=%s",
+		geo.Latitude, geo.Longitude, tUnit, wUnit,
 	)
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return "", fmt.Errorf("weather request failed: %w", err)
+	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("weather request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("weather API error %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
 
 	var data struct {
 		Current struct {
@@ -213,10 +255,10 @@ func weatherCurrent(ctx context.Context, args json.RawMessage) (string, error) {
 
 	c := data.Current
 	return fmt.Sprintf(
-		"%s, %s: %s | Temp: %.1f°C (feels like %.1f°C) | Wind: %.1f km/h",
+		"%s, %s: %s | Temp: %.1f%s (feels like %.1f%s) | Wind: %.1f %s",
 		geo.Name, geo.Country,
 		wmoDescription(c.WeatherCode),
-		c.Temperature, c.ApparentTemp, c.WindSpeed,
+		c.Temperature, tSym, c.ApparentTemp, tSym, c.WindSpeed, wLabel,
 	), nil
 }
 
@@ -240,20 +282,28 @@ func weatherForecast(ctx context.Context, args json.RawMessage) (string, error) 
 		return "", err
 	}
 
+	tUnit, tSym := tempParams()
 	u := fmt.Sprintf(
 		"https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"+
 			"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode"+
-			"&temperature_unit=celsius&forecast_days=%d",
-		geo.Latitude, geo.Longitude, days,
+			"&temperature_unit=%s&forecast_days=%d",
+		geo.Latitude, geo.Longitude, tUnit, days,
 	)
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return "", fmt.Errorf("forecast request failed: %w", err)
+	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("forecast request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("forecast API error %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
 
 	var data struct {
 		Daily struct {
@@ -274,11 +324,11 @@ func weatherForecast(ctx context.Context, args json.RawMessage) (string, error) 
 		if i >= days {
 			break
 		}
-		sb.WriteString(fmt.Sprintf("  %s: %s | High %.1f°C / Low %.1f°C | Precip %.1f mm\n",
+		sb.WriteString(fmt.Sprintf("  %s: %s | High %.1f%s / Low %.1f%s | Precip %.1f mm\n",
 			date,
 			wmoDescription(data.Daily.WeatherCode[i]),
-			data.Daily.TempMax[i],
-			data.Daily.TempMin[i],
+			data.Daily.TempMax[i], tSym,
+			data.Daily.TempMin[i], tSym,
 			data.Daily.Precip[i],
 		))
 	}
@@ -305,19 +355,27 @@ func weatherHourly(ctx context.Context, args json.RawMessage) (string, error) {
 		return "", err
 	}
 
+	tUnit, tSym := tempParams()
 	u := fmt.Sprintf(
 		"https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"+
-			"&hourly=temperature_2m&temperature_unit=celsius&forecast_days=2",
-		geo.Latitude, geo.Longitude,
+			"&hourly=temperature_2m&temperature_unit=%s&forecast_days=2",
+		geo.Latitude, geo.Longitude, tUnit,
 	)
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return "", fmt.Errorf("hourly request failed: %w", err)
+	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("hourly request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("hourly API error %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
 
 	var data struct {
 		Hourly struct {
@@ -333,7 +391,7 @@ func weatherHourly(ctx context.Context, args json.RawMessage) (string, error) {
 	sb.WriteString(fmt.Sprintf("%s, %s — hourly temperatures:\n", geo.Name, geo.Country))
 	count := int(math.Min(float64(hours), float64(len(data.Hourly.Time))))
 	for i := 0; i < count; i++ {
-		sb.WriteString(fmt.Sprintf("  %s: %.1f°C\n", data.Hourly.Time[i], data.Hourly.Temps[i]))
+		sb.WriteString(fmt.Sprintf("  %s: %.1f%s\n", data.Hourly.Time[i], data.Hourly.Temps[i], tSym))
 	}
 	return strings.TrimRight(sb.String(), "\n"), nil
 }
@@ -353,19 +411,27 @@ func weatherBrief(ctx context.Context, args json.RawMessage) (string, error) {
 		return "", err
 	}
 
+	tUnit, tSym := tempParams()
 	u := fmt.Sprintf(
 		"https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"+
-			"&current=temperature_2m,weathercode&temperature_unit=celsius",
-		geo.Latitude, geo.Longitude,
+			"&current=temperature_2m,weathercode&temperature_unit=%s",
+		geo.Latitude, geo.Longitude, tUnit,
 	)
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return "", fmt.Errorf("brief request failed: %w", err)
+	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("brief request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("brief API error %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
 
 	var data struct {
 		Current struct {
@@ -377,37 +443,46 @@ func weatherBrief(ctx context.Context, args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("brief parse failed: %w", err)
 	}
 
-	return fmt.Sprintf("%s: %s, %.1f°C",
+	return fmt.Sprintf("%s: %s, %.1f%s",
 		geo.Name,
 		wmoDescription(data.Current.WeatherCode),
-		data.Current.Temperature,
+		data.Current.Temperature, tSym,
 	), nil
 }
 
 // ── weather.dayplan ───────────────────────────────────────────────────────────
 
 type hourlySlice struct {
-	time  string
-	temp  float64
+	time   string
+	temp   float64
 	precip float64 // precipitation probability %
-	wind  float64
-	code  int
+	wind   float64
+	code   int
 }
 
 func fetchHourlyRich(ctx context.Context, geo geoResult, hours int) ([]hourlySlice, error) {
+	tUnit, _ := tempParams()
+	wUnit, _ := windParams()
 	u := fmt.Sprintf(
 		"https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"+
 			"&hourly=temperature_2m,precipitation_probability,weathercode,wind_speed_10m"+
-			"&temperature_unit=celsius&wind_speed_unit=kmh&forecast_days=1",
-		geo.Latitude, geo.Longitude,
+			"&temperature_unit=%s&wind_speed_unit=%s&forecast_days=1",
+		geo.Latitude, geo.Longitude, tUnit, wUnit,
 	)
-	req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("hourly rich request failed: %w", err)
+	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("hourly rich request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("weather API error %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
 
 	var data struct {
 		Hourly struct {
@@ -441,11 +516,11 @@ func fetchHourlyRich(ctx context.Context, geo geoResult, hours int) ([]hourlySli
 			code = data.Hourly.Code[i]
 		}
 		out[i] = hourlySlice{
-			time:  data.Hourly.Time[i],
-			temp:  data.Hourly.Temp[i],
+			time:   data.Hourly.Time[i],
+			temp:   data.Hourly.Temp[i],
 			precip: precip,
-			wind:  wind,
-			code:  code,
+			wind:   wind,
+			code:   code,
 		}
 	}
 	return out, nil
@@ -463,14 +538,15 @@ func umbrellaAdvice(maxPrecip float64) string {
 }
 
 func outfitAdvice(avgTemp float64) string {
+	t := celsiusEquiv(avgTemp) // normalize to °C for consistent thresholds
 	switch {
-	case avgTemp >= 28:
+	case t >= 28:
 		return "light summer clothing"
-	case avgTemp >= 20:
+	case t >= 20:
 		return "light layers"
-	case avgTemp >= 12:
+	case t >= 12:
 		return "jacket recommended"
-	case avgTemp >= 5:
+	case t >= 5:
 		return "warm coat"
 	default:
 		return "heavy winter clothing"
@@ -547,7 +623,8 @@ func weatherDayplan(ctx context.Context, args json.RawMessage) (string, error) {
 		}
 		sb.WriteString(fmt.Sprintf("**%s**\n", seg.name))
 		sb.WriteString(fmt.Sprintf("  Conditions: %s\n", wmoDescription(worstCode)))
-		sb.WriteString(fmt.Sprintf("  Avg temp: %.1f°C | Rain chance: %.0f%%\n", avgTemp, maxPrecip))
+		_, tSym := tempParams()
+		sb.WriteString(fmt.Sprintf("  Avg temp: %.1f%s | Rain chance: %.0f%%\n", avgTemp, tSym, maxPrecip))
 		sb.WriteString(fmt.Sprintf("  Outfit: %s | %s\n\n", outfitAdvice(avgTemp), umbrellaAdvice(maxPrecip)))
 	}
 	return strings.TrimRight(sb.String(), "\n"), nil
@@ -681,12 +758,14 @@ func weatherActivityWindow(ctx context.Context, args json.RawMessage) (string, e
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%s activity windows in %s, %s:\n\n", titleCase(p.Activity), geo.Name, geo.Country))
+	_, tSym := tempParams()
+	_, wLabel := windParams()
 	sb.WriteString(fmt.Sprintf("Best window: %s\n", timeStr(best.h.time)))
-	sb.WriteString(fmt.Sprintf("  %s | %.1f°C | Rain: %.0f%% | Wind: %.1f km/h | Score: %d/100\n\n",
-		wmoDescription(best.h.code), best.h.temp, best.h.precip, best.h.wind, best.score))
+	sb.WriteString(fmt.Sprintf("  %s | %.1f%s | Rain: %.0f%% | Wind: %.1f %s | Score: %d/100\n\n",
+		wmoDescription(best.h.code), best.h.temp, tSym, best.h.precip, best.h.wind, wLabel, best.score))
 	sb.WriteString(fmt.Sprintf("Worst window: %s\n", timeStr(worst.h.time)))
-	sb.WriteString(fmt.Sprintf("  %s | %.1f°C | Rain: %.0f%% | Wind: %.1f km/h | Score: %d/100\n",
-		wmoDescription(worst.h.code), worst.h.temp, worst.h.precip, worst.h.wind, worst.score))
+	sb.WriteString(fmt.Sprintf("  %s | %.1f%s | Rain: %.0f%% | Wind: %.1f %s | Score: %d/100\n",
+		wmoDescription(worst.h.code), worst.h.temp, tSym, worst.h.precip, worst.h.wind, wLabel, worst.score))
 	return sb.String(), nil
 }
 

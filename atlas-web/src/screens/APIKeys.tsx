@@ -3,6 +3,18 @@ import { api, APIKeyStatus } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
 
+// ── Key name helpers ──────────────────────────────────────────────────────────
+
+// "Serper Search API" → "SERPER_SEARCH_API"
+function toKeychainKey(label: string): string {
+  return label.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+}
+
+// "SERPER_SEARCH_API" → "Serper Search Api"
+function fromKeychainKey(key: string): string {
+  return key.split('_').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ')
+}
+
 const PROVIDERS = [
   { id: 'openai',      label: 'OpenAI',              sublabel: 'API key for OpenAI models (GPT-4.1 etc.)',                            key: 'openAIKeySet'      },
   { id: 'anthropic',   label: 'Anthropic',           sublabel: 'API key for Claude models (Sonnet, Opus, Haiku)',                     key: 'anthropicKeySet'   },
@@ -103,6 +115,7 @@ export function APIKeys() {
             <CustomKeyRow
               key={name}
               name={name}
+              label={keyStatus?.customKeyLabels?.[name]}
               last={i === customKeys.length - 1 && !addingNew}
               onSaved={handleSaved}
             />
@@ -178,18 +191,19 @@ function KeyRow({ providerID, label, sublabel, configured, last, onSaved }: KeyR
 
 // ── Custom key row ────────────────────────────────────────────────────────────
 
-function CustomKeyRow({ name, last, onSaved }: { name: string; last: boolean; onSaved: (u: APIKeyStatus) => void }) {
+function CustomKeyRow({ name, label, last, onSaved }: { name: string; label?: string; last: boolean; onSaved: (u: APIKeyStatus) => void }) {
   const [editing, setEditing]   = useState(false)
   const [value, setValue]       = useState('')
   const [saving, setSaving]     = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [copied, setCopied]     = useState(false)
   const [err, setErr]           = useState<string | null>(null)
 
   const save = async () => {
     if (!value.trim()) return
     setSaving(true); setErr(null)
     try {
-      const updated = await api.setAPIKey('custom', value.trim(), name)
+      const updated = await api.setAPIKey('custom', value.trim(), name, label)
       onSaved(updated); setValue(''); setEditing(false)
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to save.')
@@ -204,12 +218,39 @@ function CustomKeyRow({ name, last, onSaved }: { name: string; last: boolean; on
     } catch { /* best-effort */ } finally { setDeleting(false) }
   }
 
+  const copyName = () => {
+    navigator.clipboard.writeText(name).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+
   return (
     <div style={{ borderBottom: last && !editing ? 'none' : '1px solid var(--border)' }}>
       <div class="settings-row" style={{ borderBottom: 'none' }}>
         <div class="settings-label-col">
-          <div class="settings-label" style={{ fontFamily: 'var(--font-mono)', fontSize: '13px' }}>{name}</div>
-          <div class="settings-sublabel">Custom API key</div>
+          <div class="settings-label">{label || fromKeychainKey(name)}</div>
+          <div class="settings-sublabel" style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-3)' }}>
+              {name}
+            </span>
+            <span style={{ color: 'var(--border)', fontSize: '11px' }}>·</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-3)', opacity: 0.6 }}>
+              com.projectatlas.credentials
+            </span>
+            <button
+              onClick={copyName}
+              title="Copy keychain key name"
+              style={{
+                background: 'none', border: 'none', padding: '1px 5px', cursor: 'pointer',
+                fontSize: '10px', color: copied ? 'var(--green)' : 'var(--text-3)',
+                fontFamily: 'var(--font-mono)', borderRadius: '3px',
+                transition: 'color 0.15s',
+              }}
+            >
+              {copied ? '✓ copied' : 'copy'}
+            </button>
+          </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <StatusDot configured />
@@ -227,16 +268,17 @@ function CustomKeyRow({ name, last, onSaved }: { name: string; last: boolean; on
 // ── Add new key row ───────────────────────────────────────────────────────────
 
 function AddKeyRow({ last, onSaved, onCancel }: { last: boolean; onSaved: (u: APIKeyStatus) => void; onCancel: () => void }) {
-  const [name, setName]   = useState('')
-  const [value, setValue] = useState('')
+  const [label, setLabel]   = useState('')
+  const [keyName, setKeyName] = useState('')
+  const [value, setValue]   = useState('')
   const [saving, setSaving] = useState(false)
-  const [err, setErr]     = useState<string | null>(null)
+  const [err, setErr]       = useState<string | null>(null)
 
   const save = async () => {
-    if (!name.trim() || !value.trim()) { setErr('Both a name and a key value are required.'); return }
+    if (!keyName.trim() || !value.trim()) { setErr('Both a key name and a value are required.'); return }
     setSaving(true); setErr(null)
     try {
-      const updated = await api.setAPIKey('custom', value.trim(), name.trim())
+      const updated = await api.setAPIKey('custom', value.trim(), keyName.trim(), label.trim() || undefined)
       onSaved(updated)
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to save.')
@@ -249,11 +291,18 @@ function AddKeyRow({ last, onSaved, onCancel }: { last: boolean; onSaved: (u: AP
         <input
           class="input"
           type="text"
-          placeholder="Key name (e.g. SERPER_API_KEY)"
-          value={name}
-          onInput={e => setName((e.target as HTMLInputElement).value)}
-          style={{ fontFamily: 'var(--font-mono)', fontSize: '12.5px' }}
+          placeholder="Display name (e.g. Serper Search)"
+          value={label}
+          onInput={e => setLabel((e.target as HTMLInputElement).value)}
           autoFocus
+        />
+        <input
+          class="input"
+          type="text"
+          placeholder="Key name (e.g. SERPER_API_KEY)"
+          value={keyName}
+          onInput={e => setKeyName((e.target as HTMLInputElement).value)}
+          style={{ fontFamily: 'var(--font-mono)', fontSize: '12.5px' }}
         />
         <input
           class="input"
@@ -266,7 +315,7 @@ function AddKeyRow({ last, onSaved, onCancel }: { last: boolean; onSaved: (u: AP
       </div>
       {err && <div style={{ fontSize: '12px', color: 'var(--red)' }}>{err}</div>}
       <div style={{ display: 'flex', gap: '6px' }}>
-        <button class="btn btn-sm btn-primary" onClick={save} disabled={saving || !name.trim() || !value.trim()}>
+        <button class="btn btn-sm btn-primary" onClick={save} disabled={saving || !keyName.trim() || !value.trim()}>
           {saving ? <span class="spinner" style={{ width: '11px', height: '11px', borderTopColor: '#000', borderColor: 'rgba(0,0,0,0.2)' }} /> : 'Save'}
         </button>
         <button class="btn btn-sm" onClick={onCancel} disabled={saving}>Cancel</button>

@@ -2,6 +2,7 @@
 import type {
   APIKeyStatus,
   Approval,
+  EngineDownloadStatus,
   EngineModelInfo,
   EngineStatus,
   FsRoot,
@@ -12,8 +13,6 @@ import type {
   CommunicationValidationPayload,
   ConversationDetail,
   ConversationSummary,
-  DashboardProposal,
-  DashboardSpec,
   ForgeProposalRecord,
   ForgeResearchingItem,
   GremlinItem,
@@ -31,9 +30,10 @@ import type {
   RuntimeStatus,
   SkillRecord,
   TelegramChat,
-  WidgetExecutionResult,
   WorkflowDefinition,
   WorkflowRun,
+  TokenUsageSummary,
+  TokenUsageEvent,
 } from './contracts'
 
 export type {
@@ -53,13 +53,6 @@ export type {
   ConversationDetail,
   ConversationMessage,
   ConversationSummary,
-  DashboardDisplayItem,
-  DashboardDisplayPayload,
-  DashboardDisplayTableRow,
-  DashboardProposal,
-  DashboardSpec,
-  DashboardWidget,
-  DashboardWidgetBinding,
   ForgeProposalRecord,
   ForgeProposalStatus,
   ForgeResearchingItem,
@@ -78,8 +71,6 @@ export type {
   RuntimeStatus,
   SkillRecord,
   TelegramChat,
-  WidgetExecutionResult,
-  WidgetField,
   WorkflowApproval,
   WorkflowDefinition,
   WorkflowRun,
@@ -169,7 +160,7 @@ function del<T>(path: string, body: unknown): Promise<T> {
 export const api = {
   status: () => get<RuntimeStatus>('/status'),
   apiKeys: () => get<APIKeyStatus>('/api-keys'),
-  setAPIKey: (provider: string, key: string, name?: string) => post<APIKeyStatus>('/api-keys', { provider, key, name }),
+  setAPIKey: (provider: string, key: string, name?: string, label?: string) => post<APIKeyStatus>('/api-keys', { provider, key, name, label }),
   deleteAPIKey: (name: string) => del<APIKeyStatus>('/api-keys', { name }),
   config: () => get<RuntimeConfig>('/config'),
   updateConfig: (c: Partial<RuntimeConfig>) => put<RuntimeConfigUpdateResponse>('/config', c),
@@ -211,10 +202,10 @@ export const api = {
   mind: () => get<{ content: string }>('/mind'),
   updateMind: (content: string) => put<object>('/mind', { content }),
   regenerateMind: () => post<{ content: string }>('/mind/regenerate', {}),
+  forceDream: () => post<{ status: string }>('/mind/dream', {}),
 
-  // Skills Memory
-  skillsMemory: () => get<{ content: string }>('/skills-memory'),
-  updateSkillsMemory: (content: string) => put<object>('/skills-memory', { content }),
+  // Diary
+  diary: () => get<{ content: string }>('/diary'),
 
   // Model selector
   models: () => get<ModelSelectorInfo>('/models'),
@@ -255,18 +246,6 @@ export const api = {
   approveWorkflowRun: (runID: string) => post<WorkflowRun>(`/workflows/runs/${encodeURIComponent(runID)}/approve`, {}),
   denyWorkflowRun: (runID: string) => post<WorkflowRun>(`/workflows/runs/${encodeURIComponent(runID)}/deny`, {}),
 
-  // Dashboards
-  executeWidget: (dashboardID: string, widgetID: string, inputs?: Record<string, string>) =>
-    post<WidgetExecutionResult>('/dashboards/widgets/execute', { dashboardID, widgetID, inputs }),
-  dashboardProposals: () => get<DashboardProposal[]>('/dashboards/proposals'),
-  createDashboardProposal: (intent: string, skillIDs: string[]) => post<DashboardProposal>('/dashboards/proposals', { intent, skillIDs }),
-  installDashboard: (proposalID: string) => post<DashboardProposal>('/dashboards/install', { proposalID }),
-  rejectDashboard: (proposalID: string) => post<DashboardProposal>('/dashboards/reject', { proposalID }),
-  installedDashboards: () => get<DashboardSpec[]>('/dashboards/installed'),
-  removeDashboard: (dashboardID: string) => del<{ ok: boolean }>('/dashboards/installed', { dashboardID }),
-  recordDashboardAccess: (dashboardID: string) => post<{ ok: boolean }>('/dashboards/access', { dashboardID }),
-  toggleDashboardPin: (dashboardID: string) => post<DashboardSpec>('/dashboards/pin', { dashboardID }),
-
   // Conversation History
   conversations: (limit = 50, offset = 0) =>
     get<ConversationSummary[]>('/conversations', { limit, offset }),
@@ -288,6 +267,15 @@ export const api = {
   forgeReject: (id: string) => post<ForgeProposalRecord>(`/forge/proposals/${id}/reject`, {}),
   forgeUninstall: (skillID: string) => post<{ skillID: string; uninstalled: boolean }>(`/forge/installed/${encodeURIComponent(skillID)}/uninstall`, {}),
 
+  // Location
+  location: () => get<{ city: string; country: string; timezone: string; latitude: number; longitude: number; source: string; updatedAt: string }>('/location'),
+  setLocation: (city: string, country: string) => put<{ city: string; country: string; timezone: string; source: string; updatedAt: string }>('/location', { city, country }),
+  detectLocation: () => post<{ city: string; country: string; timezone: string; source: string; updatedAt: string }>('/location/detect', {}),
+
+  // Preferences
+  preferences: () => get<{ temperatureUnit: string; currency: string; unitSystem: string }>('/preferences'),
+  setPreferences: (p: { temperatureUnit?: string; currency?: string; unitSystem?: string }) => put<{ temperatureUnit: string; currency: string; unitSystem: string }>('/preferences', p),
+
   // Remote access
   remoteAccessStatus: () => get<{ remoteAccessEnabled: boolean; port: number; lanIP: string | null; accessURL: string | null; tailscaleEnabled: boolean; tailscaleIP: string | null; tailscaleURL: string | null; tailscaleConnected: boolean }>('/auth/remote-status'),
   remoteAccessKey: () => get<{ key: string }>('/auth/remote-key'),
@@ -299,6 +287,8 @@ export const api = {
   engineStart: (model: string, port?: number, ctxSize?: number) => post<EngineStatus>('/engine/start', { model, port, ctxSize }),
   engineStop: () => post<EngineStatus>('/engine/stop', {}),
   engineDeleteModel: (name: string) => request<EngineModelInfo[]>(`/engine/models/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  engineDownloadStatus: () => get<EngineDownloadStatus>('/engine/models/download/status'),
+  engineDismissDownload: () => request<void>('/engine/models/download', { method: 'DELETE' }),
   engineDownloadModel: (url: string, filename: string): EventSource =>
     // POST body can't be sent via EventSource — use a query-string shim via a GET
     // that the server won't support. Instead we open an SSE POST via fetch in the
@@ -312,4 +302,23 @@ export const api = {
   engineRouterStatus: () => get<EngineStatus>('/engine/router/status'),
   engineRouterStart: (model?: string) => post<EngineStatus>('/engine/router/start', { model }),
   engineRouterStop: () => post<EngineStatus>('/engine/router/stop', {}),
+
+  // Usage & cost tracking
+  usageSummary: (params?: { since?: string; until?: string; days?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.since) q.set('since', params.since)
+    if (params?.until) q.set('until', params.until)
+    if (params?.days !== undefined) q.set('days', String(params.days))
+    return get<TokenUsageSummary>(`/usage/summary?${q}`)
+  },
+  usageEvents: (params?: { since?: string; until?: string; provider?: string; model?: string; limit?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.since) q.set('since', params.since)
+    if (params?.until) q.set('until', params.until)
+    if (params?.provider) q.set('provider', params.provider)
+    if (params?.model) q.set('model', params.model)
+    if (params?.limit !== undefined) q.set('limit', String(params.limit))
+    return get<{ events: TokenUsageEvent[] }>(`/usage/events?${q}`)
+  },
+  deleteUsage: (before: string) => request<{ deleted: number }>(`/usage?before=${encodeURIComponent(before)}`, { method: 'DELETE' }),
 }

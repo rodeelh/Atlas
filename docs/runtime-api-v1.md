@@ -157,7 +157,56 @@ These are already part of the current runtime surface and should remain grouped 
 - automations
 - workflows
 - forge
-- dashboards
+
+### Memory API
+
+Long-term memories are stored in SQLite and recalled via BM25 FTS5 before each agent turn.
+
+Core routes:
+
+- `GET /memories` — list active memories, optionally filtered by `?category=` and `?limit=`
+- `POST /memories` — create a memory (fields: `category`, `title`, `content`, `source`, `confidence`, `importance`, `tags`, `isSensitive`)
+- `PUT /memories/{id}` — update a memory
+- `DELETE /memories/{id}` — hard-delete a memory
+- `POST /memories/{id}/confirm` — mark `is_user_confirmed = true`
+
+Required payload expectations:
+
+- `GET /memories` returns an array of `MemoryItem` with `id`, `category`, `title`, `content`, `source`, `confidence`, `importance`, `isUserConfirmed`, `isSensitive`, `tags`, `createdAt`, `updatedAt`
+- Invalidated memories (`valid_until` in the past) are excluded from list results
+- Categories: `commitment`, `profile`, `preference`, `project`, `workflow`, `episodic`, `tool_learning`
+
+### Mind and Skills Memory API
+
+MIND.md and SKILLS.md are Markdown files on disk that feed the agent system prompt. They are human-readable and AI-writable.
+
+Core routes:
+
+- `GET /mind` — returns `{ "content": "<MIND.md contents>" }`
+- `PUT /mind` — overwrite MIND.md with `{ "content": "…" }`
+- `POST /mind/regenerate` — trigger a full MIND.md refresh using current memories + diary (async, returns 202)
+- `GET /skills-memory` — returns `{ "content": "<SKILLS.md contents>" }`
+- `PUT /skills-memory` — overwrite SKILLS.md with `{ "content": "…" }`
+
+Required payload expectations:
+
+- Both GET routes return `{ "content": string }`
+- PUT routes accept `{ "content": string }` and write atomically (temp-file then rename)
+- `POST /mind/regenerate` triggers `mind.RegenerateMindSync` and returns 200 with updated content, or 500 on failure
+
+### Diary API
+
+DIARY.md stores per-day one-line entries (max 3 per day). Written by the `diary.record` skill and by the MIND reflection pipeline after each turn.
+
+Core routes:
+
+- `GET /diary` — returns `{ "content": "<DIARY.md contents>" }`
+- `PUT /diary` — overwrite DIARY.md with `{ "content": "…" }`
+
+Required payload expectations:
+
+- Both routes use `{ "content": string }`
+- `AppendDiaryEntry` enforces the max-3-per-day limit; direct PUT bypasses this limit
 
 ## Compatibility baseline in code
 
@@ -181,7 +230,6 @@ The current codebase now has a compatibility baseline in the Go runtime and web 
   - message failure behavior, including conversation ID preservation and reusable conversation creation
   - `MIND.md`, `SKILLS.md`, and memory create/list routes preserving runtime-owned document semantics
   - workflow definition create/update/delete, workflow run execution, and workflow run history reads
-  - dashboard proposal creation, install lifecycle, pinning, access tracking, and removal behavior
   - forge researching state, proposal create/list/reject flows, install-enable behavior, installed skill listing, and uninstall behavior
 
 This is now a broad compatibility baseline we can preserve while the runtime changes underneath.

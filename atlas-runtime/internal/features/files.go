@@ -207,23 +207,3 @@ func UpdateWorkflowRunStatus(supportDir, runID, status string) (map[string]any, 
 	}
 	return found, writeJSONFile(supportDir, "workflow-runs.json", runs)
 }
-
-// ── Dashboards ────────────────────────────────────────────────────────────────
-
-// ListDashboardProposals reads dashboard-proposals.json.
-func ListDashboardProposals(supportDir string) []json.RawMessage {
-	var proposals []json.RawMessage
-	if !readJSONFile(supportDir, "dashboard-proposals.json", &proposals) {
-		return []json.RawMessage{}
-	}
-	return proposals
-}
-
-// ListInstalledDashboards reads dashboard-installed.json.
-func ListInstalledDashboards(supportDir string) []json.RawMessage {
-	var dashboards []json.RawMessage
-	if !readJSONFile(supportDir, "dashboard-installed.json", &dashboards) {
-		return []json.RawMessage{}
-	}
-	return dashboards
-}

@@ -14,6 +14,7 @@ import (
 	"atlas-runtime-go/internal/comms/slack"
 	"atlas-runtime-go/internal/comms/telegram"
 	"atlas-runtime-go/internal/config"
+	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/storage"
 )
 
@@ -143,6 +144,10 @@ func (s *Service) startBridges(cfg config.RuntimeConfigSnapshot, bundle credBund
 	}
 	cfgFn := s.cfgStore.Load
 
+	if cfg.TelegramEnabled && strVal(bundle.TelegramBotToken) == "" {
+		logstore.Write("warn", "Telegram bridge: enabled but no bot token configured — bridge not started", map[string]string{"platform": "telegram"})
+	}
+
 	if cfg.TelegramEnabled && strVal(bundle.TelegramBotToken) != "" && s.tgBridge == nil {
 		h := s.handler
 		tgHandler := telegram.ChatHandler(func(ctx context.Context, req telegram.BridgeRequest) (string, string, error) {
@@ -159,6 +164,10 @@ func (s *Service) startBridges(cfg config.RuntimeConfigSnapshot, bundle credBund
 		s.tgBridge = b
 		b.Start()
 	}
+	if cfg.DiscordEnabled && strVal(bundle.DiscordBotToken) == "" {
+		logstore.Write("warn", "Discord bridge: enabled but no bot token configured — bridge not started", map[string]string{"platform": "discord"})
+	}
+
 	if cfg.DiscordEnabled && strVal(bundle.DiscordBotToken) != "" && s.discBridge == nil {
 		h := s.handler
 		discHandler := discord.ChatHandler(func(ctx context.Context, req discord.BridgeRequest) (string, string, error) {
@@ -172,6 +181,10 @@ func (s *Service) startBridges(cfg config.RuntimeConfigSnapshot, bundle credBund
 		s.discBridge = b
 		b.Start()
 	}
+	if cfg.SlackEnabled && (strVal(bundle.SlackBotToken) == "" || strVal(bundle.SlackAppToken) == "") {
+		logstore.Write("warn", "Slack bridge: enabled but bot token or app token missing — bridge not started", map[string]string{"platform": "slack"})
+	}
+
 	if cfg.SlackEnabled && strVal(bundle.SlackBotToken) != "" && strVal(bundle.SlackAppToken) != "" && s.slackBridge == nil {
 		h := s.handler
 		slackHandler := slack.ChatHandler(func(ctx context.Context, req slack.BridgeRequest) (string, string, error) {

@@ -37,9 +37,9 @@ func (m *mockRegistry) register(id string, stateful bool, fn func(ctx context.Co
 // parallelLoopSkills is the interface subset that Loop needs during tool execution.
 // We implement it on mockRegistry so we can test without a real skills.Registry.
 
-func (m *mockRegistry) IsStateful(actionID string) bool    { return m.stateful[actionID] }
-func (m *mockRegistry) NeedsApproval(_ string) bool        { return false }
-func (m *mockRegistry) PermissionLevel(_ string) string    { return "read" }
+func (m *mockRegistry) IsStateful(actionID string) bool { return m.stateful[actionID] }
+func (m *mockRegistry) NeedsApproval(_ string) bool     { return false }
+func (m *mockRegistry) PermissionLevel(_ string) string { return "read" }
 func (m *mockRegistry) GetActionClass(_ string) skills.ActionClass {
 	return skills.ActionClassRead
 }
@@ -51,9 +51,9 @@ func (m *mockRegistry) Execute(ctx context.Context, actionID string, args json.R
 	}
 	return fn(ctx, args)
 }
-func (m *mockRegistry) ToolDefinitions() []map[string]any        { return nil }
+func (m *mockRegistry) ToolDefinitions() []map[string]any           { return nil }
 func (m *mockRegistry) SelectiveToolDefs(_ string) []map[string]any { return nil }
-func (m *mockRegistry) RedactArgs(args json.RawMessage) string   { return string(args) }
+func (m *mockRegistry) RedactArgs(args json.RawMessage) string      { return string(args) }
 
 // ── Mock broadcaster ──────────────────────────────────────────────────────────
 
@@ -66,8 +66,8 @@ func (b *mockBC) Finish(_ string)            {}
 
 // execResult is a captured result from a tool execution.
 type execResult struct {
-	tc      OAIToolCall
-	result  *toolExecResult
+	tc     OAIToolCall
+	result *toolExecResult
 }
 
 // runExecToolBatch replicates the three-pass parallel logic from loop.go Run()
@@ -167,9 +167,9 @@ func TestParallelToolExecution_ResultOrder(t *testing.T) {
 	}
 
 	tcs := []OAIToolCall{
-		{ID: "a", Function: OAIFunctionCall{Name: "slow.op",   Arguments: "{}"}},
+		{ID: "a", Function: OAIFunctionCall{Name: "slow.op", Arguments: "{}"}},
 		{ID: "b", Function: OAIFunctionCall{Name: "medium.op", Arguments: "{}"}},
-		{ID: "c", Function: OAIFunctionCall{Name: "fast.op",   Arguments: "{}"}},
+		{ID: "c", Function: OAIFunctionCall{Name: "fast.op", Arguments: "{}"}},
 	}
 	expected := []string{"slow.op", "medium.op", "fast.op"}
 
@@ -210,9 +210,9 @@ func TestParallelToolExecution_StatefulSerial(t *testing.T) {
 	}
 
 	tcs := []OAIToolCall{
-		{ID: "1", Function: OAIFunctionCall{Name: "browser.navigate",   Arguments: "{}"}},
+		{ID: "1", Function: OAIFunctionCall{Name: "browser.navigate", Arguments: "{}"}},
 		{ID: "2", Function: OAIFunctionCall{Name: "browser.screenshot", Arguments: "{}"}},
-		{ID: "3", Function: OAIFunctionCall{Name: "browser.click",      Arguments: "{}"}},
+		{ID: "3", Function: OAIFunctionCall{Name: "browser.click", Arguments: "{}"}},
 	}
 
 	runExecToolBatch(t, reg, tcs)
@@ -256,9 +256,9 @@ func TestParallelToolExecution_MixedBatch(t *testing.T) {
 	}
 
 	tcs := []OAIToolCall{
-		{ID: "1", Function: OAIFunctionCall{Name: "weather.current",    Arguments: "{}"}},
-		{ID: "2", Function: OAIFunctionCall{Name: "browser.navigate",   Arguments: "{}"}},
-		{ID: "3", Function: OAIFunctionCall{Name: "finance.quote",      Arguments: "{}"}},
+		{ID: "1", Function: OAIFunctionCall{Name: "weather.current", Arguments: "{}"}},
+		{ID: "2", Function: OAIFunctionCall{Name: "browser.navigate", Arguments: "{}"}},
+		{ID: "3", Function: OAIFunctionCall{Name: "finance.quote", Arguments: "{}"}},
 		{ID: "4", Function: OAIFunctionCall{Name: "browser.screenshot", Arguments: "{}"}},
 	}
 	expected := []string{"weather", "browser.navigate", "finance", "browser.screenshot"}

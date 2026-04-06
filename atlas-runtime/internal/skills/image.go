@@ -164,7 +164,9 @@ func imageEdit(_ context.Context, args json.RawMessage) (string, error) {
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 	if resp.StatusCode != 200 {
 		var errResp struct {
-			Error struct{ Message string `json:"message"` } `json:"error"`
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
 		}
 		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error.Message != "" {
 			return "", fmt.Errorf("OpenAI Images Edit API: %s", errResp.Error.Message)

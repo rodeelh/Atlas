@@ -34,12 +34,16 @@ type ChatDomain struct {
 	chatSvc     *chat.Service
 	broadcaster *chat.Broadcaster
 	db          *storage.DB
+	dreamRunner func() // runs a dream cycle in the calling goroutine; nil = not configured
 }
 
 // NewChatDomain creates a ChatDomain.
 func NewChatDomain(chatSvc *chat.Service, bc *chat.Broadcaster, db *storage.DB) *ChatDomain {
 	return &ChatDomain{chatSvc: chatSvc, broadcaster: bc, db: db}
 }
+
+// SetDreamRunner wires the dream-cycle trigger so POST /mind/dream works.
+func (d *ChatDomain) SetDreamRunner(fn func()) { d.dreamRunner = fn }
 
 // Register mounts all chat routes on the given router.
 func (d *ChatDomain) Register(r chi.Router) {
@@ -66,12 +70,12 @@ func (d *ChatDomain) Register(r chi.Router) {
 	r.Get("/mind", d.getMind)
 	r.Put("/mind", d.putMind)
 	r.Post("/mind/regenerate", d.regenerateMind)
+	r.Post("/mind/dream", d.forceDreamCycle)
 	r.Get("/skills-memory", d.getSkillsMemory)
 	r.Put("/skills-memory", d.putSkillsMemory)
 
-	// DIARY.md — daily notable moments.
+	// DIARY.md — read-only; written exclusively by the dream cycle.
 	r.Get("/diary", d.getDiary)
-	r.Put("/diary", d.putDiary)
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
@@ -149,6 +153,7 @@ func (d *ChatDomain) listConversations(w http.ResponseWriter, r *http.Request) {
 		ID                   string  `json:"id"`
 		CreatedAt            string  `json:"createdAt"`
 		UpdatedAt            string  `json:"updatedAt"`
+		Platform             string  `json:"platform"`
 		MessageCount         int     `json:"messageCount"`
 		FirstUserMessage     *string `json:"firstUserMessage,omitempty"`
 		LastAssistantMessage *string `json:"lastAssistantMessage,omitempty"`
@@ -160,6 +165,7 @@ func (d *ChatDomain) listConversations(w http.ResponseWriter, r *http.Request) {
 			ID:                   r.ID,
 			CreatedAt:            r.CreatedAt,
 			UpdatedAt:            r.UpdatedAt,
+			Platform:             r.Platform,
 			MessageCount:         r.MessageCount,
 			FirstUserMessage:     r.FirstUserMessage,
 			LastAssistantMessage: r.LastAssistantMessage,
@@ -192,6 +198,7 @@ func (d *ChatDomain) searchConversations(w http.ResponseWriter, r *http.Request)
 		ID                   string  `json:"id"`
 		CreatedAt            string  `json:"createdAt"`
 		UpdatedAt            string  `json:"updatedAt"`
+		Platform             string  `json:"platform"`
 		MessageCount         int     `json:"messageCount"`
 		FirstUserMessage     *string `json:"firstUserMessage,omitempty"`
 		LastAssistantMessage *string `json:"lastAssistantMessage,omitempty"`
@@ -203,6 +210,7 @@ func (d *ChatDomain) searchConversations(w http.ResponseWriter, r *http.Request)
 			ID:                   r.ID,
 			CreatedAt:            r.CreatedAt,
 			UpdatedAt:            r.UpdatedAt,
+			Platform:             r.Platform,
 			MessageCount:         r.MessageCount,
 			FirstUserMessage:     r.FirstUserMessage,
 			LastAssistantMessage: r.LastAssistantMessage,
@@ -504,6 +512,17 @@ func (d *ChatDomain) regenerateMind(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"content": content})
 }
 
+func (d *ChatDomain) forceDreamCycle(w http.ResponseWriter, r *http.Request) {
+	if d.dreamRunner == nil {
+		writeError(w, http.StatusServiceUnavailable, "dream cycle not configured")
+		return
+	}
+	// Run in a goroutine; respond immediately so the caller isn't left hanging
+	// for the full 5-phase cycle duration (~30–60s with AI calls).
+	go d.dreamRunner()
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
+
 // ── Skills Memory (SKILLS.md) ─────────────────────────────────────────────────
 
 func (d *ChatDomain) getSkillsMemory(w http.ResponseWriter, r *http.Request) {
@@ -575,18 +594,4 @@ func (d *ChatDomain) getMemoryTags(w http.ResponseWriter, r *http.Request) {
 func (d *ChatDomain) getDiary(w http.ResponseWriter, r *http.Request) {
 	content := features.ReadDiary(config.SupportDir())
 	writeJSON(w, http.StatusOK, map[string]string{"content": content})
-}
-
-func (d *ChatDomain) putDiary(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Content string `json:"content"`
-	}
-	if !decodeJSON(w, r, &body) {
-		return
-	}
-	if err := features.WriteDiary(config.SupportDir(), body.Content); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"content": strings.TrimSpace(body.Content)})
 }

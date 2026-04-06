@@ -4,6 +4,7 @@ Automatically loaded at the start of every session. Navigation map only — read
 
 Current source of truth:
 - System design: `Atlas/docs/architecture.md`
+- Internal module contract: `Atlas/docs/internal-modules.md`
 - API reference: `Atlas/docs/runtime-api-v1.md`
 - Migration history: `archive/MIGRATION.md`
 - This file: contributor navigation and workflow shortcuts
@@ -14,9 +15,9 @@ Current source of truth:
 
 | Package | Owns |
 | --- | --- |
-| `atlas-runtime` | HTTP server, agent loop, all domain handlers, skills registry, forge pipeline, automations, workflows, auth, config, SQLite storage, comms bridges. Runs as launchd daemon `Atlas` on port 1984. |
+| `atlas-runtime` | HTTP server, agent loop, private module host, first-party feature modules, skills registry, forge pipeline, auth, config, SQLite storage, comms bridges. Runs as launchd daemon `Atlas` on port 1984. |
 | `atlas-tui` | Bubbletea terminal UI — connects to `localhost:1984`. Installed to `~/.local/bin/atlas`. |
-| `atlas-web` | All product UI — Chat, Dashboards, Forge, Skills, Approvals, Memory, Automations, Workflows, Communications, Settings |
+| `atlas-web` | All product UI — Chat, Forge, Skills, Approvals, Memory, Automations, Workflows, Communications, Settings |
 
 Swift packages are archived at `archive/swift/`. They are not built and not referenced by any active code.
 
@@ -33,11 +34,14 @@ Swift packages are archived at `archive/swift/`. They are not built and not refe
 | `internal/comms` | Telegram + Discord bridge lifecycle, channel management |
 | `internal/config` | `RuntimeConfigSnapshot`, `Store` (atomic JSON read/write), `GoRuntimeConfig` |
 | `internal/creds` | Keychain credential bundle reader (`security` CLI) |
-| `internal/domain` | HTTP domain handlers — one file per domain: `auth`, `chat`, `control`, `approvals`, `communications`, `features` |
-| `internal/features` | Automations (GREMLINS.md), workflows (JSON), dashboards (JSON), API validation history, skills state, diary (DIARY.md) |
+| `internal/domain` | Core HTTP domains that remain private core-owned: `auth`, `chat`, `control`, plus shared handler helpers |
+| `internal/features` | Automations (GREMLINS.md), workflows (JSON), API validation history, skills state, diary (DIARY.md) |
+| `internal/platform` | Private runtime host, module registry, scoped storage, agent/context seams, selective event bus |
+| `internal/modules` | First-party extracted feature modules: approvals, automations, communications, forge, workflows, skills, engine, usage, api-validation |
 | `internal/forge` | Forge proposal lifecycle — AI research, JSON persistence, install/uninstall |
 | `internal/logstore` | In-memory log ring buffer (500 entries) — written by agent loop and services, read by `GET /logs` |
-| `internal/mind` | MIND.md two-tier reflection pipeline + SKILLS.md learned-routine detection; both run non-blocking after each turn |
+| `internal/memory` | Per-turn memory extraction — two-stage pipeline (regex 7 categories + LLM); saves to SQLite `memories` table |
+| `internal/mind` | MIND.md two-tier reflection pipeline + SKILLS.md learned-routine detection (both non-blocking after each turn) + nightly dream consolidation cycle (3 AM, 5 phases) |
 | `internal/runtime` | Runtime introspection (port, start time) |
 | `internal/server` | Chi router construction, middleware (session auth, CORS, remote-IP guard) |
 | `internal/skills` | Built-in skill registry — weather, web, filesystem, system, terminal, applescript, finance, image, diary, browser, vault, gremlin, websearch, forge, info |
@@ -49,20 +53,20 @@ Swift packages are archived at `archive/swift/`. They are not built and not refe
 ## Dependency Rules
 
 ```
-creds, config  ←  everything reads these
-storage        ←  chat, domain, features
-agent          ←  chat, forge
-skills         ←  chat (registry injection), domain/features
-features       ←  domain/features, skills/gremlin
-forge          ←  domain/features, agent
-validate       ←  domain/features (validate skill), forge
-chat           ←  domain/chat, domain/features (runAutomation, runWorkflow)
-comms          ←  domain/communications
-domain/*       ←  server (router registration only)
-server         ←  cmd/atlas-runtime
+config, creds   ←  everything may read these
+storage         ←  chat, features, modules, control
+agent           ←  chat, forge
+skills          ←  chat, forge, modules/skills
+features        ←  modules for JSON-backed feature persistence
+platform        ←  cmd/atlas-runtime, internal modules
+modules/*       ←  platform contracts + feature/package dependencies they own
+domain/*        ←  server (core-owned route registration only)
+server          ←  cmd/atlas-runtime
 ```
 
-No package imports `domain`. `domain` imports everything above it.
+Core rule:
+- `internal/platform` must not import product modules
+- extracted feature routes should live in `internal/modules/*`, not reappear in `internal/domain`
 
 ---
 
@@ -71,20 +75,27 @@ No package imports `domain`. `domain` imports everything above it.
 | File | Role |
 | --- | --- |
 | `cmd/atlas-runtime/main.go` | Entry point — all service construction and wiring |
+| `internal/platform/registry.go` | Private module registration and lifecycle ordering |
+| `internal/platform/host.go` | Module host — route mounts, storage, agent runtime, event bus |
 | `internal/agent/loop.go` | Single-turn agent execution loop |
 | `internal/agent/provider.go` | AI provider dispatch (OpenAI/Anthropic/Gemini/LM Studio) |
 | `internal/chat/service.go` | `HandleMessage`, `RegenerateMind`, `ResolveProvider`, `Resume` |
 | `internal/chat/keychain.go` | `resolveProvider` — builds `ProviderConfig` from config + Keychain |
 | `internal/config/snapshot.go` | `RuntimeConfigSnapshot` — all runtime config fields |
-| `internal/domain/features.go` | All feature domain handlers — skills, automations, workflows, dashboards, forge |
 | `internal/features/skills.go` | `builtInSkills()` catalog, `ListSkills`, `SetSkillState`, `SetForgeSkillState` |
+| `internal/modules/communications/module.go` | Communications module — routes + bridge lifecycle |
+| `internal/modules/forge/module.go` | Forge module — proposal/install routes |
+| `internal/modules/workflows/module.go` | Workflows module — definitions + run routes |
+| `internal/modules/skills/module.go` | Skills module — skills routes + fs roots |
 | `internal/skills/registry.go` | `NewRegistry` — registers all built-in skills |
 | `internal/forge/service.go` | `Propose` — AI research pipeline, in-memory researching list |
 | `internal/forge/store.go` | `forge-proposals.json` and `forge-installed.json` persistence |
 | `internal/storage/db.go` | All SQLite queries |
 | `internal/validate/gate.go` | `Gate.Run` — 3-phase API validation |
+| `internal/memory/extractor.go` | `ExtractAndPersist` — two-stage memory extraction (regex + LLM) after each turn |
 | `internal/mind/reflection.go` | `ReflectNonBlocking` — two-tier MIND.md update after each turn |
 | `internal/mind/skills.go` | `LearnFromTurnNonBlocking` — SKILLS.md routine learning |
+| `internal/mind/dream.go` | `StartDreamCycle` — 5-phase nightly consolidation (prune, merge, tool synthesis, diary synthesis, MIND refresh) |
 | `internal/features/diary.go` | `AppendDiaryEntry`, `ReadDiary`, `DiaryContext` — DIARY.md R/W |
 | `internal/logstore/sink.go` | `logstore.Write` — global log sink, read by `GET /logs` |
 
@@ -181,7 +192,8 @@ DELETE /skills/:id             — remove custom skill directory
 | --- | --- |
 | New **core** built-in skill | Create `internal/skills/<name>.go` + call `r.register<Name>()` in `NewRegistry` + add to `builtInSkills()` in `internal/features/skills.go` |
 | New **custom** skill | Create `~/...ProjectAtlas/skills/<id>/skill.json` + `run` executable. Appears automatically after daemon restart. |
-| New HTTP route | Add handler to appropriate `internal/domain/<file>.go` + register in `Register(r chi.Router)` |
+| New core-owned HTTP route | Add handler to appropriate `internal/domain/<file>.go` + register in `Register(r chi.Router)` |
+| New feature HTTP route | Prefer a new or existing `internal/modules/<feature>/module.go`; mount via `Register(host)` |
 | New config field | `internal/config/snapshot.go` + `Defaults()` function |
 | New credential field | `internal/creds/bundle.go` `Bundle` struct + update `domain/control.go` `storeAPIKey` mapping |
 | New web UI screen | `atlas-web/src/screens/<Name>.tsx` + route in `atlas-web/src/App.tsx` + types/methods in `atlas-web/src/api/contracts.ts` + `atlas-web/src/api/client.ts` |
@@ -189,6 +201,9 @@ DELETE /skills/:id             — remove custom skill directory
 | New storage table | `internal/storage/db.go` `createSchema()` + add query methods |
 | Add a log entry | Call `logstore.Write(level, message, meta)` — visible at `GET /logs` |
 | Extend diary context | `internal/features/diary.go` — `DiaryContext` is injected into system prompt by `chat/service.go` |
+| Add a memory category | `internal/memory/extractor.go` — add extractor function + call in `extractCandidates()` |
+| Change memory recall behavior | `internal/storage/db.go` — `RelevantMemories()` controls BM25 scoring + commitment boost |
+| Add a dream cycle phase | `internal/mind/dream.go` — add `phaseXxx()` function + call in `runDreamCycle()` |
 
 ---
 
@@ -260,8 +275,6 @@ make uninstall                             # unload daemon, remove installed fil
 - `POST /approvals/{toolCallID}/approve` takes the tool call ID, not the approval record ID.
 - Approval resolution calls `chatSvc.Resume(toolCallID, approved)` in a goroutine.
 
-**Dashboards**
-- Read routes (`GET /dashboards/proposals`, `GET /dashboards/installed`) are native.
 - Mutating routes (POST create/install/reject/pin/access/widgets/execute) return 501 — **deferred to V1.0 rewrite**.
 
 **Communications**
@@ -280,6 +293,7 @@ make uninstall                             # unload daemon, remove installed fil
 | `MIND.md` | User / AI / mind.reflection | System prompt for the agent — updated each turn by the reflection pipeline |
 | `SKILLS.md` | User / AI / mind.skills | Skills-layer memory — learned routines written after repeated tool sequences |
 | `DIARY.md` | Go runtime / diary.record | Per-day diary entries (max 3/day) |
+| `dream-state.json` | Go runtime | Last successful dream cycle timestamp — catch-up detection at startup |
 | `GREMLINS.md` | User / web UI | Automation definitions |
 | `workflow-definitions.json` | Web UI | Workflow definitions |
 | `workflow-runs.json` | Go runtime | Workflow run records |

@@ -6,7 +6,7 @@ import "github.com/ralhassan/atlas-tui/client"
 type OnboardingStep int
 
 const (
-	StepWakeUp          OnboardingStep = iota
+	StepWakeUp OnboardingStep = iota
 	StepAskName
 	StepAskAgentName
 	StepAskAboutUser

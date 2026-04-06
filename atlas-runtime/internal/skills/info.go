@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 )
@@ -24,27 +23,6 @@ func (r *Registry) registerInfo() {
 		Fn:        atlasInfo,
 	})
 
-	r.register(SkillEntry{
-		Def: ToolDef{
-			Name:        "atlas.list_skills",
-			Description: "Lists all registered skill actions available in this Atlas runtime.",
-			Properties:  map[string]ToolParam{},
-			Required:    []string{},
-		},
-		PermLevel: "read",
-		Fn:        r.atlasListSkills,
-	})
-
-	r.register(SkillEntry{
-		Def: ToolDef{
-			Name:        "atlas.capabilities",
-			Description: "Returns a concise summary of Atlas capabilities grouped by skill area.",
-			Properties:  map[string]ToolParam{},
-			Required:    []string{},
-		},
-		PermLevel: "read",
-		Fn:        r.atlasCapabilities,
-	})
 }
 
 func (r *Registry) registerInfoSkill() {
@@ -127,42 +105,6 @@ func atlasInfo(_ context.Context, _ json.RawMessage) (string, error) {
 		"Atlas Go Runtime — status: running | Go: %s | OS: %s/%s",
 		runtime.Version(), runtime.GOOS, runtime.GOARCH,
 	), nil
-}
-
-func (r *Registry) atlasListSkills(_ context.Context, _ json.RawMessage) (string, error) {
-	var names []string
-	for id := range r.entries {
-		names = append(names, id)
-	}
-	sort.Strings(names)
-	return fmt.Sprintf("Registered actions (%d):\n%s", len(names), strings.Join(names, "\n")), nil
-}
-
-func (r *Registry) atlasCapabilities(_ context.Context, _ json.RawMessage) (string, error) {
-	groups := map[string][]string{}
-	for id := range r.entries {
-		parts := strings.SplitN(id, ".", 2)
-		ns := parts[0]
-		groups[ns] = append(groups[ns], id)
-	}
-	var nsList []string
-	for ns := range groups {
-		nsList = append(nsList, ns)
-	}
-	sort.Strings(nsList)
-
-	var sb strings.Builder
-	sb.WriteString("Atlas capability summary:\n\n")
-	for _, ns := range nsList {
-		actions := groups[ns]
-		sort.Strings(actions)
-		sb.WriteString(fmt.Sprintf("**%s** (%d actions)\n", ns, len(actions)))
-		for _, a := range actions {
-			sb.WriteString("  • " + a + "\n")
-		}
-		sb.WriteString("\n")
-	}
-	return strings.TrimRight(sb.String(), "\n"), nil
 }
 
 // ── info.current_time ─────────────────────────────────────────────────────────
@@ -359,12 +301,12 @@ func locationToTimezone(loc string) string {
 		"los angeles": "America/Los_Angeles", "la": "America/Los_Angeles",
 		"chicago": "America/Chicago", "houston": "America/Chicago",
 		"toronto": "America/Toronto", "montreal": "America/Toronto",
-		"vancouver": "America/Vancouver",
-		"denver": "America/Denver",
-		"phoenix": "America/Phoenix",
-		"miami": "America/New_York",
+		"vancouver":     "America/Vancouver",
+		"denver":        "America/Denver",
+		"phoenix":       "America/Phoenix",
+		"miami":         "America/New_York",
 		"san francisco": "America/Los_Angeles", "sf": "America/Los_Angeles",
-		"seattle": "America/Los_Angeles",
+		"seattle":     "America/Los_Angeles",
 		"mexico city": "America/Mexico_City",
 		// Europe
 		"london": "Europe/London", "uk": "Europe/London", "england": "Europe/London",
@@ -373,7 +315,7 @@ func locationToTimezone(loc string) string {
 		"rome": "Europe/Rome", "italy": "Europe/Rome",
 		"madrid": "Europe/Madrid", "spain": "Europe/Madrid",
 		"amsterdam": "Europe/Amsterdam",
-		"zurich": "Europe/Zurich", "switzerland": "Europe/Zurich",
+		"zurich":    "Europe/Zurich", "switzerland": "Europe/Zurich",
 		"stockholm": "Europe/Stockholm", "sweden": "Europe/Stockholm",
 		"oslo": "Europe/Oslo", "norway": "Europe/Oslo",
 		"moscow": "Europe/Moscow", "russia": "Europe/Moscow",
@@ -386,7 +328,7 @@ func locationToTimezone(loc string) string {
 		"beijing": "Asia/Shanghai", "shanghai": "Asia/Shanghai", "china": "Asia/Shanghai",
 		"hong kong": "Asia/Hong_Kong",
 		"singapore": "Asia/Singapore",
-		"seoul": "Asia/Seoul", "korea": "Asia/Seoul",
+		"seoul":     "Asia/Seoul", "korea": "Asia/Seoul",
 		"mumbai": "Asia/Kolkata", "delhi": "Asia/Kolkata", "india": "Asia/Kolkata",
 		"bangkok": "Asia/Bangkok", "thailand": "Asia/Bangkok",
 		"jakarta": "Asia/Jakarta", "indonesia": "Asia/Jakarta",
@@ -396,7 +338,7 @@ func locationToTimezone(loc string) string {
 		// Oceania
 		"sydney": "Australia/Sydney", "melbourne": "Australia/Melbourne",
 		"australia": "Australia/Sydney",
-		"auckland": "Pacific/Auckland", "new zealand": "Pacific/Auckland",
+		"auckland":  "Pacific/Auckland", "new zealand": "Pacific/Auckland",
 		// Africa
 		"cairo": "Africa/Cairo", "egypt": "Africa/Cairo",
 		"johannesburg": "Africa/Johannesburg", "south africa": "Africa/Johannesburg",
@@ -427,16 +369,16 @@ func locationToCurrency(loc string) string {
 		"italy": "EUR", "rome": "EUR",
 		"spain": "EUR", "madrid": "EUR",
 		"netherlands": "EUR", "amsterdam": "EUR",
-		"portugal": "EUR",
+		"portugal":    "EUR",
 		"switzerland": "CHF", "zurich": "CHF",
 		"sweden": "SEK", "stockholm": "SEK",
 		"norway": "NOK", "oslo": "NOK",
 		"denmark": "DKK",
-		"russia": "RUB", "moscow": "RUB",
+		"russia":  "RUB", "moscow": "RUB",
 		"japan": "JPY", "tokyo": "JPY",
 		"china": "CNY", "beijing": "CNY", "shanghai": "CNY",
-		"hong kong": "HKD",
-		"singapore": "SGD",
+		"hong kong":   "HKD",
+		"singapore":   "SGD",
 		"south korea": "KRW", "korea": "KRW", "seoul": "KRW",
 		"india": "INR", "mumbai": "INR", "delhi": "INR",
 		"australia": "AUD", "sydney": "AUD", "melbourne": "AUD",

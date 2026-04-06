@@ -11,17 +11,18 @@ import (
 
 // Bundle holds all API credentials from the shared Keychain bundle.
 type Bundle struct {
-	OpenAIAPIKey      string            `json:"openAIAPIKey"`
-	AnthropicAPIKey   string            `json:"anthropicAPIKey"`
-	GeminiAPIKey      string            `json:"geminiAPIKey"`
-	LMStudioAPIKey    string            `json:"lmStudioAPIKey"`
-	BraveSearchAPIKey string            `json:"braveSearchAPIKey"`
-	FinnhubAPIKey     string            `json:"finnhubAPIKey"`
-	TelegramBotToken  string            `json:"telegramBotToken"`
-	DiscordBotToken   string            `json:"discordBotToken"`
-	SlackBotToken     string            `json:"slackBotToken"`
-	SlackAppToken     string            `json:"slackAppToken"`
-	CustomSecrets     map[string]string `json:"customSecrets,omitempty"`
+	OpenAIAPIKey       string            `json:"openAIAPIKey"`
+	AnthropicAPIKey    string            `json:"anthropicAPIKey"`
+	GeminiAPIKey       string            `json:"geminiAPIKey"`
+	LMStudioAPIKey     string            `json:"lmStudioAPIKey"`
+	BraveSearchAPIKey  string            `json:"braveSearchAPIKey"`
+	FinnhubAPIKey      string            `json:"finnhubAPIKey"`
+	TelegramBotToken   string            `json:"telegramBotToken"`
+	DiscordBotToken    string            `json:"discordBotToken"`
+	SlackBotToken      string            `json:"slackBotToken"`
+	SlackAppToken      string            `json:"slackAppToken"`
+	CustomSecrets      map[string]string `json:"customSecrets,omitempty"`
+	CustomSecretLabels map[string]string `json:"customSecretLabels,omitempty"`
 }
 
 // CustomSecret returns a custom key value by name, or "" if not found.

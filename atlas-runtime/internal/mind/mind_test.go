@@ -301,40 +301,6 @@ web.search → also not a step number
 	}
 }
 
-// ── buildDiaryEntry ───────────────────────────────────────────────────────────
-
-func TestBuildDiaryEntry_Basic(t *testing.T) {
-	turn := TurnRecord{
-		UserMessage:       "What is the weather today?",
-		ToolCallSummaries: []string{"weather.current", "info.version"},
-	}
-	entry := buildDiaryEntry(turn)
-	if !strings.Contains(entry, "What is the weather today?") {
-		t.Error("expected user message in diary entry")
-	}
-	if !strings.Contains(entry, "[weather.current, info.version]") {
-		t.Error("expected tool names in diary entry")
-	}
-}
-
-func TestBuildDiaryEntry_LongMessage(t *testing.T) {
-	turn := TurnRecord{
-		UserMessage: strings.Repeat("word ", 50), // 250 runes
-	}
-	entry := buildDiaryEntry(turn)
-	if len([]rune(entry)) > 200 { // 80 user chars + possible tools
-		t.Errorf("diary entry too long: %d runes", len([]rune(entry)))
-	}
-}
-
-func TestBuildDiaryEntry_NoTools(t *testing.T) {
-	turn := TurnRecord{UserMessage: "Hello Atlas"}
-	entry := buildDiaryEntry(turn)
-	if strings.Contains(entry, "[") {
-		t.Error("expected no brackets when no tools used")
-	}
-}
-
 // ── parseSections ─────────────────────────────────────────────────────────────
 
 func TestParseSections_Basic(t *testing.T) {
@@ -388,19 +354,19 @@ func TestMergeMindSections_UpdatesMatchedSection(t *testing.T) {
 	}
 }
 
-func TestMergeMindSections_ProtectsWhoIAm(t *testing.T) {
-	existing := "# Mind of Atlas\n\n## Who I Am\n\nOriginal identity.\n\n## Our Story\n\nStory.\n"
-	patch := "## Who I Am\n\nHijacked identity.\n\n## Our Story\n\nNew story.\n"
+func TestMergeMindSections_ProtectsIdentity(t *testing.T) {
+	existing := "# Mind of Atlas\n\n## Identity\n\nOriginal identity.\n\n## What's Active\n\nStory.\n"
+	patch := "## Identity\n\nHijacked identity.\n\n## What's Active\n\nNew story.\n"
 
 	got := mergeMindSections(existing, patch)
 	if !strings.Contains(got, "Original identity.") {
-		t.Error("expected Who I Am to be protected from patch")
+		t.Error("expected Identity to be protected from patch")
 	}
 	if strings.Contains(got, "Hijacked identity.") {
-		t.Error("expected Who I Am patch to be rejected")
+		t.Error("expected Identity patch to be rejected")
 	}
 	if !strings.Contains(got, "New story.") {
-		t.Error("expected Our Story to be updated")
+		t.Error("expected What's Active to be updated")
 	}
 }
 

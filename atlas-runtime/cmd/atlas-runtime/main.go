@@ -23,8 +23,20 @@ import (
 	"atlas-runtime-go/internal/domain"
 	"atlas-runtime-go/internal/engine"
 	"atlas-runtime-go/internal/forge"
+	"atlas-runtime-go/internal/location"
 	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/mind"
+	apivalidationmodule "atlas-runtime-go/internal/modules/apivalidation"
+	approvalsmodule "atlas-runtime-go/internal/modules/approvals"
+	automationsmodule "atlas-runtime-go/internal/modules/automations"
+	communicationsmodule "atlas-runtime-go/internal/modules/communications"
+	enginemodule "atlas-runtime-go/internal/modules/engine"
+	forgemodule "atlas-runtime-go/internal/modules/forge"
+	skillsmodule "atlas-runtime-go/internal/modules/skills"
+	usagemodule "atlas-runtime-go/internal/modules/usage"
+	workflowsmodule "atlas-runtime-go/internal/modules/workflows"
+	"atlas-runtime-go/internal/platform"
+	"atlas-runtime-go/internal/preferences"
 	"atlas-runtime-go/internal/runtime"
 	"atlas-runtime-go/internal/server"
 	"atlas-runtime-go/internal/skills"
@@ -54,6 +66,19 @@ func main() {
 		log.Printf("Atlas: warn: seed SKILLS.md: %v", err)
 	}
 
+	// ── Location + Preferences ────────────────────────────────────────────────
+	// Load persisted location and locale preferences into memory immediately,
+	// then refresh location from the public IP in the background if stale.
+	preferences.LoadFromConfig()
+	location.LoadFromConfig()
+	if location.ShouldRefresh() {
+		go func() {
+			if err := location.DetectFromIP(); err != nil {
+				log.Printf("Atlas: location detection: %v", err)
+			}
+		}()
+	}
+
 	// ── Database ──────────────────────────────────────────────────────────────
 	dbPath := config.DBPath()
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
@@ -64,6 +89,14 @@ func main() {
 		log.Fatalf("Atlas: open database: %v", err)
 	}
 	defer db.Close()
+
+	// Backfill any existing token_usage rows that have $0 cost due to a missing
+	// pricing entry (e.g. preview/experimental model variants added after the row
+	// was written). Runs synchronously at startup — fast because it only touches
+	// the zero-cost subset.
+	if n := db.BackfillTokenUsageCosts(); n > 0 {
+		log.Printf("Atlas: backfilled costs for %d token usage record(s)", n)
+	}
 
 	// ── Services ──────────────────────────────────────────────────────────────
 	authSvc := auth.NewService(db)
@@ -102,14 +135,74 @@ func main() {
 	// Shares the same binary and models dir as the primary engine; just a different port + model.
 	routerMgr := engine.NewManager(config.AtlasInstallDir(), config.ModelsDir())
 
-	engineMgr.SetIdleTimeout(60 * time.Minute)  // eject primary model after 60 min idle
-	routerMgr.SetIdleTimeout(12 * time.Hour)    // eject router model after 12 hr idle
+	engineMgr.SetIdleTimeout(60 * time.Minute) // eject primary model after 60 min idle
+	routerMgr.SetIdleTimeout(12 * time.Hour)   // eject router model after 12 hr idle
+	engineMgr.SetMlock(cfg.AtlasEngineMlock)   // pin model in RAM (configurable via UI)
+	routerMgr.SetMlock(cfg.AtlasEngineMlock)
 
 	chatSvc := chat.NewService(db, cfgStore, bc, skillsRegistry)
 	chatSvc.SetEngineManager(engineMgr)
 	chatSvc.SetRouterEngineManager(routerMgr)
 	commsSvc := comms.New(cfgStore, db)
 	forgeSvc := forge.NewService(config.SupportDir())
+	platformHost := platform.NewHost(
+		cfgStore,
+		platform.NewSQLiteStorage(db),
+		platform.NewChatAgentRuntime(chatSvc),
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(256),
+	)
+	moduleRegistry := platform.NewModuleRegistry(platformHost)
+	approvalsModule := approvalsmodule.New(config.SupportDir())
+	if err := moduleRegistry.Register(approvalsModule); err != nil {
+		log.Fatalf("Atlas: register approvals module: %v", err)
+	}
+	automationsModule := automationsmodule.New(config.SupportDir())
+	if err := moduleRegistry.Register(automationsModule); err != nil {
+		log.Fatalf("Atlas: register automations module: %v", err)
+	}
+	communicationsModule := communicationsmodule.New(commsSvc)
+	if err := moduleRegistry.Register(communicationsModule); err != nil {
+		log.Fatalf("Atlas: register communications module: %v", err)
+	}
+	forgeModule := forgemodule.New(config.SupportDir(), forgeSvc, chatSvc, skillsRegistry)
+	if err := moduleRegistry.Register(forgeModule); err != nil {
+		log.Fatalf("Atlas: register forge module: %v", err)
+	}
+	workflowsModule := workflowsmodule.New(config.SupportDir())
+	if err := moduleRegistry.Register(workflowsModule); err != nil {
+		log.Fatalf("Atlas: register workflows module: %v", err)
+	}
+	skillsModule := skillsmodule.New(config.SupportDir())
+	if err := moduleRegistry.Register(skillsModule); err != nil {
+		log.Fatalf("Atlas: register skills module: %v", err)
+	}
+	apiValidationModule := apivalidationmodule.New(config.SupportDir())
+	if err := moduleRegistry.Register(apiValidationModule); err != nil {
+		log.Fatalf("Atlas: register api validation module: %v", err)
+	}
+	engineModule := enginemodule.New(engineMgr, routerMgr, cfgStore)
+	if err := moduleRegistry.Register(engineModule); err != nil {
+		log.Fatalf("Atlas: register engine module: %v", err)
+	}
+	usageModule := usagemodule.New(db)
+	if err := moduleRegistry.Register(usageModule); err != nil {
+		log.Fatalf("Atlas: register usage module: %v", err)
+	}
+	communicationsModule.SetApprovalResolver(func(toolCallID string, approved bool) error {
+		return approvalsModule.Resolve(toolCallID, approved)
+	})
+	communicationsModule.SetChatHandler(newBridgeChatHandler(chatSvc))
+	if err := moduleRegistry.StartAll(context.Background()); err != nil {
+		log.Fatalf("Atlas: start module registry: %v", err)
+	}
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := moduleRegistry.StopAll(stopCtx); err != nil {
+			log.Printf("Atlas: module registry shutdown: %v", err)
+		}
+	}()
 
 	// Wire forge.orchestration.propose → forge service.
 	skillsRegistry.SetForgePersistFn(func(specJSON, plansJSON, summary, rationale, contractJSON string) (
@@ -135,35 +228,9 @@ func main() {
 	})
 
 	// Wire approval resolver to Telegram bridge (allows inline approve/deny buttons).
-	commsSvc.SetApprovalResolver(func(toolCallID string, approved bool) error {
-		go chatSvc.Resume(toolCallID, approved)
-		return nil
-	})
-
 	// Wire chat handler to comms bridges.
 	// This is the single mapping point between comms.BridgeRequest and chat.MessageRequest.
 	// When chat.MessageRequest gains a new field, add it to comms.BridgeRequest and map it here.
-	commsSvc.SetChatHandler(func(ctx context.Context, req comms.BridgeRequest) (string, string, error) {
-		chatAttachments := make([]chat.MessageAttachment, len(req.Attachments))
-		for i, a := range req.Attachments {
-			chatAttachments[i] = chat.MessageAttachment{Filename: a.Filename, MimeType: a.MimeType, Data: a.Data}
-		}
-		resp, err := chatSvc.HandleMessage(ctx, chat.MessageRequest{
-			Message:        req.Text,
-			ConversationID: req.ConvID,
-			Platform:       req.Platform,
-			Attachments:    chatAttachments,
-		})
-		if err != nil {
-			return "", "", err
-		}
-		if resp.Response.ErrorMessage != "" {
-			return "", "", fmt.Errorf("%s", resp.Response.ErrorMessage)
-		}
-		return resp.Response.AssistantMessage, resp.Conversation.ID, nil
-	})
-	commsSvc.Start()
-	defer commsSvc.Stop()
 
 	// Dream cycle — nightly memory consolidation (prune, merge, diary synthesis, MIND refresh).
 	// Uses the heavy background provider (cloud fast model by default; local router when
@@ -190,16 +257,15 @@ func main() {
 	authDomain.EnsureRemoteKey() // Generate initial key if Keychain has none.
 	controlDomain := domain.NewControlDomain(cfgStore, runtimeSvc, db, engineMgr)
 	chatDomain := domain.NewChatDomain(chatSvc, bc, db)
-	approvalsDomain := domain.NewApprovalsDomain(db, config.SupportDir())
-	commsDomain := domain.NewCommunicationsDomain(commsSvc)
-	featuresDomain := domain.NewFeaturesDomain(config.SupportDir(), db, chatSvc, bc, forgeSvc)
-	engineDomain := domain.NewEngineDomain(engineMgr, routerMgr, cfgStore)
+	var approvalsDomain *domain.ApprovalsDomain
+	var commsDomain *domain.CommunicationsDomain
 
-	// Wire approval resolution → agent loop resumption.
-	approvalsDomain.OnResolve = func(toolCallID, status string) {
-		approved := status == "approved"
-		go chatSvc.Resume(toolCallID, approved)
-	}
+	// Wire dream cycle force-trigger → POST /mind/dream.
+	chatDomain.SetDreamRunner(func() {
+		mind.RunDreamNow(config.SupportDir(), db, cfgStore, func() (agent.ProviderConfig, error) {
+			return chat.ResolveHeavyBackgroundProvider(cfgStore.Load())
+		})
+	})
 
 	// ── HTTP server ───────────────────────────────────────────────────────────
 	remoteEnabled := func() bool { return cfgStore.Load().RemoteAccessEnabled }
@@ -211,11 +277,10 @@ func main() {
 		chatDomain,
 		approvalsDomain,
 		commsDomain,
-		featuresDomain,
-		engineDomain,
 		authSvc,
 		remoteEnabled,
 		tailscaleEnabled,
+		platformHost,
 	)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", port)

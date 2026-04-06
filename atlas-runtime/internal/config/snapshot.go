@@ -25,6 +25,7 @@ type RuntimeConfigSnapshot struct {
 	MaxRetrievedMemoriesPerTurn     int     `json:"maxRetrievedMemoriesPerTurn"`
 	MemoryAutoSaveThreshold         float64 `json:"memoryAutoSaveThreshold"`
 	PersonaName                     string  `json:"personaName"`
+	UserName                        string  `json:"userName"`
 	ActionSafetyMode                string  `json:"actionSafetyMode"`
 	ActiveImageProvider             string  `json:"activeImageProvider"`
 	ActiveAIProvider                string  `json:"activeAIProvider"`
@@ -49,19 +50,68 @@ type RuntimeConfigSnapshot struct {
 	SelectedAtlasEngineModelFast    string  `json:"selectedAtlasEngineModelFast"`
 	AtlasEngineContextWindowLimit   int     `json:"atlasEngineContextWindowLimit"`
 	AtlasEngineMaxAgentIterations   int     `json:"atlasEngineMaxAgentIterations"`
-	AtlasEngineCtxSize              int     `json:"atlasEngineCtxSize"`              // llama-server --ctx-size (KV-cache token limit)
-	AtlasEngineKVCacheQuant         string  `json:"atlasEngineKVCacheQuant"`         // llama-server -ctk/-ctv quant level: "q4_0" | "q8_0" | "f16"
-	AtlasEngineRouterPort           int     `json:"atlasEngineRouterPort"`           // port for the dedicated tool-router llama-server
-	AtlasEngineRouterModel          string  `json:"atlasEngineRouterModel"`          // GGUF filename for the tool router (e.g. gemma-4-2b-it-Q4_K_M.gguf)
-	AtlasEngineRouterForAll         bool    `json:"atlasEngineRouterForAll"`         // use router for heavy background tasks too (memory, reflection, dream)
+	AtlasEngineCtxSize              int     `json:"atlasEngineCtxSize"`       // llama-server --ctx-size (KV-cache token limit)
+	AtlasEngineKVCacheQuant         string  `json:"atlasEngineKVCacheQuant"`  // llama-server -ctk/-ctv quant level (for example: f32, f16, bf16, q8_0, q5_1, q5_0, q4_1, q4_0, iq4_nl)
+	AtlasEngineMlock                bool    `json:"atlasEngineMlock"`         // llama-server --mlock — pin model in physical RAM
+	AtlasEngineRouterPort           int     `json:"atlasEngineRouterPort"`    // port for the dedicated tool-router llama-server
+	AtlasEngineRouterModel          string  `json:"atlasEngineRouterModel"`   // GGUF filename for the tool router (e.g. gemma-4-2b-it-Q4_K_M.gguf)
+	AtlasEngineRouterForAll         bool    `json:"atlasEngineRouterForAll"`  // use router for heavy background tasks too (memory, reflection, dream)
+	AtlasEngineDraftModel           string  `json:"atlasEngineDraftModel"`    // GGUF filename for speculative decoding draft model (same family as primary)
 	EnableSmartToolSelection        bool    `json:"enableSmartToolSelection"` // legacy — superseded by ToolSelectionMode
-	ToolSelectionMode               string  `json:"toolSelectionMode"`        // "off" | "heuristic" | "llm"
+	ToolSelectionMode               string  `json:"toolSelectionMode"`        // "off" | "lazy" | "heuristic" | "llm"
 	WebResearchUseJinaReader        bool    `json:"webResearchUseJinaReader"`
 	EnableMultiAgentOrchestration   bool    `json:"enableMultiAgentOrchestration"`
 	MaxParallelAgents               int     `json:"maxParallelAgents"`
 	WorkerMaxIterations             int     `json:"workerMaxIterations"`
 	RemoteAccessEnabled             bool    `json:"remoteAccessEnabled"`
 	TailscaleEnabled                bool    `json:"tailscaleEnabled"`
+	ModelContextWindow              int     `json:"modelContextWindow"` // effective context window in tokens; 0 = auto-detect from provider
+}
+
+// EffectiveContextWindow returns the model's context window in tokens for the
+// active provider. Uses explicit ModelContextWindow if set, otherwise derives
+// from provider-specific config or falls back to sensible defaults.
+func (c RuntimeConfigSnapshot) EffectiveContextWindow() int {
+	if c.ModelContextWindow > 0 {
+		return c.ModelContextWindow
+	}
+	switch c.ActiveAIProvider {
+	case "lm_studio":
+		// LM Studio: use AtlasEngineCtxSize as a proxy if available, else 8K.
+		return 8192
+	case "ollama":
+		return 8192
+	case "atlas_engine":
+		if c.AtlasEngineCtxSize > 0 {
+			return c.AtlasEngineCtxSize
+		}
+		return 16384
+	case "anthropic":
+		return 200000
+	case "gemini":
+		return 1000000
+	default: // openai
+		return 128000
+	}
+}
+
+// SystemPromptRuneBudget returns the rune budget for the assembled system
+// prompt based on the model's context window. Allocates 15% of the context
+// window (in tokens, converted to runes at ~4 runes/token), clamped between
+// a floor and ceiling.
+func (c RuntimeConfigSnapshot) SystemPromptRuneBudget() int {
+	ctxTokens := c.EffectiveContextWindow()
+	// 15% of context window in tokens, converted to runes (~4 runes/token).
+	budget := int(float64(ctxTokens) * 0.15 * 4)
+	const floor = 4000
+	const ceiling = 20000
+	if budget < floor {
+		return floor
+	}
+	if budget > ceiling {
+		return ceiling
+	}
+	return budget
 }
 
 // Defaults returns a snapshot with the same default values as Swift's
@@ -87,6 +137,7 @@ func Defaults() RuntimeConfigSnapshot {
 		MaxRetrievedMemoriesPerTurn:     4,
 		MemoryAutoSaveThreshold:         0.75,
 		PersonaName:                     "Atlas",
+		UserName:                        "",
 		ActionSafetyMode:                "ask_only_for_risky_actions",
 		ActiveImageProvider:             "openai",
 		ActiveAIProvider:                "openai",
@@ -111,13 +162,15 @@ func Defaults() RuntimeConfigSnapshot {
 		SelectedAtlasEngineModelFast:    "",
 		AtlasEngineContextWindowLimit:   10,
 		AtlasEngineMaxAgentIterations:   2,
-		AtlasEngineCtxSize:              8192,
+		AtlasEngineCtxSize:              16384,
 		AtlasEngineKVCacheQuant:         "q4_0",
+		AtlasEngineMlock:                true,
 		AtlasEngineRouterPort:           11986,
 		AtlasEngineRouterModel:          "",
 		AtlasEngineRouterForAll:         false,
+		AtlasEngineDraftModel:           "",
 		EnableSmartToolSelection:        true,
-		ToolSelectionMode:               "heuristic",
+		ToolSelectionMode:               "lazy",
 		WebResearchUseJinaReader:        false,
 		EnableMultiAgentOrchestration:   false,
 		MaxParallelAgents:               3,

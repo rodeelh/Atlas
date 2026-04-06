@@ -1,4 +1,4 @@
-.PHONY: build build-tui build-web \
+.PHONY: build build-tui build-web test \
         install uninstall \
         run dev \
         daemon-start daemon-stop daemon-restart daemon-status daemon-logs \
@@ -28,6 +28,10 @@ build-tui:
 
 build-web:
 	cd $(WEB_DIR) && npm run build
+
+test:
+	cd $(RUNTIME_DIR) && go test ./...
+	cd $(TUI_DIR) && go test ./...
 
 tidy:
 	cd $(RUNTIME_DIR) && go mod tidy
@@ -127,4 +131,6 @@ daemon-logs:
 
 check:
 	cd $(RUNTIME_DIR) && go fmt ./... && go vet ./...
+	cd $(RUNTIME_DIR) && go test ./...
 	cd $(TUI_DIR) && go fmt ./... && go vet ./...
+	cd $(TUI_DIR) && go test ./...

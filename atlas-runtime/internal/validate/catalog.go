@@ -4,8 +4,8 @@ import "strings"
 
 // catalogEntry maps a keyword pattern to a known-good example input set.
 type catalogEntry struct {
-	keywords []string
-	example  ExampleInput
+	keywords  []string
+	example   ExampleInput
 	alternate ExampleInput
 }
 

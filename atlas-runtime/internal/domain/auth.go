@@ -484,7 +484,7 @@ func remoteGateHTML() string {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>Atlas — Remote Access</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -502,21 +502,35 @@ func remoteGateHTML() string {
     --bg:#eceae6;--surface:#f7f5f1;--surface-2:#ffffff;
     --border:rgba(32,24,16,0.12);--border-2:rgba(32,24,16,0.2);
     --text:#171411;--text-2:#5f5850;
-    --input-bg:#ffffff;--shadow:0 12px 30px rgba(0,0,0,0.10);
+    --input-bg:rgba(255,255,255,0.56);--shadow:0 18px 44px rgba(0,0,0,0.12);
   }
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%}
+html,body{height:100%;overflow:hidden}
 body{
   font-family:'Inter',-apple-system,'Helvetica Neue',system-ui,sans-serif;
-  background:var(--bg);color:var(--text);
+  background:
+    radial-gradient(circle at top, rgba(134,169,118,0.12), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(101,135,191,0.10), transparent 30%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg) 94%, white 6%), var(--bg));
+  color:var(--text);
   display:flex;align-items:center;justify-content:center;
-  min-height:100vh;padding:20px;
+  min-height:100vh;
+  min-height:100dvh;
+  padding:20px;
+  overflow:hidden;
+  touch-action:manipulation;
 }
 .card{
-  background:var(--surface);border:1px solid var(--border);
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--surface) 72%, white 28%),
+      color-mix(in srgb, var(--surface-2) 64%, transparent));
+  border:1px solid color-mix(in srgb, var(--border) 88%, rgba(255,255,255,0.18));
   border-radius:16px;padding:40px 36px;max-width:400px;width:100%;
   box-shadow:var(--shadow);text-align:center;
+  backdrop-filter:blur(24px) saturate(1.55);
+  -webkit-backdrop-filter:blur(24px) saturate(1.55);
 }
 h1{font-size:1.25rem;font-weight:600;letter-spacing:-0.01em;margin-bottom:6px;color:var(--text)}
 .subtitle{font-size:.875rem;color:var(--text-2);margin-bottom:28px;line-height:1.5}
@@ -527,26 +541,82 @@ input[type=password]{
   background:var(--input-bg);color:var(--text);
   border:1px solid var(--border-2);border-radius:8px;
   font-family:inherit;font-size:.925rem;outline:none;
-  transition:border-color .15s;
+  transition:border-color .15s,background .15s,box-shadow .15s;
+  backdrop-filter:blur(18px) saturate(1.35);
+  -webkit-backdrop-filter:blur(18px) saturate(1.35);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);
 }
 input[type=password]::placeholder{color:var(--text-2);opacity:.6}
-input[type=password]:focus{border-color:var(--accent)}
+input[type=password]:focus{
+  border-color:var(--accent);
+  background:color-mix(in srgb, var(--input-bg) 84%, white 16%);
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
 button{
   width:100%;padding:11px 14px;margin-top:4px;
-  background:var(--accent);color:#fff;
-  border:none;border-radius:8px;
+  background:color-mix(in srgb, var(--surface-2) 62%, transparent);color:var(--text);
+  border:1px solid color-mix(in srgb, var(--border-2) 88%, rgba(255,255,255,0.14));border-radius:10px;
   font-family:inherit;font-size:.925rem;font-weight:500;
-  cursor:pointer;transition:background .15s,opacity .15s;
+  cursor:pointer;transition:background .15s,opacity .15s,border-color .15s,transform .15s,color .15s;
+  backdrop-filter:blur(18px) saturate(1.4);
+  -webkit-backdrop-filter:blur(18px) saturate(1.4);
+  box-shadow:0 8px 22px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.14);
 }
-button:hover:not(:disabled){background:var(--accent-hover)}
+button:hover:not(:disabled){
+  background:color-mix(in srgb, var(--accent) 14%, var(--surface-2));
+  border-color:color-mix(in srgb, var(--accent) 28%, var(--border-2));
+  color:var(--text);
+  transform:translateY(-1px);
+}
 button:disabled{opacity:.55;cursor:not-allowed}
 .err{
   display:none;margin-top:14px;padding:10px 14px;
-  background:rgba(255,59,48,.08);border:1px solid rgba(255,59,48,.2);
+  background:color-mix(in srgb, rgba(255,59,48,.08) 72%, var(--surface-2));border:1px solid rgba(255,59,48,.2);
   border-radius:8px;color:#ff3b30;font-size:.825rem;line-height:1.45;text-align:left;
+  backdrop-filter:blur(14px) saturate(1.2);
+  -webkit-backdrop-filter:blur(14px) saturate(1.2);
 }
 @media(prefers-color-scheme:light){
   .err{background:rgba(255,59,48,.06);border-color:rgba(255,59,48,.15);color:#c0392b}
+}
+@media (max-width: 640px){
+  html,body{
+    width:100%;
+    height:100dvh;
+    overflow:hidden;
+  }
+  body{
+    min-height:100dvh;
+    padding:
+      max(18px, env(safe-area-inset-top, 0px))
+      16px
+      max(18px, env(safe-area-inset-bottom, 0px))
+      16px;
+    align-items:center;
+    justify-content:center;
+  }
+  .card{
+    width:100%;
+    max-width:400px;
+    min-height:auto;
+    border-radius:16px;
+    padding:32px 24px 28px;
+  }
+  h1{
+    font-size:1.3rem;
+    margin-bottom:8px;
+  }
+  .subtitle{
+    font-size:.9rem;
+    margin-bottom:24px;
+  }
+  label{
+    font-size:.84rem;
+  }
+  input[type=password],button{
+    min-height:50px;
+    font-size:1rem;
+  }
 }
 </style>
 </head>

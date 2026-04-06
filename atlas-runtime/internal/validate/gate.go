@@ -20,18 +20,18 @@ type Gate struct {
 
 // Run executes the full validation sequence for the given request.
 //
-//  Phase 1 — Pre-flight (no network):
-//    Step 1: Method check — only GET executed in v1; non-GET → skipped
-//    Step 2: Shape check — baseURL and endpoint must be non-empty
-//    Step 3: Auth type check — must be a supported auth type
-//    Step 4: Credential readiness — key must be present when auth type requires it
+//	Phase 1 — Pre-flight (no network):
+//	  Step 1: Method check — only GET executed in v1; non-GET → skipped
+//	  Step 2: Shape check — baseURL and endpoint must be non-empty
+//	  Step 3: Auth type check — must be a supported auth type
+//	  Step 4: Credential readiness — key must be present when auth type requires it
 //
-//  Phase 2 — Candidate execution (max 2 attempts):
-//    Attempt 1: best available example
-//    Attempt 2: alternate example (only if attempt 1 returned needsRevision)
-//    Hard failures (reject) abort immediately.
+//	Phase 2 — Candidate execution (max 2 attempts):
+//	  Attempt 1: best available example
+//	  Attempt 2: alternate example (only if attempt 1 returned needsRevision)
+//	  Hard failures (reject) abort immediately.
 //
-//  Phase 3 — Audit: record persisted regardless of outcome.
+//	Phase 3 — Audit: record persisted regardless of outcome.
 func (g *Gate) Run(ctx context.Context, req ValidationRequest) ValidationResult {
 	// ── Phase 1: Pre-flight ───────────────────────────────────────────────────
 
@@ -66,7 +66,16 @@ func (g *Gate) Run(ctx context.Context, req ValidationRequest) ValidationResult 
 	// Step 3: auth type check.
 	switch req.AuthType {
 	case AuthNone, AuthAPIKeyHeader, AuthAPIKeyQuery, AuthBearerTokenStatic, AuthBasicAuth:
-		// supported
+		// supported — live validation possible
+	case AuthOAuth2ClientCredentials:
+		// OAuth2 token exchange requires secrets not available at proposal time; skip live validation.
+		result := ValidationResult{
+			Recommendation: RecommendationSkipped,
+			Confidence:     1.0,
+			Summary:        "OAuth2 client credentials validation skipped (token exchange deferred to runtime).",
+		}
+		g.audit(req, ExampleInput{}, result)
+		return result
 	default:
 		cat := FailureUnsupportedAuth
 		result := ValidationResult{
@@ -184,7 +193,11 @@ func (g *Gate) attempt(
 	case AuthBearerTokenStatic:
 		httpReq.Header.Set("Authorization", "Bearer "+req.CredentialValue)
 	case AuthBasicAuth:
-		httpReq.SetBasicAuth(req.CredentialValue, "")
+		user, pass := req.CredentialValue, ""
+		if parts := strings.SplitN(req.CredentialValue, ":", 2); len(parts) == 2 {
+			user, pass = parts[0], parts[1]
+		}
+		httpReq.SetBasicAuth(user, pass)
 	}
 
 	httpReq.Header.Set("User-Agent", "Atlas/1.0 validate")

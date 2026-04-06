@@ -263,6 +263,8 @@ func (b *Bridge) handleEventPayload(payload slackPayload) {
 		text = strings.TrimSpace(strings.ReplaceAll(text, "<@"+botID+">", ""))
 	}
 
+	logstore.Write("info", fmt.Sprintf("Slack: message received in channel=%s", ev.ChannelID), map[string]string{"platform": "slack"})
+
 	// Command dispatch.
 	if strings.HasPrefix(text, "!") {
 		b.handleCommand(ev.ChannelID, ev.TS, ev.ThreadTS, text)

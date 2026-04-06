@@ -1,10 +1,14 @@
 package domain
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -208,6 +212,13 @@ func (d *ApprovalsDomain) resolveApproval(w http.ResponseWriter, r *http.Request
 	}
 	logstore.Write("info", logMsg, map[string]string{"toolCallID": toolCallID})
 
+	// When denied, write a tool_learning memory so Atlas learns from the rejection.
+	// This is the highest-signal feedback loop: explicit human rejection of a specific
+	// tool call in a specific context.
+	if newStatus == "denied" {
+		go writeRejectionMemory(d.db, toolName, extractToolArguments(row.NormalizedInputJSON, toolCallID))
+	}
+
 	// Notify the agent loop so it can resume the conversation.
 	if d.OnResolve != nil {
 		go d.OnResolve(toolCallID, newStatus)
@@ -309,6 +320,53 @@ func (d *ApprovalsDomain) setActionPolicy(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, policies)
+}
+
+// writeRejectionMemory writes a tool_learning memory when a user explicitly
+// denies a tool call approval. This is the highest-signal feedback loop
+// available — explicit human rejection of a specific tool call.
+func writeRejectionMemory(db *storage.DB, toolName, argsJSON string) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+
+	title := "User rejected: " + toolName
+	if len(title) > 48 {
+		title = title[:48]
+	}
+
+	skillBase := toolName
+	if idx := strings.Index(toolName, "."); idx > 0 {
+		skillBase = toolName[:idx]
+	}
+	tagsBytes, _ := json.Marshal([]string{skillBase, toolName, "rejection"})
+
+	content := fmt.Sprintf("User explicitly denied %s. Args: %s", toolName, truncateApprovalArgs(argsJSON, 150))
+
+	b := make([]byte, 16)
+	rand.Read(b) //nolint:errcheck
+
+	row := storage.MemoryRow{
+		ID:         hex.EncodeToString(b),
+		Category:   "tool_learning",
+		Title:      title,
+		Content:    content,
+		Source:     "approval_rejection",
+		Confidence: 0.60,
+		Importance: 0.75,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		TagsJSON:   string(tagsBytes),
+	}
+	if err := db.SaveMemory(row); err != nil {
+		logstore.Write("warn", "approvals: failed to write rejection memory: "+err.Error(), nil)
+	}
+}
+
+func truncateApprovalArgs(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "…"
 }
 
 // Ensure ApprovalsDomain implements Handler.

@@ -79,6 +79,16 @@ func (m *Manager) DownloadModel(ctx context.Context, url, filename string, progr
 	}
 
 	downloaded := startOffset
+
+	// Mark download as active — survives client disconnects so the status
+	// endpoint can report paused state after a page refresh.
+	m.setDownloadProgress(filename, url, downloaded, total, true)
+	defer func() {
+		// On any exit (completion, error, or context cancel) set active=false
+		// but keep filename + progress so the UI can show the paused state.
+		m.setDownloadProgress(filename, url, downloaded, total, false)
+	}()
+
 	lastReport := time.Now()
 	buf := make([]byte, 32*1024)
 
@@ -94,8 +104,11 @@ func (m *Manager) DownloadModel(ctx context.Context, url, filename string, progr
 				return fmt.Errorf("write: %w", writeErr)
 			}
 			downloaded += int64(n)
-			if progress != nil && time.Since(lastReport) >= 250*time.Millisecond {
-				progress(downloaded, total)
+			if time.Since(lastReport) >= 250*time.Millisecond {
+				m.setDownloadProgress(filename, url, downloaded, total, true)
+				if progress != nil {
+					progress(downloaded, total)
+				}
 				lastReport = time.Now()
 			}
 		}
@@ -113,6 +126,7 @@ func (m *Manager) DownloadModel(ctx context.Context, url, filename string, progr
 	}
 
 	// Final progress report.
+	m.setDownloadProgress(filename, url, downloaded, downloaded, true)
 	if progress != nil {
 		progress(downloaded, downloaded)
 	}

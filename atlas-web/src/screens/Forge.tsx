@@ -40,15 +40,6 @@ const SpinnerIcon = () => (
   <span class="spinner" style={{ width: '11px', height: '11px' }} />
 )
 
-const RefreshIcon = () => (
-  <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M2.5 8a5.5 5.5 0 0 1 9.5-3.8" />
-    <polyline points="13.5,2.5 13.5,6 10,6" />
-    <path d="M13.5 8a5.5 5.5 0 0 1-9.5 3.8" />
-    <polyline points="2.5,13.5 2.5,10 6,10" />
-  </svg>
-)
-
 const ChevronDown = () => (
   <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
     <polyline points="2,4 6,8 10,4" />
@@ -82,7 +73,7 @@ function TechnicalDetails({ proposal }: { proposal: ForgeProposalRecord }) {
   const fmtJSON = (v: unknown) => JSON.stringify(v, null, 2)
 
   const preStyle = {
-    background: 'var(--bg-2, rgba(255,255,255,0.04))',
+    background: 'var(--surface-subtle)',
     border: '1px solid var(--border)',
     borderRadius: '6px',
     padding: '10px 12px',
@@ -144,9 +135,9 @@ function ProposalCard({ proposal, onInstall, onReject, acting }: ProposalCardPro
               </span>
               {riskBadge(proposal.riskLevel)}
               <span class="badge" style={{
-                background: 'rgba(139, 92, 246, 0.15)',
-                color: '#a78bfa',
-                border: '1px solid rgba(139, 92, 246, 0.25)',
+                background: 'var(--badge-forge-bg)',
+                color: 'var(--badge-forge-text)',
+                border: '1px solid var(--badge-forge-border)',
                 borderRadius: '4px',
                 padding: '1px 6px',
                 fontSize: '10px',
@@ -194,7 +185,7 @@ function ProposalCard({ proposal, onInstall, onReject, acting }: ProposalCardPro
             </div>
           )}
           {proposal.requiredSecrets.length > 0 ? (
-            <div style={{ fontSize: '12px', color: 'var(--c-yellow, #facc15)' }}>
+            <div style={{ fontSize: '12px', color: 'var(--yellow)' }}>
               <span>▸</span>{' '}
               Requires: {proposal.requiredSecrets.join(', ')}
             </div>
@@ -233,7 +224,7 @@ function ProposalCard({ proposal, onInstall, onReject, acting }: ProposalCardPro
             class="btn btn-ghost btn-sm"
             disabled={acting}
             onClick={() => onReject(proposal.id)}
-            style={{ color: 'var(--c-red, #f87171)' }}
+            style={{ color: 'var(--red)' }}
           >
             Reject
           </button>
@@ -259,7 +250,7 @@ function ProposalCard({ proposal, onInstall, onReject, acting }: ProposalCardPro
 function ResearchingRow({ item }: { item: ForgeResearchingItem }) {
   return (
     <div class="row" style={{ gap: '12px', alignItems: 'center' }}>
-      <span style={{ color: 'var(--c-blue, #60a5fa)', animation: 'pulse 1.8s ease-in-out infinite', flexShrink: 0 }}>
+      <span style={{ color: 'var(--blue)', animation: 'pulse 1.8s ease-in-out infinite', flexShrink: 0 }}>
         <PulseIcon />
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -287,11 +278,7 @@ interface InstalledRowProps {
 
 function InstalledRow({ skill, isLast, onEnable, onDisable, onUninstall, acting }: InstalledRowProps) {
   const [confirmUninstall, setConfirmUninstall] = useState(false)
-  const state = skill.manifest.lifecycleState
-  const isEnabled = state === 'enabled'
-  const stateColor = isEnabled ? 'var(--c-green, #4ade80)'
-    : state === 'disabled' ? 'var(--c-red, #f87171)'
-    : 'var(--text-2)'
+  const isEnabled = skill.manifest.lifecycleState === 'enabled'
 
   return (
     <div style={{ borderBottom: isLast ? 'none' : '1px solid var(--border)' }}>
@@ -302,9 +289,9 @@ function InstalledRow({ skill, isLast, onEnable, onDisable, onUninstall, acting 
               {skill.manifest.name}
             </span>
             <span class="badge" style={{
-              background: 'rgba(139, 92, 246, 0.15)',
-              color: '#a78bfa',
-              border: '1px solid rgba(139, 92, 246, 0.25)',
+              background: 'var(--badge-forge-bg)',
+              color: 'var(--badge-forge-text)',
+              border: '1px solid var(--badge-forge-border)',
               borderRadius: '4px',
               padding: '1px 6px',
               fontSize: '10px',
@@ -313,29 +300,29 @@ function InstalledRow({ skill, isLast, onEnable, onDisable, onUninstall, acting 
           </div>
           <div style={{ fontSize: '12px', color: 'var(--text-2)', marginTop: '2px' }}>
             {skill.actions.length} action{skill.actions.length !== 1 ? 's' : ''}
-            {skill.manifest.category ? ` · ${skill.manifest.category}` : ''}
+            {' · '}{skill.manifest.riskLevel}
+            {skill.manifest.category && skill.manifest.category !== 'forge' ? ` · ${skill.manifest.category}` : ''}
             {skill.manifest.description ? ` · ${skill.manifest.description}` : ''}
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-          {riskBadge(skill.manifest.riskLevel)}
-          <span style={{ fontSize: '12px', color: stateColor, fontWeight: 500 }}>{state}</span>
-          <button
-            class="btn btn-sm"
-            disabled={acting}
-            onClick={() => isEnabled ? onDisable(skill.manifest.id) : onEnable(skill.manifest.id)}
-          >
-            {acting ? <SpinnerIcon /> : null}
-            {isEnabled ? 'Disable' : 'Enable'}
-          </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
           <button
             class="btn btn-ghost btn-sm"
             disabled={acting}
             onClick={() => setConfirmUninstall(true)}
-            style={{ color: 'var(--c-red, #f87171)' }}
+            style={{ color: 'var(--red)' }}
           >
             Uninstall
           </button>
+          <label class="toggle" title={isEnabled ? 'Disable skill' : 'Enable skill'}>
+            <input
+              type="checkbox"
+              checked={isEnabled}
+              disabled={acting}
+              onChange={() => isEnabled ? onDisable(skill.manifest.id) : onEnable(skill.manifest.id)}
+            />
+            <span class="toggle-track" />
+          </label>
         </div>
       </div>
       {confirmUninstall && (
@@ -352,7 +339,7 @@ function InstalledRow({ skill, isLast, onEnable, onDisable, onUninstall, acting 
           </span>
           <button
             class="btn btn-sm"
-            style={{ background: 'rgba(248, 113, 113, 0.15)', color: '#f87171', border: '1px solid rgba(248, 113, 113, 0.3)' }}
+            style={{ background: 'var(--danger-btn-bg)', color: 'var(--danger-btn-text)', border: '1px solid var(--danger-btn-border)' }}
             disabled={acting}
             onClick={() => { setConfirmUninstall(false); onUninstall(skill.manifest.id) }}
           >
@@ -378,7 +365,7 @@ function SectionHeader({ label, sub, count }: { label: string; sub: string; coun
         {count !== undefined && count > 0 && (
           <span style={{
             marginLeft: '8px',
-            background: 'var(--bg-2, rgba(255,255,255,0.08))',
+            background: 'var(--surface-chip)',
             border: '1px solid var(--border)',
             borderRadius: '10px',
             padding: '1px 7px',
@@ -516,7 +503,6 @@ export function Forge() {
       <PageHeader
         title="Forge"
         subtitle="Propose, review, and install AI-generated skills"
-        actions={<><button class="btn btn-primary btn-sm" onClick={load}><RefreshIcon /> Refresh</button></>}
       />
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
@@ -600,7 +586,7 @@ export function Forge() {
       {completedProposals.length > 0 && (
         <div style={{ marginBottom: '24px', opacity: 0.6 }}>
           <SectionHeader label="History" sub="Previously decided proposals" />
-          <div class="card forge-list-card">
+          <div class="card forge-list-card" style={{ maxHeight: '440px', overflowY: 'auto' }}>
             {completedProposals.map((p, i) => (
               <div key={p.id} class={`row forge-history-wrap${i === completedProposals.length - 1 ? ' last' : ''}`} style={{ borderBottom: 'none', gap: '10px' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>

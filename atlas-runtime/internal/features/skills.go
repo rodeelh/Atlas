@@ -4,11 +4,32 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"atlas-runtime-go/internal/customskills"
 	"atlas-runtime-go/internal/logstore"
 )
+
+// normalizePermLevel converts any permission_level value from skill.json into
+// one of the three canonical values: "read", "draft", or "execute".
+// Non-standard values (e.g. "readonly", "AUTO_APPROVE") are mapped to the
+// closest canonical value so the UI badge renders correctly.
+func normalizePermLevel(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "read", "readonly":
+		return "read"
+	case "draft":
+		return "draft"
+	case "execute":
+		return "execute"
+	default:
+		if level == "" {
+			return "execute"
+		}
+		return "execute" // safe default for unknown values
+	}
+}
 
 // SkillAction matches the web UI's SkillRecord.actions element shape.
 type SkillAction struct {
@@ -128,8 +149,7 @@ func builtInSkills() []SkillRecord {
 				Category: "research", Capabilities: []string{"web_search", "web_fetch"}, Tags: []string{"web", "search"},
 			},
 			Actions: []SkillAction{
-				{ID: "web.search", Name: "Web Search", Description: "Search the web.", PermissionLevel: "read", IsEnabled: true},
-				{ID: "websearch.query", Name: "Brave Search", Description: "Search the web using Brave Search API.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "websearch.query", Name: "Web Search", Description: "Search the web using Brave Search.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "web.fetch_page", Name: "Fetch Page", Description: "Fetch and extract content from a URL.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "web.research", Name: "Deep Research", Description: "Multi-source research on a topic.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "web.news", Name: "News", Description: "Recent news on a topic.", PermissionLevel: "read", IsEnabled: true},
@@ -160,14 +180,12 @@ func builtInSkills() []SkillRecord {
 		{
 			Manifest: SkillManifestInfo{
 				ID: "atlas.info", Name: "Atlas Info", Version: "1.0",
-				Description:    "Runtime introspection — status, version, skills catalog, and capability summary.",
+				Description:    "Runtime introspection — status and version.",
 				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,
 				Category: "system", Capabilities: []string{"runtime_info"}, Tags: []string{"atlas"},
 			},
 			Actions: []SkillAction{
 				{ID: "atlas.info", Name: "Atlas Info", Description: "Get runtime status and configuration info.", PermissionLevel: "read", IsEnabled: true},
-				{ID: "atlas.list_skills", Name: "List Skills", Description: "List all registered skill actions.", PermissionLevel: "read", IsEnabled: true},
-				{ID: "atlas.capabilities", Name: "Capabilities Summary", Description: "Get a grouped summary of all Atlas capabilities.", PermissionLevel: "read", IsEnabled: true},
 			},
 		},
 		{
@@ -315,17 +333,6 @@ func builtInSkills() []SkillRecord {
 		},
 		{
 			Manifest: SkillManifestInfo{
-				ID: "diary", Name: "Diary", Version: "1.0",
-				Description:    "Atlas Diary — records notable moments per day to shape long-term memory and user experience.",
-				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: false,
-				Category: "memory", Capabilities: []string{"diary"}, Tags: []string{"diary", "memory", "context"},
-			},
-			Actions: []SkillAction{
-				{ID: "diary.record", Name: "Record Entry", Description: "Record a significant moment into the daily diary.", PermissionLevel: "read", IsEnabled: true},
-			},
-		},
-		{
-			Manifest: SkillManifestInfo{
 				ID: "browser-control", Name: "Browser Control", Version: "1.1",
 				Description:    "Control a real browser — navigate, screenshot, fill forms, manage multi-tab sessions, run JS, upload files, and handle 2FA. Requires Google Chrome.",
 				LifecycleState: "enabled", RiskLevel: "high", IsUserVisible: true,
@@ -370,7 +377,7 @@ func builtInSkills() []SkillRecord {
 			Manifest: SkillManifestInfo{
 				ID: "vault", Name: "Vault", Version: "1.0",
 				Description:    "Secure credential vault — store, retrieve, and manage passwords, tokens, and TOTP 2FA secrets created or discovered by the agent.",
-				LifecycleState: "enabled", RiskLevel: "medium", IsUserVisible: true,
+				LifecycleState: "enabled", RiskLevel: "medium", IsUserVisible: false,
 				Category: "security", Capabilities: []string{"credential_storage", "totp_generation"}, Tags: []string{"vault", "credentials", "2fa", "security"},
 			},
 			Actions: []SkillAction{
@@ -380,6 +387,18 @@ func builtInSkills() []SkillRecord {
 				{ID: "vault.update", Name: "Update Credential", Description: "Update an existing vault entry.", PermissionLevel: "execute", IsEnabled: true},
 				{ID: "vault.delete", Name: "Delete Credential", Description: "Permanently delete a vault entry.", PermissionLevel: "execute", IsEnabled: true},
 				{ID: "vault.totp_generate", Name: "Generate TOTP Code", Description: "Generate the current TOTP 2FA code for a vault entry.", PermissionLevel: "read", IsEnabled: true},
+			},
+		},
+		{
+			Manifest: SkillManifestInfo{
+				ID: "memory", Name: "Memory", Version: "1.0",
+				Description:    "Save facts to and recall facts from Atlas's long-term memory store. Use memory.save for explicit user directives and commitments. Use memory.recall to check what you already know before asking.",
+				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,
+				Category: "core", Capabilities: []string{"memory_write", "memory_read"}, Tags: []string{"memory", "recall"},
+			},
+			Actions: []SkillAction{
+				{ID: "memory.save", Name: "Save Memory", Description: "Write an important fact to long-term memory.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "memory.recall", Name: "Recall Memory", Description: "Search long-term memory for relevant facts.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
 			},
 		},
 	}
@@ -431,10 +450,7 @@ func customManifestToRecord(manifest customskills.CustomSkillManifest, states sk
 
 	actions := make([]SkillAction, 0, len(manifest.Actions))
 	for _, a := range manifest.Actions {
-		permLevel := a.PermLevel
-		if permLevel == "" {
-			permLevel = "execute"
-		}
+		permLevel := normalizePermLevel(a.PermLevel)
 		actionID := manifest.ID + "." + a.Name
 		approvalPolicy := "always_ask"
 		if policy, ok := policies[actionID]; ok {
@@ -461,8 +477,21 @@ func customManifestToRecord(manifest customskills.CustomSkillManifest, states sk
 	if source == "" {
 		source = "custom"
 	}
-	category := source // "forge" or "custom" — both make sense as category
-	tag := source
+
+	riskLevel := manifest.RiskLevel
+	if riskLevel == "" {
+		riskLevel = "medium"
+	}
+
+	category := manifest.Category
+	if category == "" {
+		category = source // fall back to source tag ("forge" or "custom")
+	}
+
+	tags := manifest.Tags
+	if len(tags) == 0 {
+		tags = []string{source}
+	}
 
 	return SkillRecord{
 		Manifest: SkillManifestInfo{
@@ -471,12 +500,12 @@ func customManifestToRecord(manifest customskills.CustomSkillManifest, states sk
 			Version:        version,
 			Description:    manifest.Description,
 			LifecycleState: lifecycleState,
-			RiskLevel:      "medium",
+			RiskLevel:      riskLevel,
 			IsUserVisible:  true,
 			Category:       category,
 			Source:         source,
 			Capabilities:   []string{},
-			Tags:           []string{tag},
+			Tags:           tags,
 		},
 		Actions: actions,
 	}
@@ -484,11 +513,11 @@ func customManifestToRecord(manifest customskills.CustomSkillManifest, states sk
 
 // SkillValidation is the validation result embedded in a SkillRecord.
 type SkillValidation struct {
-	SkillID  string   `json:"skillID"`
-	Status   string   `json:"status"`
-	Summary  string   `json:"summary"`
-	IsValid  bool     `json:"isValid"`
-	Issues   []string `json:"issues"`
+	SkillID string   `json:"skillID"`
+	Status  string   `json:"status"`
+	Summary string   `json:"summary"`
+	IsValid bool     `json:"isValid"`
+	Issues  []string `json:"issues"`
 }
 
 // ValidateSkill runs a lightweight validation check on the skill and returns the

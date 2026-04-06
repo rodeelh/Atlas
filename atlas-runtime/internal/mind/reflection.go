@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"atlas-runtime-go/internal/agent"
-	"atlas-runtime-go/internal/features"
 	"atlas-runtime-go/internal/logstore"
 )
 
@@ -21,8 +20,8 @@ import (
 var reflectMu sync.Mutex
 
 const (
-	mindTier1InputCap = 6000          // max runes of MIND.md fed to Tier 1 (context only)
-	mindDeepInputCap  = 8000          // max runes of MIND.md fed to deep reflect
+	mindTier1InputCap = 6000 // max runes of MIND.md fed to Tier 1 (context only)
+	mindDeepInputCap  = 8000 // max runes of MIND.md fed to deep reflect
 	reflectTimeout    = 150 * time.Second
 )
 
@@ -81,24 +80,22 @@ func runReflection(ctx context.Context, provider agent.ProviderConfig, turn Turn
 	if err != nil {
 		return fmt.Errorf("tier1: %w", err)
 	}
-	if err := atomicWrite(mindPath, []byte(withRead), 0o600); err != nil {
+
+	// ── Current Frame (always runs, no AI call) ──────────────────────────────────
+	// Synthesised programmatically from What's Active, How You Work, Commitments.
+	// Written to disk together with Today's Read in one atomic write.
+	withFrame := updateCurrentFrame(withRead)
+
+	if err := atomicWrite(mindPath, []byte(withFrame), 0o600); err != nil {
 		return fmt.Errorf("write tier1: %w", err)
 	}
 
 	// Save Today's Read now so we can splice it back after deep reflect without
 	// making a redundant 4th AI call.
-	savedRead := extractTodaysRead(withRead)
-
-	// ── Diary: AI-generated entry per turn (max 3/day enforced by AppendDiaryEntry)
-	if entry := buildSmartDiaryEntry(ctx, provider, turn); entry != "" {
-		if _, dErr := features.AppendDiaryEntry(supportDir, entry); dErr != nil {
-			logstore.Write("warn", "MIND: diary append failed: "+dErr.Error(), nil)
-			// non-fatal — keep going
-		}
-	}
+	savedRead := extractTodaysRead(withFrame)
 
 	// ── Tier 2: Significance gate ───────────────────────────────────────────────
-	significant, err := assessSignificance(ctx, provider, withRead, turn)
+	significant, err := assessSignificance(ctx, provider, withFrame, turn)
 	if err != nil {
 		// Gate failure is non-fatal — skip deep reflection rather than crash.
 		logstore.Write("warn", "MIND: significance check failed: "+err.Error(), nil)
@@ -112,14 +109,14 @@ func runReflection(ctx context.Context, provider agent.ProviderConfig, turn Turn
 		map[string]string{"conv": shortID(turn.ConversationID)})
 
 	// ── Tier 2: Deep reflection (diff-based) ───────────────────────────────────
-	patch, err := deepReflect(ctx, provider, withRead, turn)
+	patch, err := deepReflect(ctx, provider, withFrame, turn)
 	if err != nil {
 		return fmt.Errorf("deep reflect: %w", err)
 	}
 
 	// Merge only the sections the AI chose to update into the existing MIND.
 	// This prevents information loss in sections the current turn doesn't touch.
-	merged := mergeMindSections(withRead, patch)
+	merged := mergeMindSections(withFrame, patch)
 
 	// Stamp the reflection date.
 	merged = updateReflectionDate(merged)
@@ -218,21 +215,21 @@ func deepReflect(ctx context.Context, provider agent.ProviderConfig, mindContent
 
 Return ONLY the sections you want to change, each with its exact "## " header.
 Updatable sections:
-- ## My Understanding of You
-- ## Patterns I've Noticed
-- ## Active Theories
-- ## Our Story
-- ## What I'm Curious About
-- ## What Matters Right Now
+- ## You
+- ## How You Work
+- ## What's Active
+- ## What I've Learned
 
 Rules:
 - Return NOTHING for sections you are not changing
-- Do NOT return ## Who I Am or ## Today's Read (handled separately)
+- Do NOT return ## Identity, ## Current Frame, ## Commitments, or ## Today's Read — these are protected
 - Do NOT include "# Mind of Atlas" or the metadata line
 - First person throughout
-- Specific, not generic — form real opinions, not platitudes
-- Mark theories: (testing) / (likely) / (confirmed) / (refuted)
-- Remove outdated content when you have better understanding
+- Abstraction only — never write raw observations ("user asked about X"); only write what it reveals ("user approaches X by…" / "user is someone who…")
+- Confidence encoding — prefix beliefs in ## You, ## How You Work, ## What I've Learned with: **Confirmed** / **High confidence** / **Working theory**
+- ## How You Work — only update with strong, repeated evidence; never infer style from a single turn
+- ## Commitments is protected — never write to it; explicit user directives are captured separately
+- Remove outdated content when you have contradicting evidence
 - Each section ~100-200 words max`
 
 	toolResults := ""
@@ -272,55 +269,6 @@ Return only the sections that need updating:`,
 		return "", fmt.Errorf("deep reflect returned empty patch")
 	}
 	return result, nil
-}
-
-// ── Diary ─────────────────────────────────────────────────────────────────────
-
-// buildDiaryEntry creates a compact one-line diary entry from a turn:
-// the first ~80 runes of the user message plus the tools used in brackets.
-// Kept as fallback for buildSmartDiaryEntry.
-func buildDiaryEntry(turn TurnRecord) string {
-	msg := strings.Join(strings.Fields(turn.UserMessage), " ")
-	msg = truncate(msg, 80)
-	if len(turn.ToolCallSummaries) > 0 {
-		msg += " [" + strings.Join(turn.ToolCallSummaries, ", ") + "]"
-	}
-	return msg
-}
-
-// buildSmartDiaryEntry uses a fast AI call to generate a descriptive diary
-// entry that captures what happened and why it mattered, rather than a
-// mechanical truncation of the user message. Falls back to buildDiaryEntry
-// on error.
-func buildSmartDiaryEntry(ctx context.Context, provider agent.ProviderConfig, turn TurnRecord) string {
-	fallback := buildDiaryEntry(turn)
-	if fallback == "" {
-		return ""
-	}
-
-	system := `Write a single-sentence diary entry (max 120 characters) for this Atlas conversation turn.
-Format: what happened + why it mattered or what it revealed. First person, past tense.
-If the turn was routine, say so briefly. No quotes, no markdown. Just the sentence.`
-
-	tools := ""
-	if len(turn.ToolCallSummaries) > 0 {
-		tools = strings.Join(turn.ToolCallSummaries, ", ")
-	}
-	user := fmt.Sprintf("User: %s\nAtlas: %s\nTools: %s",
-		truncate(turn.UserMessage, 200),
-		truncate(turn.AssistantResponse, 200),
-		tools,
-	)
-
-	reply, err := callFast(ctx, provider, system, user)
-	if err != nil {
-		return fallback
-	}
-	entry := strings.TrimSpace(reply)
-	if entry == "" {
-		return fallback
-	}
-	return truncate(entry, 150)
 }
 
 // ── Section merge (diff-based reflection) ────────────────────────────────────
@@ -365,9 +313,10 @@ func mergeMindSections(existing, patch string) string {
 
 	// Protected sections that must never be overwritten by a patch.
 	protected := map[string]bool{
-		"## Who I Am":      true,
-		"## Today's Read":  true,
-		"## Working Style": true,
+		"## Identity":      true, // static — never AI-modified
+		"## Current Frame": true, // has its own programmatic update path
+		"## Commitments":   true, // only written by commitment detection, not reflection
+		"## Today's Read":  true, // has its own Tier 1 update path
 	}
 
 	lines := strings.Split(existing, "\n")
@@ -412,18 +361,16 @@ func mergeMindSections(existing, patch string) string {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// replaceTodaysRead splices new content into the "## Today's Read" section
-// using a line-anchored scan so an embedded occurrence of the header string
-// inside another section's body cannot cause a mis-splice.
+// replaceSection splices new content into any named "## Header" section using
+// a line-anchored scan so an embedded occurrence of the header string inside
+// another section's body cannot cause a mis-splice.
 // If the section is missing, it is appended.
-func replaceTodaysRead(mind, newContent string) string {
-	const marker = "## Today's Read"
+func replaceSection(mind, header, newContent string) string {
 	lines := strings.Split(mind, "\n")
 	for i, line := range lines {
-		if strings.TrimSpace(line) != marker {
+		if strings.TrimSpace(line) != header {
 			continue
 		}
-		// Found the section heading — locate the end of this section.
 		end := len(lines)
 		for j := i + 1; j < len(lines); j++ {
 			if strings.HasPrefix(lines[j], "## ") {
@@ -438,7 +385,74 @@ func replaceTodaysRead(mind, newContent string) string {
 		return strings.Join(result, "\n")
 	}
 	// Section missing — append.
-	return strings.TrimRight(mind, "\n") + "\n\n---\n\n" + marker + "\n\n" + newContent + "\n"
+	return strings.TrimRight(mind, "\n") + "\n\n---\n\n" + header + "\n\n" + newContent + "\n"
+}
+
+// replaceTodaysRead is a convenience wrapper around replaceSection.
+func replaceTodaysRead(mind, newContent string) string {
+	return replaceSection(mind, "## Today's Read", newContent)
+}
+
+// updateCurrentFrame synthesises a dense primer from existing MIND.md sections
+// and splices it into ## Current Frame. No AI call — built programmatically
+// from What's Active, How You Work, and Commitments each turn.
+// The frame is always one turn behind (generated after the previous turn, like
+// Today's Read) so it adds zero latency to the current response.
+func updateCurrentFrame(mindContent string) string {
+	sections := parseSections(mindContent)
+
+	isPlaceholder := func(s string) bool {
+		s = strings.TrimSpace(s)
+		return s == "" || strings.HasPrefix(s, "_(")
+	}
+
+	firstReal := func(body string) string {
+		for _, line := range strings.Split(body, "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !isPlaceholder(line) && line != "---" {
+				return line
+			}
+		}
+		return ""
+	}
+
+	var sentences []string
+
+	// Active context — what is live right now.
+	if active := sections["## What's Active"]; !isPlaceholder(active) {
+		if line := firstReal(active); line != "" {
+			sentences = append(sentences, line)
+		}
+	}
+
+	// Behavioral calibration — how to respond to this user.
+	if how := sections["## How You Work"]; !isPlaceholder(how) {
+		if line := firstReal(how); line != "" {
+			sentences = append(sentences, line)
+		}
+	}
+
+	// Active commitments — non-negotiable rules.
+	if commits := sections["## Commitments"]; !isPlaceholder(commits) {
+		var rules []string
+		for _, line := range strings.Split(commits, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "- ") {
+				rules = append(rules, strings.TrimPrefix(line, "- "))
+				if len(rules) >= 2 {
+					break
+				}
+			}
+		}
+		if len(rules) > 0 {
+			sentences = append(sentences, "Active rules: "+strings.Join(rules, "; "))
+		}
+	}
+
+	if len(sentences) == 0 {
+		return mindContent
+	}
+	return replaceSection(mindContent, "## Current Frame", strings.Join(sentences, " · "))
 }
 
 // extractTodaysRead returns the text body of the "## Today's Read" section,
@@ -463,14 +477,16 @@ func extractTodaysRead(mind string) string {
 	return ""
 }
 
-// updateReflectionDate replaces the "_Last deep reflection: date_" metadata
-// line with today's date. Inserts after the title if the line is not found.
+// updateReflectionDate replaces the "_Last updated: date_" metadata line with
+// today's date. Handles both the new "_Last updated:" and legacy
+// "_Last deep reflection:" formats. Inserts after the title if not found.
 func updateReflectionDate(content string) string {
 	today := time.Now().Format("2006-01-02")
-	newMeta := "_Last deep reflection: " + today + "_"
+	newMeta := "_Last updated: " + today + "_"
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "_Last deep reflection:") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "_Last updated:") || strings.HasPrefix(trimmed, "_Last deep reflection:") {
 			lines[i] = newMeta
 			return strings.Join(lines, "\n")
 		}

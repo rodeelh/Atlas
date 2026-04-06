@@ -21,6 +21,22 @@ type GoRuntimeConfig struct {
 	// browses silently in the background. Set to true to watch what the agent is
 	// doing, useful for debugging or demos.
 	BrowserShowWindow bool `json:"browserShowWindow"`
+
+	// Locale preferences — inferred from country or set manually.
+	UserTemperatureUnit string `json:"userTemperatureUnit"` // "celsius" | "fahrenheit"
+	UserCurrency        string `json:"userCurrency"`        // ISO 4217 e.g. "USD", "AED"
+	UserUnitSystem      string `json:"userUnitSystem"`      // "metric" | "imperial"
+
+	// Location — resolved via IP geolocation at startup or set manually by the
+	// user.  Injected into the system prompt each turn so the model can infer
+	// the user's city/timezone without being asked.
+	UserCity            string  `json:"userCity"`
+	UserCountry         string  `json:"userCountry"`
+	UserTimezone        string  `json:"userTimezone"`
+	UserLatitude        float64 `json:"userLatitude"`
+	UserLongitude       float64 `json:"userLongitude"`
+	UserLocationSource  string  `json:"userLocationSource"`  // "ip" | "manual" | ""
+	UserLocationUpdated string  `json:"userLocationUpdated"` // RFC3339
 }
 
 // GoConfigPath returns the path of the Go-runtime sidecar config file.

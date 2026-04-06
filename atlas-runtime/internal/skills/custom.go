@@ -40,6 +40,29 @@ func (r *Registry) LoadCustomSkills(supportDir string) {
 	}
 }
 
+// ReloadCustomSkill re-registers a single custom skill from disk by skillID.
+// Called after a forge install so the agent can call the new skill immediately
+// without a daemon restart. Safe to call while the server is running — register
+// is guarded by the registry mutex.
+func (r *Registry) ReloadCustomSkill(supportDir, skillID string) {
+	manifests := customskills.ListManifests(supportDir)
+	for _, manifest := range manifests {
+		if manifest.ID != skillID {
+			continue
+		}
+		runPath := filepath.Join(manifest.SkillDir, "run")
+		for _, action := range manifest.Actions {
+			r.registerCustomAction(manifest, action, manifest.SkillDir, runPath)
+		}
+		logstore.Write("info",
+			fmt.Sprintf("custom skills: hot-reloaded %s v%s (%d action(s))", manifest.ID, manifest.Version, len(manifest.Actions)),
+			map[string]string{"skillDir": manifest.SkillDir})
+		return
+	}
+	logstore.Write("warn",
+		fmt.Sprintf("custom skills: hot-reload: manifest not found for %s", skillID), nil)
+}
+
 // registerCustomAction registers a single action from a custom skill manifest.
 func (r *Registry) registerCustomAction(manifest customskills.CustomSkillManifest, action customskills.CustomSkillAction, skillDir, runPath string) {
 	actionID := manifest.ID + "." + action.Name

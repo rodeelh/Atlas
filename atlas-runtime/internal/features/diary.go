@@ -31,17 +31,6 @@ func ReadDiary(supportDir string) string {
 	return string(data)
 }
 
-// WriteDiary replaces the entire DIARY.md content atomically.
-func WriteDiary(supportDir, content string) error {
-	diaryMu.Lock()
-	defer diaryMu.Unlock()
-	path := filepath.Join(supportDir, diaryFile)
-	if err := os.MkdirAll(supportDir, 0o700); err != nil {
-		return err
-	}
-	return atomicWrite(path, []byte(strings.TrimSpace(content)), 0o600)
-}
-
 // AppendDiaryEntry adds a single entry under today's date heading.
 // Enforces diaryMaxPerDay: if today already has that many entries the call
 // is a no-op and returns ("", nil). Returns the entry text that was written,

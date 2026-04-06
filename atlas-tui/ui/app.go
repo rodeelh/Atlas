@@ -29,13 +29,13 @@ const (
 
 // AppModel is the root BubbleTea model.
 type AppModel struct {
-	client   *client.Client
-	cfg      *config.Config
-	width    int
-	height   int
+	client    *client.Client
+	cfg       *config.Config
+	width     int
+	height    int
 	activeTab tab
-	phase    appPhase
-	splash   SplashModel
+	phase     appPhase
+	splash    SplashModel
 
 	chat     ChatModel
 	status   StatusModel

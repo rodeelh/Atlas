@@ -45,10 +45,10 @@ func NewStatusModel(c *client.Client) StatusModel {
 	vp := viewport.New(80, 20)
 
 	return StatusModel{
-		client:  c,
-		spinner: sp,
+		client:   c,
+		spinner:  sp,
 		viewport: vp,
-		loading: true,
+		loading:  true,
 	}
 }
 

@@ -15,11 +15,14 @@ function riskBadge(level: string) {
 }
 
 function permissionBadge(level: string) {
-  switch (level.toLowerCase()) {
-    case 'read':    return <span class="badge badge-green">{level}</span>
-    case 'draft':   return <span class="badge badge-yellow">{level}</span>
-    case 'execute': return <span class="badge badge-red">{level}</span>
-    default:        return <span class="badge badge-gray">{level}</span>
+  const normalized = level.toLowerCase().trim()
+  // Normalize non-standard aliases that AI may produce in skill.json
+  const canonical = (normalized === 'readonly') ? 'read' : normalized
+  switch (canonical) {
+    case 'read':    return <span class="badge badge-green">read</span>
+    case 'draft':   return <span class="badge badge-yellow">draft</span>
+    case 'execute': return <span class="badge badge-red">execute</span>
+    default:        return <span class="badge badge-green">read</span>
   }
 }
 
@@ -218,7 +221,6 @@ export function Skills() {
       <PageHeader
         title="Skills"
         subtitle="Capabilities available to Atlas"
-        actions={<><button class="btn btn-primary btn-sm" onClick={loadSkills}><RefreshIcon /> Refresh</button></>}
       />
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
@@ -253,10 +255,10 @@ export function Skills() {
                     {skill.manifest.name}
                     {riskBadge(skill.manifest.riskLevel)}
                     {skill.manifest.source === 'forge' && (
-                      <span class="badge" style={{ background: 'rgba(139,92,246,0.15)', color: 'rgb(139,92,246)', border: '1px solid rgba(139,92,246,0.3)' }}>Forge</span>
+                      <span class="badge" style={{ background: 'var(--badge-forge-bg)', color: 'var(--badge-forge-text)', border: '1px solid var(--badge-forge-border)' }}>Forge</span>
                     )}
                     {skill.manifest.source === 'custom' && (
-                      <span class="badge" style={{ background: 'rgba(20,184,166,0.15)', color: 'rgb(20,184,166)', border: '1px solid rgba(20,184,166,0.3)' }}>Custom</span>
+                      <span class="badge" style={{ background: 'var(--badge-custom-bg)', color: 'var(--badge-custom-text)', border: '1px solid var(--badge-custom-border)' }}>Custom</span>
                     )}
                     {skill.validation && (
                       <span class={`badge ${skill.validation.status === 'passed' || skill.validation.status === 'warning' ? 'badge-green' : 'badge-red'}`}>
@@ -276,7 +278,7 @@ export function Skills() {
                   {skill.manifest.source === 'custom' && (
                     <button
                       class="btn btn-sm btn-ghost"
-                      style={{ color: 'var(--c-red)', fontSize: '11px', padding: '2px 7px' }}
+                      style={{ color: 'var(--red)', fontSize: '11px', padding: '2px 7px' }}
                       disabled={customRemoving.has(id)}
                       onClick={() => removeCustomSkill(id)}
                       title="Remove this custom skill"
@@ -326,13 +328,13 @@ export function Skills() {
                         : <div style={{ marginBottom: '10px' }}>
                             {fsRoots.map(root => (
                               <div key={root.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 0', borderBottom: '1px solid var(--border)' }}>
-                                <span style={{ flex: 1, fontSize: '12.5px', fontFamily: 'monospace', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{root.path}</span>
-                                <button class="btn btn-sm btn-ghost" style={{ color: 'var(--c-red)', flexShrink: 0 }} onClick={() => removeFsRoot(root.id)}>Remove</button>
+                                <span style={{ flex: 1, fontSize: '12px', fontFamily: 'monospace', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{root.path}</span>
+                                <button class="btn btn-sm btn-ghost" style={{ color: 'var(--red)', flexShrink: 0 }} onClick={() => removeFsRoot(root.id)}>Remove</button>
                               </div>
                             ))}
                           </div>
                       }
-                      {fsRootError && <div style={{ fontSize: '12px', color: 'var(--c-red)', marginBottom: '8px' }}>{fsRootError}</div>}
+                      {fsRootError && <div style={{ fontSize: '12px', color: 'var(--red)', marginBottom: '8px' }}>{fsRootError}</div>}
                       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                         <button class="btn btn-primary btn-sm" disabled={fsRootAdding} onClick={browseFsFolder}>
                           {fsRootAdding ? <span class="spinner" style={{ width: '11px', height: '11px' }} /> : 'Add Folder'}
@@ -364,13 +366,13 @@ export function Skills() {
 
                   {/* Install feedback */}
                   {isCustomGroup && customInstallMsg && (
-                    <div style={{ fontSize: '12.5px', color: 'var(--c-green)', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ fontSize: '12px', color: 'var(--green)', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                       <span>{customInstallMsg}</span>
                       <button class="btn btn-sm btn-ghost" onClick={() => setCustomInstallMsg(null)}>✕</button>
                     </div>
                   )}
                   {isCustomGroup && customInstallErr && (
-                    <div style={{ fontSize: '12.5px', color: 'var(--c-red)', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ fontSize: '12px', color: 'var(--red)', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                       <span>{customInstallErr}</span>
                       <button class="btn btn-sm btn-ghost" onClick={() => setCustomInstallErr(null)}>✕</button>
                     </div>
@@ -379,8 +381,8 @@ export function Skills() {
                   {isCustomGroup && groupSkills.length === 0 ? (
                     <div class="card" style={{ padding: '24px 20px', textAlign: 'center' }}>
                       <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text)', marginBottom: '6px' }}>No custom skills installed</div>
-                      <div style={{ fontSize: '12.5px', color: 'var(--text-2)', marginBottom: '16px', maxWidth: '400px', margin: '0 auto 16px' }}>
-                        Custom skills are executables in their own folder with a <code style={{ fontFamily: 'monospace', fontSize: '11.5px' }}>skill.json</code> manifest.
+                      <div style={{ fontSize: '12px', color: 'var(--text-2)', marginBottom: '16px', maxWidth: '400px', margin: '0 auto 16px' }}>
+                        Custom skills are executables in their own folder with a <code style={{ fontFamily: 'monospace', fontSize: '11px' }}>skill.json</code> manifest.
                         Forge-generated skills also appear here once installed.
                       </div>
                       <button class="btn btn-primary btn-sm" disabled={customInstalling} onClick={installCustomSkill}>

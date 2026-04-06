@@ -13,6 +13,24 @@ Keep the Engine LM tab up to date with the latest models and tooling.
 
 ## UI Bugs
 
+### Browser STT Bridge → Whisper Runtime Migration
+
+The chat composer now supports browser-native speech-to-text as a temporary bridge for voice input validation. Keep the current UX, but replace the transcription source with a runtime-owned local Whisper pipeline once the interaction model feels right.
+
+**Implementation goals:**
+- Add a runtime speech provider abstraction so the web UI can switch from browser STT to Whisper without changing the composer UX
+- Run local Whisper transcription through the Go runtime, not directly from the browser
+- Support partial transcripts, stop/start control, and clean insertion into the existing chat textarea
+- Keep the browser-native STT path as an optional fallback during the transition
+- Expose minimal settings later: model, language, and auto-send behavior
+
+**Likely files:**
+- `atlas-web/src/screens/Chat.tsx`
+- `atlas-web/src/lib/browserSpeech.ts`
+- `atlas-runtime/internal/domain/`
+- `atlas-runtime/internal/chat/`
+- `atlas-runtime/internal/config/`
+
 ### ✅ Safari — Chat Copy Button Hover Persists — WORKAROUND SHIPPED 2026-04-05
 
 The copy button beside chat bubbles works correctly in Chrome but persists (doesn't disappear on mouse leave) in Safari. Multiple approaches attempted:

@@ -33,8 +33,8 @@ func makeProposal(t *testing.T, withContract bool) ForgeProposal {
 			ActionID: "weather-gov.forecast",
 			Type:     "http",
 			HTTPRequest: &HTTPRequestPlan{
-				Method:  "GET",
-				URL:     "https://api.weather.gov/gridpoints/{office}/{gridX},{gridY}/forecast",
+				Method:   "GET",
+				URL:      "https://api.weather.gov/gridpoints/{office}/{gridX},{gridY}/forecast",
 				AuthType: "none",
 			},
 		},

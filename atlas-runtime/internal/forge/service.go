@@ -17,7 +17,7 @@ import (
 // Service manages the Forge proposal lifecycle.
 // It holds in-memory researching state and delegates persistence to store.go.
 type Service struct {
-	mu         sync.RWMutex
+	mu          sync.RWMutex
 	researching []ResearchingItem
 	supportDir  string
 }
@@ -39,15 +39,49 @@ func (s *Service) GetResearching() []ResearchingItem {
 	return out
 }
 
+// proposePlaceholderDomains is a blocklist of domains that indicate a fabricated URL.
+// This mirrors the list in forge_skill.go — both paths must reject the same domains.
+var proposePlaceholderDomains = []string{
+	"example.com", "example.org", "example.net", "localhost",
+	"placeholder.com", "your-api.com", "yourdomain.com", "sample.com",
+	"test.com", "fake.com", "api.example.com", "local-skill", "local-api.com",
+}
+
+// validateProposalAPIURL returns a non-empty error string if rawURL uses a
+// placeholder/example domain or is otherwise unsuitable as a real API base URL.
+func validateProposalAPIURL(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Sprintf("invalid API URL %q: %v", rawURL, err)
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, ph := range proposePlaceholderDomains {
+		if host == ph {
+			return fmt.Sprintf("domain %q is a placeholder — provide the real API base URL", host)
+		}
+	}
+	return ""
+}
+
 // Propose runs the full research pipeline for a new skill proposal:
-//  1. Adds a ResearchingItem to the in-memory list.
-//  2. Calls the AI to generate a structured ForgeProposal.
-//  3. Saves the proposal to forge-proposals.json.
-//  4. Removes the ResearchingItem.
+//  1. Validates the API URL against the placeholder domain blocklist.
+//  2. Adds a ResearchingItem to the in-memory list.
+//  3. Calls the AI to generate a structured ForgeProposal.
+//  4. Validates the AI-returned domains against the same blocklist.
+//  5. Saves the proposal to forge-proposals.json.
+//  6. Removes the ResearchingItem.
 //
 // It runs synchronously so the caller can decide whether to background it.
 // Returns the created ForgeProposal on success.
 func (s *Service) Propose(ctx context.Context, req ProposeRequest, provider AIProvider) (ForgeProposal, error) {
+	// Gate: reject placeholder/example API URLs before spending an AI call.
+	if msg := validateProposalAPIURL(req.APIURL); msg != "" {
+		return ForgeProposal{}, fmt.Errorf("forge: %s", msg)
+	}
+
 	id := newID()
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -69,6 +103,16 @@ func (s *Service) Propose(ctx context.Context, req ProposeRequest, provider AIPr
 		logstore.Write("error", "Forge research failed: "+req.Name,
 			map[string]string{"id": id, "elapsed": elapsed, "error": err.Error()})
 		return ForgeProposal{}, err
+	}
+
+	// Gate: validate AI-returned domains — reject if the model fabricated placeholder hostnames.
+	for _, domain := range proposal.Domains {
+		for _, ph := range proposePlaceholderDomains {
+			if strings.EqualFold(strings.ToLower(domain), ph) {
+				return ForgeProposal{}, fmt.Errorf(
+					"forge: AI returned placeholder domain %q — provide a real API URL and try again", domain)
+			}
+		}
 	}
 
 	if err := SaveProposal(s.supportDir, proposal); err != nil {

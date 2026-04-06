@@ -162,6 +162,28 @@ func (db *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_memories_importance
 			ON memories(importance DESC, updated_at DESC)`,
 
+		// memories_fts — FTS5 full-text index for BM25 candidate selection.
+		// Standalone table (not content=) so it survives schema migrations cleanly.
+		// Triggers below keep it in sync with the memories table.
+		`CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+			memory_id UNINDEXED,
+			title,
+			content,
+			tags_json
+		)`,
+		`CREATE TRIGGER IF NOT EXISTS memories_fts_ai AFTER INSERT ON memories BEGIN
+			INSERT INTO memories_fts(memory_id, title, content, tags_json)
+				VALUES (new.memory_id, new.title, new.content, new.tags_json);
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS memories_fts_au AFTER UPDATE ON memories BEGIN
+			DELETE FROM memories_fts WHERE memory_id = old.memory_id;
+			INSERT INTO memories_fts(memory_id, title, content, tags_json)
+				VALUES (new.memory_id, new.title, new.content, new.tags_json);
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS memories_fts_ad AFTER DELETE ON memories BEGIN
+			DELETE FROM memories_fts WHERE memory_id = old.memory_id;
+		END`,
+
 		// gremlin_runs — stores automation run history.
 		// started_at / finished_at stored as Unix timestamp doubles (REAL).
 		`CREATE TABLE IF NOT EXISTS gremlin_runs (
@@ -189,6 +211,36 @@ func (db *DB) migrate() error {
 			last_used_at TEXT NOT NULL,
 			created_at   TEXT NOT NULL
 		)`,
+
+		// token_usage — one row per agent turn; costs pre-computed at write time.
+		`CREATE TABLE IF NOT EXISTS token_usage (
+			id               TEXT PRIMARY KEY,
+			conversation_id  TEXT NOT NULL,
+			provider         TEXT NOT NULL,
+			model            TEXT NOT NULL,
+			input_tokens     INTEGER NOT NULL DEFAULT 0,
+			output_tokens    INTEGER NOT NULL DEFAULT 0,
+			input_cost_usd   REAL NOT NULL DEFAULT 0.0,
+			output_cost_usd  REAL NOT NULL DEFAULT 0.0,
+			total_cost_usd   REAL NOT NULL DEFAULT 0.0,
+			recorded_at      TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_token_usage_recorded_at
+			ON token_usage(recorded_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_token_usage_conversation_id
+			ON token_usage(conversation_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_token_usage_provider_model
+			ON token_usage(provider, model)`,
+	}
+
+	// Idempotent migrations for memories columns added after initial creation.
+	// valid_until: ISO8601 timestamp after which a contradicted memory is excluded
+	// from retrieval but preserved for history. NULL = still valid.
+	alterMemories := []string{
+		`ALTER TABLE memories ADD COLUMN valid_until TEXT`,
+		// Backfill FTS5 index for memories that existed before the FTS5 table was added.
+		`INSERT OR IGNORE INTO memories_fts(memory_id, title, content, tags_json)
+		    SELECT memory_id, title, content, tags_json FROM memories`,
 	}
 
 	// Idempotent migrations for rows added to deferred_executions after its initial creation.
@@ -207,6 +259,11 @@ func (db *DB) migrate() error {
 		`ALTER TABLE deferred_executions ADD COLUMN preview_diff TEXT`,
 	}
 
+	// Idempotent migrations for conversations columns added after initial creation.
+	alterConversations := []string{
+		`ALTER TABLE conversations ADD COLUMN platform TEXT NOT NULL DEFAULT 'web'`,
+	}
+
 	// Idempotent migrations for browser_sessions columns added after initial creation.
 	alterBrowserSessions := []string{
 		`ALTER TABLE browser_sessions ADD COLUMN session_name TEXT NOT NULL DEFAULT ''`,
@@ -218,7 +275,13 @@ func (db *DB) migrate() error {
 		}
 	}
 	// Swallow errors — column already exists is expected on re-open.
+	for _, stmt := range alterMemories {
+		db.conn.Exec(stmt) //nolint:errcheck
+	}
 	for _, stmt := range alterDeferred {
+		db.conn.Exec(stmt) //nolint:errcheck
+	}
+	for _, stmt := range alterConversations {
 		db.conn.Exec(stmt) //nolint:errcheck
 	}
 	for _, stmt := range alterBrowserSessions {
@@ -313,6 +376,7 @@ type ConversationRow struct {
 	ID              string
 	CreatedAt       string
 	UpdatedAt       string
+	Platform        string
 	PlatformContext *string
 }
 
@@ -322,6 +386,7 @@ type ConversationSummaryRow struct {
 	ID                   string
 	CreatedAt            string
 	UpdatedAt            string
+	Platform             string
 	PlatformContext      *string
 	MessageCount         int
 	FirstUserMessage     *string
@@ -340,6 +405,7 @@ func (db *DB) ListConversationSummaries(limit int) ([]ConversationSummaryRow, er
 			c.conversation_id,
 			c.created_at,
 			c.updated_at,
+			c.platform,
 			c.platform_context,
 			(SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.conversation_id) AS message_count,
 			(SELECT m2.content FROM messages m2
@@ -360,7 +426,7 @@ func (db *DB) ListConversationSummaries(limit int) ([]ConversationSummaryRow, er
 	for rows.Next() {
 		var r ConversationSummaryRow
 		if err := rows.Scan(
-			&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.PlatformContext,
+			&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.Platform, &r.PlatformContext,
 			&r.MessageCount, &r.FirstUserMessage, &r.LastAssistantMessage,
 		); err != nil {
 			return nil, err
@@ -382,6 +448,7 @@ func (db *DB) SearchConversationSummaries(query string, limit int) ([]Conversati
 			c.conversation_id,
 			c.created_at,
 			c.updated_at,
+			c.platform,
 			c.platform_context,
 			(SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.conversation_id) AS message_count,
 			(SELECT m2.content FROM messages m2
@@ -407,7 +474,7 @@ func (db *DB) SearchConversationSummaries(query string, limit int) ([]Conversati
 	for rows.Next() {
 		var r ConversationSummaryRow
 		if err := rows.Scan(
-			&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.PlatformContext,
+			&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.Platform, &r.PlatformContext,
 			&r.MessageCount, &r.FirstUserMessage, &r.LastAssistantMessage,
 		); err != nil {
 			return nil, err
@@ -418,11 +485,14 @@ func (db *DB) SearchConversationSummaries(query string, limit int) ([]Conversati
 }
 
 // SaveConversation inserts a new conversation record. No-op if ID already exists.
-func (db *DB) SaveConversation(id, createdAt, updatedAt string, platformContext *string) error {
+func (db *DB) SaveConversation(id, createdAt, updatedAt, platform string, platformContext *string) error {
+	if platform == "" {
+		platform = "web"
+	}
 	_, err := db.conn.Exec(
-		`INSERT OR IGNORE INTO conversations(conversation_id, created_at, updated_at, platform_context)
-		 VALUES (?, ?, ?, ?)`,
-		id, createdAt, updatedAt, platformContext,
+		`INSERT OR IGNORE INTO conversations(conversation_id, created_at, updated_at, platform, platform_context)
+		 VALUES (?, ?, ?, ?, ?)`,
+		id, createdAt, updatedAt, platform, platformContext,
 	)
 	return err
 }
@@ -442,7 +512,7 @@ func (db *DB) ListConversations(limit int) ([]ConversationRow, error) {
 		limit = 20
 	}
 	rows, err := db.conn.Query(
-		`SELECT conversation_id, created_at, updated_at, platform_context
+		`SELECT conversation_id, created_at, updated_at, platform, platform_context
 		 FROM conversations ORDER BY updated_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -452,7 +522,7 @@ func (db *DB) ListConversations(limit int) ([]ConversationRow, error) {
 	var out []ConversationRow
 	for rows.Next() {
 		var r ConversationRow
-		if err := rows.Scan(&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.PlatformContext); err != nil {
+		if err := rows.Scan(&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.Platform, &r.PlatformContext); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -463,10 +533,10 @@ func (db *DB) ListConversations(limit int) ([]ConversationRow, error) {
 // FetchConversation returns a single conversation by ID, or nil if not found.
 func (db *DB) FetchConversation(id string) (*ConversationRow, error) {
 	row := db.conn.QueryRow(
-		`SELECT conversation_id, created_at, updated_at, platform_context
+		`SELECT conversation_id, created_at, updated_at, platform, platform_context
 		 FROM conversations WHERE conversation_id = ?`, id)
 	var r ConversationRow
-	if err := row.Scan(&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.PlatformContext); err != nil {
+	if err := row.Scan(&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.Platform, &r.PlatformContext); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -885,11 +955,14 @@ type MemoryRow struct {
 	IsSensitive           bool
 	TagsJSON              string
 	RelatedConversationID *string
+	// ValidUntil, when set, marks a contradicted memory as inactive. NULL = still valid.
+	// The memory is preserved for history but excluded from retrieval after this timestamp.
+	ValidUntil *string
 }
 
 const memoryCols = `memory_id, category, title, content, source, confidence, importance,
 	created_at, updated_at, last_retrieved_at, is_user_confirmed, is_sensitive,
-	tags_json, related_conversation_id`
+	tags_json, related_conversation_id, valid_until`
 
 func scanMemoryRow(row interface{ Scan(...any) error }) (*MemoryRow, error) {
 	var r MemoryRow
@@ -899,7 +972,7 @@ func scanMemoryRow(row interface{ Scan(...any) error }) (*MemoryRow, error) {
 		&r.Confidence, &r.Importance,
 		&r.CreatedAt, &r.UpdatedAt, &r.LastRetrievedAt,
 		&isConfirmedInt, &isSensitiveInt,
-		&r.TagsJSON, &r.RelatedConversationID,
+		&r.TagsJSON, &r.RelatedConversationID, &r.ValidUntil,
 	)
 	if err != nil {
 		return nil, err
@@ -909,7 +982,8 @@ func scanMemoryRow(row interface{ Scan(...any) error }) (*MemoryRow, error) {
 	return &r, nil
 }
 
-// ListMemories returns memories ordered by importance DESC, updated_at DESC.
+// ListMemories returns active memories ordered by importance DESC, updated_at DESC.
+// Active means valid_until IS NULL or in the future.
 // Pass a non-empty category to filter. limit <= 0 defaults to 100.
 func (db *DB) ListMemories(limit int, category string) ([]MemoryRow, error) {
 	if limit <= 0 {
@@ -922,12 +996,14 @@ func (db *DB) ListMemories(limit int, category string) ([]MemoryRow, error) {
 	if category != "" {
 		rows, err = db.conn.Query(
 			`SELECT `+memoryCols+`
-			 FROM memories WHERE category = ?
+			 FROM memories
+			 WHERE category = ? AND (valid_until IS NULL OR valid_until > strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 			 ORDER BY importance DESC, updated_at DESC LIMIT ?`, category, limit)
 	} else {
 		rows, err = db.conn.Query(
 			`SELECT `+memoryCols+`
 			 FROM memories
+			 WHERE valid_until IS NULL OR valid_until > strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 			 ORDER BY importance DESC, updated_at DESC LIMIT ?`, limit)
 	}
 	if err != nil {
@@ -983,11 +1059,11 @@ func (db *DB) DeleteMemory(id string) error {
 // SaveMemory inserts a new memory row. ID, CreatedAt, and UpdatedAt must be pre-populated.
 func (db *DB) SaveMemory(r MemoryRow) error {
 	_, err := db.conn.Exec(
-		`INSERT INTO memories (`+memoryCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO memories (`+memoryCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.ID, r.Category, r.Title, r.Content, r.Source, r.Confidence, r.Importance,
 		r.CreatedAt, r.UpdatedAt, r.LastRetrievedAt,
 		boolToInt(r.IsUserConfirmed), boolToInt(r.IsSensitive),
-		r.TagsJSON, r.RelatedConversationID,
+		r.TagsJSON, r.RelatedConversationID, r.ValidUntil,
 	)
 	return err
 }
@@ -996,10 +1072,21 @@ func (db *DB) SaveMemory(r MemoryRow) error {
 func (db *DB) UpdateMemory(r MemoryRow) error {
 	_, err := db.conn.Exec(
 		`UPDATE memories SET title=?, content=?, confidence=?, importance=?, updated_at=?,
-		 is_user_confirmed=?, is_sensitive=?, tags_json=? WHERE memory_id=?`,
+		 is_user_confirmed=?, is_sensitive=?, tags_json=?, valid_until=? WHERE memory_id=?`,
 		r.Title, r.Content, r.Confidence, r.Importance, r.UpdatedAt,
 		boolToInt(r.IsUserConfirmed), boolToInt(r.IsSensitive),
-		r.TagsJSON, r.ID,
+		r.TagsJSON, r.ValidUntil, r.ID,
+	)
+	return err
+}
+
+// SetValidUntil marks a memory as no longer valid after the given ISO8601 timestamp.
+// The memory is excluded from retrieval but preserved for historical record.
+// Use time.Now().UTC().Format(time.RFC3339) as until to invalidate immediately.
+func (db *DB) SetValidUntil(id, until string) error {
+	_, err := db.conn.Exec(
+		`UPDATE memories SET valid_until=?, updated_at=? WHERE memory_id=?`,
+		until, time.Now().UTC().Format(time.RFC3339Nano), id,
 	)
 	return err
 }
@@ -1093,20 +1180,29 @@ func (db *DB) DeleteStaleMemories(maxAgeDays, unretrievedMaxAgeDays int, minConf
 
 // RelevantMemories returns memories scored by a weighted combination of keyword
 // relevance (0.5), static importance (0.3), and time-decayed recency (0.2).
-// Falls back to ListMemories when the query yields no keyword matches.
+// Commitment memories receive an importance boost (+0.2) so they surface first.
+// FTS5 is used for candidate selection when available, falling back to
+// importance-ordered pre-filter. Invalidated memories (valid_until in the past)
+// are excluded.
 func (db *DB) RelevantMemories(query string, limit int) ([]MemoryRow, error) {
 	if limit <= 0 {
 		limit = 4
 	}
 	keywords := extractKeywords(query)
 	if len(keywords) == 0 {
-		return db.ListMemories(limit, "")
+		return db.listActiveMemories(limit)
 	}
 
-	// Pre-filter: fetch top 50 by importance as candidates.
-	all, err := db.ListMemories(50, "")
-	if err != nil {
-		return nil, err
+	// Try FTS5 candidate selection — gives better recall than importance-only pre-filter.
+	// Falls back silently if the FTS5 table is unavailable or the query fails.
+	ftsQuery := strings.Join(keywords, " OR ")
+	all, err := db.ftsSearch(ftsQuery, 50)
+	if err != nil || len(all) == 0 {
+		// Fall back to importance-ordered active memories.
+		all, err = db.listActiveMemories(50)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(all) == 0 {
 		return nil, nil
@@ -1138,7 +1234,26 @@ func (db *DB) RelevantMemories(query string, limit int) ([]MemoryRow, error) {
 		}
 		recencyScore := math.Exp(-0.693 * hoursAge / (7.0 * 24.0))
 
-		combined := keywordScore*0.5 + m.Importance*0.3 + recencyScore*0.2
+		// Commitment memories always surface — boost importance.
+		importance := m.Importance
+		if m.Category == "commitment" {
+			importance = math.Min(importance+0.2, 1.0)
+		}
+
+		// Retrieval diversity penalty: if this memory was retrieved very recently
+		// (within the last hour — roughly the last few turns), reduce its score
+		// so fresh, unseen memories can surface. Commitments are exempt.
+		diversityPenalty := 0.0
+		if m.Category != "commitment" && m.LastRetrievedAt != nil && *m.LastRetrievedAt != "" {
+			if lastRetr, err := time.Parse(time.RFC3339Nano, *m.LastRetrievedAt); err == nil {
+				hoursSinceRetrieval := now.Sub(lastRetr).Hours()
+				if hoursSinceRetrieval < 1.0 {
+					diversityPenalty = 0.15 * (1.0 - hoursSinceRetrieval) // fades over 1 hour
+				}
+			}
+		}
+
+		combined := keywordScore*0.5 + importance*0.3 + recencyScore*0.2 - diversityPenalty
 		results = append(results, scored{row: m, score: combined})
 	}
 
@@ -1146,8 +1261,6 @@ func (db *DB) RelevantMemories(query string, limit int) ([]MemoryRow, error) {
 		return results[i].score > results[j].score
 	})
 
-	// If no keyword matched at all, the ordering is purely importance+recency
-	// which is fine — we still return the best candidates.
 	if len(results) > limit {
 		results = results[:limit]
 	}
@@ -1156,6 +1269,54 @@ func (db *DB) RelevantMemories(query string, limit int) ([]MemoryRow, error) {
 		out[i] = r.row
 	}
 	return out, nil
+}
+
+// listActiveMemories returns up to limit active memories (valid_until IS NULL or
+// in the future), ordered by importance DESC, updated_at DESC.
+func (db *DB) listActiveMemories(limit int) ([]MemoryRow, error) {
+	rows, err := db.conn.Query(
+		`SELECT `+memoryCols+`
+		 FROM memories
+		 WHERE valid_until IS NULL OR valid_until > strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+		 ORDER BY importance DESC, updated_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MemoryRow
+	for rows.Next() {
+		r, err := scanMemoryRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
+}
+
+// ftsSearch uses the memories_fts FTS5 index to find candidate memories matching
+// an OR query of keywords. Returns active memories only (valid_until filter applied).
+func (db *DB) ftsSearch(ftsQuery string, limit int) ([]MemoryRow, error) {
+	rows, err := db.conn.Query(
+		`SELECT `+memoryCols+`
+		 FROM memories
+		 WHERE memory_id IN (SELECT memory_id FROM memories_fts WHERE memories_fts MATCH ?)
+		   AND (valid_until IS NULL OR valid_until > strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+		 ORDER BY importance DESC, updated_at DESC LIMIT ?`,
+		ftsQuery, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MemoryRow
+	for rows.Next() {
+		r, err := scanMemoryRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
 }
 
 // UpdateLastRetrieved sets last_retrieved_at = now for a batch of memory IDs.
@@ -1327,4 +1488,270 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// ── Token usage ───────────────────────────────────────────────────────────────
+
+// TokenUsageRow is one persisted token usage event.
+type TokenUsageRow struct {
+	ID             string
+	ConversationID string
+	Provider       string
+	Model          string
+	InputTokens    int
+	OutputTokens   int
+	InputCostUSD   float64
+	OutputCostUSD  float64
+	TotalCostUSD   float64
+	RecordedAt     string
+}
+
+// ModelUsageBreakdown aggregates usage for one provider+model combination.
+type ModelUsageBreakdown struct {
+	Provider     string
+	Model        string
+	InputTokens  int64
+	OutputTokens int64
+	TotalTokens  int64
+	TotalCostUSD float64
+	TurnCount    int64
+}
+
+// DailyUsage aggregates usage for one calendar day.
+type DailyUsage struct {
+	Date         string // "2025-04-03"
+	InputTokens  int64
+	OutputTokens int64
+	TotalTokens  int64
+	CostUSD      float64
+	TurnCount    int64
+}
+
+// TokenUsageSummary is the full aggregated response.
+type TokenUsageSummary struct {
+	TotalInputTokens  int64
+	TotalOutputTokens int64
+	TotalTokens       int64
+	TotalCostUSD      float64
+	TurnCount         int64
+	ByModel           []ModelUsageBreakdown
+	DailySeries       []DailyUsage
+}
+
+// RecordTokenUsage persists one token usage event.
+func (db *DB) RecordTokenUsage(id, convID, provider, model string,
+	inputTokens, outputTokens int,
+	inputCost, outputCost float64,
+	recordedAt string,
+) error {
+	total := inputCost + outputCost
+	_, err := db.conn.Exec(`
+		INSERT INTO token_usage
+			(id, conversation_id, provider, model,
+			 input_tokens, output_tokens,
+			 input_cost_usd, output_cost_usd, total_cost_usd, recorded_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, convID, provider, model,
+		inputTokens, outputTokens,
+		inputCost, outputCost, total, recordedAt,
+	)
+	return err
+}
+
+// TokenUsageEvents returns raw events newest-first with optional filters.
+func (db *DB) TokenUsageEvents(since, until, provider, model string, limit int) ([]TokenUsageRow, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	q := `SELECT id, conversation_id, provider, model,
+		input_tokens, output_tokens,
+		input_cost_usd, output_cost_usd, total_cost_usd, recorded_at
+		FROM token_usage WHERE 1=1`
+	args := []any{}
+	if since != "" {
+		q += " AND recorded_at >= ?"
+		args = append(args, since)
+	}
+	if until != "" {
+		q += " AND recorded_at <= ?"
+		args = append(args, until)
+	}
+	if provider != "" {
+		q += " AND provider = ?"
+		args = append(args, provider)
+	}
+	if model != "" {
+		q += " AND model = ?"
+		args = append(args, model)
+	}
+	q += " ORDER BY recorded_at DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := db.conn.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TokenUsageRow
+	for rows.Next() {
+		var r TokenUsageRow
+		if err := rows.Scan(&r.ID, &r.ConversationID, &r.Provider, &r.Model,
+			&r.InputTokens, &r.OutputTokens,
+			&r.InputCostUSD, &r.OutputCostUSD, &r.TotalCostUSD, &r.RecordedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// GetTokenUsageSummary returns aggregated stats with optional date range and daily series.
+func (db *DB) GetTokenUsageSummary(since, until string, dailyDays int) (TokenUsageSummary, error) {
+	where := "WHERE 1=1"
+	args := []any{}
+	if since != "" {
+		where += " AND recorded_at >= ?"
+		args = append(args, since)
+	}
+	if until != "" {
+		where += " AND recorded_at <= ?"
+		args = append(args, until)
+	}
+
+	var s TokenUsageSummary
+
+	// ── Scalar totals ─────────────────────────────────────────────────────────
+	row := db.conn.QueryRow(
+		"SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), "+
+			"COALESCE(SUM(total_cost_usd),0), COUNT(*) FROM token_usage "+where,
+		args...)
+	if err := row.Scan(&s.TotalInputTokens, &s.TotalOutputTokens, &s.TotalCostUSD, &s.TurnCount); err != nil {
+		return s, err
+	}
+	s.TotalTokens = s.TotalInputTokens + s.TotalOutputTokens
+
+	// ── Per-model breakdown ───────────────────────────────────────────────────
+	mrows, err := db.conn.Query(
+		"SELECT provider, model, "+
+			"COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), "+
+			"COALESCE(SUM(total_cost_usd),0), COUNT(*) "+
+			"FROM token_usage "+where+
+			" GROUP BY provider, model ORDER BY SUM(total_cost_usd) DESC",
+		args...)
+	if err != nil {
+		return s, err
+	}
+	defer mrows.Close()
+	for mrows.Next() {
+		var m ModelUsageBreakdown
+		if err := mrows.Scan(&m.Provider, &m.Model, &m.InputTokens, &m.OutputTokens, &m.TotalCostUSD, &m.TurnCount); err != nil {
+			return s, err
+		}
+		m.TotalTokens = m.InputTokens + m.OutputTokens
+		s.ByModel = append(s.ByModel, m)
+	}
+	if err := mrows.Err(); err != nil {
+		return s, err
+	}
+
+	// ── Daily series ─────────────────────────────────────────────────────────
+	// dailyDays=0 skips the series entirely; callers receive a nil DailySeries.
+	// Pass days=30 (or any positive value) to include the per-day breakdown.
+	if dailyDays > 0 {
+		dargs := []any{}
+		dwhere := "WHERE 1=1"
+		if since != "" {
+			dwhere += " AND recorded_at >= ?"
+			dargs = append(dargs, since)
+		}
+		if until != "" {
+			dwhere += " AND recorded_at <= ?"
+			dargs = append(dargs, until)
+		}
+		drows, err := db.conn.Query(
+			"SELECT strftime('%Y-%m-%d', recorded_at) AS day, "+
+				"COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), "+
+				"COALESCE(SUM(total_cost_usd),0), COUNT(*) "+
+				"FROM token_usage "+dwhere+
+				" GROUP BY day ORDER BY day ASC LIMIT ?",
+			append(dargs, dailyDays)...)
+		if err != nil {
+			return s, err
+		}
+		defer drows.Close()
+		for drows.Next() {
+			var d DailyUsage
+			if err := drows.Scan(&d.Date, &d.InputTokens, &d.OutputTokens, &d.CostUSD, &d.TurnCount); err != nil {
+				return s, err
+			}
+			d.TotalTokens = d.InputTokens + d.OutputTokens
+			s.DailySeries = append(s.DailySeries, d)
+		}
+		if err := drows.Err(); err != nil {
+			return s, err
+		}
+	}
+
+	return s, nil
+}
+
+// BackfillTokenUsageCosts re-computes and updates cost columns for any existing
+// token_usage rows that have total_cost_usd = 0 for non-local providers.
+// Returns the number of rows updated. Safe to call at startup; no-ops if all
+// rows already have accurate costs.
+func (db *DB) BackfillTokenUsageCosts() int {
+	rows, err := db.conn.Query(`
+		SELECT id, provider, model, input_tokens, output_tokens
+		FROM token_usage
+		WHERE total_cost_usd = 0
+		  AND provider NOT IN ('lm_studio', 'ollama', 'atlas_engine')
+	`)
+	if err != nil {
+		return 0
+	}
+
+	type update struct {
+		id                    string
+		inputCost, outputCost float64
+	}
+	var updates []update
+
+	for rows.Next() {
+		var id, provider, model string
+		var inputTokens, outputTokens int
+		if err := rows.Scan(&id, &provider, &model, &inputTokens, &outputTokens); err != nil {
+			continue
+		}
+		ic, oc, known := ComputeCost(provider, model, inputTokens, outputTokens)
+		if !known || (ic == 0 && oc == 0) {
+			continue
+		}
+		updates = append(updates, update{id, ic, oc})
+	}
+	rows.Close()
+
+	count := 0
+	for _, u := range updates {
+		_, err := db.conn.Exec(
+			`UPDATE token_usage SET input_cost_usd=?, output_cost_usd=?, total_cost_usd=? WHERE id=?`,
+			u.inputCost, u.outputCost, u.inputCost+u.outputCost, u.id,
+		)
+		if err == nil {
+			count++
+		}
+	}
+	return count
+}
+
+// TokenUsageDeleteBefore deletes all events recorded before the given ISO8601 timestamp.
+// Returns the number of rows deleted.
+func (db *DB) TokenUsageDeleteBefore(before string) (int64, error) {
+	res, err := db.conn.Exec("DELETE FROM token_usage WHERE recorded_at < ?", before)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

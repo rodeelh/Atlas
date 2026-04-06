@@ -30,7 +30,7 @@ const (
 	SessionCookieName     = "atlas_session"
 	tokenLifetime         = 60 * time.Second
 	sessionLifetime       = 7 * 24 * time.Hour // local browser sessions
-	remoteSessionLifetime = 24 * time.Hour      // remote sessions expire sooner
+	remoteSessionLifetime = 24 * time.Hour     // remote sessions expire sooner
 )
 
 // Session is an active browser session.
