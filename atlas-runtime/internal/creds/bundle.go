@@ -14,7 +14,9 @@ type Bundle struct {
 	OpenAIAPIKey       string            `json:"openAIAPIKey"`
 	AnthropicAPIKey    string            `json:"anthropicAPIKey"`
 	GeminiAPIKey       string            `json:"geminiAPIKey"`
+	OpenRouterAPIKey   string            `json:"openRouterAPIKey"`
 	LMStudioAPIKey     string            `json:"lmStudioAPIKey"`
+	OllamaAPIKey       string            `json:"ollamaAPIKey"`
 	BraveSearchAPIKey  string            `json:"braveSearchAPIKey"`
 	FinnhubAPIKey      string            `json:"finnhubAPIKey"`
 	TelegramBotToken   string            `json:"telegramBotToken"`
@@ -85,8 +87,12 @@ func Store(provider, key, name string) error {
 		m["anthropicAPIKey"] = key
 	case "gemini":
 		m["geminiAPIKey"] = key
+	case "openrouter":
+		m["openRouterAPIKey"] = key
 	case "lm_studio":
 		m["lmStudioAPIKey"] = key
+	case "ollama":
+		m["ollamaAPIKey"] = key
 	case "telegram":
 		m["telegramBotToken"] = key
 	case "discord":

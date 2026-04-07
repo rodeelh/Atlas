@@ -29,6 +29,7 @@ export interface APIKeyStatus {
   braveSearchKeySet: boolean
   anthropicKeySet: boolean
   geminiKeySet: boolean
+  openRouterKeySet: boolean
   lmStudioKeySet: boolean
   ollamaKeySet: boolean
   finnhubKeySet: boolean
@@ -63,10 +64,12 @@ export interface RuntimeConfig {
   lmStudioBaseURL: string
   selectedAnthropicModel: string
   selectedGeminiModel: string
+  selectedOpenRouterModel: string
   selectedOpenAIPrimaryModel: string
   selectedOpenAIFastModel: string
   selectedAnthropicFastModel: string
   selectedGeminiFastModel: string
+  selectedOpenRouterFastModel: string
   selectedLMStudioModel: string
   selectedLMStudioModelFast: string
   lmStudioContextWindowLimit: number
@@ -95,6 +98,18 @@ export interface RuntimeConfig {
   workerMaxIterations: number
   remoteAccessEnabled: boolean
   tailscaleEnabled: boolean
+
+  // Voice — Whisper STT + Kokoro TTS. All fields optional on the TS side so
+  // older persisted configs don't fail to parse.
+  voiceSTTEnabled?: boolean
+  voiceTTSEnabled?: boolean
+  voiceContinuousMode?: boolean
+  voiceWhisperPort?: number
+  voiceWhisperModel?: string
+  voiceWhisperLanguage?: string
+  voiceTTSAutoPlay?: boolean
+  voiceSessionIdleSec?: number
+  voiceKokoroPort?: number
 }
 
 export interface RuntimeConfigUpdateResponse {
@@ -381,6 +396,18 @@ export interface ModelSelectorInfo {
   availableModels?: AIModelRecord[]
 }
 
+export interface OpenRouterModelHealth {
+  status: 'ok' | 'rate_limited' | 'warning' | 'missing_key' | 'unavailable' | 'unknown' | string
+  message: string
+  checkedAt: string
+}
+
+export interface CloudModelHealth {
+  status: 'ok' | 'rate_limited' | 'warning' | 'missing_key' | 'unavailable' | 'unknown' | string
+  message: string
+  checkedAt: string
+}
+
 export interface GremlinRun {
   id: string
   gremlinID: string
@@ -536,4 +563,42 @@ export interface TokenUsageEvent {
   outputCostUSD: number
   totalCostUSD: number
   recordedAt: string
+}
+
+// ── Voice (Phase 1: Whisper STT; Phase 2 reserved for Piper TTS) ─────────────
+
+export interface VoiceStatus {
+  sessionActive: boolean
+  sessionID?: string
+  sessionStartedUnix?: number
+  whisperRunning: boolean
+  whisperReady: boolean
+  whisperPort: number
+  whisperModel?: string
+  whisperBuildTag?: string
+  kokoroRunning: boolean
+  kokoroReady: boolean
+  kokoroPort: number
+  lastError?: string
+}
+
+export interface VoiceModelInfo {
+  name: string
+  component: 'whisper' | 'kokoro'
+  sizeBytes: number
+  sizeHuman: string
+}
+
+export interface VoiceTranscribeResult {
+  text: string
+  language?: string
+  duration?: number
+  sessionID?: string
+}
+
+export interface VoiceSynthesizeChunkEvent {
+  index: number
+  text: string
+  final: boolean
+  chunk: string // base64 WAV
 }

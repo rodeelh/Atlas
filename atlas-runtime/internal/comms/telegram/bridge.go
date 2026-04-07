@@ -405,6 +405,25 @@ func (b *Bridge) processText(chatID, msgID int64, from *tgUser, text string, att
 	if upsertErr := b.db.UpsertTelegramSession(row); upsertErr != nil {
 		logstore.Write("error", "Telegram: upsert session: "+upsertErr.Error(), map[string]string{"platform": "telegram"})
 	}
+	var userIDStr *string
+	if from != nil {
+		v := fmt.Sprintf("%d", from.ID)
+		userIDStr = &v
+	}
+	lastMessageID := fmt.Sprintf("%d", msgID)
+	commRow := storage.CommSessionRow{
+		Platform:             "telegram",
+		ChannelID:            fmt.Sprintf("%d", chatID),
+		ThreadID:             "",
+		UserID:               userIDStr,
+		ActiveConversationID: newConvID,
+		CreatedAt:            row.CreatedAt,
+		UpdatedAt:            row.UpdatedAt,
+		LastMessageID:        &lastMessageID,
+	}
+	if upsertErr := b.db.UpsertCommSession(commRow); upsertErr != nil {
+		logstore.Write("error", "Telegram: upsert comm session: "+upsertErr.Error(), map[string]string{"platform": "telegram"})
+	}
 
 	// ✅ only when the message was an action request (proxy for "tools ran").
 	if reactWithProcessing(text) {
@@ -645,6 +664,22 @@ func (b *Bridge) handleCommand(chatID, msgID int64, text string, cfg config.Runt
 				UpdatedAt:            now,
 			}
 			b.db.UpsertTelegramSession(row) //nolint:errcheck
+			chatIDStr := fmt.Sprintf("%d", chatID)
+			var userIDStr *string
+			if session.UserID != nil {
+				v := fmt.Sprintf("%d", *session.UserID)
+				userIDStr = &v
+			}
+			commRow := storage.CommSessionRow{
+				Platform:             "telegram",
+				ChannelID:            chatIDStr,
+				ThreadID:             "",
+				UserID:               userIDStr,
+				ActiveConversationID: "",
+				CreatedAt:            session.CreatedAt,
+				UpdatedAt:            now,
+			}
+			b.db.UpsertCommSession(commRow) //nolint:errcheck
 		}
 		b.sendMessage(chatID, "Conversation reset. Send a message to start fresh.")
 

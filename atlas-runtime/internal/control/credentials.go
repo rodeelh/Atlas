@@ -19,6 +19,7 @@ type APIKeyStatus struct {
 	BraveSearchKeySet bool              `json:"braveSearchKeySet"`
 	AnthropicKeySet   bool              `json:"anthropicKeySet"`
 	GeminiKeySet      bool              `json:"geminiKeySet"`
+	OpenRouterKeySet  bool              `json:"openRouterKeySet"`
 	LMStudioKeySet    bool              `json:"lmStudioKeySet"`
 	FinnhubKeySet     bool              `json:"finnhubKeySet"`
 	CustomKeys        []string          `json:"customKeys"`
@@ -48,6 +49,7 @@ func (s *CredentialsService) Status() APIKeyStatus {
 		BraveSearchAPIKey  string            `json:"braveSearchAPIKey"`
 		AnthropicAPIKey    string            `json:"anthropicAPIKey"`
 		GeminiAPIKey       string            `json:"geminiAPIKey"`
+		OpenRouterAPIKey   string            `json:"openRouterAPIKey"`
 		LMStudioAPIKey     string            `json:"lmStudioAPIKey"`
 		OllamaAPIKey       string            `json:"ollamaAPIKey"`
 		FinnhubAPIKey      string            `json:"finnhubAPIKey"`
@@ -65,6 +67,7 @@ func (s *CredentialsService) Status() APIKeyStatus {
 	status.BraveSearchKeySet = bundle.BraveSearchAPIKey != ""
 	status.AnthropicKeySet = bundle.AnthropicAPIKey != ""
 	status.GeminiKeySet = bundle.GeminiAPIKey != ""
+	status.OpenRouterKeySet = bundle.OpenRouterAPIKey != ""
 	status.LMStudioKeySet = bundle.LMStudioAPIKey != ""
 	status.OllamaKeySet = bundle.OllamaAPIKey != ""
 	status.FinnhubKeySet = bundle.FinnhubAPIKey != ""
@@ -94,6 +97,8 @@ func (s *CredentialsService) Store(provider, key, name, label string) error {
 		m["anthropicAPIKey"] = key
 	case "gemini":
 		m["geminiAPIKey"] = key
+	case "openrouter":
+		m["openRouterAPIKey"] = key
 	case "lm_studio":
 		m["lmStudioAPIKey"] = key
 	case "ollama":

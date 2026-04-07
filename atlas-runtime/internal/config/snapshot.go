@@ -3,69 +3,99 @@
 // CodingKeys exactly so the Go and Swift runtimes share the same config file.
 package config
 
+type CachedModelRecord struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	IsFast      bool   `json:"isFast"`
+}
+
+type OpenRouterModelCache struct {
+	FetchedAt string              `json:"fetchedAt"`
+	Models    []CachedModelRecord `json:"models"`
+}
+
 // RuntimeConfigSnapshot is the portable config contract shared between the
 // Swift and Go runtimes. All JSON keys are identical to the Swift CodingKeys.
 type RuntimeConfigSnapshot struct {
-	RuntimePort                     int     `json:"runtimePort"`
-	OnboardingCompleted             bool    `json:"onboardingCompleted"`
-	TelegramEnabled                 bool    `json:"telegramEnabled"`
-	DiscordEnabled                  bool    `json:"discordEnabled"`
-	DiscordClientID                 string  `json:"discordClientID"`
-	SlackEnabled                    bool    `json:"slackEnabled"`
-	TelegramPollingTimeoutSeconds   int     `json:"telegramPollingTimeoutSeconds"`
-	TelegramPollingRetryBaseSeconds int     `json:"telegramPollingRetryBaseSeconds"`
-	TelegramCommandPrefix           string  `json:"telegramCommandPrefix"`
-	TelegramAllowedUserIDs          []int64 `json:"telegramAllowedUserIDs"`
-	TelegramAllowedChatIDs          []int64 `json:"telegramAllowedChatIDs"`
-	DefaultOpenAIModel              string  `json:"defaultOpenAIModel"`
-	BaseSystemPrompt                string  `json:"baseSystemPrompt"`
-	MaxAgentIterations              int     `json:"maxAgentIterations"`
-	ConversationWindowLimit         int     `json:"conversationWindowLimit"`
-	MemoryEnabled                   bool    `json:"memoryEnabled"`
-	MaxRetrievedMemoriesPerTurn     int     `json:"maxRetrievedMemoriesPerTurn"`
-	MemoryAutoSaveThreshold         float64 `json:"memoryAutoSaveThreshold"`
-	PersonaName                     string  `json:"personaName"`
-	UserName                        string  `json:"userName"`
-	ActionSafetyMode                string  `json:"actionSafetyMode"`
-	ActiveImageProvider             string  `json:"activeImageProvider"`
-	ActiveAIProvider                string  `json:"activeAIProvider"`
-	LMStudioBaseURL                 string  `json:"lmStudioBaseURL"`
-	SelectedAnthropicModel          string  `json:"selectedAnthropicModel"`
-	SelectedGeminiModel             string  `json:"selectedGeminiModel"`
-	SelectedOpenAIPrimaryModel      string  `json:"selectedOpenAIPrimaryModel"`
-	SelectedOpenAIFastModel         string  `json:"selectedOpenAIFastModel"`
-	SelectedAnthropicFastModel      string  `json:"selectedAnthropicFastModel"`
-	SelectedGeminiFastModel         string  `json:"selectedGeminiFastModel"`
-	SelectedLMStudioModel           string  `json:"selectedLMStudioModel"`
-	SelectedLMStudioModelFast       string  `json:"selectedLMStudioModelFast"`
-	LMStudioContextWindowLimit      int     `json:"lmStudioContextWindowLimit"`
-	LMStudioMaxAgentIterations      int     `json:"lmStudioMaxAgentIterations"`
-	OllamaBaseURL                   string  `json:"ollamaBaseURL"`
-	SelectedOllamaModel             string  `json:"selectedOllamaModel"`
-	SelectedOllamaModelFast         string  `json:"selectedOllamaModelFast"`
-	OllamaContextWindowLimit        int     `json:"ollamaContextWindowLimit"`
-	OllamaMaxAgentIterations        int     `json:"ollamaMaxAgentIterations"`
-	AtlasEnginePort                 int     `json:"atlasEnginePort"`
-	SelectedAtlasEngineModel        string  `json:"selectedAtlasEngineModel"`
-	SelectedAtlasEngineModelFast    string  `json:"selectedAtlasEngineModelFast"`
-	AtlasEngineContextWindowLimit   int     `json:"atlasEngineContextWindowLimit"`
-	AtlasEngineMaxAgentIterations   int     `json:"atlasEngineMaxAgentIterations"`
-	AtlasEngineCtxSize              int     `json:"atlasEngineCtxSize"`       // llama-server --ctx-size (KV-cache token limit)
-	AtlasEngineKVCacheQuant         string  `json:"atlasEngineKVCacheQuant"`  // llama-server -ctk/-ctv quant level (for example: f32, f16, bf16, q8_0, q5_1, q5_0, q4_1, q4_0, iq4_nl)
-	AtlasEngineMlock                bool    `json:"atlasEngineMlock"`         // llama-server --mlock — pin model in physical RAM
-	AtlasEngineRouterPort           int     `json:"atlasEngineRouterPort"`    // port for the dedicated tool-router llama-server
-	AtlasEngineRouterModel          string  `json:"atlasEngineRouterModel"`   // GGUF filename for the tool router (e.g. gemma-4-2b-it-Q4_K_M.gguf)
-	AtlasEngineRouterForAll         bool    `json:"atlasEngineRouterForAll"`  // use router for heavy background tasks too (memory, reflection, dream)
-	AtlasEngineDraftModel           string  `json:"atlasEngineDraftModel"`    // GGUF filename for speculative decoding draft model (same family as primary)
-	EnableSmartToolSelection        bool    `json:"enableSmartToolSelection"` // legacy — superseded by ToolSelectionMode
-	ToolSelectionMode               string  `json:"toolSelectionMode"`        // "off" | "lazy" | "heuristic" | "llm"
-	WebResearchUseJinaReader        bool    `json:"webResearchUseJinaReader"`
-	EnableMultiAgentOrchestration   bool    `json:"enableMultiAgentOrchestration"`
-	MaxParallelAgents               int     `json:"maxParallelAgents"`
-	WorkerMaxIterations             int     `json:"workerMaxIterations"`
-	RemoteAccessEnabled             bool    `json:"remoteAccessEnabled"`
-	TailscaleEnabled                bool    `json:"tailscaleEnabled"`
-	ModelContextWindow              int     `json:"modelContextWindow"` // effective context window in tokens; 0 = auto-detect from provider
+	RuntimePort                     int                  `json:"runtimePort"`
+	OnboardingCompleted             bool                 `json:"onboardingCompleted"`
+	TelegramEnabled                 bool                 `json:"telegramEnabled"`
+	DiscordEnabled                  bool                 `json:"discordEnabled"`
+	WhatsAppEnabled                 bool                 `json:"whatsAppEnabled"`
+	DiscordClientID                 string               `json:"discordClientID"`
+	SlackEnabled                    bool                 `json:"slackEnabled"`
+	TelegramPollingTimeoutSeconds   int                  `json:"telegramPollingTimeoutSeconds"`
+	TelegramPollingRetryBaseSeconds int                  `json:"telegramPollingRetryBaseSeconds"`
+	TelegramCommandPrefix           string               `json:"telegramCommandPrefix"`
+	TelegramAllowedUserIDs          []int64              `json:"telegramAllowedUserIDs"`
+	TelegramAllowedChatIDs          []int64              `json:"telegramAllowedChatIDs"`
+	DefaultOpenAIModel              string               `json:"defaultOpenAIModel"`
+	BaseSystemPrompt                string               `json:"baseSystemPrompt"`
+	MaxAgentIterations              int                  `json:"maxAgentIterations"`
+	ConversationWindowLimit         int                  `json:"conversationWindowLimit"`
+	MemoryEnabled                   bool                 `json:"memoryEnabled"`
+	MaxRetrievedMemoriesPerTurn     int                  `json:"maxRetrievedMemoriesPerTurn"`
+	MemoryAutoSaveThreshold         float64              `json:"memoryAutoSaveThreshold"`
+	PersonaName                     string               `json:"personaName"`
+	UserName                        string               `json:"userName"`
+	ActionSafetyMode                string               `json:"actionSafetyMode"`
+	ActiveImageProvider             string               `json:"activeImageProvider"`
+	ActiveAIProvider                string               `json:"activeAIProvider"`
+	LMStudioBaseURL                 string               `json:"lmStudioBaseURL"`
+	SelectedAnthropicModel          string               `json:"selectedAnthropicModel"`
+	SelectedGeminiModel             string               `json:"selectedGeminiModel"`
+	SelectedOpenRouterModel         string               `json:"selectedOpenRouterModel"`
+	SelectedOpenAIPrimaryModel      string               `json:"selectedOpenAIPrimaryModel"`
+	SelectedOpenAIFastModel         string               `json:"selectedOpenAIFastModel"`
+	SelectedAnthropicFastModel      string               `json:"selectedAnthropicFastModel"`
+	SelectedGeminiFastModel         string               `json:"selectedGeminiFastModel"`
+	SelectedOpenRouterFastModel     string               `json:"selectedOpenRouterFastModel"`
+	OpenRouterModelCache            OpenRouterModelCache `json:"openRouterModelCache"`
+	SelectedLMStudioModel           string               `json:"selectedLMStudioModel"`
+	SelectedLMStudioModelFast       string               `json:"selectedLMStudioModelFast"`
+	LMStudioContextWindowLimit      int                  `json:"lmStudioContextWindowLimit"`
+	LMStudioMaxAgentIterations      int                  `json:"lmStudioMaxAgentIterations"`
+	OllamaBaseURL                   string               `json:"ollamaBaseURL"`
+	SelectedOllamaModel             string               `json:"selectedOllamaModel"`
+	SelectedOllamaModelFast         string               `json:"selectedOllamaModelFast"`
+	OllamaContextWindowLimit        int                  `json:"ollamaContextWindowLimit"`
+	OllamaMaxAgentIterations        int                  `json:"ollamaMaxAgentIterations"`
+	AtlasEnginePort                 int                  `json:"atlasEnginePort"`
+	SelectedAtlasEngineModel        string               `json:"selectedAtlasEngineModel"`
+	SelectedAtlasEngineModelFast    string               `json:"selectedAtlasEngineModelFast"`
+	AtlasEngineContextWindowLimit   int                  `json:"atlasEngineContextWindowLimit"`
+	AtlasEngineMaxAgentIterations   int                  `json:"atlasEngineMaxAgentIterations"`
+	AtlasEngineCtxSize              int                  `json:"atlasEngineCtxSize"`       // llama-server --ctx-size (KV-cache token limit)
+	AtlasEngineKVCacheQuant         string               `json:"atlasEngineKVCacheQuant"`  // llama-server -ctk/-ctv quant level (for example: f32, f16, bf16, q8_0, q5_1, q5_0, q4_1, q4_0, iq4_nl)
+	AtlasEngineMlock                bool                 `json:"atlasEngineMlock"`         // llama-server --mlock — pin model in physical RAM
+	AtlasEngineRouterPort           int                  `json:"atlasEngineRouterPort"`    // port for the dedicated tool-router llama-server
+	AtlasEngineRouterModel          string               `json:"atlasEngineRouterModel"`   // GGUF filename for the tool router (e.g. gemma-4-2b-it-Q4_K_M.gguf)
+	AtlasEngineRouterForAll         bool                 `json:"atlasEngineRouterForAll"`  // use router for heavy background tasks too (memory, reflection, dream)
+	AtlasEngineDraftModel           string               `json:"atlasEngineDraftModel"`    // GGUF filename for speculative decoding draft model (same family as primary)
+	EnableSmartToolSelection        bool                 `json:"enableSmartToolSelection"` // legacy — superseded by ToolSelectionMode
+	ToolSelectionMode               string               `json:"toolSelectionMode"`        // "off" | "lazy" | "heuristic" | "llm"
+	WebResearchUseJinaReader        bool                 `json:"webResearchUseJinaReader"`
+	EnableMultiAgentOrchestration   bool                 `json:"enableMultiAgentOrchestration"`
+	MaxParallelAgents               int                  `json:"maxParallelAgents"`
+	WorkerMaxIterations             int                  `json:"workerMaxIterations"`
+	RemoteAccessEnabled             bool                 `json:"remoteAccessEnabled"`
+	TailscaleEnabled                bool                 `json:"tailscaleEnabled"`
+	ModelContextWindow              int                  `json:"modelContextWindow"` // effective context window in tokens; 0 = auto-detect from provider
+
+	// Voice — Whisper STT + Kokoro TTS.
+	VoiceSTTEnabled      bool   `json:"voiceSTTEnabled"`
+	VoiceTTSEnabled      bool   `json:"voiceTTSEnabled"`
+	VoiceContinuousMode  bool   `json:"voiceContinuousMode"`
+	VoiceWhisperPort     int    `json:"voiceWhisperPort"`
+	VoiceWhisperModel    string `json:"voiceWhisperModel"`
+	VoiceWhisperLanguage string `json:"voiceWhisperLanguage"`
+	VoiceTTSAutoPlay     bool   `json:"voiceTTSAutoPlay"`
+	VoiceSessionIdleSec  int    `json:"voiceSessionIdleSec"`
+
+	// Kokoro TTS (OHF-Voice, ONNX). Voice is hardcoded to am_onyx in
+	// internal/voice/kokoro.go (KokoroVoiceDefault); only the port survives
+	// in config so multiple instances can use different ports if ever needed.
+	VoiceKokoroPort int `json:"voiceKokoroPort"`
 }
 
 // EffectiveContextWindow returns the model's context window in tokens for the
@@ -122,6 +152,7 @@ func Defaults() RuntimeConfigSnapshot {
 		OnboardingCompleted:             false,
 		TelegramEnabled:                 false,
 		DiscordEnabled:                  false,
+		WhatsAppEnabled:                 false,
 		DiscordClientID:                 "",
 		SlackEnabled:                    false,
 		TelegramPollingTimeoutSeconds:   30,
@@ -144,10 +175,13 @@ func Defaults() RuntimeConfigSnapshot {
 		LMStudioBaseURL:                 "http://localhost:1234",
 		SelectedAnthropicModel:          "",
 		SelectedGeminiModel:             "",
+		SelectedOpenRouterModel:         "",
 		SelectedOpenAIPrimaryModel:      "",
 		SelectedOpenAIFastModel:         "",
 		SelectedAnthropicFastModel:      "",
 		SelectedGeminiFastModel:         "",
+		SelectedOpenRouterFastModel:     "",
+		OpenRouterModelCache:            OpenRouterModelCache{FetchedAt: "", Models: []CachedModelRecord{}},
 		SelectedLMStudioModel:           "",
 		SelectedLMStudioModelFast:       "",
 		LMStudioContextWindowLimit:      10,
@@ -177,6 +211,15 @@ func Defaults() RuntimeConfigSnapshot {
 		WorkerMaxIterations:             4,
 		RemoteAccessEnabled:             false,
 		TailscaleEnabled:                false,
+		VoiceSTTEnabled:                 false,
+		VoiceTTSEnabled:                 false,
+		VoiceContinuousMode:             false,
+		VoiceWhisperPort:                11987,
+		VoiceWhisperModel:               "ggml-base.en.bin",
+		VoiceWhisperLanguage:            "en",
+		VoiceTTSAutoPlay:                false,
+		VoiceSessionIdleSec:             300,
+		VoiceKokoroPort:                 11989,
 	}
 }
 

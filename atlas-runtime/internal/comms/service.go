@@ -7,12 +7,16 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"atlas-runtime-go/internal/comms/discord"
 	"atlas-runtime-go/internal/comms/slack"
 	"atlas-runtime-go/internal/comms/telegram"
+	"atlas-runtime-go/internal/comms/whatsapp"
 	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/storage"
@@ -103,6 +107,7 @@ type Service struct {
 	tgBridge         *telegram.Bridge
 	discBridge       *discord.Bridge
 	slackBridge      *slack.Bridge
+	waBridge         *whatsapp.Bridge
 }
 
 // New creates a new communications Service.
@@ -198,6 +203,15 @@ func (s *Service) startBridges(cfg config.RuntimeConfigSnapshot, bundle credBund
 		s.slackBridge = b
 		b.Start()
 	}
+	if cfg.WhatsAppEnabled && s.waBridge == nil {
+		h := s.handler
+		storeDSN := "file:" + filepath.Join(config.SupportDir(), "whatsapp_auth.db") + "?_pragma=foreign_keys(ON)&_foreign_keys=on"
+		b := whatsapp.New(storeDSN, s.db, func(ctx context.Context, req whatsapp.BridgeRequest) (string, string, error) {
+			return h(ctx, BridgeRequest{Text: req.Text, ConvID: req.ConvID, Platform: req.Platform})
+		})
+		s.waBridge = b
+		b.Start()
+	}
 }
 
 func (s *Service) stopBridges() {
@@ -212,6 +226,10 @@ func (s *Service) stopBridges() {
 	if s.slackBridge != nil {
 		s.slackBridge.Stop()
 		s.slackBridge = nil
+	}
+	if s.waBridge != nil {
+		s.waBridge.Stop()
+		s.waBridge = nil
 	}
 }
 
@@ -255,12 +273,33 @@ func (s *Service) Snapshot() Snapshot {
 		e := s.slackBridge.LastError()
 		slackErr = &e
 	}
+	waConnected := s.waBridge != nil && s.waBridge.Connected()
+	var waAccount *string
+	if s.waBridge != nil && s.waBridge.AccountName() != "" {
+		n := s.waBridge.AccountName()
+		waAccount = &n
+	}
+	var waErr *string
+	if s.waBridge != nil && s.waBridge.LastError() != "" {
+		e := s.waBridge.LastError()
+		waErr = &e
+	}
+	waQR := ""
+	if s.waBridge != nil {
+		waQR = s.waBridge.QRCodeDataURL()
+	}
 	s.mu.RUnlock()
 
 	platforms := []PlatformStatus{
 		s.platformStatus("telegram", cfg, bundle, tgConnected, tgAccount, tgErr),
 		s.platformStatus("discord", cfg, bundle, discConnected, discAccount, discErr),
 		s.platformStatus("slack", cfg, bundle, slackConnected, slackAccount, slackErr),
+		s.platformStatus("whatsapp", cfg, bundle, waConnected, waAccount, waErr),
+	}
+	for i := range platforms {
+		if platforms[i].Platform == "whatsapp" && waQR != "" {
+			platforms[i].Metadata["qrCodeDataURL"] = waQR
+		}
 	}
 
 	return Snapshot{
@@ -277,12 +316,13 @@ func (s *Service) Channels() []ChannelRecord {
 func (s *Service) channels() []ChannelRecord {
 	rows, err := s.db.ListCommunicationChannels("")
 	if err != nil {
-		return []ChannelRecord{}
+		rows = nil
 	}
-	out := make([]ChannelRecord, 0, len(rows))
+	merged := make(map[string]ChannelRecord, len(rows))
+
 	for _, r := range rows {
 		tid := normalizedThreadID(r.ThreadID)
-		out = append(out, ChannelRecord{
+		record := ChannelRecord{
 			ID:                      strings.Join([]string{r.Platform, r.ChannelID, r.ThreadID}, ":"),
 			Platform:                r.Platform,
 			ChannelID:               r.ChannelID,
@@ -294,9 +334,69 @@ func (s *Service) channels() []ChannelRecord {
 			UpdatedAt:               r.UpdatedAt,
 			LastMessageID:           r.LastMessageID,
 			CanReceiveNotifications: true,
-		})
+		}
+		merged[channelKey(r.Platform, r.ChannelID, r.ThreadID)] = record
 	}
+
+	// Telegram still stores session truth in telegram_sessions. Merge it so
+	// Recent Sessions always reflects current Telegram activity.
+	if tgRows, tgErr := s.db.ListTelegramSessions(); tgErr == nil {
+		for _, r := range tgRows {
+			channelID := fmt.Sprintf("%d", r.ChatID)
+			key := channelKey("telegram", channelID, "")
+
+			var userID *string
+			if r.UserID != nil {
+				v := fmt.Sprintf("%d", *r.UserID)
+				userID = &v
+			}
+			var lastMessageID *string
+			if r.LastMessageID != nil {
+				v := fmt.Sprintf("%d", *r.LastMessageID)
+				lastMessageID = &v
+			}
+
+			record := ChannelRecord{
+				ID:                      strings.Join([]string{"telegram", channelID, ""}, ":"),
+				Platform:                "telegram",
+				ChannelID:               channelID,
+				ChannelName:             nil,
+				UserID:                  userID,
+				ThreadID:                nil,
+				ActiveConversationID:    r.ActiveConversationID,
+				CreatedAt:               r.CreatedAt,
+				UpdatedAt:               r.UpdatedAt,
+				LastMessageID:           lastMessageID,
+				CanReceiveNotifications: true,
+			}
+			if existing, ok := merged[key]; !ok || timestampAfter(record.UpdatedAt, existing.UpdatedAt) {
+				merged[key] = record
+			}
+		}
+	}
+
+	out := make([]ChannelRecord, 0, len(merged))
+	for _, channel := range merged {
+		out = append(out, channel)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return timestampAfter(out[i].UpdatedAt, out[j].UpdatedAt)
+	})
+
 	return out
+}
+
+func channelKey(platform, channelID, threadID string) string {
+	return strings.Join([]string{platform, channelID, threadID}, ":")
+}
+
+func timestampAfter(a, b string) bool {
+	ta, errA := time.Parse(time.RFC3339Nano, a)
+	tb, errB := time.Parse(time.RFC3339Nano, b)
+	if errA == nil && errB == nil {
+		return ta.After(tb)
+	}
+	return a > b
 }
 
 func normalizedThreadID(raw string) *string {
@@ -363,6 +463,8 @@ func (s *Service) UpdatePlatform(platform string, enabled bool) (PlatformStatus,
 		cfg.TelegramEnabled = enabled
 	case "discord":
 		cfg.DiscordEnabled = enabled
+	case "whatsapp":
+		cfg.WhatsAppEnabled = enabled
 	case "slack":
 		cfg.SlackEnabled = enabled
 	default:
@@ -390,6 +492,11 @@ func (s *Service) UpdatePlatform(platform string, enabled bool) (PlatformStatus,
 			if s.slackBridge != nil {
 				s.slackBridge.Stop()
 				s.slackBridge = nil
+			}
+		case "whatsapp":
+			if s.waBridge != nil {
+				s.waBridge.Stop()
+				s.waBridge = nil
 			}
 		}
 	} else {
@@ -514,12 +621,39 @@ func (s *Service) ValidatePlatform(platform string, credentials map[string]strin
 		if err := s.cfgStore.Save(cfg); err != nil {
 			log.Printf("comms: ValidatePlatform: save config: %v", err)
 		}
+	case "whatsapp":
+		cfg.WhatsAppEnabled = true
+		if err := s.cfgStore.Save(cfg); err != nil {
+			log.Printf("comms: ValidatePlatform: save config: %v", err)
+		}
+		s.mu.Lock()
+		s.startBridges(cfg, bundle)
+		if s.waBridge != nil {
+			connected = s.waBridge.Connected()
+			if name := s.waBridge.AccountName(); name != "" {
+				accountName = &name
+			}
+			if msg := s.waBridge.LastError(); msg != "" {
+				lastErr = &msg
+			}
+		}
+		s.mu.Unlock()
 
 	default:
 		return PlatformStatus{}, fmt.Errorf("unknown platform: %s", platform)
 	}
 
-	return s.platformStatus(platform, cfg, bundle, connected, accountName, lastErr), nil
+	status := s.platformStatus(platform, cfg, bundle, connected, accountName, lastErr)
+	if platform == "whatsapp" {
+		s.mu.RLock()
+		if s.waBridge != nil {
+			if qr := s.waBridge.QRCodeDataURL(); qr != "" {
+				status.Metadata["qrCodeDataURL"] = qr
+			}
+		}
+		s.mu.RUnlock()
+	}
+	return status, nil
 }
 
 // ── Platform status builder ───────────────────────────────────────────────────
@@ -562,6 +696,14 @@ func (s *Service) platformStatus(
 		requiredCreds = []string{"slack_bot_token", "slack_app_token"}
 		if !credConfigured {
 			br := "Add a Slack bot token to finish setup."
+			blockingReason = &br
+		}
+	case "whatsapp":
+		enabled = cfg.WhatsAppEnabled
+		credConfigured = true
+		requiredCreds = []string{}
+		if enabled && !connected {
+			br := "Scan the QR code from WhatsApp on your phone to finish setup."
 			blockingReason = &br
 		}
 	}

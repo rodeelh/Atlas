@@ -8,6 +8,7 @@ import { Forge } from './screens/Forge'
 import { Mind } from './screens/Mind'
 import { Activity } from './screens/Activity'
 import { Settings } from './screens/Settings'
+import { AIProviders } from './screens/AIProviders'
 import { Automations } from './screens/Automations'
 import { Workflows } from './screens/Workflows'
 import { APIKeys } from './screens/APIKeys'
@@ -32,6 +33,7 @@ type Screen =
   | 'workflows'
   | 'activity'
   | 'settings'
+  | 'ai-providers'
   | 'api-keys'
   | 'theme'
   | 'atlas-engine'
@@ -40,7 +42,7 @@ type Screen =
 
 const VALID_SCREENS: Screen[] = [
   'chat', 'onboarding', 'communications', 'approvals', 'skills', 'forge', 'mind',
-  'automations', 'workflows', 'activity', 'settings', 'api-keys', 'theme',
+  'automations', 'workflows', 'activity', 'settings', 'ai-providers', 'api-keys', 'theme',
   'atlas-engine', 'usage',
   'docs',
 ]
@@ -207,6 +209,7 @@ const SCREEN_LABELS: Partial<Record<Screen, string>> = {
   workflows: 'Workflows',
   activity: 'Activity',
   settings: 'General',
+  'ai-providers': 'AI Providers',
   'api-keys': 'Credentials',
   theme: 'Appearance',
   'atlas-engine': 'Engine LM',
@@ -249,6 +252,7 @@ const NAV_GROUPS: NavGroup[] = [
     defaultExpanded: false,
     items: [
       { id: 'settings',        icon: Icon.settings,        label: 'General' },
+      { id: 'ai-providers',    icon: Icon.settings,        label: 'AI Providers' },
       { id: 'api-keys',        icon: Icon.apiKeys,         label: 'Credentials' },
       { id: 'theme',           icon: Icon.theme,           label: 'Appearance' },
       { id: 'communications',  icon: Icon.communications,  label: 'Communications' },
@@ -681,6 +685,7 @@ export function App() {
         {screen === 'mind'        && <Mind />}
         {screen === 'activity'    && <Activity />}
         {screen === 'settings'    && <Settings />}
+        {screen === 'ai-providers' && <AIProviders />}
         {screen === 'api-keys'    && <APIKeys />}
         {screen === 'theme'       && <Theme activePreset={themeConfig.preset} onPresetChange={setActivePreset} activeTheme={activeTheme} onThemeChange={setActiveTheme} activeAccent={themeConfig.accent} onAccentChange={setActiveAccent} activeDensity={themeConfig.density} onDensityChange={setActiveDensity} activeChatFontSize={themeConfig.chatFontSize} onChatFontSizeChange={setChatFontSize} activeChatRadius={themeConfig.chatRadius} onChatRadiusChange={setChatRadius} activeChatFont={themeConfig.chatFont} onChatFontChange={setChatFont} activeChatAvatarStyle={themeConfig.chatAvatarStyle} onChatAvatarStyleChange={setChatAvatarStyle} />}
         {screen === 'atlas-engine' && <AtlasEngine />}

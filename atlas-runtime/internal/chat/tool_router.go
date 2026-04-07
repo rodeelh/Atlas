@@ -21,6 +21,8 @@ import (
 	"atlas-runtime-go/internal/skills"
 )
 
+var callAINonStreamingFn = agent.CallAINonStreamingExported
+
 // selectToolsWithLLM is the Phase 3 entry point. It resolves the background
 // provider (Engine LM router → cloud fast model fallback), sends the user
 // message with a tool-selection prompt, and returns the filtered tool subset.
@@ -28,14 +30,18 @@ import (
 func selectToolsWithLLM(
 	ctx context.Context,
 	cfg config.RuntimeConfigSnapshot,
+	turn *turnContext,
 	message string,
 	registry *skills.Registry,
 ) []map[string]any {
-	bgProvider, err := resolveBackgroundProvider(cfg)
+	bgProvider, usedFallback, err := resolveBackgroundProvider(cfg, turn)
 	if err != nil {
 		logstore.Write("warn",
 			fmt.Sprintf("Tool router: no background provider (%v), using heuristic", err), nil)
 		return registry.SelectiveToolDefs(message)
+	}
+	if usedFallback && turn != nil {
+		turn.markRouterFallback("router_unhealthy")
 	}
 
 	allTools := registry.ToolDefinitions()
@@ -69,7 +75,15 @@ func selectToolsWithLLM(
 		{Role: "user", Content: prompt},
 	}
 
-	reply, _, _, err := agent.CallAINonStreamingExported(ctx, bgProvider, messages, nil)
+	reply, _, _, err := callAINonStreamingFn(ctx, bgProvider, messages, nil)
+	if err != nil && bgProvider.Type == agent.ProviderAtlasEngine && turn != nil {
+		turn.markRouterFallback("router_call_failed")
+		fallbackProvider, _, fbErr := resolveBackgroundProvider(cfg, turn)
+		if fbErr == nil {
+			reply, _, _, err = callAINonStreamingFn(ctx, fallbackProvider, messages, nil)
+			bgProvider = fallbackProvider
+		}
+	}
 	if err != nil {
 		logstore.Write("warn",
 			fmt.Sprintf("Tool router: call failed (%v), using heuristic", err), nil)

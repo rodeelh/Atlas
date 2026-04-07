@@ -1,26 +1,38 @@
 package control
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/engine"
+	"atlas-runtime-go/internal/logstore"
 )
 
 type ModelsService struct {
 	cfgStore  *config.Store
 	engineMgr *engine.Manager
+	now       func() time.Time
+	httpDo    func(*http.Request) (*http.Response, error)
 }
 
+var fetchOpenRouterModelsFn = fetchOpenRouterModels
+
 func NewModelsService(cfgStore *config.Store, mgr *engine.Manager) *ModelsService {
-	return &ModelsService{cfgStore: cfgStore, engineMgr: mgr}
+	return &ModelsService{
+		cfgStore:  cfgStore,
+		engineMgr: mgr,
+		now:       time.Now,
+		httpDo:    (&http.Client{Timeout: 10 * time.Second}).Do,
+	}
 }
 
 type ModelRecord struct {
@@ -39,6 +51,8 @@ func (s *ModelsService) Selected() map[string]any {
 		"selectedAnthropicFastModel":   snap.SelectedAnthropicFastModel,
 		"selectedGeminiModel":          snap.SelectedGeminiModel,
 		"selectedGeminiFastModel":      snap.SelectedGeminiFastModel,
+		"selectedOpenRouterModel":      snap.SelectedOpenRouterModel,
+		"selectedOpenRouterFastModel":  snap.SelectedOpenRouterFastModel,
 		"selectedLMStudioModel":        snap.SelectedLMStudioModel,
 		"selectedLMStudioModelFast":    snap.SelectedLMStudioModelFast,
 		"selectedOllamaModel":          snap.SelectedOllamaModel,
@@ -52,7 +66,7 @@ func (s *ModelsService) Selected() map[string]any {
 func (s *ModelsService) Available(provider string) map[string]any {
 	cfg := s.cfgStore.Load()
 	bundle, _ := readRawBundle()
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := s.now().UTC().Format(time.RFC3339)
 
 	switch provider {
 	case "openai":
@@ -105,6 +119,24 @@ func (s *ModelsService) Available(provider string) map[string]any {
 			"fastModel":       fast,
 			"lastRefreshedAt": now,
 			"availableModels": fetchGeminiModels(apiKey),
+		}
+	case "openrouter":
+		apiKey, _ := bundle["openRouterAPIKey"].(string)
+		models := s.openRouterModels(false, apiKey, cfg, 25)
+		primary := cfg.SelectedOpenRouterModel
+		if primary == "" {
+			// Default to OpenRouter's free router when no model is explicitly selected.
+			primary = "openrouter/auto:free"
+		}
+		fast := cfg.SelectedOpenRouterFastModel
+		if fast == "" {
+			fast = primary
+		}
+		return map[string]any{
+			"primaryModel":    primary,
+			"fastModel":       fast,
+			"lastRefreshedAt": now,
+			"availableModels": models,
 		}
 	case "lm_studio":
 		primary := cfg.SelectedLMStudioModel
@@ -175,6 +207,402 @@ func (s *ModelsService) Available(provider string) map[string]any {
 	default:
 		return map[string]any{"availableModels": []ModelRecord{}}
 	}
+}
+
+func (s *ModelsService) OpenRouterModels(refresh bool, limit int) map[string]any {
+	cfg := s.cfgStore.Load()
+	bundle, _ := readRawBundle()
+	apiKey, _ := bundle["openRouterAPIKey"].(string)
+	models := s.openRouterModels(refresh, apiKey, cfg, limit)
+	return map[string]any{
+		"lastRefreshedAt": s.now().UTC().Format(time.RFC3339),
+		"availableModels": models,
+	}
+}
+
+func (s *ModelsService) OpenRouterModelHealth(model string) map[string]any {
+	now := s.now().UTC().Format(time.RFC3339)
+	model = strings.TrimSpace(model)
+	logResult := func(level, status, message string, extra map[string]string) {
+		meta := map[string]string{
+			"provider": "openrouter",
+			"model":    model,
+			"status":   status,
+		}
+		for k, v := range extra {
+			meta[k] = v
+		}
+		logstore.Write(level, "OpenRouter model health check", meta)
+	}
+	if model == "" {
+		logResult("warn", "unknown", "No model selected.", nil)
+		return map[string]any{
+			"status":    "unknown",
+			"message":   "No model selected.",
+			"checkedAt": now,
+		}
+	}
+
+	bundle, _ := readRawBundle()
+	apiKey, _ := bundle["openRouterAPIKey"].(string)
+	if strings.TrimSpace(apiKey) == "" {
+		logResult("warn", "missing_key", "OpenRouter API key is not configured.", nil)
+		return map[string]any{
+			"status":    "missing_key",
+			"message":   "OpenRouter API key is not configured.",
+			"checkedAt": now,
+		}
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"model":       model,
+		"messages":    []map[string]string{{"role": "user", "content": "ping"}},
+		"max_tokens":  1,
+		"temperature": 0,
+	})
+	req, err := http.NewRequest("POST", "https://openrouter.ai/api/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		logResult("error", "unavailable", "Could not construct OpenRouter health request.", nil)
+		return map[string]any{
+			"status":    "unavailable",
+			"message":   "Could not construct OpenRouter health request.",
+			"checkedAt": now,
+		}
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("HTTP-Referer", "https://github.com/rodeelh/project-atlas")
+	req.Header.Set("X-Title", "Atlas")
+
+	resp, err := s.httpDo(req)
+	if err != nil {
+		logResult("error", "unavailable", "Unable to reach OpenRouter right now.", nil)
+		return map[string]any{
+			"status":    "unavailable",
+			"message":   "Unable to reach OpenRouter right now.",
+			"checkedAt": now,
+		}
+	}
+	defer resp.Body.Close()
+
+	var errBody struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&errBody)
+	msg := strings.TrimSpace(errBody.Error.Message)
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		if msg == "" {
+			msg = "This model is currently rate limited on OpenRouter."
+		}
+		logResult("warn", "rate_limited", msg, map[string]string{"http_status": strconv.Itoa(resp.StatusCode)})
+		return map[string]any{
+			"status":    "rate_limited",
+			"message":   msg,
+			"checkedAt": now,
+		}
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		logResult("info", "ok", "Model is currently available.", map[string]string{"http_status": strconv.Itoa(resp.StatusCode)})
+		return map[string]any{
+			"status":    "ok",
+			"message":   "Model is currently available.",
+			"checkedAt": now,
+		}
+	}
+	if msg == "" {
+		msg = fmt.Sprintf("OpenRouter returned %d for this model health check.", resp.StatusCode)
+	}
+	logResult("warn", "warning", msg, map[string]string{"http_status": strconv.Itoa(resp.StatusCode)})
+	return map[string]any{
+		"status":    "warning",
+		"message":   msg,
+		"checkedAt": now,
+	}
+}
+
+func (s *ModelsService) CloudModelHealth(provider, model string) map[string]any {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	model = strings.TrimSpace(model)
+	now := s.now().UTC().Format(time.RFC3339)
+
+	if provider == "" {
+		return map[string]any{
+			"status":    "unknown",
+			"message":   "No provider selected.",
+			"checkedAt": now,
+		}
+	}
+	if model == "" {
+		return map[string]any{
+			"status":    "unknown",
+			"message":   "No model selected.",
+			"checkedAt": now,
+		}
+	}
+	if provider == "openrouter" {
+		return s.OpenRouterModelHealth(model)
+	}
+
+	bundle, _ := readRawBundle()
+
+	type reqInfo struct {
+		url     string
+		headers map[string]string
+		body    map[string]any
+	}
+	makeReq := func() (reqInfo, string) {
+		switch provider {
+		case "openai":
+			apiKey, _ := bundle["openAIAPIKey"].(string)
+			if strings.TrimSpace(apiKey) == "" {
+				return reqInfo{}, "missing_key"
+			}
+			return reqInfo{
+				url: "https://api.openai.com/v1/chat/completions",
+				headers: map[string]string{
+					"Authorization": "Bearer " + apiKey,
+					"Content-Type":  "application/json",
+				},
+				body: map[string]any{
+					"model":                 model,
+					"messages":              []map[string]string{{"role": "user", "content": "ping"}},
+					"max_completion_tokens": 16,
+				},
+			}, ""
+		case "anthropic":
+			apiKey, _ := bundle["anthropicAPIKey"].(string)
+			if strings.TrimSpace(apiKey) == "" {
+				return reqInfo{}, "missing_key"
+			}
+			return reqInfo{
+				url: "https://api.anthropic.com/v1/messages",
+				headers: map[string]string{
+					"x-api-key":         apiKey,
+					"anthropic-version": "2023-06-01",
+					"Content-Type":      "application/json",
+				},
+				body: map[string]any{
+					"model":      model,
+					"max_tokens": 1,
+					"messages": []map[string]string{
+						{"role": "user", "content": "ping"},
+					},
+				},
+			}, ""
+		case "gemini":
+			apiKey, _ := bundle["geminiAPIKey"].(string)
+			if strings.TrimSpace(apiKey) == "" {
+				return reqInfo{}, "missing_key"
+			}
+			return reqInfo{
+				url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+				headers: map[string]string{
+					"Authorization": "Bearer " + apiKey,
+					"Content-Type":  "application/json",
+				},
+				body: map[string]any{
+					"model":       model,
+					"messages":    []map[string]string{{"role": "user", "content": "ping"}},
+					"max_tokens":  1,
+					"temperature": 0,
+				},
+			}, ""
+		default:
+			return reqInfo{}, "unknown_provider"
+		}
+	}
+
+	info, reqErr := makeReq()
+	if reqErr == "missing_key" {
+		logstore.Write("warn", "Cloud model health check", map[string]string{
+			"provider": provider,
+			"model":    model,
+			"status":   "missing_key",
+		})
+		return map[string]any{
+			"status":    "missing_key",
+			"message":   "API key is not configured for this provider.",
+			"checkedAt": now,
+		}
+	}
+	if reqErr == "unknown_provider" {
+		return map[string]any{
+			"status":    "unknown",
+			"message":   "Unsupported provider for health check.",
+			"checkedAt": now,
+		}
+	}
+
+	body, _ := json.Marshal(info.body)
+	req, err := http.NewRequest("POST", info.url, bytes.NewReader(body))
+	if err != nil {
+		logstore.Write("error", "Cloud model health check", map[string]string{
+			"provider": provider,
+			"model":    model,
+			"status":   "unavailable",
+			"error":    err.Error(),
+		})
+		return map[string]any{
+			"status":    "unavailable",
+			"message":   "Could not construct health request.",
+			"checkedAt": now,
+		}
+	}
+	for k, v := range info.headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := s.httpDo(req)
+	if err != nil {
+		logstore.Write("error", "Cloud model health check", map[string]string{
+			"provider": provider,
+			"model":    model,
+			"status":   "unavailable",
+			"error":    err.Error(),
+		})
+		return map[string]any{
+			"status":    "unavailable",
+			"message":   "Unable to reach provider right now.",
+			"checkedAt": now,
+		}
+	}
+	defer resp.Body.Close()
+
+	var errBody struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&errBody)
+	msg := strings.TrimSpace(errBody.Error.Message)
+	lowerMsg := strings.ToLower(msg)
+
+	// Some providers/models may return a token-cap probe error even though the
+	// model is reachable and authenticated. Treat this as healthy for status UI.
+	if strings.Contains(lowerMsg, "max_tokens") && strings.Contains(lowerMsg, "output limit was reached") {
+		logstore.Write("info", "Cloud model health check", map[string]string{
+			"provider":    provider,
+			"model":       model,
+			"status":      "ok",
+			"http_status": strconv.Itoa(resp.StatusCode),
+			"probe_note":  "token_cap_reached",
+		})
+		return map[string]any{
+			"status":    "ok",
+			"message":   "Model is reachable (health probe hit output token cap).",
+			"checkedAt": now,
+		}
+	}
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		if msg == "" {
+			msg = "This model is currently rate limited."
+		}
+		logstore.Write("warn", "Cloud model health check", map[string]string{
+			"provider":    provider,
+			"model":       model,
+			"status":      "rate_limited",
+			"http_status": strconv.Itoa(resp.StatusCode),
+		})
+		return map[string]any{
+			"status":    "rate_limited",
+			"message":   msg,
+			"checkedAt": now,
+		}
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		logstore.Write("info", "Cloud model health check", map[string]string{
+			"provider":    provider,
+			"model":       model,
+			"status":      "ok",
+			"http_status": strconv.Itoa(resp.StatusCode),
+		})
+		return map[string]any{
+			"status":    "ok",
+			"message":   "Model is currently available.",
+			"checkedAt": now,
+		}
+	}
+	if msg == "" {
+		displayProvider := provider
+		switch provider {
+		case "openai":
+			displayProvider = "OpenAI"
+		case "anthropic":
+			displayProvider = "Anthropic"
+		case "gemini":
+			displayProvider = "Gemini"
+		case "openrouter":
+			displayProvider = "OpenRouter"
+		}
+		msg = fmt.Sprintf("%s returned %d for this model health check.", displayProvider, resp.StatusCode)
+	}
+	logstore.Write("warn", "Cloud model health check", map[string]string{
+		"provider":    provider,
+		"model":       model,
+		"status":      "warning",
+		"http_status": strconv.Itoa(resp.StatusCode),
+	})
+	return map[string]any{
+		"status":    "warning",
+		"message":   msg,
+		"checkedAt": now,
+	}
+}
+
+func (s *ModelsService) openRouterModels(refresh bool, apiKey string, cfg config.RuntimeConfigSnapshot, limit int) []ModelRecord {
+	if limit <= 0 {
+		limit = 25
+	}
+	if !refresh && cfg.OpenRouterModelCache.FetchedAt != "" {
+		if fetchedAt, err := time.Parse(time.RFC3339, cfg.OpenRouterModelCache.FetchedAt); err == nil {
+			if s.now().Sub(fetchedAt) < 24*time.Hour && len(cfg.OpenRouterModelCache.Models) > 0 {
+				models := make([]ModelRecord, 0, len(cfg.OpenRouterModelCache.Models))
+				for _, m := range cfg.OpenRouterModelCache.Models {
+					models = append(models, ModelRecord{ID: m.ID, DisplayName: m.DisplayName, IsFast: m.IsFast})
+				}
+				if len(models) > limit {
+					return models[:limit]
+				}
+				return models
+			}
+		}
+	}
+
+	models := fetchOpenRouterModelsFn(apiKey, s.httpDo)
+	if len(models) == 0 && len(cfg.OpenRouterModelCache.Models) > 0 {
+		out := make([]ModelRecord, 0, len(cfg.OpenRouterModelCache.Models))
+		for _, m := range cfg.OpenRouterModelCache.Models {
+			out = append(out, ModelRecord{ID: m.ID, DisplayName: m.DisplayName, IsFast: m.IsFast})
+		}
+		if len(out) > limit {
+			return out[:limit]
+		}
+		return out
+	}
+	if len(models) == 0 {
+		return []ModelRecord{}
+	}
+
+	cfg.OpenRouterModelCache = config.OpenRouterModelCache{
+		FetchedAt: s.now().UTC().Format(time.RFC3339),
+		Models:    make([]config.CachedModelRecord, 0, len(models)),
+	}
+	for _, m := range models {
+		cfg.OpenRouterModelCache.Models = append(cfg.OpenRouterModelCache.Models, config.CachedModelRecord{
+			ID:          m.ID,
+			DisplayName: m.DisplayName,
+			IsFast:      m.IsFast,
+		})
+	}
+	_ = s.cfgStore.Save(cfg)
+	if len(models) > limit {
+		return models[:limit]
+	}
+	return models
 }
 
 func (s *ModelsService) RefreshActive() map[string]any {
@@ -441,6 +869,115 @@ func fetchGeminiModels(apiKey string) []ModelRecord {
 	return top
 }
 
+func fetchOpenRouterModels(apiKey string, do func(*http.Request) (*http.Response, error)) []ModelRecord {
+	if apiKey == "" {
+		return []ModelRecord{}
+	}
+	req, err := http.NewRequest("GET", "https://openrouter.ai/api/v1/models", nil)
+	if err != nil {
+		return []ModelRecord{}
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("HTTP-Referer", "https://github.com/rodeelh/project-atlas")
+	req.Header.Set("X-Title", "Atlas")
+	resp, err := do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return []ModelRecord{}
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []struct {
+			ID            string `json:"id"`
+			Name          string `json:"name"`
+			ContextLength int    `json:"context_length"`
+			Architecture  struct {
+				InputModalities  []string `json:"input_modalities"`
+				OutputModalities []string `json:"output_modalities"`
+			} `json:"architecture"`
+			Pricing struct {
+				Prompt string `json:"prompt"`
+			} `json:"pricing"`
+			TopProvider struct {
+				MaxCompletionTokens int `json:"max_completion_tokens"`
+			} `json:"top_provider"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return []ModelRecord{}
+	}
+	type scored struct {
+		model ModelRecord
+		score int
+	}
+	hasText := func(modalities []string) bool {
+		for _, m := range modalities {
+			if strings.EqualFold(strings.TrimSpace(m), "text") {
+				return true
+			}
+		}
+		return false
+	}
+	nonTextKeywords := []string{
+		"image", "vision", "video", "audio", "speech", "tts", "transcrib", "asr",
+		"whisper", "embedding", "embed", "rerank", "moderation", "diffusion",
+		"lyria", "music",
+	}
+	items := make([]scored, 0, len(result.Data))
+	for _, m := range result.Data {
+		if m.ID == "" {
+			continue
+		}
+		display := m.Name
+		if strings.TrimSpace(display) == "" {
+			display = m.ID
+		}
+		lower := strings.ToLower(m.ID + " " + display)
+		// Keep only text-capable chat models.
+		if len(m.Architecture.InputModalities) > 0 && !hasText(m.Architecture.InputModalities) {
+			continue
+		}
+		if len(m.Architecture.OutputModalities) > 0 && !hasText(m.Architecture.OutputModalities) {
+			continue
+		}
+		skip := false
+		for _, kw := range nonTextKeywords {
+			if strings.Contains(lower, kw) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		isFast := strings.Contains(lower, "mini") || strings.Contains(lower, "flash") || strings.Contains(lower, "haiku")
+		// TODO: cost telemetry — pricing is parsed but not yet persisted/used in usage tracking.
+		promptCostScore := 0
+		if m.Pricing.Prompt != "" {
+			if f, err := strconv.ParseFloat(m.Pricing.Prompt, 64); err == nil {
+				// Lower price is better; tiny scaling to keep deterministic ordering.
+				promptCostScore = int((1.0 / (f + 0.000001)) * 10)
+			}
+		}
+		score := m.ContextLength/1024 + m.TopProvider.MaxCompletionTokens/1024 + promptCostScore
+		items = append(items, scored{
+			model: ModelRecord{ID: m.ID, DisplayName: display, IsFast: isFast},
+			score: score,
+		})
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].score != items[j].score {
+			return items[i].score > items[j].score
+		}
+		return items[i].model.ID < items[j].model.ID
+	})
+	out := make([]ModelRecord, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.model)
+	}
+	return out
+}
+
 func curatedGeminiModels() []ModelRecord {
 	return []ModelRecord{
 		{ID: "gemini-2.5-pro", DisplayName: "Gemini 2.5 Pro", IsFast: false},
@@ -489,6 +1026,29 @@ func topFastAndPrimary(models []ModelRecord, n int) []ModelRecord {
 		}
 	}
 	return append(primary, fast...)
+}
+
+func preferredOpenRouterDefault(models []ModelRecord) string {
+	// Prefer known free-route candidates first.
+	prioritized := []string{
+		"qwen/qwen3.6-plus:free",
+		"openrouter/auto:free",
+		"openrouter/auto",
+	}
+	for _, id := range prioritized {
+		for _, m := range models {
+			if m.ID == id {
+				return id
+			}
+		}
+	}
+	// Fall back to the first free model in the fetched list.
+	for _, m := range models {
+		if strings.Contains(strings.ToLower(m.ID), ":free") {
+			return m.ID
+		}
+	}
+	return ""
 }
 
 func openAIModelScore(id string) int {

@@ -35,6 +35,7 @@ const (
 	ProviderOpenAI      ProviderType = "openai"
 	ProviderAnthropic   ProviderType = "anthropic"
 	ProviderGemini      ProviderType = "gemini"
+	ProviderOpenRouter  ProviderType = "openrouter"
 	ProviderLMStudio    ProviderType = "lm_studio"
 	ProviderOllama      ProviderType = "ollama"
 	ProviderAtlasEngine ProviderType = "atlas_engine"
@@ -48,10 +49,11 @@ func isLocalProvider(t ProviderType) bool {
 
 // ProviderConfig carries everything the agent loop needs to call an AI backend.
 type ProviderConfig struct {
-	Type    ProviderType
-	APIKey  string
-	Model   string
-	BaseURL string // used by LM Studio and Ollama
+	Type         ProviderType
+	APIKey       string
+	Model        string
+	BaseURL      string            // used by local providers and OpenAI-compatible variants
+	ExtraHeaders map[string]string // optional provider-specific request headers
 }
 
 // ── Non-streaming (Forge + RegenerateMind) ────────────────────────────────────
@@ -293,6 +295,8 @@ func oaiCompatBaseURL(p ProviderConfig) string {
 	switch p.Type {
 	case ProviderGemini:
 		return "https://generativelanguage.googleapis.com/v1beta/openai"
+	case ProviderOpenRouter:
+		return "https://openrouter.ai/api/v1"
 	case ProviderLMStudio:
 		base := strings.TrimRight(p.BaseURL, "/")
 		if base == "" {
@@ -324,6 +328,19 @@ func oaiCompatBaseURL(p ProviderConfig) string {
 		return base
 	default: // openai
 		return "https://api.openai.com/v1"
+	}
+}
+
+func applyOpenAICompatHeaders(req *http.Request, p ProviderConfig) {
+	req.Header.Set("Content-Type", "application/json")
+	if p.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.APIKey)
+	}
+	for k, v := range p.ExtraHeaders {
+		if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
+			continue
+		}
+		req.Header.Set(k, v)
 	}
 }
 
@@ -359,10 +376,7 @@ func callOpenAICompatNonStreaming(
 	if err != nil {
 		return OAIMessage{}, "", TokenUsage{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if p.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+p.APIKey)
-	}
+	applyOpenAICompatHeaders(req, p)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -379,10 +393,7 @@ func callOpenAICompatNonStreaming(
 			case <-time.After(2 * time.Second):
 			}
 			retryReq, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-			retryReq.Header.Set("Content-Type", "application/json")
-			if p.APIKey != "" {
-				retryReq.Header.Set("Authorization", "Bearer "+p.APIKey)
-			}
+			applyOpenAICompatHeaders(retryReq, p)
 			resp, err = http.DefaultClient.Do(retryReq)
 			if err != nil {
 				return OAIMessage{}, "", TokenUsage{}, fmt.Errorf("AI non-streaming request failed (%s): %w", p.Type, err)
@@ -481,10 +492,7 @@ func streamOpenAICompatWithToolDetection(
 	if err != nil {
 		return streamResult{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if p.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+p.APIKey)
-	}
+	applyOpenAICompatHeaders(req, p)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -501,10 +509,7 @@ func streamOpenAICompatWithToolDetection(
 			case <-time.After(2 * time.Second):
 			}
 			retryReq, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-			retryReq.Header.Set("Content-Type", "application/json")
-			if p.APIKey != "" {
-				retryReq.Header.Set("Authorization", "Bearer "+p.APIKey)
-			}
+			applyOpenAICompatHeaders(retryReq, p)
 			resp, err = http.DefaultClient.Do(retryReq)
 			if err != nil {
 				return streamResult{}, fmt.Errorf("AI streaming request failed (%s): %w", p.Type, err)

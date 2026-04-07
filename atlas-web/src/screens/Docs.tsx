@@ -57,8 +57,8 @@ const DOCS_PAGES: DocsPageMeta[] = [
   { id: 'approvals', title: 'Approvals', group: 'web-ui', keywords: ['permissions', 'review', 'action'] },
   { id: 'automations', title: 'Automations', group: 'web-ui', keywords: ['schedule', 'notifications', 'gremlins'] },
   { id: 'workflows', title: 'Workflows', group: 'web-ui', keywords: ['template', 'trust scope', 'runs'] },
-  { id: 'api-keys', title: 'Credentials', group: 'web-ui', keywords: ['openai', 'telegram', 'discord', 'token', 'api keys'] },
-  { id: 'integrations-overview', title: 'How Atlas Chat Integrations Work', group: 'integrations', keywords: ['telegram', 'discord', 'slack', 'channels'] },
+  { id: 'api-keys', title: 'Credentials', group: 'web-ui', keywords: ['openai', 'telegram', 'discord', 'whatsapp', 'token', 'api keys'] },
+  { id: 'integrations-overview', title: 'How Atlas Chat Integrations Work', group: 'integrations', keywords: ['telegram', 'discord', 'whatsapp', 'slack', 'channels'] },
   { id: 'telegram-setup', title: 'Telegram Setup', group: 'integrations', keywords: ['botfather', 'chat id', 'token'] },
   { id: 'discord-setup', title: 'Discord Setup', group: 'integrations', keywords: ['discord app', 'bot token', 'gateway intents'] },
   { id: 'slack-setup', title: 'Slack Setup', group: 'integrations', keywords: ['coming soon', 'workspace', 'oauth'] },
@@ -194,7 +194,7 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
             <DocsChecklistCard
               items={[
                 'Learn how Atlas routes work between chat, approvals, skills, and output.',
-                'Connect your first chat agent through Telegram or Discord.',
+                'Connect your first chat agent through Telegram, Discord, or WhatsApp.',
                 'Use API Keys and Communications together so channels show up correctly.',
                 'Return here for troubleshooting, trust-scope guidance, and workflow patterns.',
               ]}
@@ -343,7 +343,7 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
           summary="The control room for connected platforms, routing rules, and discovered sessions or channels."
           accessPath="Sidebar > Communications"
           tasks={[
-            'Validate whether Telegram, Discord, or future Slack connections are actually live.',
+            'Validate whether Telegram, Discord, and WhatsApp connections are actually live.',
             'Review discovered channels and active sessions.',
             'Understand which routes Atlas can use for notifications or ongoing replies.',
           ]}
@@ -470,7 +470,7 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
         <DocsPageLayout
           eyebrow="Web UI"
           title="Credentials"
-          summary="Credentials is where users unlock Atlas providers and platform integrations, including OpenAI, Telegram, and Discord."
+          summary="Credentials is where users unlock Atlas providers and platform integrations, including OpenAI, Telegram, Discord, and WhatsApp."
           graphic={<DocsSignalPanel title="Credential Flow" lines={['Get token from provider', 'Paste into Atlas', 'Validate in Communications', 'Send a real test message']} />}
         >
           <DocsSection title="How to access it">
@@ -482,6 +482,7 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
                 'OpenAI key for Atlas responses and agent reasoning.',
                 'Telegram bot token for Telegram chat integration.',
                 'Discord bot token for Discord integration.',
+                'WhatsApp bridge credentials for WhatsApp linked-device chat integration.',
                 'Other provider or custom keys as Atlas grows.',
               ]}
             />
@@ -652,7 +653,7 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
           </DocsSection>
           <DocsSection title="For now">
             <p>
-              Users should treat Slack support as planned but not yet documented. Telegram and Discord remain the fully
+              Users should treat Slack support as planned but not yet documented. Telegram, Discord, and WhatsApp remain the fully
               documented chat integrations for the current docs release.
             </p>
           </DocsSection>

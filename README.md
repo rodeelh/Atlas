@@ -2,7 +2,7 @@
 
 Atlas is a local AI operator. A single Go binary runs on your machine, serves a web UI, and connects to OpenAI, Anthropic, Gemini, or a local LM Studio model.
 
-It handles chat, memory, automations, skills, approvals, browser control, Telegram/Discord integration, and a Forge pipeline for AI-generated skill extensions.
+It handles chat, memory, automations, skills, approvals, browser control, Telegram/Discord/WhatsApp integration, and a Forge pipeline for AI-generated skill extensions.
 
 ## Repository Layout
 

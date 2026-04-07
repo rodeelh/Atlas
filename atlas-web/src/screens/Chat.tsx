@@ -2,12 +2,13 @@ import { useState, useEffect, useRef, useCallback } from 'preact/hooks'
 import type { JSX } from 'preact/jsx-runtime'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { api, MessageAttachment, LinkPreview, ConversationSummary, ConversationDetail } from '../api/client'
+import { api, MessageAttachment, LinkPreview, ConversationSummary, ConversationDetail, CloudModelHealth } from '../api/client'
 import { toast } from '../toast'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
-import { formatAtlasModelName } from '../modelName'
-import { browserSpeechSupported, startBrowserSpeech, type BrowserSpeechSession } from '../lib/browserSpeech'
+import { formatProviderModelName } from '../modelName'
+import { voiceSpeechSupported, startVoiceSpeech, type VoiceSpeechSession } from '../lib/voiceSpeech'
+import { createVoicePlayer, warmupAudioContext, type VoicePlayer } from '../lib/voicePlayback'
 
 // Configure marked once — GFM tables, auto line-breaks, external links
 marked.use({
@@ -33,7 +34,8 @@ interface Message {
   linkPreviews?: Record<string, LinkPreview>
 }
 
-type ChatProvider = 'openai' | 'anthropic' | 'gemini' | 'lm_studio' | 'ollama' | 'atlas_engine'
+type ChatProvider = 'openai' | 'anthropic' | 'gemini' | 'openrouter' | 'lm_studio' | 'ollama' | 'atlas_engine'
+const CLOUD_CHAT_PROVIDERS: ChatProvider[] = ['openai', 'anthropic', 'gemini', 'openrouter']
 
 const STORAGE_ID_KEY  = 'atlasConversationID'
 const STORAGE_MSG_KEY = 'atlasChatMessages'
@@ -42,6 +44,7 @@ function selectedModelForProvider(config: {
   selectedOpenAIPrimaryModel?: string
   selectedAnthropicModel?: string
   selectedGeminiModel?: string
+  selectedOpenRouterModel?: string
   selectedLMStudioModel?: string
   selectedOllamaModel?: string
   selectedAtlasEngineModel?: string
@@ -53,6 +56,8 @@ function selectedModelForProvider(config: {
       return config.selectedAnthropicModel?.trim() || null
     case 'gemini':
       return config.selectedGeminiModel?.trim() || null
+    case 'openrouter':
+      return config.selectedOpenRouterModel?.trim() || null
     case 'lm_studio':
       return config.selectedLMStudioModel?.trim() || null
     case 'ollama':
@@ -245,18 +250,24 @@ const LinkPreviewCard = ({ preview }: { preview: LinkPreview }) => {
 // ── Icon components ────────────────────────────────────────────────────────────
 
 const SendIcon = () => (
-  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <line x1="14" y1="2" x2="7" y2="9" />
-    <polygon points="14,2 9,14 7,9 2,7" fill="currentColor" stroke="none" />
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.5 13.5L14 8 2.5 2.5l2.2 4.1 4.8 1.4-4.8 1.4-2.2 4.1z" />
   </svg>
 )
 
 const MicIcon = () => (
-  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="5" y="1" width="6" height="9" rx="3" />
-    <path d="M2 8a6 6 0 0012 0" />
-    <line x1="8" y1="14" x2="8" y2="16" />
-    <line x1="5.5" y1="16" x2="10.5" y2="16" />
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="5.2" y="1.6" width="5.6" height="8.2" rx="2.8" />
+    <path d="M3.2 7.9a4.8 4.8 0 0 0 9.6 0" />
+    <line x1="8" y1="12.9" x2="8" y2="14.6" />
+    <line x1="5.8" y1="14.6" x2="10.2" y2="14.6" />
+  </svg>
+)
+
+const AttachIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 2.5v11" />
+    <path d="M2.5 8h11" />
   </svg>
 )
 
@@ -270,6 +281,38 @@ const CopyIcon = () => (
 const CheckIcon = () => (
   <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d="M3 8l4 4 6-7" />
+  </svg>
+)
+
+const SpeakerIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M2.8 6.2h2.3L8.4 3.4v9.2L5.1 9.8H2.8z" />
+    <path d="M10.6 6a2.9 2.9 0 0 1 0 4" />
+    <path d="M12.6 4.2a5.2 5.2 0 0 1 0 7.6" />
+  </svg>
+)
+
+const SpeakerStopIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M2.8 6.2h2.3L8.4 3.4v9.2L5.1 9.8H2.8z" />
+    <rect x="10.6" y="5.4" width="3.2" height="5.2" rx="0.7" />
+  </svg>
+)
+
+const SpeakerMutedIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.8 6.2h2.3L8.4 3.4v9.2L5.1 9.8H2.8z" />
+    <line x1="10.8" y1="5.4" x2="13.8" y2="10.6" />
+    <line x1="13.8" y1="5.4" x2="10.8" y2="10.6" />
+  </svg>
+)
+
+const ProviderIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="2.5" y1="4.5" x2="13.5" y2="4.5" />
+    <line x1="2.5" y1="11.5" x2="13.5" y2="11.5" />
+    <circle cx="5.6" cy="4.5" r="1.6" />
+    <circle cx="10.4" cy="11.5" r="1.6" />
   </svg>
 )
 
@@ -302,17 +345,25 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
   const [attachments, setAttachments]         = useState<MessageAttachment[]>([])
   const [agentName, setAgentName]             = useState('Atlas')
   const [userName, setUserName]               = useState('')
-  const [speechAvailable]                     = useState(() => browserSpeechSupported())
+  const [speechAvailable]                     = useState(() => voiceSpeechSupported())
   const [speechListening, setSpeechListening] = useState(false)
+  const [ttsEnabled, setTtsEnabled]           = useState<boolean>(() => {
+    try { return localStorage.getItem('atlas.ttsEnabled') === '1' } catch { return false }
+  })
+  const [speakingMsgId, setSpeakingMsgId]     = useState<string | null>(null)
   const [activeProvider, setActiveProvider]   = useState<ChatProvider>('openai')
   const [modelByProvider, setModelByProvider] = useState<Record<ChatProvider, string>>({
     openai:    '',
     anthropic: '',
     gemini:    '',
+    openrouter: '',
     lm_studio:    '',
     ollama:       '',
     atlas_engine: '',
   })
+  const [cloudModelHealth, setCloudModelHealth] = useState<CloudModelHealth | null>(null)
+  const [checkingCloudModelHealth, setCheckingCloudModelHealth] = useState(false)
+  const [showScrollBottom, setShowScrollBottom] = useState(false)
 
   // History search state
   const [historyOpen, setHistoryOpen]           = useState(false)
@@ -345,9 +396,29 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
   const fileInputRef   = useRef<HTMLInputElement>(null)
   const conversationID = useRef<string>(getConversationID())
   const isInitialMount = useRef(true)
-  const speechSessionRef = useRef<BrowserSpeechSession | null>(null)
+  const speechSessionRef = useRef<VoiceSpeechSession | null>(null)
   const speechBaseInputRef = useRef('')
   const speechCommittedRef = useRef('')
+  const voicePlayerRef = useRef<VoicePlayer | null>(null)
+  const voiceStreamAbortRef = useRef<(() => void) | null>(null)
+  // Streaming-speaker state — used by auto-play during a chat turn.
+  // streamingPlayerRef is a SHARED player that all sentences fire into so
+  // playback is gapless across sentence boundaries. streamingBufferRef
+  // accumulates raw markdown deltas; sentences are popped from it as soon
+  // as a sentence terminator (.!?) appears.
+  const streamingPlayerRef     = useRef<VoicePlayer | null>(null)
+  const streamingBufferRef     = useRef<string>('')
+  const streamingPendingRef    = useRef<number>(0) // in-flight synth requests
+  const streamingFinishedRef   = useRef<boolean>(false) // model done emitting deltas
+  const streamingMsgIdRef      = useRef<string | null>(null)
+  const streamingAbortsRef     = useRef<Array<() => void>>([])
+
+  const updateScrollBottomVisibility = useCallback(() => {
+    const el = messagesRef.current
+    if (!el) return
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+    setShowScrollBottom(distance > 140)
+  }, [])
 
   const scrollToBottom = (smooth: boolean) => {
     requestAnimationFrame(() => {
@@ -355,8 +426,10 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
       if (!el) return
       if (smooth) {
         el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+        window.setTimeout(updateScrollBottomVisibility, 220)
       } else {
         el.scrollTop = el.scrollHeight
+        updateScrollBottomVisibility()
       }
     })
   }
@@ -367,12 +440,27 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     isInitialMount.current = false
   }, [messages])
 
+  useEffect(() => {
+    const el = messagesRef.current
+    if (!el) return
+    const onScroll = () => updateScrollBottomVisibility()
+    el.addEventListener('scroll', onScroll, { passive: true })
+    onScroll()
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [updateScrollBottomVisibility])
+
   // Scroll to bottom on mount (page load or tab switch back)
   useEffect(() => {
     scrollToBottom(false)
     return () => {
       esRef.current?.close()
       speechSessionRef.current?.stop()
+      if (voiceStreamAbortRef.current) {
+        try { voiceStreamAbortRef.current() } catch { /* ignore */ }
+      }
+      if (voicePlayerRef.current) {
+        try { voicePlayerRef.current.stop() } catch { /* ignore */ }
+      }
       if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current)
       if (presenceTimer.current) clearTimeout(presenceTimer.current)
     }
@@ -431,6 +519,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
         openai:    s.selectedOpenAIPrimaryModel?.trim() || '',
         anthropic: s.selectedAnthropicModel?.trim() || '',
         gemini:    s.selectedGeminiModel?.trim() || '',
+        openrouter: s.selectedOpenRouterModel?.trim() || '',
         lm_studio:    s.selectedLMStudioModel?.trim() || '',
         ollama:       s.selectedOllamaModel?.trim() || '',
         atlas_engine: s.selectedAtlasEngineModel?.trim() || '',
@@ -439,6 +528,36 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
       await resolveModelLabel(provider, selectedModelForProvider(s, provider))
     }).catch(() => {})
   }, [resolveModelLabel])
+
+  useEffect(() => {
+    if (!CLOUD_CHAT_PROVIDERS.includes(activeProvider)) {
+      setCloudModelHealth(null)
+      setCheckingCloudModelHealth(false)
+      return
+    }
+    const resolvedModel = (modelByProvider[activeProvider]?.trim()
+      || (activeProvider === 'openrouter' ? 'openrouter/auto:free' : ''))
+    if (!resolvedModel) {
+      setCloudModelHealth(null)
+      setCheckingCloudModelHealth(false)
+      return
+    }
+    let cancelled = false
+    setCheckingCloudModelHealth(true)
+    api.cloudModelHealth(activeProvider, resolvedModel)
+      .then((health) => { if (!cancelled) setCloudModelHealth(health) })
+      .catch(() => {
+        if (!cancelled) {
+          setCloudModelHealth({
+            status: 'unavailable',
+            message: 'Could not check model availability.',
+            checkedAt: new Date().toISOString(),
+          })
+        }
+      })
+      .finally(() => { if (!cancelled) setCheckingCloudModelHealth(false) })
+    return () => { cancelled = true }
+  }, [activeProvider, modelByProvider])
 
   // Click-outside handler for search dropdown
   useEffect(() => {
@@ -533,6 +652,255 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     speechSessionRef.current?.stop()
   }, [])
 
+  const stopSpeaking = useCallback(() => {
+    // Single-shot path (per-message Speak button)
+    if (voiceStreamAbortRef.current) {
+      try { voiceStreamAbortRef.current() } catch { /* ignore */ }
+      voiceStreamAbortRef.current = null
+    }
+    if (voicePlayerRef.current) {
+      try { voicePlayerRef.current.stop() } catch { /* ignore */ }
+      voicePlayerRef.current = null
+    }
+    // Streaming-speaker path (auto-play during a turn)
+    for (const abort of streamingAbortsRef.current) {
+      try { abort() } catch { /* ignore */ }
+    }
+    streamingAbortsRef.current = []
+    if (streamingPlayerRef.current) {
+      try { streamingPlayerRef.current.stop() } catch { /* ignore */ }
+      streamingPlayerRef.current = null
+    }
+    streamingBufferRef.current = ''
+    streamingPendingRef.current = 0
+    streamingFinishedRef.current = false
+    streamingMsgIdRef.current = null
+    setSpeakingMsgId(null)
+  }, [])
+
+  // ── Streaming TTS helpers ──────────────────────────────────────────────────
+  // Strip markdown so the synthesizer doesn't try to pronounce backticks/asterisks.
+  const cleanForSpeech = (text: string): string =>
+    text
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/!\[[^\]]*]\([^)]*\)/g, '')
+      .replace(/\[([^\]]+)]\([^)]*\)/g, '$1')
+      .replace(/[#*_>]+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+  // Pop the longest sentence-terminated prefix off the buffer. Returns ''
+  // if no sentence boundary is present yet. Sentence boundaries are .!?
+  // followed by whitespace or end-of-buffer. Code fences and inline code
+  // pause sentence splitting so we don't break mid-snippet.
+  const popReadySentences = (buffer: string): { ready: string; rest: string } => {
+    // Don't split inside an unclosed code fence — wait for the closing ```.
+    const fenceCount = (buffer.match(/```/g) || []).length
+    if (fenceCount % 2 === 1) {
+      return { ready: '', rest: buffer }
+    }
+    // Find the last sentence terminator followed by whitespace.
+    // Walk backwards so we capture as much as possible per flush.
+    let lastBoundary = -1
+    for (let i = buffer.length - 1; i >= 0; i--) {
+      const c = buffer[i]
+      if (c === '.' || c === '!' || c === '?') {
+        // Boundary if next char is whitespace or end of string.
+        if (i === buffer.length - 1 || /\s/.test(buffer[i + 1])) {
+          lastBoundary = i
+          break
+        }
+      }
+    }
+    if (lastBoundary < 0) return { ready: '', rest: buffer }
+    return {
+      ready: buffer.slice(0, lastBoundary + 1).trim(),
+      rest:  buffer.slice(lastBoundary + 1).trimStart(),
+    }
+  }
+
+  // Lazily create the shared streaming player on first use.
+  const ensureStreamingPlayer = (messageId: string): VoicePlayer | null => {
+    if (streamingPlayerRef.current) return streamingPlayerRef.current
+    let player: VoicePlayer
+    try { player = createVoicePlayer() }
+    catch (err) {
+      setError(err instanceof Error ? err.message : 'Audio playback unavailable.')
+      return null
+    }
+    streamingPlayerRef.current = player
+    streamingMsgIdRef.current = messageId
+    setSpeakingMsgId(messageId)
+    player.onFinished = () => {
+      if (streamingPlayerRef.current === player) {
+        streamingPlayerRef.current = null
+        streamingBufferRef.current = ''
+        streamingPendingRef.current = 0
+        streamingFinishedRef.current = false
+        streamingMsgIdRef.current = null
+        streamingAbortsRef.current = []
+        setSpeakingMsgId(null)
+      }
+    }
+    player.onError = (msg) => {
+      setError(msg)
+      if (streamingPlayerRef.current === player) {
+        try { player.stop() } catch { /* ignore */ }
+        streamingPlayerRef.current = null
+        streamingBufferRef.current = ''
+        streamingPendingRef.current = 0
+        streamingFinishedRef.current = false
+        streamingMsgIdRef.current = null
+        streamingAbortsRef.current = []
+        setSpeakingMsgId(null)
+      }
+    }
+    return player
+  }
+
+  // Fire one sentence into the shared player. Bumps the in-flight count so
+  // we know when to call player.finish() once everything has been processed.
+  const speakSentence = (sentence: string, player: VoicePlayer) => {
+    const text = cleanForSpeech(sentence)
+    if (!text) return
+    streamingPendingRef.current += 1
+    const stream = api.voiceSynthesize(text, {
+      onChunk: (b64, index, sampleRate) => {
+        if (streamingPlayerRef.current === player) {
+          player.enqueueChunk(b64, index, sampleRate)
+        }
+      },
+      onEnd: () => {
+        streamingPendingRef.current -= 1
+        if (streamingFinishedRef.current && streamingPendingRef.current === 0) {
+          if (streamingPlayerRef.current === player) player.finish()
+        }
+      },
+      onError: (msg) => {
+        streamingPendingRef.current -= 1
+        setError(msg)
+      },
+    })
+    streamingAbortsRef.current.push(stream.abort)
+  }
+
+  // Append a delta from assistant_delta. Pops any completed sentences off
+  // the buffer and fires them at the player. Called per-delta, so the
+  // first sentence usually starts speaking ~300 ms after the model emits
+  // the first period — not after the whole turn finishes.
+  const streamingAppendDelta = (delta: string, messageId: string) => {
+    if (!ttsEnabled) return
+    const player = ensureStreamingPlayer(messageId)
+    if (!player) return
+    streamingBufferRef.current += delta
+    while (true) {
+      const { ready, rest } = popReadySentences(streamingBufferRef.current)
+      if (!ready) break
+      streamingBufferRef.current = rest
+      speakSentence(ready, player)
+    }
+  }
+
+  // Called from the SSE 'done' handler. Flushes any tail content as a
+  // final sentence and signals the player that no more chunks will arrive.
+  const streamingFinish = () => {
+    const player = streamingPlayerRef.current
+    if (!player) return
+    const tail = streamingBufferRef.current.trim()
+    streamingBufferRef.current = ''
+    if (tail) speakSentence(tail, player)
+    streamingFinishedRef.current = true
+    if (streamingPendingRef.current === 0) {
+      try { player.finish() } catch { /* ignore */ }
+    }
+  }
+
+  const speakText = useCallback((text: string, messageId: string) => {
+    // Strip markdown for a cleaner read-aloud: keep words, drop fences.
+    const clean = text
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/!\[[^\]]*]\([^)]*\)/g, '')
+      .replace(/\[([^\]]+)]\([^)]*\)/g, '$1')
+      .replace(/[#*_>]+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!clean) return
+
+    // Stop any in-flight playback first.
+    stopSpeaking()
+
+    let player: VoicePlayer
+    try {
+      player = createVoicePlayer()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Audio playback unavailable.')
+      return
+    }
+    voicePlayerRef.current = player
+    setSpeakingMsgId(messageId)
+
+    player.onFinished = () => {
+      if (voicePlayerRef.current === player) {
+        voicePlayerRef.current = null
+        voiceStreamAbortRef.current = null
+        setSpeakingMsgId(null)
+      }
+    }
+    player.onError = (msg) => {
+      setError(msg)
+      if (voicePlayerRef.current === player) {
+        voicePlayerRef.current = null
+        voiceStreamAbortRef.current = null
+        setSpeakingMsgId(null)
+      }
+    }
+
+    const stream = api.voiceSynthesize(clean, {
+      onChunk: (b64, index, sampleRate) => {
+        if (voicePlayerRef.current === player) {
+          player.enqueueChunk(b64, index, sampleRate)
+        }
+      },
+      onEnd: () => {
+        if (voicePlayerRef.current === player) {
+          player.finish()
+        }
+      },
+      onError: (msg) => {
+        setError(msg)
+        if (voicePlayerRef.current === player) {
+          try { player.stop() } catch { /* ignore */ }
+          voicePlayerRef.current = null
+          voiceStreamAbortRef.current = null
+          setSpeakingMsgId(null)
+        }
+      },
+    })
+    voiceStreamAbortRef.current = stream.abort
+  }, [stopSpeaking])
+
+  const toggleTTS = useCallback(() => {
+    setTtsEnabled((prev) => {
+      const next = !prev
+      try { localStorage.setItem('atlas.ttsEnabled', next ? '1' : '0') } catch { /* ignore */ }
+      if (!next) stopSpeaking()
+      if (next) {
+        // Unlock the shared AudioContext on the user gesture that turns TTS on
+        // so later auto-play triggered from the SSE done event can play without
+        // hitting the browser's autoplay policy.
+        warmupAudioContext()
+        // Pre-warm the Kokoro subprocess so the first sentence of the next
+        // response doesn't pay the ~600 ms model-load cost. Best-effort:
+        // failures here just mean the first synth call will pay the cost
+        // itself, which is the previous behavior.
+        api.voiceKokoroWarmup().catch(() => { /* ignore */ })
+      }
+      return next
+    })
+  }, [stopSpeaking])
+
   const toggleSpeechInput = useCallback(() => {
     if (speechListening) {
       stopSpeechInput()
@@ -540,7 +908,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     }
 
     if (!speechAvailable) {
-      toast.info('Browser voice input is not available here yet.')
+      toast.info('Voice input is not available in this browser.')
       return
     }
 
@@ -548,17 +916,18 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     speechCommittedRef.current = ''
 
     try {
-      speechSessionRef.current = startBrowserSpeech({
+      speechSessionRef.current = startVoiceSpeech({
         lang: navigator.language || 'en-US',
+        transcribe: (blob, language) => api.voiceTranscribe(blob, language),
         onStart: () => {
           setSpeechListening(true)
-          toast.info('Listening in your browser. Tap the mic again to stop.')
+          toast.info('Recording — tap the mic again to stop and transcribe.')
         },
-        onResult: ({ finalText, interimText }) => {
+        onResult: ({ finalText }) => {
           if (finalText.trim()) {
             speechCommittedRef.current = joinTranscriptParts(speechCommittedRef.current, finalText)
           }
-          syncSpeechInput(interimText)
+          syncSpeechInput()
         },
         onError: (message) => {
           setError(message)
@@ -571,7 +940,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
         },
       })
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Browser voice input failed.'
+      const message = err instanceof Error ? err.message : 'Voice input failed.'
       setError(message)
       setSpeechListening(false)
     }
@@ -663,6 +1032,14 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
   const send = async () => {
     const text = input.trim()
     if ((!text && attachments.length === 0) || sending) return
+    // Warm the shared AudioContext on this user gesture so auto-play TTS can
+    // fire later from the SSE done event without the browser's autoplay policy
+    // keeping the context suspended. Also pre-warm Kokoro in the background
+    // so the first sentence doesn't pay the model load cost.
+    if (ttsEnabled) {
+      warmupAudioContext()
+      api.voiceKokoroWarmup().catch(() => { /* ignore */ })
+    }
 
     const pendingAttachments = [...attachments]
     setInput('')
@@ -736,9 +1113,11 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
               } else {
                 setMessages(prev => prev.map(m => m.id === resumedMsgID ? { ...m, content: resumedContent, isTyping: true } : m))
               }
+              if (ttsEnabled && resumedMsgID) streamingAppendDelta(delta, resumedMsgID)
             } else {
               accumulatedContent += delta
               setMessages(prev => prev.map(m => m.id === assistantMsg.id ? { ...m, content: accumulatedContent, isTyping: true } : m))
+              if (ttsEnabled) streamingAppendDelta(delta, assistantMsg.id)
             }
             break
           }
@@ -840,6 +1219,18 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
               // Fetch link previews for assistant replies in the background
               if (data.status === 'completed' && finalContent) {
                 fetchAndAttachPreviews(finalID, finalContent)
+                if (ttsEnabled) {
+                  // Sentence streaming has been firing all along — flush any
+                  // remaining tail content and let the player drain. If for
+                  // some reason no streaming player exists yet (e.g. the
+                  // model emitted everything in one delta with no terminator),
+                  // fall back to a single one-shot synth call.
+                  if (streamingPlayerRef.current) {
+                    streamingFinish()
+                  } else {
+                    speakText(finalContent, finalID)
+                  }
+                }
               }
               setApprovalBanner(false); setSending(false); es.close()
             }
@@ -917,11 +1308,34 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
   }
 
   // Derived — model name shown as header subtitle.
-  // Atlas Engine model names are GGUF filenames; format them into readable labels.
-  const activeModelRaw = modelByProvider[activeProvider]?.trim() || 'Loading…'
-  const activeModel = activeProvider === 'atlas_engine'
-    ? formatAtlasModelName(activeModelRaw)
-    : activeModelRaw
+  // Provider-specific IDs are normalized to readable labels.
+  const activeModelRaw = modelByProvider[activeProvider]?.trim() || (activeProvider === 'openrouter' ? 'openrouter/auto:free' : 'Loading…')
+  const activeModel = formatProviderModelName(activeProvider, activeModelRaw)
+
+  const cloudHealthDot = CLOUD_CHAT_PROVIDERS.includes(activeProvider)
+    ? (checkingCloudModelHealth
+        ? (
+          <span
+            title="Checking model availability"
+            style={{ display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', marginLeft: '8px', background: 'var(--text-3)', opacity: 0.75 }}
+          />
+        )
+        : cloudModelHealth?.status === 'ok'
+          ? (
+            <span
+              title="Model available"
+              style={{ display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', marginLeft: '8px', background: 'var(--green, #22c55e)' }}
+            />
+          )
+          : cloudModelHealth && cloudModelHealth.status !== 'unknown'
+            ? (
+              <span
+                title={cloudModelHealth.message || 'Model unavailable'}
+                style={{ display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', marginLeft: '8px', background: 'var(--red, #ef4444)' }}
+              />
+            )
+            : null)
+    : null
 
   // ── Render ─────────────────────────────────────────────────────────────────────
 
@@ -929,7 +1343,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     <div class="chat-screen">
       <PageHeader
         title="Chat"
-        subtitle={activeModel ? `Model: ${activeModel}` : ''}
+        subtitle={activeModel ? <span>Model: {activeModel}{cloudHealthDot}</span> : ''}
         actions={
           <>
             {/* Search — icon collapses to expanding search bar + dropdown */}
@@ -1144,6 +1558,23 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
                         </button>
                       )
                     })()}
+                    {msg.role === 'assistant' && (
+                      <button
+                        class={`chat-copy-btn${speakingMsgId === msg.id ? ' speaking' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (speakingMsgId === msg.id) {
+                            stopSpeaking()
+                          } else {
+                            speakText(msg.content, msg.id)
+                          }
+                        }}
+                        title={speakingMsgId === msg.id ? 'Stop playback' : 'Read aloud'}
+                        aria-label={speakingMsgId === msg.id ? 'Stop playback' : 'Read aloud'}
+                      >
+                        {speakingMsgId === msg.id ? <SpeakerStopIcon /> : <SpeakerIcon />}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1174,6 +1605,17 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
         </div>
       </div>
 
+      <button
+        class={`chat-scroll-bottom-btn${showScrollBottom ? ' visible' : ''}`}
+        onClick={() => scrollToBottom(true)}
+        title="Scroll to bottom"
+        aria-label="Scroll to bottom"
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 6l4 4 4-4" />
+        </svg>
+      </button>
+
       {/* Composer v2 */}
       <div class="chat-composer">
         <input
@@ -1199,18 +1641,28 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
           )}
 
           <div class="chat-composer-row">
-            {/* + attachment button — outside left */}
-            <button
-              class={`chat-round-btn chat-round-btn-attach${attachments.length > 0 ? ' active' : ''}`}
-              onClick={() => fileInputRef.current?.click()}
-              disabled={sending}
-              title="Attach image or PDF"
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                <line x1="8" y1="2" x2="8" y2="14" />
-                <line x1="2" y1="8" x2="14" y2="8" />
-              </svg>
-            </button>
+            <div class="chat-composer-tools">
+              {/* + attachment button — outside left */}
+              <button
+                class={`chat-round-btn chat-round-btn-attach${attachments.length > 0 ? ' active' : ''}`}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={sending}
+                title="Attach image or PDF"
+              >
+                <AttachIcon />
+              </button>
+              <button
+                class={`chat-round-btn chat-round-btn-tool${ttsEnabled ? ' active' : ''}`}
+                onClick={toggleTTS}
+                disabled={sending}
+                type="button"
+                title={ttsEnabled ? 'Disable auto-read (Piper TTS)' : 'Enable auto-read (Piper TTS)'}
+                aria-label={ttsEnabled ? 'Disable auto-read' : 'Enable auto-read'}
+                aria-pressed={ttsEnabled ? 'true' : 'false'}
+              >
+                {ttsEnabled ? <SpeakerIcon /> : <SpeakerMutedIcon />}
+              </button>
+            </div>
 
             {/* Textarea box */}
             <div class="chat-textarea-wrap">
@@ -1231,10 +1683,10 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
                 type="button"
                 title={
                   speechListening
-                    ? 'Stop browser voice input'
+                    ? 'Stop voice input'
                     : speechAvailable
-                      ? 'Use browser voice input (temporary bridge)'
-                      : 'Browser voice input unavailable'
+                      ? 'Voice input (Whisper)'
+                      : 'Voice input unavailable in this browser'
                 }
                 aria-label={speechListening ? 'Stop voice input' : 'Start voice input'}
                 aria-pressed={speechListening ? 'true' : 'false'}
@@ -1252,17 +1704,13 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
                 <option value="openai">OpenAI</option>
                 <option value="anthropic">Anthropic</option>
                 <option value="gemini">Gemini</option>
+                <option value="openrouter">OpenRouter</option>
                 <option value="lm_studio">LM Studio</option>
                 <option value="ollama">Ollama</option>
                 <option value="atlas_engine">Engine LM</option>
               </select>
               <span class="chat-provider-select-icon" aria-hidden="true">
-                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                  <line x1="2" y1="5" x2="14" y2="5" />
-                  <line x1="2" y1="11" x2="14" y2="11" />
-                  <circle cx="6" cy="5" r="2" />
-                  <circle cx="10" cy="11" r="2" />
-                </svg>
+                <ProviderIcon />
               </span>
             </div>
 

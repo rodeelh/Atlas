@@ -44,7 +44,7 @@ function platformSubtitle(platform: PlatformID) {
     case 'telegram': return 'Token-based chat bot integration with polling.'
     case 'discord': return 'Bot gateway integration for DMs and @mentions.'
     case 'slack': return 'Socket Mode integration for DMs and @mentions.'
-    case 'whatsapp': return 'Not available yet.'
+    case 'whatsapp': return 'Scan QR code to connect your WhatsApp account.'
     case 'companion': return 'Reserved for the Atlas companion app.'
     default: return ''
   }
@@ -69,6 +69,8 @@ function setupHint(status: CommunicationPlatformStatus) {
       return 'Add the Discord bot token and client ID, install the bot into your server, enable Message Content intent, and validate gateway access.'
     case 'slack':
       return 'Add the xoxb bot token and xapp app token, enable Socket Mode, and validate DMs plus @mentions.'
+    case 'whatsapp':
+      return 'Open Linked Devices in WhatsApp on your phone and scan the QR code.'
     default:
       return 'Finish setup to make this channel available.'
   }
@@ -108,6 +110,13 @@ function platformSetupNotes(platform: PlatformID) {
         'Subscribe to bot DMs and app mentions before validating.',
         'Send one DM or @mention after setup so Atlas can discover the channel.',
       ]
+    case 'whatsapp':
+      return [
+        'Click Save & Validate to generate a QR code.',
+        'On your phone open WhatsApp > Linked Devices > Link a Device.',
+        'Scan the code and keep Atlas running while pairing completes.',
+        'Send a message to Atlas in WhatsApp to create the first session.',
+      ]
     default:
       return ['Finish setup to make this platform available in Atlas.']
   }
@@ -121,9 +130,29 @@ function platformDocsURL(platform: PlatformID) {
       return 'https://discord.com/developers/docs/quick-start/getting-started'
     case 'slack':
       return 'https://api.slack.com/start/quickstart'
+    case 'whatsapp':
+      return 'https://faq.whatsapp.com/1317564962315842'
     default:
       return null
   }
+}
+
+function formatLastSeen(timestamp: string): { relative: string; absolute: string } {
+  const date = new Date(timestamp)
+  const absolute = date.toLocaleString()
+  const diffMs = Date.now() - date.getTime()
+
+  if (!Number.isFinite(diffMs) || diffMs < 0) {
+    return { relative: 'just now', absolute }
+  }
+
+  const diffSeconds = Math.floor(diffMs / 1000)
+  if (diffSeconds < 45) return { relative: 'just now', absolute }
+  if (diffSeconds < 3600) return { relative: `${Math.floor(diffSeconds / 60)}m ago`, absolute }
+  if (diffSeconds < 86400) return { relative: `${Math.floor(diffSeconds / 3600)}h ago`, absolute }
+  if (diffSeconds < 604800) return { relative: `${Math.floor(diffSeconds / 86400)}d ago`, absolute }
+
+  return { relative: absolute, absolute }
 }
 
 function PlatformLogo({ platform }: { platform: PlatformID }) {
@@ -135,6 +164,8 @@ function PlatformLogo({ platform }: { platform: PlatformID }) {
         return '/web/chat-app-logos/discord.png'
       case 'slack':
         return '/web/chat-app-logos/slack.png'
+      case 'whatsapp':
+        return '/web/chat-app-logos/whatsapp.svg'
       default:
         return null
     }
@@ -212,6 +243,13 @@ export function Communications() {
   const selectedPlatform = platforms.find(platform => platform.platform === selectedPlatformID) ?? null
   const readyPlatformIDs = new Set(readyPlatforms.map(platform => platform.platform))
   const channels = (snapshot?.channels ?? []).filter(channel => readyPlatformIDs.has(channel.platform))
+  const sevenDaysMs = 7 * 24 * 60 * 60 * 1000
+  const recentChannels = channels.filter(channel => {
+    const updatedAtMs = Date.parse(channel.updatedAt)
+    if (!Number.isFinite(updatedAtMs)) return true
+    return (Date.now() - updatedAtMs) <= sevenDaysMs
+  })
+  const activePlatformsWithRecentSessions = new Set(recentChannels.map(channel => channel.platform))
 
   const choosePlatform = async (platform: PlatformID) => {
     const initialValues = {
@@ -234,8 +272,20 @@ export function Communications() {
       }
       setCredentialValues(loadedValues)
       setInitialCredentialValues(loadedValues)
+
+      // WhatsApp is QR-based and has no credentials; auto-trigger validation so
+      // the QR appears immediately when opening setup.
+      if (platform === 'whatsapp') {
+        setBusyPlatform(`${platform}:setup`)
+        const updated = await api.validateCommunicationPlatform(platform)
+        mergePlatformStatus(updated)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load saved channel credentials.')
+    } finally {
+      if (platform === 'whatsapp') {
+        setBusyPlatform(null)
+      }
     }
   }
 
@@ -332,7 +382,7 @@ export function Communications() {
   }
 
   return (
-    <div class="screen">
+    <div class="screen communications-screen">
       <PageHeader
         title="Communications"
         subtitle="Manage connected channels and complete setup for supported chat platforms."
@@ -352,12 +402,51 @@ export function Communications() {
             <ConnectedPlatformRow
               key={platform.id}
               platform={platform}
+              idle={!activePlatformsWithRecentSessions.has(platform.platform)}
               last={index === readyPlatforms.length - 1}
               busy={busyPlatform === `${platform.platform}:disable` || busyPlatform === `${platform.platform}:validate`}
               onDisable={() => disablePlatform(platform.platform)}
               onValidate={() => revalidatePlatform(platform.platform)}
             />
           ))}
+        </div>
+      </div>
+
+      <div>
+        <div class="section-label">Recent Sessions</div>
+        <div class="card settings-group">
+          {recentChannels.length === 0 && (
+            <div class="communication-empty-state">
+              No sessions in the last 7 days. Once a ready integration receives a message, it will appear here.
+            </div>
+          )}
+          {recentChannels.map((channel, index) => (
+            <CommunicationChannelRow key={channel.id} channel={channel} last={index === recentChannels.length - 1} />
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <div class="section-label">Routing</div>
+        <div class="card communication-routing-card">
+          <div class="settings-row communication-routing-row">
+            <div class="settings-label-col">
+              <div class="communication-platform-heading">
+                <div class="settings-label">Inbound routing</div>
+                <div class="badge badge-green">Unified</div>
+              </div>
+              <div class="settings-sublabel">All connected channels route into the same Atlas runtime.</div>
+            </div>
+          </div>
+          <div class="settings-row communication-routing-row">
+            <div class="settings-label-col">
+              <div class="communication-platform-heading">
+                <div class="settings-label">Outbound automations</div>
+                <div class="badge badge-gray">{recentChannels.filter(channel => channel.canReceiveNotifications).length} channels</div>
+              </div>
+              <div class="settings-sublabel">Automation results can target any notification-capable ready channel.</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -390,7 +479,7 @@ export function Communications() {
                 </div>
                 <div class="communication-platform-controls communication-platform-controls-bottom">
                   <div class="communication-platform-actions">
-                    <span class="btn btn-sm communication-platform-action-btn">Set up</span>
+                    <span class="btn btn-sm communication-platform-action-btn">Configure</span>
                   </div>
                 </div>
               </button>
@@ -399,44 +488,6 @@ export function Communications() {
               <div class="communication-empty-state">All supported communication apps are already configured.</div>
             )}
           </div>
-        </div>
-      </div>
-
-      <div>
-        <div class="section-label">Routing</div>
-        <div class="card communication-routing-card">
-          <div class="settings-row communication-routing-row">
-            <div class="settings-label-col">
-              <div class="settings-label">Inbound routing</div>
-              <div class="settings-sublabel">All connected channels route into the same Atlas runtime.</div>
-            </div>
-            <div class="communication-routing-badge-row">
-              <div class="badge badge-green">Unified</div>
-            </div>
-          </div>
-          <div class="settings-row communication-routing-row">
-            <div class="settings-label-col">
-              <div class="settings-label">Outbound automations</div>
-              <div class="settings-sublabel">Automation results can target any notification-capable ready channel.</div>
-            </div>
-            <div class="communication-routing-badge-row">
-              <div class="badge badge-gray">{channels.filter(channel => channel.canReceiveNotifications).length} channels</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div>
-        <div class="section-label">Recent Sessions</div>
-        <div class="card settings-group">
-          {channels.length === 0 && (
-            <div class="communication-empty-state">
-              No sessions discovered yet. Once a ready integration receives a message, it will appear here.
-            </div>
-          )}
-          {channels.map((channel, index) => (
-            <CommunicationChannelRow key={channel.id} channel={channel} last={index === channels.length - 1} />
-          ))}
         </div>
       </div>
 
@@ -461,12 +512,14 @@ export function Communications() {
 
 function ConnectedPlatformRow({
   platform,
+  idle,
   last,
   busy,
   onDisable,
   onValidate,
 }: {
   platform: CommunicationPlatformStatus
+  idle: boolean
   last: boolean
   busy: boolean
   onDisable: () => void
@@ -482,6 +535,7 @@ function ConnectedPlatformRow({
             <span class={setupBadgeClass(platform)}>{platform.statusLabel}</span>
           </div>
           <div class="settings-sublabel communication-bot-label">{platformBotLabel(platform)}</div>
+          {idle && <div class="settings-sublabel">No messages in the last 7 days.</div>}
           {platform.blockingReason && <div class="settings-sublabel" style={{ color: 'var(--text-2)', marginTop: '4px' }}>{platform.blockingReason}</div>}
         </div>
       </div>
@@ -519,9 +573,11 @@ function QuickSetupModal({
   const fields = QUICK_SETUP_FIELDS[platform.platform]
   const hasPendingInput = fields.some(field => values[field.id]?.trim())
   const isDiscord = platform.platform === 'discord'
+  const isWhatsApp = platform.platform === 'whatsapp'
   const installURL = platform.metadata.installURL
   const notes = platformSetupNotes(platform.platform)
   const docsURL = platformDocsURL(platform.platform)
+  const qrCodeDataURL = platform.platform === 'whatsapp' ? platform.metadata.qrCodeDataURL : ''
 
   return (
       <div class="modal-overlay" onClick={(event) => { if ((event.target as HTMLElement).classList.contains('modal-overlay')) onCancel() }}>
@@ -539,23 +595,37 @@ function QuickSetupModal({
           </div>
         </div>
 
-        <div class="modal-body communication-modal-body">
+        <div class={`modal-body communication-modal-body ${isWhatsApp ? 'communication-modal-body-whatsapp' : ''}`}>
           <div class="communication-modal-panel">
-            <div class="communication-panel-label">Required Credentials</div>
-            <div class="communication-setup-fields">
-              {fields.map(field => (
-                <label key={field.id} class="communication-secret-field">
-                  <span>{field.label}</span>
-                  <input
-                    class="input"
-                    type={field.inputType ?? 'password'}
-                    value={values[field.id] ?? ''}
-                    placeholder={field.placeholder}
-                    onInput={event => onChange(field.id, (event.target as HTMLInputElement).value)}
-                  />
-                </label>
-              ))}
-            </div>
+            <div class="communication-panel-label">{isWhatsApp ? 'Scan QR Code' : 'Required Credentials'}</div>
+            {fields.length > 0 && (
+              <div class="communication-setup-fields">
+                {fields.map(field => (
+                  <label key={field.id} class="communication-secret-field">
+                    <span>{field.label}</span>
+                    <input
+                      class="input"
+                      type={field.inputType ?? 'password'}
+                      value={values[field.id] ?? ''}
+                      placeholder={field.placeholder}
+                      onInput={event => onChange(field.id, (event.target as HTMLInputElement).value)}
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+            {platform.platform === 'whatsapp' && (
+              <div class="communication-whatsapp-qr-block">
+                {qrCodeDataURL ? (
+                  <>
+                    <img src={qrCodeDataURL} alt="WhatsApp login QR code" class="communication-whatsapp-qr-image" />
+                    <div class="communication-setup-note communication-whatsapp-qr-note">Scan with WhatsApp Linked Devices to connect.</div>
+                  </>
+                ) : (
+                  <div class="communication-setup-note communication-whatsapp-qr-note">Generate QR code by clicking Save & Validate.</div>
+                )}
+              </div>
+            )}
             {isDiscord && (
               <div class="communication-setup-inline-action">
                 {installURL ? (
@@ -599,6 +669,8 @@ function QuickSetupModal({
 }
 
 function CommunicationChannelRow({ channel, last }: { channel: CommunicationChannel; last: boolean }) {
+  const lastSeen = formatLastSeen(channel.updatedAt)
+
   return (
     <div class="settings-row communication-session-row" style={{ borderBottom: last ? 'none' : undefined }}>
       <div class="communication-platform-summary">
@@ -606,19 +678,24 @@ function CommunicationChannelRow({ channel, last }: { channel: CommunicationChan
         <div class="settings-label-col">
           <div class="communication-platform-heading">
             <div class="settings-label">{platformLabel(channel.platform)}</div>
+            {channel.canReceiveNotifications && <span class="badge badge-green">Notifications</span>}
           </div>
-          <div class="settings-sublabel">
-            Chat {channel.channelName ?? channel.channelID}
-          </div>
-          <div class="settings-sublabel">
-            Conv {channel.activeConversationID.slice(0, 8)}
+          <div class="settings-sublabel" title={lastSeen.absolute}>
+            Last seen {lastSeen.relative}
           </div>
         </div>
       </div>
       <div class="communication-session-meta">
-        {channel.canReceiveNotifications && <span class="badge badge-green">Notifications</span>}
+        {channel.channelName && (
+          <div class="settings-sublabel">
+            Chat name: {channel.channelName}
+          </div>
+        )}
         <div class="settings-sublabel">
-          Last active {new Date(channel.updatedAt).toLocaleString()}
+          Chat ID: {channel.channelID}
+        </div>
+        <div class="settings-sublabel">
+          Conversation ID: {channel.activeConversationID}
         </div>
       </div>
     </div>

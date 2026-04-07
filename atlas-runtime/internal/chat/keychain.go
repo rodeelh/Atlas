@@ -46,11 +46,12 @@ func randomID(n int) string {
 // credentialBundle is the JSON bundle stored in the Keychain under
 // com.projectatlas.credentials / bundle (same struct as AtlasCredentialBundle).
 type credentialBundle struct {
-	OpenAIAPIKey    string `json:"openAIAPIKey"`
-	AnthropicAPIKey string `json:"anthropicAPIKey"`
-	GeminiAPIKey    string `json:"geminiAPIKey"`
-	LMStudioAPIKey  string `json:"lmStudioAPIKey"`
-	OllamaAPIKey    string `json:"ollamaAPIKey"`
+	OpenAIAPIKey     string `json:"openAIAPIKey"`
+	AnthropicAPIKey  string `json:"anthropicAPIKey"`
+	GeminiAPIKey     string `json:"geminiAPIKey"`
+	OpenRouterAPIKey string `json:"openRouterAPIKey"`
+	LMStudioAPIKey   string `json:"lmStudioAPIKey"`
+	OllamaAPIKey     string `json:"ollamaAPIKey"`
 }
 
 // readCredentialBundle reads the full credential bundle from the Keychain.
@@ -70,29 +71,44 @@ func readCredentialBundle() (credentialBundle, error) {
 	return bundle, nil
 }
 
-// ResolveProvider is the exported form of resolveProvider, used by packages
-// outside chat (e.g. main.go wiring vision inference into the skills registry).
+// ResolveProvider resolves the primary slot for the active provider.
+//
+// Contract:
+//   - Uses ActiveAIProvider from runtime config.
+//   - Returns a concrete ProviderConfig or an API-key error.
+//   - Call sites: main message loop, vision calls, and primary-turn inference.
 func ResolveProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, error) {
 	return resolveProvider(cfg)
 }
 
-// ResolveFastProvider is the exported form of resolveFastProvider.
-// It returns the fast-model ProviderConfig for use in background tasks
-// (reflection, tool selection, mind pipeline, forge research).
+// ResolveFastProvider resolves the fast slot for the active provider.
+//
+// Contract:
+//   - Uses Selected*FastModel when configured.
+//   - Falls back to provider primary model, then provider default.
+//   - Call sites: fallback background tasks and heavy background default path.
 func ResolveFastProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, error) {
 	return resolveFastProvider(cfg)
 }
 
-// ResolveBackgroundProvider is the exported form of resolveBackgroundProvider.
-// Use for light background tasks (tool routing). Always prefers the Engine LM
-// router when available, falls back to the cloud fast model.
+// ResolveBackgroundProvider resolves the router slot for light background work.
+//
+// Contract:
+//   - Prefers Engine router when /health is 200.
+//   - Health check uses AtlasEngineRouterPort, defaulting to 11986.
+//   - Falls back to ResolveFastProvider on non-200, timeout, or sticky-turn fallback.
+//   - Call sites: tool routing and other latency-sensitive background lookups.
 func ResolveBackgroundProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, error) {
-	return resolveBackgroundProvider(cfg)
+	p, _, err := resolveBackgroundProvider(cfg, nil)
+	return p, err
 }
 
-// ResolveHeavyBackgroundProvider is the exported form of resolveHeavyBackgroundProvider.
-// Use for quality-sensitive background tasks (memory extraction, reflection, dream cycle).
-// Only routes to Engine LM when AtlasEngineRouterForAll is explicitly enabled.
+// ResolveHeavyBackgroundProvider resolves the reflection slot for heavy background work.
+//
+// Contract:
+//   - Uses Engine router only when AtlasEngineRouterForAll is true and healthy.
+//   - Otherwise falls back to ResolveFastProvider.
+//   - Call sites: memory extraction, reflection, dream cycle.
 func ResolveHeavyBackgroundProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, error) {
 	return resolveHeavyBackgroundProvider(cfg)
 }
@@ -100,6 +116,11 @@ func ResolveHeavyBackgroundProvider(cfg config.RuntimeConfigSnapshot) (agent.Pro
 // engineRouterReady pings the Engine LM router's /health endpoint.
 // Returns true only when the server is up and the model is fully loaded.
 // Uses a short timeout so background tasks don't stall waiting for a cold router.
+var (
+	readCredentialBundleFn = readCredentialBundle
+	engineRouterReadyFn    = engineRouterReady
+)
+
 func engineRouterReady(port int) bool {
 	client := &http.Client{Timeout: 500 * time.Millisecond}
 	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/health", port))
@@ -114,20 +135,26 @@ func engineRouterReady(port int) bool {
 // (tool routing, classification). Prefers the Engine LM router when ready —
 // free, local, private — regardless of the active primary provider.
 // Falls back to the cloud fast model via resolveFastProvider.
-func resolveBackgroundProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, error) {
+func resolveBackgroundProvider(cfg config.RuntimeConfigSnapshot, turn *turnContext) (agent.ProviderConfig, bool, error) {
+	if turn != nil && turn.routerFallbackSticky {
+		p, err := resolveFastProvider(cfg)
+		return p, true, err
+	}
+
 	port := cfg.AtlasEngineRouterPort
 	if port == 0 {
 		port = 11986
 	}
-	if engineRouterReady(port) {
+	if engineRouterReadyFn(port) {
 		return agent.ProviderConfig{
 			Type:    agent.ProviderAtlasEngine,
 			APIKey:  "",
 			Model:   "router", // llama-server uses whatever model is loaded; name is advisory
 			BaseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
-		}, nil
+		}, false, nil
 	}
-	return resolveFastProvider(cfg)
+	p, err := resolveFastProvider(cfg)
+	return p, true, err
 }
 
 // resolveHeavyBackgroundProvider returns the best provider for HEAVY background
@@ -141,7 +168,7 @@ func resolveHeavyBackgroundProvider(cfg config.RuntimeConfigSnapshot) (agent.Pro
 		if port == 0 {
 			port = 11986
 		}
-		if engineRouterReady(port) {
+		if engineRouterReadyFn(port) {
 			return agent.ProviderConfig{
 				Type:    agent.ProviderAtlasEngine,
 				APIKey:  "",
@@ -157,7 +184,7 @@ func resolveHeavyBackgroundProvider(cfg config.RuntimeConfigSnapshot) (agent.Pro
 // the active provider. Falls back to the primary model when no fast model is
 // explicitly configured, so callers always get a usable config.
 func resolveFastProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, error) {
-	bundle, _ := readCredentialBundle()
+	bundle, _ := readCredentialBundleFn()
 
 	providerType := agent.ProviderType(cfg.ActiveAIProvider)
 	if providerType == "" {
@@ -169,10 +196,10 @@ func resolveFastProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig
 		if bundle.AnthropicAPIKey == "" {
 			return agent.ProviderConfig{}, fmt.Errorf("Anthropic API key not configured")
 		}
-		// Use explicitly configured fast model; never fall back to the primary
-		// model — that causes rate-limit spikes when background tasks fire
-		// immediately after a heavy main turn.
 		model := cfg.SelectedAnthropicFastModel
+		if model == "" {
+			model = cfg.SelectedAnthropicModel
+		}
 		if model == "" {
 			model = "claude-haiku-4-5-20251001"
 		}
@@ -188,12 +215,36 @@ func resolveFastProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig
 		}
 		model := cfg.SelectedGeminiFastModel
 		if model == "" {
+			model = cfg.SelectedGeminiModel
+		}
+		if model == "" {
 			model = "gemini-2.5-flash"
 		}
 		return agent.ProviderConfig{
 			Type:   agent.ProviderGemini,
 			APIKey: bundle.GeminiAPIKey,
 			Model:  model,
+		}, nil
+
+	case agent.ProviderOpenRouter:
+		if bundle.OpenRouterAPIKey == "" {
+			return agent.ProviderConfig{}, fmt.Errorf("OpenRouter API key not configured")
+		}
+		model := cfg.SelectedOpenRouterFastModel
+		if model == "" {
+			model = cfg.SelectedOpenRouterModel
+		}
+		if model == "" {
+			model = "openrouter/auto:free"
+		}
+		return agent.ProviderConfig{
+			Type:   agent.ProviderOpenRouter,
+			APIKey: bundle.OpenRouterAPIKey,
+			Model:  model,
+			ExtraHeaders: map[string]string{
+				"HTTP-Referer": "https://github.com/rodeelh/project-atlas",
+				"X-Title":      "Atlas",
+			},
 		}, nil
 
 	case agent.ProviderLMStudio:
@@ -265,6 +316,12 @@ func resolveFastProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig
 		}
 		model := cfg.SelectedOpenAIFastModel
 		if model == "" {
+			model = cfg.SelectedOpenAIPrimaryModel
+		}
+		if model == "" {
+			model = cfg.DefaultOpenAIModel
+		}
+		if model == "" {
 			model = "gpt-4.1-mini"
 		}
 		return agent.ProviderConfig{
@@ -279,7 +336,7 @@ func resolveFastProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig
 // and the Keychain credential bundle. Returns an error when the active provider
 // has no API key configured (LM Studio is key-optional).
 func resolveProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, error) {
-	bundle, _ := readCredentialBundle()
+	bundle, _ := readCredentialBundleFn()
 
 	providerType := agent.ProviderType(cfg.ActiveAIProvider)
 	if providerType == "" {
@@ -363,6 +420,24 @@ func resolveProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, er
 			APIKey:  "", // Engine LM is local — no API key
 			Model:   model,
 			BaseURL: baseURL,
+		}, nil
+
+	case agent.ProviderOpenRouter:
+		if bundle.OpenRouterAPIKey == "" {
+			return agent.ProviderConfig{}, fmt.Errorf("OpenRouter API key not configured. Add your key in Atlas Settings")
+		}
+		model := cfg.SelectedOpenRouterModel
+		if model == "" {
+			model = "openrouter/auto:free"
+		}
+		return agent.ProviderConfig{
+			Type:   agent.ProviderOpenRouter,
+			APIKey: bundle.OpenRouterAPIKey,
+			Model:  model,
+			ExtraHeaders: map[string]string{
+				"HTTP-Referer": "https://github.com/rodeelh/project-atlas",
+				"X-Title":      "Atlas",
+			},
 		}, nil
 
 	default: // openai

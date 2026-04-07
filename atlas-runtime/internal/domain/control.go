@@ -54,6 +54,9 @@ func (d *ControlDomain) Register(r chi.Router) {
 	r.Post("/location/detect", d.postLocationDetect)
 	r.Get("/preferences", d.getPreferences)
 	r.Put("/preferences", d.putPreferences)
+	r.Get("/providers/openrouter/models", d.getOpenRouterModels)
+	r.Get("/providers/openrouter/model-health", d.getOpenRouterModelHealth)
+	r.Get("/providers/cloud/model-health", d.getCloudModelHealth)
 }
 
 func (d *ControlDomain) getStatus(w http.ResponseWriter, _ *http.Request) {
@@ -224,4 +227,26 @@ func (d *ControlDomain) putPreferences(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d.profile.UpdatePreferences(body.TemperatureUnit, body.Currency, body.UnitSystem))
+}
+
+func (d *ControlDomain) getOpenRouterModels(w http.ResponseWriter, r *http.Request) {
+	refresh := r.URL.Query().Get("refresh") == "1"
+	limit := 25
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 250 {
+			limit = n
+		}
+	}
+	writeJSON(w, http.StatusOK, d.models.OpenRouterModels(refresh, limit))
+}
+
+func (d *ControlDomain) getOpenRouterModelHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, d.models.OpenRouterModelHealth(r.URL.Query().Get("model")))
+}
+
+func (d *ControlDomain) getCloudModelHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, d.models.CloudModelHealth(
+		r.URL.Query().Get("provider"),
+		r.URL.Query().Get("model"),
+	))
 }

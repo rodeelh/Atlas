@@ -125,6 +125,8 @@ export function AtlasEngine() {
   // Context size + KV cache quant — read from config, editable here
   const [ctxSize, setCtxSize]             = useState(8192)
   const [ctxSizeSaving, setCtxSizeSaving] = useState(false)
+  const [serverPort, setServerPort] = useState(11985)
+  const [serverPortSaving, setServerPortSaving] = useState(false)
   const [kvQuant, setKvQuant]             = useState('q4_0')
   const [kvQuantSaving, setKvQuantSaving] = useState(false)
   const [mlock, setMlock]                 = useState(true)
@@ -210,6 +212,7 @@ export function AtlasEngine() {
   // Load ctx size, KV quant + router model from config once on mount
   useEffect(() => {
     api.config().then(cfg => {
+      if (cfg.atlasEnginePort && cfg.atlasEnginePort > 0) setServerPort(cfg.atlasEnginePort)
       if (cfg.atlasEngineCtxSize && cfg.atlasEngineCtxSize > 0) setCtxSize(cfg.atlasEngineCtxSize)
       if (cfg.atlasEngineKVCacheQuant) setKvQuant(cfg.atlasEngineKVCacheQuant)
       if (cfg.atlasEngineMlock !== undefined) setMlock(cfg.atlasEngineMlock)
@@ -252,6 +255,19 @@ export function AtlasEngine() {
       // best-effort
     } finally {
       setCtxSizeSaving(false)
+    }
+  }
+
+  const handleServerPortChange = async (newPort: number) => {
+    if (!Number.isFinite(newPort) || newPort < 1024 || newPort > 65535) return
+    setServerPort(newPort)
+    setServerPortSaving(true)
+    try {
+      await api.updateConfig({ atlasEnginePort: newPort } as Partial<RuntimeConfig>)
+    } catch {
+      // best-effort
+    } finally {
+      setServerPortSaving(false)
     }
   }
 
@@ -911,23 +927,31 @@ export function AtlasEngine() {
             </div>
           </div>
 
+          {/* Server port */}
+          <div class="settings-row">
+            <div class="settings-label-col">
+              <div class="settings-label">Server Port</div>
+              <div class="settings-sublabel">
+                Port Engine LM listens on (managed by Atlas). Restart daemon after changing.
+              </div>
+            </div>
+            <div class="settings-field">
+              <input
+                class="input input-sm"
+                type="number"
+                min={1024}
+                max={65535}
+                value={serverPort}
+                onChange={e => handleServerPortChange(Number((e.target as HTMLInputElement).value))}
+                disabled={serverPortSaving}
+              />
+            </div>
+          </div>
+
           {/* llama-server version + update — merged row */}
           <div class={`settings-row engine-inline-control-row${isMobile ? ' settings-row-mobile' : ''}`} style={{ borderBottom: 'none' }}>
             <div class="settings-label-col">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <div class="settings-label">llama-server</div>
-                {binaryReady && buildVersion && (
-                  <span
-                    class={`badge ${isUpToDate ? 'badge-green' : 'badge-yellow'}`}
-                    style={{ fontSize: 11, padding: '2px 8px' }}
-                  >
-                    v. {buildVersion}
-                  </span>
-                )}
-                {!binaryReady && (
-                  <span class="badge badge-red" style={{ fontSize: 11, padding: '2px 8px' }}>Missing</span>
-                )}
-              </div>
+              <div class="settings-label">llama-server</div>
               <div class="settings-sublabel">
                 {binaryReady
                   ? isUpToDate

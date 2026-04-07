@@ -140,7 +140,7 @@ Some areas are split by trigger vs implementation.
   - normalized turn ingress once a bridge hands off a request
 
 - stays outside Agent:
-  - Telegram/Discord/Slack lifecycle, setup, validation, and credentials
+  - Telegram/Discord/WhatsApp/Slack lifecycle, setup, validation, and credentials
 
 ---
 

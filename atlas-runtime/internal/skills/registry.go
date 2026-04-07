@@ -14,6 +14,7 @@ import (
 	"atlas-runtime-go/internal/browser"
 	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/storage"
+	"atlas-runtime-go/internal/voice"
 )
 
 // ToolParam describes a single JSON schema parameter.
@@ -139,6 +140,7 @@ type Registry struct {
 	supportDir     string
 	db             *storage.DB
 	browserMgr     *browser.Manager
+	voiceMgr       *voice.Manager
 	visionFn       VisionFn
 	runAutoFn      func(ctx context.Context, gremlinID, prompt string) (string, error)
 	forgePersistFn ForgePersistFn
@@ -177,6 +179,7 @@ func NewRegistry(supportDir string, db *storage.DB, browserMgr *browser.Manager)
 	r.registerVault()
 	r.registerBrowser()
 	r.registerMemory()
+	r.registerVoice()
 	return r
 }
 
@@ -269,6 +272,8 @@ func toolCapabilityGroup(name string) string {
 		return "vault"
 	case strings.HasPrefix(name, "browser."):
 		return "browser"
+	case strings.HasPrefix(name, "voice."):
+		return "voice"
 	case strings.HasPrefix(name, "image."):
 		return "creative"
 	case strings.HasPrefix(name, "gremlin."):
@@ -301,6 +306,7 @@ var groupThresholds = map[string]int{
 	"files":      2,
 	"vault":      1,
 	"browser":    2,
+	"voice":      1,
 	"creative":   1,
 	"automation": 1,
 	"forge":      1,

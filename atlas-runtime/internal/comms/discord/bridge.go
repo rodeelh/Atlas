@@ -299,41 +299,13 @@ func (b *Bridge) connect() error {
 // ── Message handling ──────────────────────────────────────────────────────────
 
 func (b *Bridge) handleMessage(ev messageCreateEvent) {
-	// Ignore bot messages.
-	if ev.Author.Bot {
-		return
-	}
-	// Ignore non-default message types.
-	if ev.Type != 0 {
-		return
-	}
-
 	b.mu.Lock()
 	botID := b.botID
 	b.mu.Unlock()
 
-	isGuild := ev.GuildID != ""
-	isDM := !isGuild
-
-	// In guild: only respond when @mentioned.
-	if isGuild {
-		mentioned := false
-		for _, u := range ev.Mentions {
-			if u.ID == botID {
-				mentioned = true
-				break
-			}
-		}
-		if !mentioned {
-			return
-		}
-	}
-
-	text := ev.Content
-	// Strip @mention from guild messages.
-	if isGuild && botID != "" {
-		text = strings.TrimSpace(strings.ReplaceAll(text, "<@"+botID+">", ""))
-		text = strings.TrimSpace(strings.ReplaceAll(text, "<@!"+botID+">", ""))
+	text, isDM, ok := classifyIncomingMessage(ev, botID)
+	if !ok {
+		return
 	}
 
 	logstore.Write("info", fmt.Sprintf("Discord: message received in channel=%s", ev.ChannelID), map[string]string{"platform": "discord"})
@@ -396,6 +368,42 @@ func (b *Bridge) handleMessage(ev messageCreateEvent) {
 	for _, chunk := range chunkText(reply, maxChunk) {
 		b.sendMessage(ev.ChannelID, ev.ID, chunk)
 	}
+}
+
+func classifyIncomingMessage(ev messageCreateEvent, botID string) (text string, isDM bool, ok bool) {
+	// Ignore bot messages.
+	if ev.Author.Bot {
+		return "", false, false
+	}
+	// Ignore non-default message types.
+	if ev.Type != 0 {
+		return "", false, false
+	}
+
+	isGuild := ev.GuildID != ""
+	isDM = !isGuild
+
+	// In guild: only respond when @mentioned.
+	if isGuild {
+		mentioned := false
+		for _, u := range ev.Mentions {
+			if u.ID == botID {
+				mentioned = true
+				break
+			}
+		}
+		if !mentioned {
+			return "", false, false
+		}
+	}
+
+	text = ev.Content
+	// Strip @mention from guild messages.
+	if isGuild && botID != "" {
+		text = strings.TrimSpace(strings.ReplaceAll(text, "<@"+botID+">", ""))
+		text = strings.TrimSpace(strings.ReplaceAll(text, "<@!"+botID+">", ""))
+	}
+	return text, isDM, true
 }
 
 func (b *Bridge) handleCommand(channelID, refMsgID, text string, isDM bool) {

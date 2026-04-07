@@ -1,6 +1,6 @@
 # Atlas Architecture
 
-**Last updated: 2026-04-06** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md) · Internal modules: [`docs/internal-modules.md`](internal-modules.md) · Agent boundary: [`docs/agent-boundary.md`](agent-boundary.md) · Migration verification: [`docs/migration-verification.md`](migration-verification.md) · Manual smoke: [`docs/manual-smoke-checklist.md`](manual-smoke-checklist.md)
+**Last updated: 2026-04-07** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md) · Internal modules: [`docs/internal-modules.md`](internal-modules.md) · Agent boundary: [`docs/agent-boundary.md`](agent-boundary.md) · Migration verification: [`docs/migration-verification.md`](migration-verification.md) · Manual smoke: [`docs/manual-smoke-checklist.md`](manual-smoke-checklist.md)
 
 Atlas is a local AI operator. A Go binary runs as a launchd daemon (`Atlas`), serves a web UI, and connects to any supported AI provider. A Bubbletea TUI (`atlas`) provides a terminal interface. No Swift required.
 
@@ -43,6 +43,7 @@ Atlas/
 │       │   ├── validate.go             # Platform credential validation
 │       │   ├── telegram/               # Telegram long-poll bridge
 │       │   ├── discord/                # Discord gateway bridge
+│       │   ├── whatsapp/               # WhatsApp bridge (self-chat scoped)
 │       │   └── slack/                  # Slack bridge (stub)
 │       ├── config/
 │       │   ├── snapshot.go             # RuntimeConfigSnapshot (shared with web UI)
@@ -165,7 +166,7 @@ Atlas/
    ├── /status, /config Control         Runtime state, config R/W, API keys
    ├── /message, /…     Chat            Agent loop, SSE streaming, memories
    ├── /approvals, /…   Approvals       Approval queue, action-policies
-   ├── /communications  Comms           Telegram / Discord platform management
+   ├── /communications  Comms           Telegram / Discord / WhatsApp platform management
    └── /skills, /forge, Modules         Private module-backed feature surfaces
        /automations, …
             │

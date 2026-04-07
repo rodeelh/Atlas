@@ -288,6 +288,18 @@ func builtInSkills() []SkillRecord {
 		},
 		{
 			Manifest: SkillManifestInfo{
+				ID: "voice", Name: "Voice", Version: "2.0",
+				Description:    "Local Whisper speech-to-text and Kokoro text-to-speech. Voice servers start on demand and stop when the session ends.",
+				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,
+				Category: "system", Capabilities: []string{"speech_to_text", "text_to_speech"}, Tags: []string{"voice", "whisper", "kokoro", "stt", "tts"},
+			},
+			Actions: []SkillAction{
+				{ID: "voice.transcribe", Name: "Transcribe Audio", Description: "Transcribe a local audio file to text using the bundled Whisper server.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "voice.synthesize", Name: "Synthesize Speech", Description: "Turn text into a WAV file using the bundled Kokoro TTS model.", PermissionLevel: "draft", IsEnabled: true},
+			},
+		},
+		{
+			Manifest: SkillManifestInfo{
 				ID: "image-generation", Name: "Image Generation", Version: "1.0",
 				Description:    "Generate and edit images using OpenAI DALL-E.",
 				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,

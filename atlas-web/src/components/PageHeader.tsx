@@ -5,7 +5,7 @@ export const HeaderChromeContext = createContext<ComponentChildren>(null)
 
 interface PageHeaderProps {
   title: string
-  subtitle: string
+  subtitle: ComponentChildren
   actions?: ComponentChildren
 }
 

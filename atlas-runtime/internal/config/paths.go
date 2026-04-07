@@ -42,3 +42,10 @@ func AtlasInstallDir() string {
 func ModelsDir() string {
 	return filepath.Join(SupportDir(), "models")
 }
+
+// VoiceModelsDir returns the parent directory for Whisper and Piper models
+// (subdirs whisper/ and piper/). Lives under SupportDir() so voice models
+// survive runtime reinstalls.
+func VoiceModelsDir() string {
+	return filepath.Join(SupportDir(), "voice-models")
+}

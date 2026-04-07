@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -176,6 +177,77 @@ func hasImageAttachments(attachments []MessageAttachment) bool {
 		}
 	}
 	return false
+}
+
+// openRouterModelSupportsImage reports whether a specific OpenRouter model
+// advertises image input support.
+func openRouterModelSupportsImage(apiKey, model string) (supported bool, known bool, err error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return false, false, nil
+	}
+	// OpenRouter auto routers are synthetic IDs and may not appear in /models.
+	switch model {
+	case "openrouter/auto":
+		return true, true, nil
+	case "openrouter/auto:free":
+		return false, true, nil
+	}
+
+	req, err := http.NewRequest("GET", "https://openrouter.ai/api/v1/models", nil)
+	if err != nil {
+		return false, false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("HTTP-Referer", "https://github.com/rodeelh/project-atlas")
+	req.Header.Set("X-Title", "Atlas")
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, false, fmt.Errorf("openrouter models returned %d", resp.StatusCode)
+	}
+
+	var payload struct {
+		Data []struct {
+			ID           string `json:"id"`
+			Architecture struct {
+				InputModalities []string `json:"input_modalities"`
+			} `json:"architecture"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return false, false, err
+	}
+
+	for _, m := range payload.Data {
+		if strings.TrimSpace(m.ID) != model {
+			continue
+		}
+		hasImage := false
+		hasText := false
+		for _, modality := range m.Architecture.InputModalities {
+			switch strings.ToLower(strings.TrimSpace(modality)) {
+			case "image":
+				hasImage = true
+			case "text":
+				hasText = true
+			}
+		}
+		if hasImage {
+			return true, true, nil
+		}
+		// If OpenRouter reports modalities and image is absent, treat as text-only.
+		if len(m.Architecture.InputModalities) > 0 && hasText {
+			return false, true, nil
+		}
+		return false, false, nil
+	}
+	return false, false, nil
 }
 
 // buildSystemPrompt assembles the system prompt for each agent turn with
@@ -582,6 +654,7 @@ func (s *Service) buildTrimmedHistoryNote(convID string, trimCount int, trimmed 
 //  5. Returns the final MessageResponse.
 func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (MessageResponse, error) {
 	cfg := s.cfgStore.Load()
+	turn := &turnContext{}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 
 	// Resolve conversation ID.
@@ -697,6 +770,44 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		resp.Response.AssistantMessage = degradeMsg
 		resp.Response.Status = "complete"
 		return resp, nil
+	}
+
+	// OpenRouter image turns: the free auto-router and many text models do not
+	// support image input and return 404 "No endpoints found that support image input".
+	// Fallback to OpenRouter auto-router for this turn when the selected model is
+	// known text-only, instead of hard-failing the turn.
+	if provider.Type == agent.ProviderOpenRouter && hasImageAttachments(req.Attachments) {
+		origModel := strings.TrimSpace(provider.Model)
+		if origModel == "" {
+			origModel = "openrouter/auto:free"
+		}
+		if origModel == "openrouter/auto:free" {
+			provider.Model = "openrouter/auto"
+			logstore.Write("info", "OpenRouter image turn fallback", map[string]string{
+				"from_model": origModel,
+				"to_model":   provider.Model,
+				"reason":     "free_router_text_only",
+				"conv":       convID[:8],
+			})
+		} else {
+			supportsImage, known, err := openRouterModelSupportsImage(provider.APIKey, origModel)
+			if err != nil {
+				logstore.Write("warn", "OpenRouter image capability check failed", map[string]string{
+					"model": origModel,
+					"error": err.Error(),
+					"conv":  convID[:8],
+				})
+			}
+			if known && !supportsImage {
+				provider.Model = "openrouter/auto"
+				logstore.Write("info", "OpenRouter image turn fallback", map[string]string{
+					"from_model": origModel,
+					"to_model":   provider.Model,
+					"reason":     "selected_model_text_only",
+					"conv":       convID[:8],
+				})
+			}
+		}
 	}
 
 	// Build messages from history.
@@ -829,7 +940,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 				}
 			}
 		}
-		selectedTools = selectToolsWithLLM(ctx, cfg, req.Message, s.registry)
+		selectedTools = selectToolsWithLLM(ctx, cfg, turn, req.Message, s.registry)
 		if s.routerEngine != nil {
 			s.routerEngine.RecordActivity()
 		}
@@ -880,6 +991,11 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		errMsg := "Agent loop error"
 		if result.Error != nil {
 			errMsg = result.Error.Error()
+		}
+		if provider.Type == agent.ProviderOpenRouter &&
+			hasImageAttachments(req.Attachments) &&
+			strings.Contains(strings.ToLower(errMsg), "no endpoints found that support image input") {
+			errMsg = "The selected OpenRouter model could not accept image input. Atlas tried an automatic image route, but no compatible endpoint is currently available."
 		}
 		logstore.Write("error", "Turn error: "+errMsg,
 			map[string]string{

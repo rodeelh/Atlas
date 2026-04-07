@@ -34,6 +34,7 @@ import (
 	forgemodule "atlas-runtime-go/internal/modules/forge"
 	skillsmodule "atlas-runtime-go/internal/modules/skills"
 	usagemodule "atlas-runtime-go/internal/modules/usage"
+	voicemodule "atlas-runtime-go/internal/modules/voice"
 	workflowsmodule "atlas-runtime-go/internal/modules/workflows"
 	"atlas-runtime-go/internal/platform"
 	"atlas-runtime-go/internal/preferences"
@@ -41,6 +42,7 @@ import (
 	"atlas-runtime-go/internal/server"
 	"atlas-runtime-go/internal/skills"
 	"atlas-runtime-go/internal/storage"
+	"atlas-runtime-go/internal/voice"
 )
 
 func main() {
@@ -110,7 +112,19 @@ func main() {
 	browserMgr := browser.New(db, !goCfg.BrowserShowWindow)
 	defer browserMgr.Close()
 
+	// Voice manager — whisper-server (Phase 1) + piper (Phase 2) subprocess lifecycle.
+	// Both servers start when a voice session begins and stop together on session
+	// end or idle timeout, so no voice-related RAM is resident when voice is off.
+	voiceMgr := voice.NewManager(config.AtlasInstallDir(), config.VoiceModelsDir())
+	voiceIdle := cfg.VoiceSessionIdleSec
+	if voiceIdle <= 0 {
+		voiceIdle = 300
+	}
+	voiceMgr.SetIdleTimeout(time.Duration(voiceIdle) * time.Second)
+	defer voiceMgr.Close()
+
 	skillsRegistry := skills.NewRegistry(config.SupportDir(), db, browserMgr)
+	skillsRegistry.SetVoiceManager(voiceMgr)
 
 	// Load user-installed custom skills from ~/Library/Application Support/ProjectAtlas/skills/.
 	// Non-fatal: a broken custom skill never prevents Atlas from starting.
@@ -188,6 +202,10 @@ func main() {
 	usageModule := usagemodule.New(db)
 	if err := moduleRegistry.Register(usageModule); err != nil {
 		log.Fatalf("Atlas: register usage module: %v", err)
+	}
+	voiceModule := voicemodule.New(voiceMgr, cfgStore)
+	if err := moduleRegistry.Register(voiceModule); err != nil {
+		log.Fatalf("Atlas: register voice module: %v", err)
 	}
 	communicationsModule.SetApprovalResolver(func(toolCallID string, approved bool) error {
 		return approvalsModule.Resolve(toolCallID, approved)

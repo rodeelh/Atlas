@@ -15,10 +15,11 @@ function fromKeychainKey(key: string): string {
   return key.split('_').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ')
 }
 
-const PROVIDERS = [
+const KNOWN_PROVIDERS = [
   { id: 'openai',      label: 'OpenAI',              sublabel: 'API key for OpenAI models (GPT-4.1 etc.)',                            key: 'openAIKeySet'      },
   { id: 'anthropic',   label: 'Anthropic',           sublabel: 'API key for Claude models (Sonnet, Opus, Haiku)',                     key: 'anthropicKeySet'   },
   { id: 'gemini',      label: 'Google Gemini',       sublabel: 'API key for Gemini models (Flash, Pro etc.)',                        key: 'geminiKeySet'      },
+  { id: 'openrouter',  label: 'OpenRouter',          sublabel: 'API key for OpenRouter models and routers',                           key: 'openRouterKeySet'  },
   { id: 'lm_studio',   label: 'LM Studio',           sublabel: 'Optional Bearer token for LM Studio v0.4.8+ authentication',         key: 'lmStudioKeySet'    },
   { id: 'telegram',    label: 'Telegram Bot',        sublabel: 'Required for Telegram integration',                                   key: 'telegramTokenSet'  },
   { id: 'discord',     label: 'Discord Bot',         sublabel: 'Connects Atlas through your Discord bot token',                      key: 'discordTokenSet'   },
@@ -27,6 +28,22 @@ const PROVIDERS = [
   { id: 'braveSearch', label: 'Brave Search',        sublabel: 'Enables the Web Search skill (websearch.query)',                      key: 'braveSearchKeySet' },
   { id: 'finnhub',     label: 'Finnhub',             sublabel: 'Enables real-time stock quotes via the Finance skill (optional — falls back to Yahoo Finance)', key: 'finnhubKeySet'     },
 ] as const
+const BADGE_STYLE = { fontSize: '11px', padding: '2px 8px' } as const
+
+type ProviderRow = {
+  id: string
+  label: string
+  sublabel: string
+  key: string
+}
+
+const KNOWN_PROVIDER_STATUS_KEYS = new Set<string>(KNOWN_PROVIDERS.map(p => p.key))
+
+function humanizeCamel(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/^./, c => c.toUpperCase())
+}
 
 export function APIKeys() {
   const [keyStatus, setKeyStatus] = useState<APIKeyStatus | null>(null)
@@ -70,9 +87,34 @@ export function APIKeys() {
   }
 
   const customKeys = keyStatus?.customKeys ?? []
+  const providers: ProviderRow[] = (() => {
+    const known: ProviderRow[] = [...KNOWN_PROVIDERS]
+    if (!keyStatus) return known
+
+    const discovered = Object.keys(keyStatus)
+      .filter(k => (k.endsWith('KeySet') || k.endsWith('TokenSet')) && !KNOWN_PROVIDER_STATUS_KEYS.has(k))
+      .map((k) => {
+        const base = k.replace(/(KeySet|TokenSet)$/, '')
+        return {
+          id: base, // use the discovered provider ID; backend can map or store as custom fallback
+          label: humanizeCamel(base),
+          sublabel: 'Auto-discovered system credential.',
+          key: k,
+        }
+      })
+      .sort((a, b) => a.label.localeCompare(b.label))
+    const merged = [...known, ...discovered]
+    const keyStatusMap = keyStatus as unknown as Record<string, unknown>
+    return merged.sort((a, b) => {
+      const aConfigured = keyStatusMap[a.key] === true
+      const bConfigured = keyStatusMap[b.key] === true
+      if (aConfigured !== bConfigured) return aConfigured ? -1 : 1
+      return a.label.localeCompare(b.label)
+    })
+  })()
 
   return (
-    <div class="screen">
+    <div class="screen credentials-screen">
       <PageHeader title="Credentials" subtitle="Keys, tokens, and provider credentials Atlas uses to operate." />
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
@@ -81,14 +123,14 @@ export function APIKeys() {
       <div>
         <div class="section-label">Providers</div>
         <div class="card settings-group">
-          {PROVIDERS.map((p, i) => (
+          {providers.map((p, i) => (
             <KeyRow
               key={p.id}
               providerID={p.id}
               label={p.label}
               sublabel={p.sublabel}
-              configured={keyStatus?.[p.key] ?? false}
-              last={i === PROVIDERS.length - 1}
+              configured={(keyStatus as Record<string, unknown> | null)?.[p.key] === true}
+              last={i === providers.length - 1}
               onSaved={handleSaved}
             />
           ))}
@@ -97,15 +139,15 @@ export function APIKeys() {
 
       {/* Custom keys */}
       <div>
-        <div class="section-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div class="section-label credentials-section-label">
           <span>Custom Keys</span>
           {!addingNew && (
             <button
               class="btn btn-sm"
-              style={{ textTransform: 'none', letterSpacing: 0, fontSize: '11px' }}
+              style={{ minWidth: '96px' }}
               onClick={() => setAddingNew(true)}
             >
-              + Add key
+              Add key
             </button>
           )}
         </div>
@@ -174,13 +216,15 @@ function KeyRow({ providerID, label, sublabel, configured, last, onSaved }: KeyR
     <div style={{ borderBottom: last && !editing ? 'none' : '1px solid var(--border)' }}>
       <div class="settings-row" style={{ borderBottom: 'none' }}>
         <div class="settings-label-col">
-          <div class="settings-label">{label}</div>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <div class="settings-label">{label}</div>
+            <StatusBadge configured={configured} />
+          </div>
           <div class="settings-sublabel">{sublabel}</div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <StatusDot configured={configured} />
-          <button class="btn btn-sm" onClick={() => setEditing(v => !v)}>
-            {configured ? 'Change' : 'Add'}
+        <div class="settings-field credentials-actions">
+          <button class="btn btn-sm" style={{ minWidth: '96px' }} onClick={() => setEditing(v => !v)}>
+            {configured ? 'Change' : 'Configure'}
           </button>
         </div>
       </div>
@@ -229,8 +273,11 @@ function CustomKeyRow({ name, label, last, onSaved }: { name: string; label?: st
     <div style={{ borderBottom: last && !editing ? 'none' : '1px solid var(--border)' }}>
       <div class="settings-row" style={{ borderBottom: 'none' }}>
         <div class="settings-label-col">
-          <div class="settings-label">{label || fromKeychainKey(name)}</div>
-          <div class="settings-sublabel" style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <div class="settings-label">{label || fromKeychainKey(name)}</div>
+            <StatusBadge configured />
+          </div>
+          <div class="settings-sublabel credentials-meta-row" style={{ marginTop: '2px' }}>
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-3)' }}>
               {name}
             </span>
@@ -252,10 +299,9 @@ function CustomKeyRow({ name, label, last, onSaved }: { name: string; label?: st
             </button>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <StatusDot configured />
-          <button class="btn btn-sm" onClick={() => setEditing(v => !v)}>Change</button>
-          <button class="btn btn-sm btn-danger" disabled={deleting} onClick={remove}>
+        <div class="settings-field credentials-actions">
+          <button class="btn btn-sm" style={{ minWidth: '96px' }} onClick={() => setEditing(v => !v)}>Change</button>
+          <button class="btn btn-sm btn-danger" style={{ minWidth: '96px' }} disabled={deleting} onClick={remove}>
             {deleting ? <span class="spinner" style={{ width: '10px', height: '10px' }} /> : 'Delete'}
           </button>
         </div>
@@ -287,7 +333,7 @@ function AddKeyRow({ last, onSaved, onCancel }: { last: boolean; onSaved: (u: AP
 
   return (
     <div style={{ borderBottom: last ? 'none' : '1px solid var(--border)', padding: '14px 20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-      <div style={{ display: 'flex', gap: '8px' }}>
+      <div class="credentials-add-grid">
         <input
           class="input"
           type="text"
@@ -314,11 +360,11 @@ function AddKeyRow({ last, onSaved, onCancel }: { last: boolean; onSaved: (u: AP
         />
       </div>
       {err && <div style={{ fontSize: '12px', color: 'var(--red)' }}>{err}</div>}
-      <div style={{ display: 'flex', gap: '6px' }}>
-        <button class="btn btn-sm btn-primary" onClick={save} disabled={saving || !keyName.trim() || !value.trim()}>
+      <div class="credentials-actions">
+        <button class="btn btn-sm btn-primary" style={{ minWidth: '96px' }} onClick={save} disabled={saving || !keyName.trim() || !value.trim()}>
           {saving ? <span class="spinner" style={{ width: '11px', height: '11px', borderTopColor: '#000', borderColor: 'rgba(0,0,0,0.2)' }} /> : 'Save'}
         </button>
-        <button class="btn btn-sm" onClick={onCancel} disabled={saving}>Cancel</button>
+        <button class="btn btn-sm" style={{ minWidth: '96px' }} onClick={onCancel} disabled={saving}>Cancel</button>
       </div>
     </div>
   )
@@ -326,11 +372,10 @@ function AddKeyRow({ last, onSaved, onCancel }: { last: boolean; onSaved: (u: AP
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-function StatusDot({ configured }: { configured: boolean }) {
+function StatusBadge({ configured }: { configured: boolean }) {
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12.5px', fontWeight: 500, color: configured ? 'var(--green)' : 'var(--text-3)' }}>
-      <span style={{ width: '7px', height: '7px', borderRadius: '50%', flexShrink: 0, backgroundColor: configured ? 'var(--green)' : 'var(--text-3)' }} />
-      {configured ? 'Configured' : 'Not set'}
+    <span class={`badge ${configured ? 'badge-green' : 'badge-red'}`} style={BADGE_STYLE}>
+      {configured ? 'Configured' : 'Not configured'}
     </span>
   )
 }
@@ -351,11 +396,11 @@ function KeyInput({ value, onChange, onSave, onCancel, saving, err, placeholder 
         autoFocus
       />
       {err && <div style={{ fontSize: '12px', color: 'var(--red)' }}>{err}</div>}
-      <div style={{ display: 'flex', gap: '6px' }}>
-        <button class="btn btn-sm btn-primary" onClick={onSave} disabled={saving || !value.trim()}>
+      <div class="credentials-actions">
+        <button class="btn btn-sm btn-primary" style={{ minWidth: '96px' }} onClick={onSave} disabled={saving || !value.trim()}>
           {saving ? <span class="spinner" style={{ width: '11px', height: '11px', borderTopColor: '#000', borderColor: 'rgba(0,0,0,0.2)' }} /> : 'Save'}
         </button>
-        <button class="btn btn-sm" onClick={onCancel} disabled={saving}>Cancel</button>
+        <button class="btn btn-sm" style={{ minWidth: '96px' }} onClick={onCancel} disabled={saving}>Cancel</button>
       </div>
     </div>
   )
