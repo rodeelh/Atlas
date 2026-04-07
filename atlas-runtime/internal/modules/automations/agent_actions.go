@@ -24,7 +24,7 @@ func (m *Module) registerAgentActions() {
 	m.skills.RegisterExternal(skills.SkillEntry{
 		Def: skills.ToolDef{
 			Name:        "automation.create",
-			Description: "Create a new Atlas automation.",
+			Description: "Create a new Atlas automation. For Telegram/WhatsApp/Slack/Discord delivery, call communication.list_channels first and pass the returned channel id as destinationID.",
 			Properties: map[string]skills.ToolParam{
 				"name":        {Description: "Short display name for the automation.", Type: "string"},
 				"prompt":      {Description: "Task prompt Atlas should run.", Type: "string"},
@@ -32,6 +32,13 @@ func (m *Module) registerAgentActions() {
 				"emoji":       {Description: "Optional emoji for display.", Type: "string"},
 				"description": {Description: "Optional description.", Type: "string"},
 				"enabled":     {Description: "Whether the automation starts enabled. Defaults to true.", Type: "boolean"},
+				"destinationID": {
+					Description: "Optional authorized communication channel id from communication.list_channels, for example telegram:123: or whatsapp:me@s.whatsapp.net:.",
+					Type:        "string",
+				},
+				"platform":  {Description: "Optional delivery platform when destinationID is not provided: telegram, whatsapp, slack, or discord.", Type: "string"},
+				"channelID": {Description: "Optional delivery channel/chat ID when destinationID is not provided.", Type: "string"},
+				"threadID":  {Description: "Optional delivery thread ID for Slack or Discord.", Type: "string"},
 			},
 			Required: []string{"name", "prompt", "schedule"},
 		},
@@ -43,7 +50,7 @@ func (m *Module) registerAgentActions() {
 	m.skills.RegisterExternal(skills.SkillEntry{
 		Def: skills.ToolDef{
 			Name:        "automation.update",
-			Description: "Update an existing Atlas automation by ID or exact name.",
+			Description: "Update an existing Atlas automation by ID or exact name. For delivery changes, call communication.list_channels first and pass the returned channel id as destinationID.",
 			Properties: map[string]skills.ToolParam{
 				"id":          {Description: "Automation ID. Preferred for exact targeting.", Type: "string"},
 				"name":        {Description: "Automation name to target when ID is not known.", Type: "string"},
@@ -53,6 +60,14 @@ func (m *Module) registerAgentActions() {
 				"emoji":       {Description: "New emoji.", Type: "string"},
 				"enabled":     {Description: "Enable or disable the automation.", Type: "boolean"},
 				"description": {Description: "New description.", Type: "string"},
+				"destinationID": {
+					Description: "Authorized communication channel id from communication.list_channels. Use clearDestination=true to clear delivery.",
+					Type:        "string",
+				},
+				"platform":         {Description: "Delivery platform when destinationID is not provided.", Type: "string"},
+				"channelID":        {Description: "Delivery channel/chat ID when destinationID is not provided.", Type: "string"},
+				"threadID":         {Description: "Optional delivery thread ID.", Type: "string"},
+				"clearDestination": {Description: "If true, clear the automation delivery destination.", Type: "boolean"},
 			},
 			Required: []string{},
 		},
@@ -187,12 +202,16 @@ func actionClass(name string) skills.ActionClass {
 
 func (m *Module) agentCreate(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
 	var p struct {
-		Name        string  `json:"name"`
-		Prompt      string  `json:"prompt"`
-		Schedule    string  `json:"schedule"`
-		Emoji       string  `json:"emoji"`
-		Description *string `json:"description"`
-		Enabled     *bool   `json:"enabled"`
+		Name          string  `json:"name"`
+		Prompt        string  `json:"prompt"`
+		Schedule      string  `json:"schedule"`
+		Emoji         string  `json:"emoji"`
+		Description   *string `json:"description"`
+		Enabled       *bool   `json:"enabled"`
+		DestinationID string  `json:"destinationID"`
+		Platform      string  `json:"platform"`
+		ChannelID     string  `json:"channelID"`
+		ThreadID      string  `json:"threadID"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return skills.ToolResult{}, fmt.Errorf("invalid arguments: %w", err)
@@ -215,6 +234,13 @@ func (m *Module) agentCreate(_ context.Context, args json.RawMessage) (skills.To
 		GremlinDescription: p.Description,
 		Tags:               []string{},
 	}
+	if hasAgentDestinationArgs(p.DestinationID, p.Platform, p.ChannelID, p.ThreadID) {
+		dest, err := m.resolveAgentDestination(p.DestinationID, p.Platform, p.ChannelID, p.ThreadID)
+		if err != nil {
+			return skills.ToolResult{}, err
+		}
+		item.CommunicationDestination = dest
+	}
 	if _, err := m.createDefinition(item); err != nil {
 		return skills.ToolResult{}, fmt.Errorf("failed to create automation: %w", err)
 	}
@@ -224,14 +250,19 @@ func (m *Module) agentCreate(_ context.Context, args json.RawMessage) (skills.To
 
 func (m *Module) agentUpdate(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
 	var p struct {
-		ID          string  `json:"id"`
-		Name        string  `json:"name"`
-		NewName     string  `json:"newName"`
-		Prompt      *string `json:"prompt"`
-		Schedule    *string `json:"schedule"`
-		Emoji       *string `json:"emoji"`
-		Enabled     *bool   `json:"enabled"`
-		Description *string `json:"description"`
+		ID               string  `json:"id"`
+		Name             string  `json:"name"`
+		NewName          string  `json:"newName"`
+		Prompt           *string `json:"prompt"`
+		Schedule         *string `json:"schedule"`
+		Emoji            *string `json:"emoji"`
+		Enabled          *bool   `json:"enabled"`
+		Description      *string `json:"description"`
+		DestinationID    string  `json:"destinationID"`
+		Platform         string  `json:"platform"`
+		ChannelID        string  `json:"channelID"`
+		ThreadID         string  `json:"threadID"`
+		ClearDestination *bool   `json:"clearDestination"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return skills.ToolResult{}, fmt.Errorf("invalid arguments: %w", err)
@@ -258,6 +289,15 @@ func (m *Module) agentUpdate(_ context.Context, args json.RawMessage) (skills.To
 	}
 	if p.Description != nil {
 		updates.GremlinDescription = p.Description
+	}
+	if p.ClearDestination != nil && *p.ClearDestination {
+		updates.CommunicationDestination = nil
+	} else if hasAgentDestinationArgs(p.DestinationID, p.Platform, p.ChannelID, p.ThreadID) {
+		dest, err := m.resolveAgentDestination(p.DestinationID, p.Platform, p.ChannelID, p.ThreadID)
+		if err != nil {
+			return skills.ToolResult{}, err
+		}
+		updates.CommunicationDestination = dest
 	}
 	updates.LastModifiedAt = strPtr(time.Now().UTC().Format(time.RFC3339))
 	updated, err := m.saveDefinition(updates)
@@ -455,6 +495,50 @@ func (m *Module) agentValidateSchedule(_ context.Context, args json.RawMessage) 
 	return skills.OKResult(summary, map[string]any{"schedule": schedule, "summary": summary}), nil
 }
 
+func hasAgentDestinationArgs(destinationID, platform, channelID, threadID string) bool {
+	return strings.TrimSpace(destinationID) != "" ||
+		strings.TrimSpace(platform) != "" ||
+		strings.TrimSpace(channelID) != "" ||
+		strings.TrimSpace(threadID) != ""
+}
+
+func (m *Module) resolveAgentDestination(destinationID, platform, channelID, threadID string) (*features.CommunicationDestination, error) {
+	if m.commsStore == nil {
+		return nil, fmt.Errorf("communication destinations are not available")
+	}
+	targetID := strings.TrimSpace(destinationID)
+	targetPlatform := strings.ToLower(strings.TrimSpace(platform))
+	targetChannelID := strings.TrimSpace(channelID)
+	targetThreadID := strings.TrimSpace(threadID)
+
+	rows, err := m.commsStore.ListCommunicationChannels(targetPlatform)
+	if err != nil {
+		return nil, fmt.Errorf("list communication channels: %w", err)
+	}
+	for _, row := range rows {
+		rowID := strings.Join([]string{row.Platform, row.ChannelID, row.ThreadID}, ":")
+		idMatches := targetID != "" && rowID == targetID
+		tupleMatches := targetID == "" &&
+			strings.ToLower(row.Platform) == targetPlatform &&
+			row.ChannelID == targetChannelID &&
+			row.ThreadID == targetThreadID
+		if !idMatches && !tupleMatches {
+			continue
+		}
+		return &features.CommunicationDestination{
+			ID:          rowID,
+			Platform:    row.Platform,
+			ChannelID:   row.ChannelID,
+			ChannelName: row.ChannelName,
+			ThreadID:    strPtrIfNotEmpty(row.ThreadID),
+		}, nil
+	}
+	if targetID != "" {
+		return nil, fmt.Errorf("destination %q is not an authorized communication channel; call communication.list_channels and use one of its returned ids", targetID)
+	}
+	return nil, fmt.Errorf("destination %s:%s is not an authorized communication channel; call communication.list_channels and use one of its returned ids", targetPlatform, targetChannelID)
+}
+
 func (m *Module) resolveAutomation(ref automationRefArgs, allowFuzzy bool) (features.GremlinItem, error) {
 	id := strings.TrimSpace(ref.ID)
 	name := strings.TrimSpace(ref.Name)
@@ -526,5 +610,12 @@ func validateScheduleSummary(schedule string) string {
 }
 
 func strPtr(v string) *string {
+	return &v
+}
+
+func strPtrIfNotEmpty(v string) *string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
 	return &v
 }

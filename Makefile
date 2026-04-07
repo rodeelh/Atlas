@@ -5,7 +5,8 @@
         download-engine engine-update \
         download-whisper download-whisper-model \
         download-voice-venv download-kokoro download-kokoro-model download-voice \
-        tidy clean check
+        tidy clean check \
+        test-fast test-standard verify-release scorecard
 
 RUNTIME_DIR  := atlas-runtime
 TUI_DIR      := atlas-tui
@@ -260,3 +261,18 @@ check:
 	cd $(RUNTIME_DIR) && go test ./...
 	cd $(TUI_DIR) && go fmt ./... && go vet ./...
 	cd $(TUI_DIR) && go test ./...
+
+# ── Tiered testing & release validation ─────────────────────────────────────
+# See docs/testing/README.md and scripts/verify-release.sh.
+
+test-fast:
+	@./scripts/verify-release.sh fast
+
+test-standard:
+	@./scripts/verify-release.sh standard
+
+verify-release:
+	@./scripts/verify-release.sh release
+
+scorecard: verify-release
+	@echo "→ docs/testing/atlas-test-scorecard.md"

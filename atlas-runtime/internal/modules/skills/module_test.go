@@ -50,7 +50,7 @@ func TestModule_ListSkillsReturnsCurrentShape(t *testing.T) {
 	if body == nil {
 		t.Fatal("expected [] not null")
 	}
-	var foundAutomation, foundWorkflow bool
+	var foundAutomation, foundWorkflow, foundCommunication bool
 	for _, rec := range body {
 		manifest, _ := rec["manifest"].(map[string]any)
 		switch manifest["id"] {
@@ -62,6 +62,9 @@ func TestModule_ListSkillsReturnsCurrentShape(t *testing.T) {
 		case "workflow-control":
 			foundWorkflow = true
 			assertActionPolicy(t, rec, "workflow.run", "auto_approve")
+		case "communication-bridge":
+			foundCommunication = true
+			assertActionPolicy(t, rec, "communication.send_message", "auto_approve")
 		}
 	}
 	if !foundAutomation {
@@ -69,6 +72,9 @@ func TestModule_ListSkillsReturnsCurrentShape(t *testing.T) {
 	}
 	if !foundWorkflow {
 		t.Fatal("expected workflow-control skill")
+	}
+	if !foundCommunication {
+		t.Fatal("expected communication-bridge skill")
 	}
 }
 

@@ -123,10 +123,10 @@ curl -s -X POST http://localhost:1984/skills/install \
 | Class | Approval | Use for |
 |-------|----------|---------|
 | `read` | Auto | Fetching data, no side effects |
-| `local_write` | Auto | Writing local files |
+| `local_write` | Auto | Writing local files or authorized first-party control state |
 | `destructive_local` | Required | Deleting local state |
 | `external_side_effect` | Required | Calling external APIs with write/mutation operations |
-| `send_publish_delete` | Required | Sending messages, publishing posts, deleting remote data |
+| `send_publish_delete` | Required | Sending third-party messages, publishing posts, deleting remote data |
 
 ---
 

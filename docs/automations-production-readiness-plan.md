@@ -415,6 +415,7 @@ Additional production-readiness work completed:
 3. Phase 7 destination safety:
    - New/updated automation destinations must reference an authorized communication session.
    - Delivery also validates the destination before sending.
+   - Agent-created or agent-updated automations can use `destinationID` from `communication.list_channels` to attach Telegram/WhatsApp/Slack/Discord delivery without asking for raw bot tokens or chat IDs.
    - Added a regression test for rejecting unauthorized destinations.
 
 Validation:

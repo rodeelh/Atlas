@@ -308,15 +308,43 @@ var intentSignals = map[string]groupSignals{
 			"create automation", "new automation", "list automations",
 			"run automation", "schedule automation", "my automations",
 			"set up automation", "enable automation", "disable automation",
+			"every day", "every morning", "every weekday", "every week",
+			"daily reminder", "daily briefing", "daily forecast",
+			"send me a daily", "send me every", "recurring reminder",
+			"set a reminder", "scheduled reminder",
 		},
 		words: []string{
-			"automation", "gremlin", "recurring", "trigger",
+			"automation", "gremlin", "recurring", "trigger", "daily",
 		},
 		pairs: [][2]string{
 			{"create", "automation"}, {"new", "automation"}, {"list", "automations"},
 			{"run", "automation"}, {"schedule", "automation"}, {"set", "automation"},
 			{"enable", "automation"}, {"disable", "automation"}, {"delete", "automation"},
-			{"my", "automations"},
+			{"my", "automations"}, {"every", "day"}, {"every", "morning"},
+			{"every", "weekday"}, {"daily", "forecast"}, {"daily", "briefing"},
+			{"daily", "reminder"}, {"send", "daily"}, {"remind", "me"},
+			{"reminder", "at"},
+		},
+	},
+
+	// ── communication bridge ─────────────────────────────────────────────────
+	"communication": {
+		phrases: []string{
+			"send me a message", "message me", "send to telegram",
+			"send to whatsapp", "send to slack", "send to discord",
+			"notify me on telegram", "notify me on whatsapp",
+			"available channels", "communication channels", "chat bridge",
+			"reach the user", "send this to me",
+		},
+		words: []string{
+			"telegram", "whatsapp", "slack", "discord", "channel", "notify",
+		},
+		pairs: [][2]string{
+			{"send", "telegram"}, {"send", "whatsapp"}, {"send", "slack"},
+			{"send", "discord"}, {"notify", "me"}, {"message", "me"},
+			{"send", "me"},
+			{"list", "channels"}, {"available", "channels"}, {"chat", "bridge"},
+			{"reach", "user"}, {"send", "message"},
 		},
 	},
 

@@ -158,6 +158,12 @@ Core routes:
 - `PUT /communications/platforms/{platform}`
 - `POST /communications/platforms/{platform}/validate`
 
+Agent-facing communications surface:
+
+- `communication.list_channels` lists authorized chat bridge channels from the normalized communication session store.
+- `communication.send_message` sends only to an existing authorized channel returned by `communication.list_channels`; it cannot invent new targets or reach arbitrary contacts.
+- Workflow trust scope can allow this through the `communication` / `chat bridge` app family, which maps to the `communication.*` tool prefix.
+
 ### Operator domains
 
 These are already part of the current runtime surface and should remain grouped for migration:
@@ -190,6 +196,7 @@ Core routes:
 Required payload expectations:
 
 - `/automations/summaries` returns health, delivery health, next run, last run, and destination label fields used by the web UI.
+- Agent-created automations can set chat delivery with `destinationID` from `communication.list_channels`, or the explicit `platform` + `channelID` + optional `threadID` tuple.
 - Advanced import/export routes are compatibility/repair tooling, not the normal UI path.
 
 ### Workflows API

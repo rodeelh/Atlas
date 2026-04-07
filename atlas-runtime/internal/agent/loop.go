@@ -117,11 +117,29 @@ func RequestToolsDef() map[string]any {
 				"e.g. search the web, check weather, read a file, run a skill. " +
 				"Do NOT call it for conversational replies: greetings, acknowledgements ('ok', 'thanks', 'got it', 'sounds good'), " +
 				"casual chat, opinions, explanations, or anything you can answer from your own knowledge. " +
-				"After calling it you will receive the relevant tools and should proceed immediately.",
+				"After calling it you will receive the relevant tools and should proceed immediately. " +
+				"If the provided short list is not enough, call request_tools again with broad=true or with categories.",
 			"parameters": map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-				"required":   []string{},
+				"type": "object",
+				"properties": map[string]any{
+					"broad": map[string]any{
+						"type":        "boolean",
+						"description": "Set true if the previously provided short list is not enough and you need the broad/full tool surface.",
+					},
+					"categories": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "string",
+							"enum": []string{
+								"weather", "web", "finance", "office", "media", "mac", "shell",
+								"files", "vault", "browser", "voice", "communication", "creative",
+								"workflow", "automation", "forge", "meta",
+							},
+						},
+						"description": "Optional categories to request instead of the full broad list.",
+					},
+				},
+				"required": []string{},
 			},
 		},
 	}
@@ -206,7 +224,8 @@ func capToolsForProvider(tools []map[string]any, providerType ProviderType) []ma
 		switch {
 		case strings.HasPrefix(name, "forge__"):
 			p1 = append(p1, t)
-		case strings.HasPrefix(name, "atlas__"), strings.HasPrefix(name, "info__"):
+		case name == requestToolsName,
+			strings.HasPrefix(name, "atlas__"), strings.HasPrefix(name, "info__"):
 			p2 = append(p2, t)
 		case strings.HasPrefix(name, "vault__"), strings.HasPrefix(name, "gremlin__"),
 			strings.HasPrefix(name, "diary__"), strings.HasPrefix(name, "image__"):
@@ -261,7 +280,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		totalUsage         TokenUsage
 		allToolSummaries   []string
 		allResultSummaries []string
-		toolsUpgraded      bool // lazy mode: upgrade happens at most once per turn
+		toolUpgradeStage   int  // lazy mode: 0 meta only, 1 short list, 2 broad/category list
 		compacted          bool // overflow recovery: compact at most once per turn
 	)
 
@@ -301,47 +320,36 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		}
 
 		// ── Lazy tool upgrade ────────────────────────────────────────────────
-		// In "lazy" mode the model is given only the request_tools meta-tool.
-		// When it calls it, we upgrade to the full heuristic tool set and
-		// continue the loop — completely transparent to the user.
-		if !toolsUpgraded {
-			for _, tc := range sr.ToolCalls {
-				if tc.Function.Name != requestToolsName {
-					continue
-				}
-				// Upgrade: heuristic selection based on the original user message.
-				// Sends only the relevant capability groups — keeps token usage low
-				// while ensuring the model gets the tools it actually needs.
-				// The 128-cap safety net handles provider limits.
-				upgraded := l.Skills.SelectiveToolDefs(cfg.UserMessage)
-				upgraded = capToolsForProvider(upgraded, cfg.Provider.Type)
-				tools = upgraded
-				toolsUpgraded = true
+		// In Smart/lazy mode the model starts with request_tools. The first
+		// request returns a short local tool list; a later request can expand to
+		// requested categories or the broad/full tool surface.
+		if tc, ok := firstRequestToolsCall(sr.ToolCalls); ok {
+			upgraded, stage, summary := l.resolveToolUpgrade(cfg, tc, toolUpgradeStage)
+			upgraded = appendRequestToolsDef(upgraded)
+			upgraded = capToolsForProvider(upgraded, cfg.Provider.Type)
+			tools = upgraded
+			toolUpgradeStage = stage
 
-				logstore.Write("info",
-					fmt.Sprintf("Lazy tool upgrade: %d tools selected (conv %s, msg: %.60q)",
-						len(tools), shortConv, cfg.UserMessage),
-					map[string]string{"conv": shortConv, "mode": "lazy→heuristic", "tools": fmt.Sprintf("%d", len(tools))})
+			logstore.Write("info",
+				fmt.Sprintf("Smart tool upgrade: %d tools selected (stage=%d, conv %s, msg: %.60q)",
+					len(tools), toolUpgradeStage, shortConv, cfg.UserMessage),
+				map[string]string{"conv": shortConv, "mode": "smart", "stage": fmt.Sprintf("%d", toolUpgradeStage), "tools": fmt.Sprintf("%d", len(tools))})
 
-				// Protocol: the assistant message must contain the tool_call,
-				// and we must send a tool result before the next model turn.
-				messages = append(messages, OAIMessage{
-					Role:      "assistant",
-					Content:   sr.FinalText, // preserve any text streamed before the call
-					ToolCalls: sr.ToolCalls,
-				})
-				messages = append(messages, OAIMessage{
-					Role:       "tool",
-					Content:    "Tool capabilities are now available. Proceed to answer the user's request using the appropriate tools.",
-					ToolCallID: tc.ID,
-					Name:       requestToolsName,
-				})
-				break
-			}
-			if toolsUpgraded {
-				i--      // lazy upgrade doesn't count as an iteration
-				continue // re-enter loop with real tools
-			}
+			// Protocol: the assistant message must contain the tool_call,
+			// and we must send a tool result before the next model turn.
+			messages = append(messages, OAIMessage{
+				Role:      "assistant",
+				Content:   sr.FinalText, // preserve any text streamed before the call
+				ToolCalls: sr.ToolCalls,
+			})
+			messages = append(messages, OAIMessage{
+				Role:       "tool",
+				Content:    summary,
+				ToolCallID: tc.ID,
+				Name:       requestToolsName,
+			})
+			i--      // tool upgrade doesn't count as an iteration
+			continue // re-enter loop with updated tools
 		}
 
 		// Tool calls.
@@ -752,6 +760,11 @@ type toolPolicyBlock struct {
 	Reason     string
 }
 
+type requestToolsArgs struct {
+	Broad      bool     `json:"broad"`
+	Categories []string `json:"categories"`
+}
+
 func (b toolPolicyBlock) message() OAIMessage {
 	result := skills.ErrResult("run "+b.ActionID, "workflow trust scope", false, errors.New(b.Reason))
 	return OAIMessage{
@@ -796,6 +809,43 @@ func (l *Loop) blockedByToolPolicy(policy *ToolPolicy, tc OAIToolCall) (toolPoli
 		}
 	}
 	return toolPolicyBlock{}, false
+}
+
+func firstRequestToolsCall(calls []OAIToolCall) (OAIToolCall, bool) {
+	for _, tc := range calls {
+		if tc.Function.Name == requestToolsName {
+			return tc, true
+		}
+	}
+	return OAIToolCall{}, false
+}
+
+func (l *Loop) resolveToolUpgrade(cfg LoopConfig, tc OAIToolCall, currentStage int) ([]map[string]any, int, string) {
+	var args requestToolsArgs
+	_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+	if len(args.Categories) > 0 {
+		tools := l.Skills.ToolDefsForGroups(args.Categories)
+		return tools, 2, fmt.Sprintf("Tool capabilities are now expanded for categories: %s. Proceed using the appropriate tools. If these are still insufficient, call request_tools again with broad=true.", strings.Join(args.Categories, ", "))
+	}
+	if args.Broad || currentStage >= 1 {
+		tools := l.Skills.ToolDefinitions()
+		return tools, 2, "The broad tool surface is now available. Proceed using the appropriate tools; do not ask the user to paste a spec if a tool can perform the action."
+	}
+	tools := l.Skills.SelectiveToolDefs(cfg.UserMessage)
+	return tools, 1, "A short relevant tool list is now available. Proceed using those tools. If the short list is not enough, call request_tools again with broad=true or with categories."
+}
+
+func appendRequestToolsDef(tools []map[string]any) []map[string]any {
+	for _, tool := range tools {
+		fn, _ := tool["function"].(map[string]any)
+		if fn["name"] == requestToolsName {
+			return tools
+		}
+	}
+	out := make([]map[string]any, 0, len(tools)+1)
+	out = append(out, tools...)
+	out = append(out, RequestToolsDef())
+	return out
 }
 
 func hasAllowedToolPrefix(actionID string, prefixes []string) bool {

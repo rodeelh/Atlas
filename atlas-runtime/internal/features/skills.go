@@ -318,8 +318,8 @@ func builtInSkills() []SkillRecord {
 				Category: "automation", Capabilities: []string{"automation_management"}, Tags: []string{"automations", "scheduler"},
 			},
 			Actions: []SkillAction{
-				{ID: "automation.create", Name: "Create Automation", Description: "Create a new Atlas automation.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
-				{ID: "automation.update", Name: "Update Automation", Description: "Update an existing automation.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "automation.create", Name: "Create Automation", Description: "Create a new Atlas automation, optionally with a chat delivery destination.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "automation.update", Name: "Update Automation", Description: "Update an automation, including schedule, prompt, state, or delivery destination.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
 				{ID: "automation.delete", Name: "Delete Automation", Description: "Delete an automation by ID or exact name.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
 				{ID: "automation.list", Name: "List Automations", Description: "List Atlas automations and their current state.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
 				{ID: "automation.get", Name: "Get Automation", Description: "Inspect a single automation.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
@@ -350,6 +350,18 @@ func builtInSkills() []SkillRecord {
 				{ID: "workflow.duplicate", Name: "Duplicate Workflow", Description: "Duplicate a workflow under a new name.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
 				{ID: "workflow.validate", Name: "Validate Workflow", Description: "Validate a workflow definition.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
 				{ID: "workflow.explain", Name: "Explain Workflow", Description: "Explain what a workflow does and how it is constrained.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
+			},
+		},
+		{
+			Manifest: SkillManifestInfo{
+				ID: "communication-bridge", Name: "Communication Bridge", Version: "1.0",
+				Description:    "Reach the user through authorized chat channels.",
+				LifecycleState: "enabled", RiskLevel: "medium", IsUserVisible: true,
+				Category: "communication", Capabilities: []string{"user_contact", "chat_bridge_delivery"}, Tags: []string{"communications", "telegram", "whatsapp", "slack", "discord"},
+			},
+			Actions: []SkillAction{
+				{ID: "communication.list_channels", Name: "List Channels", Description: "List authorized chat bridge channels.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "communication.send_message", Name: "Send Message", Description: "Send a message to an authorized user channel.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
 			},
 		},
 		{

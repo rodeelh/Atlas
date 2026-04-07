@@ -11,10 +11,10 @@ Every skill registration carries an `ActionClass` that drives the confirmation p
 | Class | Constant | Auto-approved? | Example skills |
 |---|---|---|---|
 | `read` | `ActionClassRead` | Yes | weather, web search, filesystem read, info |
-| `local_write` | `ActionClassLocalWrite` | Yes | reminders create, calendar create, notes create, clipboard |
+| `local_write` | `ActionClassLocalWrite` | Yes | reminders create, calendar create, notes create, clipboard, authorized communication bridge send |
 | `destructive_local` | `ActionClassDestructiveLocal` | **No** | quit app, run custom AppleScript, shell script |
 | `external_side_effect` | `ActionClassExternalSideEffect` | **No** | open URL, open app, send notification, image generate |
-| `send_publish_delete` | `ActionClassSendPublishDelete` | **No** | mail send, gremlin delete |
+| `send_publish_delete` | `ActionClassSendPublishDelete` | **No** | mail send, third-party publish/delete |
 
 `DefaultNeedsConfirmation(ac ActionClass) bool` is the single source of truth for the base policy. Individual actions can override via `action-policies.json` (`"auto_approve"` / `"always_ask"`).
 

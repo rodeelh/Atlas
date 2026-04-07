@@ -178,6 +178,7 @@ func main() {
 		log.Fatalf("Atlas: register automations module: %v", err)
 	}
 	communicationsModule := communicationsmodule.New(commsSvc)
+	communicationsModule.SetSkillRegistry(skillsRegistry)
 	if err := moduleRegistry.Register(communicationsModule); err != nil {
 		log.Fatalf("Atlas: register communications module: %v", err)
 	}

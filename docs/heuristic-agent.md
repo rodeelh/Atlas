@@ -1,123 +1,88 @@
-# Agent Tool Selection — Flow Diagram
+# Agent Tool Selection
 
-There are four independent tool selection modes. **Lazy** and **heuristic** are separate
-modes that share one component — `SelectiveToolDefs` — but invoke it at different times
-and for different reasons.
+Atlas has four tool-selection modes. The default **Smart** mode is staged:
 
-| | Heuristic | Lazy |
-|---|---|---|
-| When scoring runs | Before the loop | Inside the loop, only if model asks |
-| Who decides tools are needed | service.go (always) | The model (on demand) |
-| Entry token cost | ~800–1 800 | ~100 |
-| Extra turn cost | None | +1 (free, doesn't count against maxIter) |
+1. The cloud model initially receives only `request_tools`.
+2. If it needs tools, it calls `request_tools`.
+3. Atlas answers with a short local `SelectiveToolDefs(userMessage)` list.
+4. If that short list is insufficient, the model can call `request_tools` again with `broad=true` or with `categories`.
+5. Atlas then returns either the requested categories or the broad/full tool surface, still subject to provider caps and action safety.
 
----
+This keeps the cloud model from seeing every tool on ordinary turns, but also prevents it from getting stuck when the short list is too small.
+
+| Mode | Selection behavior |
+| --- | --- |
+| `lazy` / Smart | Starts with `request_tools`; first request returns a short local list; second request can expand by category or broad list. |
+| `heuristic` / Keywords | Injects `SelectiveToolDefs(userMessage)` before the main model turn. |
+| `llm` / AI Router | Uses the Engine LM router or fast fallback provider to choose tools before the main model turn. |
+| `off` | Injects all tools; explicit opt-in only. |
 
 ```mermaid
 flowchart TD
-    USER(["👤 User Message"]) --> SVC
+    USER(["User message"]) --> MODE{"ToolSelectionMode"}
 
-    subgraph SVC["service.go — HandleMessage"]
-        direction TB
-        MODE{"ToolSelectionMode"}
+    MODE -- "lazy / Smart" --> META["request_tools only"]
+    MODE -- "heuristic / Keywords" --> SHORT["SelectiveToolDefs(userMessage)"]
+    MODE -- "llm / AI Router" --> LLM["selectToolsWithLLM()"]
+    MODE -- "off" --> FULL["Full ToolDefinitions()"]
 
-        MODE -- '"heuristic"\nor empty' --> HEUR_SCORE
-        MODE -- '"lazy"' --> LAZY_ONE
-        MODE -- '"llm"' --> ROUTER
-        MODE -- '"off"' --> FULL
+    META --> CLOUD["Cloud model turn"]
+    CLOUD --> NEEDS{"calls request_tools?"}
+    NEEDS -- "no" --> DONE["Answer directly"]
+    NEEDS -- "yes, first call" --> SHORT
+    SHORT --> CAP1["capToolsForProvider()"]
+    CAP1 --> CLOUD2["Cloud model with short list + request_tools"]
+    CLOUD2 --> ENOUGH{"can complete?"}
+    ENOUGH -- "yes" --> TOOLS["Use selected tools"]
+    ENOUGH -- "no, calls request_tools again" --> BROAD{"broad or categories?"}
+    BROAD -- "categories" --> CAT["ToolDefsForGroups(categories)"]
+    BROAD -- "broad / omitted" --> FULL
+    CAT --> CAP2["capToolsForProvider()"]
+    FULL --> CAP2
+    CAP2 --> CLOUD3["Cloud model with expanded tools"]
+    LLM --> CAP1
+    SHORT --> CAP1
 
-        subgraph HEUR_SCORE["SelectiveToolDefs()  ·  runs before loop"]
-            direction TB
-            subgraph SCORING["scoreGroups()  — heuristic.go"]
-                direction LR
-                T1["Tier 1 · Phrase\n+2 pts  (substring)"]
-                T2["Tier 2 · Pair\n+2 pts  (verb + object\nboth whole-word)"]
-                T3["Tier 3 · Word\n+1 pt   (whole-word\nnegation-aware)"]
-                T1 & T2 & T3 --> TSUM(["group score"])
-            end
-            THRESH{"score ≥ 1?"}
-            ALWAYS["Always-on\ncore · management · custom"]
-            COND["Conditional groups\nbrowser · filesystem\nsystem · scripting · services"]
-            SCORING --> THRESH
-            THRESH -- yes --> COND
-            THRESH -- no --> XDROP(["group excluded"])
-            ALWAYS & COND --> HEUR_OUT(["26–57 tools"])
-        end
-
-        LAZY_ONE["1 meta-tool only\nrequest_tools  ~100 tokens"]
-
-        ROUTER["selectToolsWithLLM()\nfast model pre-selects\n─────────────────────\nany failure → SelectiveToolDefs()"]
-
-        FULL["nil  →  loop uses\nfull ToolDefinitions()\n~130+ tools"]
-
-        CAP["capToolsForProvider()\nhard cap 128  (OpenAI / LM Studio / Engine)\npriority: forge › core › mgmt › rest"]
-
-        HEUR_OUT --> CAP
-        LAZY_ONE --> CAP
-        ROUTER  --> CAP
-        FULL    --> CAP
-    end
-
-    CAP --> LOOP
-
-    subgraph LOOP["agent/loop.go — Loop.Run()  (i = 0 … maxIter-1)"]
-        direction TB
-        STREAM["streamWithToolDetection()\nstreaming API call"]
-        NO_TOOLS{"any tool\ncalls?"}
-        DONE(["✅ complete"])
-        NO_TOOLS -- no --> DONE
-
-        LAZY_CHK{"request_tools called\nAND not yet upgraded?"}
-        UPGRADE["SelectiveToolDefs(userMessage)\n+ capToolsForProvider()\ntoolsUpgraded = true\ni--  ← free iteration"]
-        RESUME["append assistant + tool result msgs\ncontinue with scored tool set"]
-
-        APPROVE{"NeedsApproval?"}
-        DEFER(["⏸ pendingApproval\nSSE: approval_required"])
-        EXEC_PAR["stateless tools\nparallel goroutines"]
-        EXEC_SER["stateful tools  browser.*\nserial — shared go-rod"]
-        RESULTS["append tool result messages\nSSE: tool_finished"]
-        CONT["→ next iteration"]
-        MAXITER(["⚠️ max iterations reached"])
-
-        STREAM --> NO_TOOLS
-        NO_TOOLS -- yes --> LAZY_CHK
-        LAZY_CHK -- yes --> UPGRADE --> RESUME --> STREAM
-        LAZY_CHK -- no  --> APPROVE
-        APPROVE -- yes --> DEFER
-        APPROVE -- no  --> EXEC_PAR & EXEC_SER --> RESULTS --> CONT --> STREAM
-    end
-
-    LOOP -- "i ≥ maxIter" --> MAXITER
-
-    style HEUR_SCORE fill:#1e3a5f,stroke:#4a9eff,color:#e0f0ff
-    style SCORING    fill:#0d2137,stroke:#4a9eff,color:#c8e6ff
-    style LOOP       fill:#1a3a1a,stroke:#4aff6a,color:#e0ffe0
-    style CAP        fill:#3a1a1a,stroke:#ff6a4a,color:#ffe0e0
-    style SVC        fill:#1a1a3a,stroke:#9a6aff,color:#e8e0ff
-    style LAZY_ONE   fill:#2a1a3a,stroke:#cc88ff,color:#eed8ff
-    style ROUTER     fill:#2a2a1a,stroke:#cccc44,color:#ffffcc
+    TOOLS --> APPROVAL{"Needs approval?"}
+    CLOUD3 --> APPROVAL
+    APPROVAL -- "yes" --> DEFER["approval_required"]
+    APPROVAL -- "no" --> EXEC["execute tools"]
+    EXEC --> DONE
 ```
 
----
+## Request Tools Contract
 
-## How lazy and heuristic relate
+`request_tools` accepts optional arguments:
 
-```
-Heuristic mode                      Lazy mode
-──────────────                      ─────────
-service.go runs                     service.go injects
-SelectiveToolDefs() ──────┐         1 tool only
-before the loop       shared   ┌──────────────────────
-                      component│   loop starts →
-26–57 tools enter ←───────────┘   model replies
-the loop pre-loaded                  │
-                                     ├─ text only → done (scoring never ran)
-                                     │
-                                     └─ calls request_tools
-                                          │
-                                          └─ SelectiveToolDefs() ──┘
-                                             runs NOW with same
-                                             3-tier scoring
-                                             i--  (free turn)
-                                             loop continues
-```
+- `broad: true` asks Atlas to send the broad/full tool surface.
+- `categories: [...]` asks Atlas to send all tools in specific capability groups.
+
+Supported categories:
+
+- `automation`
+- `communication`
+- `workflow`
+- `weather`
+- `web`
+- `finance`
+- `office`
+- `media`
+- `mac`
+- `shell`
+- `files`
+- `vault`
+- `browser`
+- `voice`
+- `creative`
+- `forge`
+- `meta`
+
+## Safety
+
+Tool selection only changes what the model can see. It does not bypass:
+
+- provider tool caps
+- action approval policy
+- workflow trust scope
+- filesystem root restrictions
+- bridge destination validation

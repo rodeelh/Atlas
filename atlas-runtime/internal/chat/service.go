@@ -897,10 +897,9 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 
 	// Select tools based on the configured tool-selection mode.
 	//
-	//   "lazy"      — sends only the request_tools meta-tool (~100 tokens).
-	//                 The model calls it when it needs real capabilities; the
-	//                 agent loop upgrades to heuristic selection transparently.
-	//                 Best for Telegram / chat-heavy workloads.
+	//   "lazy"      — Smart staged router. Starts with request_tools, then the
+	//                 loop returns a short local list; a second request can
+	//                 expand to categories or the broad/full list.
 	//   "heuristic" — always-on baseline (core + management + custom) plus
 	//                 keyword-triggered groups (~26–57 tools). Default.
 	//   "llm"       — Phase 3 Tool Router (see TODO.md); falls back to heuristic.
@@ -915,10 +914,12 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 	var selectedTools []map[string]any
 	switch toolMode {
 	case "lazy":
-		// Single meta-tool: the model calls request_tools if it needs capabilities.
-		// The agent loop intercepts the call and upgrades to heuristic selection.
+		// Smart staged router: the main model starts with request_tools only.
+		// If it asks for tools, the agent loop returns the local short list.
+		// If that short list is insufficient, the model can call request_tools
+		// again with broad=true or categories to expand the surface.
 		selectedTools = []map[string]any{agent.RequestToolsDef()}
-		logstore.Write("debug", "Tool selection: lazy mode — 1 meta-tool injected",
+		logstore.Write("debug", "Tool selection: smart mode — 1 meta-tool injected",
 			map[string]string{"mode": "lazy"})
 	case "llm":
 		// Auto-start the router model if it isn't running yet.

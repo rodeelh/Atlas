@@ -9,10 +9,12 @@ import (
 
 	"atlas-runtime-go/internal/comms"
 	"atlas-runtime-go/internal/platform"
+	"atlas-runtime-go/internal/skills"
 )
 
 type Module struct {
 	service *comms.Service
+	skills  *skills.Registry
 }
 
 func New(service *comms.Service) *Module {
@@ -26,6 +28,7 @@ func (m *Module) Manifest() platform.Manifest {
 }
 
 func (m *Module) Register(host platform.Host) error {
+	m.registerAgentActions()
 	host.MountProtected(m.registerRoutes)
 	return nil
 }
@@ -46,6 +49,10 @@ func (m *Module) SetChatHandler(handler comms.ChatHandler) {
 
 func (m *Module) SetApprovalResolver(resolver func(toolCallID string, approved bool) error) {
 	m.service.SetApprovalResolver(resolver)
+}
+
+func (m *Module) SetSkillRegistry(registry *skills.Registry) {
+	m.skills = registry
 }
 
 func (m *Module) registerRoutes(r chi.Router) {

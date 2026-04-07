@@ -268,10 +268,16 @@ Custom skills are registered at startup by `LoadCustomSkills()` and appear in
 skills). The Skills UI groups them under **Custom Extensions**; Forge-generated
 extensions use a **Generated** badge. The model cannot distinguish them from built-ins.
 
-The Skills UI also exposes module-owned **Automation Control** and **Workflow Control**
-catalog entries. These map to canonical `automation.*` and `workflow.*` agent actions;
-legacy `gremlin.*` aliases remain compatibility-only and should not be the visible user
-surface.
+The Skills UI also exposes module-owned **Automation Control**, **Workflow Control**,
+and **Communication Bridge** catalog entries. These map to canonical `automation.*`,
+`workflow.*`, and `communication.*` agent actions. Legacy `gremlin.*` aliases remain
+compatibility-only and should not be the visible user surface.
+
+The agent should use `communication.list_channels` as the source of truth for
+Telegram/WhatsApp/Slack/Discord destinations. `automation.create` and
+`automation.update` accept the returned channel `id` as `destinationID`, so the
+agent does not need to ask the user for bot tokens, chat IDs, or Saved Messages
+when an authorized bridge session already exists.
 
 **Subprocess protocol (custom skills):**
 ```
@@ -284,7 +290,7 @@ Process is spawned fresh per call with a 30s deadline. Output is capped at 1 MB.
 See **[`docs/custom-skills.md`](custom-skills.md)** for the full authoring guide, manifest
 reference, credential patterns, and worked examples (Linear, GitHub, shell, Slack).
 
-**Built-in skills (16 groups, 90+ actions):**
+**Built-in skills (17 groups, 90+ actions):**
 
 | Group | Key actions |
 |-------|-------------|
@@ -300,7 +306,9 @@ reference, credential patterns, and worked examples (Linear, GitHub, shell, Slac
 | diary | record |
 | browser | navigate, screenshot, read_page, find_element, scroll, session_check, wait_for_element, wait_network_idle, tabs_list, tabs_new, tabs_switch, tabs_close, switch_frame, switch_main_frame, click, hover, select, type_text, fill_form, submit_form, eval, upload_file, session_login, session_store_credentials, session_submit_2fa, session_clear, solve_captcha |
 | vault | store, lookup, list, update, delete, totp_generate |
-| gremlin | create, update, delete, list, get, enable, disable, run_now, run_history, next_run, duplicate, validate_schedule |
+| automation | create, update, delete, list, get, enable, disable, run, run_history, next_run, duplicate, validate_schedule |
+| workflow | create, update, delete, list, get, run, run_history, duplicate, validate, explain |
+| communication | list_channels, send_message |
 | forge | orchestration.propose |
 | atlas | info, list_skills, capabilities |
 

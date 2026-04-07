@@ -64,6 +64,13 @@ Prompt-only guardrails were not enough because the model could still request a d
 Resolution:
 Workflow runs now pass a `ToolPolicy` into the agent loop. The loop blocks disallowed tool families, live-write actions, sensitive-read tools, and filesystem paths outside workflow-approved roots before execution or approval deferral.
 
+### P2 - Workflows could not proactively reach the user
+
+Automations had delivery destinations, but the agent did not have an explicit way to discover which chat bridge channels were available or send a user-facing message from a workflow.
+
+Resolution:
+The communications module now exposes canonical `communication.*` agent actions. `communication.list_channels` returns authorized bridge sessions, and `communication.send_message` only delivers to those known destinations. Workflow trust scope can opt into this by allowing the `communication` / `chat bridge` tool family and live-write behavior.
+
 ### P2 - Steps were not persisted as execution state
 
 Steps were previously prompt context only.

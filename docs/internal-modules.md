@@ -93,7 +93,7 @@ A feature should be an internal module when it owns one or more of:
 A module should have a clear owner and a bounded responsibility.
 
 Examples:
-- `communications` owns bridge management routes and lifecycle
+- `communications` owns bridge management routes, lifecycle, authorized channel discovery, and the canonical `communication.*` agent contact surface
 - `approvals` owns approval resolution routes and policy behavior
 - `automations` owns schedules, trigger execution, run state, delivery, and the canonical `automation.*` agent control surface
 - `workflows` owns reusable process definitions, trust-bounded workflow runs, summaries, and the canonical `workflow.*` agent control surface

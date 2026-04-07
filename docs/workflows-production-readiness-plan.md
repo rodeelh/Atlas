@@ -90,6 +90,7 @@ What now works:
 15. Refreshed the Workflows web UI so workflows are presented as reusable processes with health, step count, trust scope, tags, and last-run state.
 16. Refreshed the Automations web UI so automations are presented as triggers/delivery surfaces with task mode, destination health, next run, and last-run state.
 17. Updated the Skills catalog/UI language so canonical `automation.*` and `workflow.*` controls replace the legacy Gremlin-facing catalog entry.
+18. Added the module-owned `communication.*` agent surface so workflows and automations can discover authorized chat bridge channels and send user-facing messages through them.
 
 ## UI Contract - 2026-04-07
 
@@ -99,9 +100,11 @@ The web UI now reflects the product boundary:
 | --- | --- |
 | Automations | Configure schedule, enabled state, delivery destination, and linked workflow/prompt task. |
 | Workflows | Configure reusable process instructions, steps, trust scope, tags, and run history. |
-| Skills | Show canonical agent control surfaces: `Automation Control` and `Workflow Control`. |
+| Skills | Show canonical agent control surfaces: `Automation Control`, `Workflow Control`, and `Communication Bridge`. |
 
 Automations can bind to a workflow, but workflows remain independently runnable by the agent, HTTP, and the web UI.
+Workflows that need to reach the user should allow the `communication`/`chat bridge`
+tool family in trust scope and allow live-write behavior for that run.
 
 ### Phase 3 - UI Refresh
 

@@ -231,6 +231,25 @@ func (r *Registry) ToolDefinitions() []map[string]any {
 	return out
 }
 
+// ToolDefsForGroups returns tools whose capability group is in groups. Unknown
+// group names are ignored. Core tools are always included as context helpers.
+func (r *Registry) ToolDefsForGroups(groups []string) []map[string]any {
+	wanted := map[string]bool{"core": true}
+	for _, group := range groups {
+		group = strings.ToLower(strings.TrimSpace(group))
+		if group != "" {
+			wanted[group] = true
+		}
+	}
+	out := make([]map[string]any, 0, len(r.entries))
+	for _, e := range r.entries {
+		if wanted[toolCapabilityGroup(e.Def.Name)] {
+			out = append(out, e.Def.MarshalOpenAI())
+		}
+	}
+	return out
+}
+
 // toolCapabilityGroup returns which capability group a tool name belongs to.
 // Groups drive selective injection in SelectiveToolDefs.
 //
@@ -280,6 +299,8 @@ func toolCapabilityGroup(name string) string {
 		return "browser"
 	case strings.HasPrefix(name, "voice."):
 		return "voice"
+	case strings.HasPrefix(name, "communication."):
+		return "communication"
 	case strings.HasPrefix(name, "image."):
 		return "creative"
 	case strings.HasPrefix(name, "workflow."):
@@ -303,22 +324,23 @@ func toolCapabilityGroup(name string) string {
 // "core" has no entry — it is always-on (no threshold needed).
 // "meta" covers atlas.* runtime-status tools — only injected when explicitly asked.
 var groupThresholds = map[string]int{
-	"meta":       1,
-	"weather":    1,
-	"web":        1,
-	"finance":    1,
-	"office":     1,
-	"media":      1,
-	"mac":        1,
-	"shell":      3,
-	"files":      2,
-	"vault":      1,
-	"browser":    2,
-	"voice":      1,
-	"creative":   1,
-	"workflow":   1,
-	"automation": 1,
-	"forge":      1,
+	"meta":          1,
+	"weather":       1,
+	"web":           1,
+	"finance":       1,
+	"office":        1,
+	"media":         1,
+	"mac":           1,
+	"shell":         3,
+	"files":         2,
+	"vault":         1,
+	"browser":       2,
+	"voice":         1,
+	"communication": 1,
+	"creative":      1,
+	"workflow":      1,
+	"automation":    1,
+	"forge":         1,
 }
 
 // SelectiveToolDefs returns a bounded tool set for the given user message.

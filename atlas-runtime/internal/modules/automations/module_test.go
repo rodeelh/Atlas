@@ -469,6 +469,56 @@ func TestModule_AutomationRunActionIsAutoApprovedAndUsesModuleRunner(t *testing.
 	}
 }
 
+func TestModule_AutomationCreateActionAcceptsAuthorizedCommunicationDestination(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+	seedCommSession(t, db, "telegram", "123")
+
+	registry := skills.NewRegistry(dir, db, nil)
+	host := platform.NewHost(
+		stubConfig{},
+		platform.NewSQLiteStorage(db),
+		&stubAgentRuntime{},
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(8),
+	)
+
+	module := New(dir)
+	module.SetSkillRegistry(registry)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	result, err := registry.Execute(context.Background(), "automation.create", []byte(`{
+		"name":"Telegram Reminder",
+		"prompt":"Send the Friday reminder.",
+		"schedule":"weekly Friday at 09:00",
+		"destinationID":"telegram:123:"
+	}`))
+	if err != nil {
+		t.Fatalf("automation.create: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success result: %+v", result)
+	}
+
+	items, err := module.listDefinitions()
+	if err != nil {
+		t.Fatalf("listDefinitions: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected one automation, got %+v", items)
+	}
+	dest := items[0].CommunicationDestination
+	if dest == nil || dest.Platform != "telegram" || dest.ChannelID != "123" || dest.ID != "telegram:123:" {
+		t.Fatalf("unexpected destination: %+v", dest)
+	}
+}
+
 func TestModule_SchedulerRunsDueEnabledAutomationsOnce(t *testing.T) {
 	dir := t.TempDir()
 	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))

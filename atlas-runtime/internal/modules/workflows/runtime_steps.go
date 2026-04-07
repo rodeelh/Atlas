@@ -238,6 +238,8 @@ func allowedToolPrefixes(apps []string) []string {
 			add("image.")
 		case "voice":
 			add("voice.")
+		case "communications", "communication", "chat", "chat bridge", "bridge":
+			add("communication.")
 		}
 	}
 	return out
