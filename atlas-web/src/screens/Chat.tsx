@@ -1496,56 +1496,37 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
               </button>
 
               {historyOpen && historyDropdownVisible && (
-                <div style={{
-                  position: 'absolute', top: 'calc(100% + 6px)', right: 0, width: '100%',
-                  background: 'var(--surface-2)',
-                  border: '1px solid var(--border-2)',
-                  borderRadius: '12px',
-                  boxShadow: '0 8px 32px rgba(0,0,0,0.28)',
-                  overflow: 'hidden',
-                  zIndex: 300,
-                  maxHeight: '340px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                }}>
+                <div class="chat-history-dropdown">
                     {historyLoading && (
-                      <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-2)', fontSize: '13px' }}>Loading…</div>
+                      <div class="chat-history-empty">Loading…</div>
                     )}
                     {!historyLoading && historySummaries.length === 0 && (
-                      <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-2)', fontSize: '13px' }}>
+                      <div class="chat-history-empty">
                         {historyQuery ? `No results for "${historyQuery}"` : 'No conversations yet'}
                       </div>
                     )}
                     {!historyLoading && historySummaries.length > 0 && (
-                      <div style={{ overflowY: 'auto' }}>
+                      <div class="chat-history-list">
                         {historySummaries.map((s, i) => {
                           const diff = Date.now() - new Date(s.updatedAt).getTime()
                           const rel = diff < 60000 ? 'Just now' : diff < 3600000 ? `${Math.floor(diff / 60000)}m ago` : diff < 86400000 ? `${Math.floor(diff / 3600000)}h ago` : diff < 604800000 ? `${Math.floor(diff / 86400000)}d ago` : new Date(s.updatedAt).toLocaleDateString()
                           return (
                             <div
                               key={s.id}
+                              class={`chat-history-item${i < historySummaries.length - 1 ? ' bordered' : ''}`}
                               onClick={() => resumeConversation(s.id)}
-                              style={{
-                                padding: '10px 14px', cursor: 'pointer',
-                                borderBottom: i < historySummaries.length - 1 ? '0.5px solid var(--border)' : 'none',
-                                transition: 'background 0.1s',
-                              }}
-                              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--control-bg-hover)' }}
-                              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '' }}
                             >
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                  <span style={{ fontSize: '11px', color: 'var(--text-2)' }}>{rel}</span>
+                              <div class="chat-history-item-meta">
+                                <div class="chat-history-item-left">
+                                  <span class="chat-history-item-time">{rel}</span>
                                   {s.platform && s.platform !== 'web' && (
-                                    <span style={{ fontSize: '10px', fontWeight: 600, letterSpacing: '0.03em', textTransform: 'uppercase', padding: '1px 5px', borderRadius: '4px', background: 'var(--theme-accent-subtle, rgba(99,102,241,0.12))', color: 'var(--theme-accent, #6366f1)' }}>
-                                      {s.platform}
-                                    </span>
+                                    <span class="chat-history-platform-badge">{s.platform}</span>
                                   )}
                                 </div>
-                                <span style={{ fontSize: '11px', color: 'var(--text-2)' }}>{s.messageCount} msgs</span>
+                                <span class="chat-history-item-count">{s.messageCount} msgs</span>
                               </div>
-                              <div style={{ fontSize: '13px', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {s.firstUserMessage || <em style={{ color: 'var(--text-2)' }}>No messages</em>}
+                              <div class="chat-history-item-title">
+                                {s.firstUserMessage || <em class="chat-history-item-empty">No messages</em>}
                               </div>
                             </div>
                           )
@@ -1554,11 +1535,9 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
                     )}
                     {/* Clear history footer */}
                     {!historyLoading && historySummaries.length > 0 && (
-                      <div style={{ borderTop: '0.5px solid var(--border)', padding: '8px 10px' }}>
+                      <div class="chat-history-footer">
                         <button
-                          style={{ width: '100%', padding: '6px 10px', fontSize: '12px', color: 'var(--theme-text-danger, #e05252)', background: 'none', border: 'none', borderRadius: '6px', cursor: 'pointer', textAlign: 'center', transition: 'background 0.1s' }}
-                          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--control-bg-hover)' }}
-                          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '' }}
+                          class="chat-history-clear-btn"
                           onClick={async () => {
                             if (!confirm('Clear all conversation history? This cannot be undone.')) return
                             await api.clearAllConversations()
