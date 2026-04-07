@@ -2146,7 +2146,6 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   align-self: flex-start;
   width: fit-content;
   max-width: 80%;
-  gap: 3px;
 }
 
 .chat-message-group.user {
@@ -2304,6 +2303,8 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   flex: 0 1 auto;
   position: relative;
   isolation: isolate;
+  /* extra bottom clearance so the absolutely-positioned meta isn't clipped */
+  padding-bottom: 22px;
 }
 
 .chat-message-actions {
@@ -2580,25 +2581,28 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  /* indent past avatar (30px) + gap (12px) */
-  padding-left: 42px;
-  padding-right: 2px;
+  position: absolute;
+  bottom: 2px;
+  left: 0;
+  right: 0;
+  padding: 0 2px;
   opacity: 0;
   visibility: hidden;
   transition: opacity 0.15s ease, visibility 0s linear 0.15s;
 }
 
+/* Hover on the bubble itself reveals meta — pure CSS, no JS */
+.chat-bubble:hover ~ .chat-message-meta,
+.chat-message-meta:hover,
 .chat-message-group.meta-visible .chat-message-meta {
   opacity: 1;
   visibility: visible;
   transition-delay: 0s;
 }
 
-/* User messages: copy on left, timestamp on right; no left-indent */
+/* User messages: reverse so copy is on right, timestamp on left */
 .chat-message-group.user .chat-message-meta {
   flex-direction: row-reverse;
-  padding-left: 2px;
-  padding-right: 42px;
 }
 
 .chat-timestamp {
@@ -2632,11 +2636,14 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 
 .chat-meta-copy-btn:hover {
   color: var(--theme-text-primary);
-  background: color-mix(in srgb, var(--theme-accent-fill) 10%, transparent);
 }
 
 .chat-meta-copy-btn.copied {
-  color: var(--theme-accent-fill);
+  color: var(--theme-text-primary);
+}
+
+.chat-meta-copy-btn.failed {
+  color: var(--yellow);
 }
 
 /* ─── Inline link & preview ──────────────────────────────── */

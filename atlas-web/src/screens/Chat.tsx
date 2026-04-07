@@ -19,6 +19,11 @@ marked.use({
       const safeHref = encodeURI(href ?? '')
       const titleAttr = title ? ` title="${title.replace(/"/g, '&quot;')}"` : ''
       return `<a href="${safeHref}"${titleAttr} target="_blank" rel="noopener noreferrer" class="chat-link">${text}</a>`
+    },
+    code({ text, lang }: { text: string; lang?: string }) {
+      const label   = lang?.trim() || 'code'
+      const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      return `<div class="code-block"><div class="code-block-header"><span class="code-block-lang">${label}</span><button class="code-copy-btn" type="button">Copy</button></div><pre><code>${escaped}</code></pre></div>`
     }
   }
 })
@@ -30,12 +35,23 @@ interface Message {
   role: 'user' | 'assistant'
   content: string
   isTyping?: boolean
+  createdAt?: number
   /** URL → preview map so each card can be anchored to its source URL. */
   linkPreviews?: Record<string, LinkPreview>
 }
 
 type ChatProvider = 'openai' | 'anthropic' | 'gemini' | 'openrouter' | 'lm_studio' | 'ollama' | 'atlas_engine'
 const CLOUD_CHAT_PROVIDERS: ChatProvider[] = ['openai', 'anthropic', 'gemini', 'openrouter']
+
+const PROVIDER_LABELS: Record<ChatProvider, string> = {
+  openai:       'OpenAI',
+  anthropic:    'Anthropic',
+  gemini:       'Gemini',
+  openrouter:   'OpenRouter',
+  lm_studio:    'LM Studio',
+  ollama:       'Ollama',
+  atlas_engine: 'Engine LM',
+}
 
 const STORAGE_ID_KEY  = 'atlasConversationID'
 const STORAGE_MSG_KEY = 'atlasChatMessages'
@@ -114,7 +130,7 @@ function loadMessages(): Message[] {
   try {
     const raw = localStorage.getItem(STORAGE_MSG_KEY)
     if (!raw) return []
-    return (JSON.parse(raw) as Message[]).map(m => ({ ...m, isTyping: false }))
+    return (JSON.parse(raw) as Message[]).map(m => ({ ...m, isTyping: false, createdAt: m.createdAt ?? Date.now() }))
   } catch { return [] }
 }
 
@@ -122,7 +138,7 @@ function saveMessages(msgs: Message[]) {
   try {
     const toSave = msgs
       .filter(m => m.content.length > 0 && !m.isTyping)
-      .map(({ id, role, content }) => ({ id, role, content }))
+      .map(({ id, role, content, createdAt }) => ({ id, role, content, createdAt }))
     localStorage.setItem(STORAGE_MSG_KEY, JSON.stringify(toSave))
   } catch {
     // QuotaExceededError — storage full; skip silently
@@ -165,6 +181,25 @@ function humanizeToolName(raw: string): string {
   return 'Working on it…'
 }
 
+// ── Timestamp helpers ─────────────────────────────────────────────────────────
+
+function formatTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+}
+
+function formatDateLabel(ts: number): string {
+  const d   = new Date(ts)
+  const now = new Date()
+  if (d.toDateString() === now.toDateString()) return 'Today'
+  const yesterday = new Date(now)
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
+  return d.toLocaleDateString(undefined, {
+    month: 'short', day: 'numeric',
+    ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {})
+  })
+}
+
 // ── URL detection & link previews ──────────────────────────────────────────────
 
 const URL_RE = /https?:\/\/[^\s<>"'()[\]{}]+[^\s<>"'()[\]{}.,!?;:]/g
@@ -190,12 +225,12 @@ function renderMessageContent(
   const normalized = content.replace(/<br\s*\/?>/gi, '\n')
   const rawHtml = marked.parse(normalized) as string
   const safeHtml = DOMPurify.sanitize(rawHtml, {
-    ADD_ATTR: ['target', 'rel', 'class'],
+    ADD_ATTR: ['target', 'rel', 'class', 'type'],
     ALLOWED_TAGS: [
       'p', 'br', 'strong', 'b', 'em', 'i', 'code', 'pre', 'a',
       'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
       'table', 'thead', 'tbody', 'tr', 'th', 'td',
-      'blockquote', 'hr', 's', 'del', 'span'
+      'blockquote', 'hr', 's', 'del', 'span', 'div', 'button'
     ]
   })
 
@@ -250,8 +285,9 @@ const LinkPreviewCard = ({ preview }: { preview: LinkPreview }) => {
 // ── Icon components ────────────────────────────────────────────────────────────
 
 const SendIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M2.5 13.5L14 8 2.5 2.5l2.2 4.1 4.8 1.4-4.8 1.4-2.2 4.1z" />
+  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 13V3" />
+    <path d="M4 7l4-4 4 4" />
   </svg>
 )
 
@@ -284,26 +320,32 @@ const CheckIcon = () => (
   </svg>
 )
 
+/* Waveform equalizer — 4 bars of varying height */
 const SpeakerIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M2.8 6.2h2.3L8.4 3.4v9.2L5.1 9.8H2.8z" />
-    <path d="M10.6 6a2.9 2.9 0 0 1 0 4" />
-    <path d="M12.6 4.2a5.2 5.2 0 0 1 0 7.6" />
+  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+    <line x1="3"    y1="10"   x2="3"    y2="8.5" />
+    <line x1="6.5"  y1="12.5" x2="6.5"  y2="3.5" />
+    <line x1="10"   y1="11"   x2="10"   y2="5.5" />
+    <line x1="13.5" y1="10.5" x2="13.5" y2="7"   />
   </svg>
 )
 
+/* Pause bars — shown when audio is actively playing */
 const SpeakerStopIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M2.8 6.2h2.3L8.4 3.4v9.2L5.1 9.8H2.8z" />
-    <rect x="10.6" y="5.4" width="3.2" height="5.2" rx="0.7" />
+  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" aria-hidden="true">
+    <line x1="5.5"  y1="5" x2="5.5"  y2="11" />
+    <line x1="10.5" y1="5" x2="10.5" y2="11" />
   </svg>
 )
 
+/* Waveform with diagonal slash — TTS disabled */
 const SpeakerMutedIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M2.8 6.2h2.3L8.4 3.4v9.2L5.1 9.8H2.8z" />
-    <line x1="10.8" y1="5.4" x2="13.8" y2="10.6" />
-    <line x1="13.8" y1="5.4" x2="10.8" y2="10.6" />
+  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+    <line x1="3"    y1="10"   x2="3"    y2="8.5" />
+    <line x1="6.5"  y1="12.5" x2="6.5"  y2="3.5" />
+    <line x1="10"   y1="11"   x2="10"   y2="5.5" />
+    <line x1="13.5" y1="10.5" x2="13.5" y2="7"   />
+    <line x1="2"    y1="14"   x2="14"   y2="2"   />
   </svg>
 )
 
@@ -377,6 +419,22 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
   const [copyFeedback, setCopyFeedback]         = useState<{ id: string; status: 'copied' | 'failed' } | null>(null)
   const copyFeedbackTimer                       = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [revealedCopyId, setRevealedCopyId]     = useState<string | null>(null)
+  const [promptIndex, setPromptIndex]           = useState(0)
+
+  const PROMPTS = [
+    'Help me draft an email',
+    'Summarize a document',
+    'Write some code',
+    'Search the web for me',
+    'Set a reminder for me',
+    'What\'s the weather like?',
+  ]
+
+  useEffect(() => {
+    if (messages.length > 0) return
+    const t = setInterval(() => setPromptIndex(i => i + 1), 3500)
+    return () => clearInterval(t)
+  }, [messages.length])
 
   // Presence state — replaces spinner + tool banner entirely
   const [presenceText, setPresenceText]       = useState('Thinking…')
@@ -388,6 +446,18 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
   // Used to keep typing dots visible even after assistant_done fires (tool-only turns
   // produce no text, so assistant_done fires before tools run, yet the turn continues).
   const activeMsgId = useRef<string | null>(null)
+
+  // Code block copy — event-delegated so it works on DOMPurify-rendered HTML
+  const handleCodeCopy = useCallback((e: MouseEvent) => {
+    const btn = (e.target as HTMLElement).closest('.code-copy-btn') as HTMLButtonElement | null
+    if (!btn) return
+    e.stopPropagation()
+    const code = btn.closest('.code-block')?.querySelector('code')?.textContent ?? ''
+    navigator.clipboard.writeText(code).catch(() => {})
+    const orig = btn.textContent
+    btn.textContent = 'Copied!'
+    setTimeout(() => { if (btn) btn.textContent = orig }, 2000)
+  }, [])
 
   const bottomRef      = useRef<HTMLDivElement>(null)
   const messagesRef    = useRef<HTMLDivElement>(null)
@@ -469,7 +539,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
   useEffect(() => {
     const handlePointerDown = (e: MouseEvent | TouchEvent) => {
       const target = e.target as HTMLElement | null
-      if (target?.closest('.chat-bubble-wrap')) return
+      if (target?.closest('.chat-bubble-wrap, .chat-message-meta')) return
       setRevealedCopyId(null)
     }
     document.addEventListener('mousedown', handlePointerDown)
@@ -1058,8 +1128,8 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     const userContent = pendingAttachments.length > 0
       ? `${text}${text ? '\n' : ''}📎 ${pendingAttachments.map(a => a.filename).join(', ')}`
       : text
-    const userMsg: Message      = { id: uuid(), role: 'user',      content: userContent }
-    const assistantMsg: Message = { id: uuid(), role: 'assistant', content: '', isTyping: true }
+    const userMsg: Message      = { id: uuid(), role: 'user',      content: userContent, createdAt: Date.now() }
+    const assistantMsg: Message = { id: uuid(), role: 'assistant', content: '', isTyping: true, createdAt: Date.now() }
     activeMsgId.current = assistantMsg.id   // track the active bubble for presence dots
     setMessages(prev => [...prev, userMsg, assistantMsg])
 
@@ -1495,7 +1565,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
       />
 
       {/* Messages */}
-      <div ref={messagesRef} class="chat-messages">
+      <div ref={messagesRef} class="chat-messages" onClick={handleCodeCopy as any}>
         <div class="chat-thread">
           {messages.length === 0 && (
             <div class="empty-state">
@@ -1503,89 +1573,99 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
                 <path d="M30 5.5A2.5 2.5 0 0027.5 3h-19A2.5 2.5 0 006 5.5v16A2.5 2.5 0 008.5 24H15l5 6 5-6h2.5A2.5 2.5 0 0030 21.5v-16z" />
               </svg>
               <h3>Start a conversation</h3>
-              <p>Type a message below to chat with Atlas</p>
+              <p>Type a message below to chat with {agentName}</p>
+              <div class="empty-prompts">
+                <button
+                  key={promptIndex}
+                  class="empty-prompt-chip"
+                  onClick={() => { setInput(PROMPTS[promptIndex % PROMPTS.length]); setTimeout(() => textareaRef.current?.focus(), 0) }}
+                >
+                  {PROMPTS[promptIndex % PROMPTS.length]}
+                </button>
+              </div>
             </div>
           )}
 
-          {messages.map(msg => (
+          {messages.map((msg, i) => {
+            const prevMsg = messages[i - 1]
+            const msgDate = formatDateLabel(msg.createdAt ?? Date.now())
+            const showDateSep = !prevMsg || formatDateLabel(prevMsg.createdAt ?? Date.now()) !== msgDate
+            return (
+            <>
+              {showDateSep && (
+                <div key={`sep-${msg.id}`} class="chat-date-separator">
+                  <span>{msgDate}</span>
+                </div>
+              )}
             <div
               key={msg.id}
-              class={`chat-message-row ${msg.role}${msg.isTyping ? ' typing' : ''}`}
+              class={`chat-message-group ${msg.role}${msg.isTyping ? ' typing' : ''}${revealedCopyId === msg.id ? ' meta-visible' : ''}`}
             >
-              <div class={`chat-avatar chat-avatar-${msg.role}`}>
-                <span class="chat-avatar-content chat-avatar-content-glyph"><AvatarGlyph /></span>
-                <span class="chat-avatar-content chat-avatar-content-initial">{msg.role === 'assistant' ? agentName[0]?.toUpperCase() ?? 'A' : userName[0]?.toUpperCase() ?? 'Y'}</span>
-                <span class="chat-avatar-content chat-avatar-content-minimal"><span class="chat-avatar-minimal-dot" /></span>
-              </div>
-              <div class={`chat-bubble-wrap${revealedCopyId === msg.id ? ' copy-revealed' : ''}`}>
-                <div
-                  class="chat-bubble"
-                  onClick={(e) => {
-                    const target = e.target as HTMLElement
-                    if (target.closest('a, button, input, textarea, select')) return
-                    setRevealedCopyId(current => current === msg.id ? null : msg.id)
-                  }}
-                >
-                  {msg.content
-                    ? (msg.role === 'assistant'
-                        ? renderMessageContent(msg.content, msg.linkPreviews)
-                        : msg.content)
-                    : (msg.isTyping || msg.id === activeMsgId.current)
-                        ? <TypingDots working={presenceWorking} />
-                        : null
-                  }
+              <div class="chat-message-row">
+                <div class={`chat-avatar chat-avatar-${msg.role}`}>
+                  <span class="chat-avatar-content chat-avatar-content-glyph"><AvatarGlyph /></span>
+                  <span class="chat-avatar-content chat-avatar-content-initial">{msg.role === 'assistant' ? agentName[0]?.toUpperCase() ?? 'A' : userName[0]?.toUpperCase() ?? 'Y'}</span>
+                  <span class="chat-avatar-content chat-avatar-content-minimal"><span class="chat-avatar-minimal-dot" /></span>
                 </div>
-                {msg.content && !msg.isTyping && (
-                  <div class="chat-message-actions">
-                    {(() => {
-                      const copyState = copyFeedback?.id === msg.id ? copyFeedback.status : 'idle'
-                      const label = copyState === 'copied'
-                        ? 'Copied'
-                        : copyState === 'failed'
-                          ? 'Retry copy'
-                          : 'Copy'
-                      return (
-                        <button
-                          class={`chat-copy-btn${copyState !== 'idle' ? ` ${copyState}` : ''}`}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            copyMessage(msg.id, msg.content)
-                          }}
-                          title="Copy message"
-                          aria-label={label}
-                        >
-                          {copyState === 'copied' ? <CheckIcon /> : <CopyIcon />}
-                        </button>
-                      )
-                    })()}
-                    {msg.role === 'assistant' && (
-                      <button
-                        class={`chat-copy-btn${speakingMsgId === msg.id ? ' speaking' : ''}`}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (speakingMsgId === msg.id) {
-                            stopSpeaking()
-                          } else {
-                            speakText(msg.content, msg.id)
-                          }
-                        }}
-                        title={speakingMsgId === msg.id ? 'Stop playback' : 'Read aloud'}
-                        aria-label={speakingMsgId === msg.id ? 'Stop playback' : 'Read aloud'}
-                      >
-                        {speakingMsgId === msg.id ? <SpeakerStopIcon /> : <SpeakerIcon />}
-                      </button>
-                    )}
+                <div class="chat-bubble-wrap">
+                  <div
+                    class="chat-bubble"
+                    onClick={(e) => {
+                      const target = e.target as HTMLElement
+                      if (target.closest('a, button, input, textarea, select')) return
+                      setRevealedCopyId(current => current === msg.id ? null : msg.id)
+                    }}
+                  >
+                    {msg.content
+                      ? (msg.role === 'assistant'
+                          ? renderMessageContent(msg.content, msg.linkPreviews)
+                          : msg.content)
+                      : (msg.isTyping || msg.id === activeMsgId.current)
+                          ? <TypingDots working={presenceWorking} />
+                          : null
+                    }
                   </div>
-                )}
+                  {!msg.isTyping && (msg.content || msg.createdAt) && (
+                    <div class="chat-message-meta">
+                      {msg.content && (() => {
+                        const copyState = copyFeedback?.id === msg.id ? copyFeedback.status : 'idle'
+                        const label = copyState === 'copied'
+                          ? 'Copied'
+                          : copyState === 'failed'
+                            ? 'Retry copy'
+                            : 'Copy'
+                        return (
+                          <button
+                            class={`chat-meta-copy-btn${copyState !== 'idle' ? ` ${copyState}` : ''}`}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              copyMessage(msg.id, msg.content)
+                            }}
+                            title="Copy message"
+                            aria-label={label}
+                          >
+                            {copyState === 'copied' ? <CheckIcon /> : <CopyIcon />}
+                          </button>
+                        )
+                      })()}
+                      {msg.createdAt && (
+                        <span class="chat-timestamp">{formatTime(msg.createdAt)}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-          ))}
+            </>
+            )
+          })}
 
           {/* Presence line — replaces tool banner + spinner.
               Fades status text in/out smoothly during all active states.
               Never blank: typing dots in bubble + this line below. */}
           {sending && (
             <div class={`chat-presence-line${presenceVisible ? ' visible' : ''}`}>
+              <span class="presence-dot" />
               <span class="chat-presence-text">{presenceText}</span>
             </div>
           )}
@@ -1616,7 +1696,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
         </svg>
       </button>
 
-      {/* Composer v2 */}
+      {/* Composer */}
       <div class="chat-composer">
         <input
           ref={fileInputRef}
@@ -1640,23 +1720,58 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
             </div>
           )}
 
-          <div class="chat-composer-row">
-            <div class="chat-composer-tools">
-              {/* + attachment button — outside left */}
+          {/* Textarea with mic + send inside */}
+          <div class="chat-textarea-wrap">
+            <textarea
+              ref={textareaRef}
+              class="chat-input"
+              placeholder={`Message ${agentName}…`}
+              value={input}
+              onInput={(e) => { setInput((e.target as HTMLTextAreaElement).value); resizeTextarea() }}
+              onKeyDown={handleKeyDown}
+              disabled={sending || speechListening}
+              rows={1}
+            />
+            <button
+              class={`chat-mic-btn${speechListening ? ' active' : ''}${!speechAvailable ? ' unsupported' : ''}`}
+              onClick={toggleSpeechInput}
+              disabled={sending}
+              type="button"
+              title={speechListening ? 'Stop voice input' : speechAvailable ? 'Voice input (Whisper)' : 'Voice input unavailable in this browser'}
+              aria-label={speechListening ? 'Stop voice input' : 'Start voice input'}
+              aria-pressed={speechListening ? 'true' : 'false'}
+            >
+              <MicIcon />
+            </button>
+            <button
+              class="chat-send-btn"
+              onClick={send}
+              disabled={sending || speechListening || (!input.trim() && attachments.length === 0)}
+              title="Send message"
+              aria-label="Send message"
+            >
+              <SendIcon />
+            </button>
+          </div>
+
+          {/* Bottom toolbar: tools left — provider right */}
+          <div class="chat-composer-toolbar">
+            <div class="chat-toolbar-left">
               <button
-                class={`chat-round-btn chat-round-btn-attach${attachments.length > 0 ? ' active' : ''}`}
+                class={`chat-tool-btn${attachments.length > 0 ? ' active' : ''}`}
                 onClick={() => fileInputRef.current?.click()}
                 disabled={sending}
                 title="Attach image or PDF"
+                aria-label="Attach file"
               >
                 <AttachIcon />
               </button>
               <button
-                class={`chat-round-btn chat-round-btn-tool${ttsEnabled ? ' active' : ''}`}
+                class={`chat-tool-btn${ttsEnabled ? ' active' : ''}`}
                 onClick={toggleTTS}
                 disabled={sending}
                 type="button"
-                title={ttsEnabled ? 'Disable auto-read (Piper TTS)' : 'Enable auto-read (Piper TTS)'}
+                title={ttsEnabled ? 'Disable auto-read' : 'Enable auto-read'}
                 aria-label={ttsEnabled ? 'Disable auto-read' : 'Enable auto-read'}
                 aria-pressed={ttsEnabled ? 'true' : 'false'}
               >
@@ -1664,64 +1779,28 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
               </button>
             </div>
 
-            {/* Textarea box */}
-            <div class="chat-textarea-wrap">
-              <textarea
-                ref={textareaRef}
-                class="chat-input"
-                placeholder={`Message ${agentName}…`}
-                value={input}
-                onInput={(e) => { setInput((e.target as HTMLTextAreaElement).value); resizeTextarea() }}
-                onKeyDown={handleKeyDown}
-                disabled={sending || speechListening}
-                rows={1}
-              />
-              <button
-                class={`chat-mic-btn${speechListening ? ' active' : ''}${!speechAvailable ? ' unsupported' : ''}`}
-                onClick={toggleSpeechInput}
-                disabled={sending}
-                type="button"
-                title={
-                  speechListening
-                    ? 'Stop voice input'
-                    : speechAvailable
-                      ? 'Voice input (Whisper)'
-                      : 'Voice input unavailable in this browser'
-                }
-                aria-label={speechListening ? 'Stop voice input' : 'Start voice input'}
-                aria-pressed={speechListening ? 'true' : 'false'}
-              >
-                <MicIcon />
-              </button>
-
-              {/* Provider select — inside box, bottom-right */}
-              <select
-                class="chat-provider-select"
-                value={activeProvider}
-                onChange={(e) => handleProviderChange((e.target as HTMLSelectElement).value as ChatProvider)}
-                title="Choose model provider"
-              >
-                <option value="openai">OpenAI</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="gemini">Gemini</option>
-                <option value="openrouter">OpenRouter</option>
-                <option value="lm_studio">LM Studio</option>
-                <option value="ollama">Ollama</option>
-                <option value="atlas_engine">Engine LM</option>
-              </select>
-              <span class="chat-provider-select-icon" aria-hidden="true">
-                <ProviderIcon />
-              </span>
+            <div class="chat-toolbar-right">
+              {/* Provider — visible label with transparent select overlay */}
+              <div class="chat-provider-wrap">
+                <select
+                  class="chat-provider-select"
+                  value={activeProvider}
+                  onChange={(e) => handleProviderChange((e.target as HTMLSelectElement).value as ChatProvider)}
+                  aria-label="Model provider"
+                >
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="gemini">Gemini</option>
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="lm_studio">LM Studio</option>
+                  <option value="ollama">Ollama</option>
+                  <option value="atlas_engine">Engine LM</option>
+                </select>
+                <span class="chat-provider-label" aria-hidden="true">
+                  {PROVIDER_LABELS[activeProvider]} ▾
+                </span>
+              </div>
             </div>
-
-            {/* Send button — no spinner; disabled opacity communicates sending state */}
-            <button
-              class="chat-round-btn chat-round-btn-send"
-              onClick={send}
-              disabled={sending || speechListening || (!input.trim() && attachments.length === 0)}
-            >
-              <SendIcon />
-            </button>
           </div>
         </div>
       </div>
