@@ -265,7 +265,13 @@ success/failure, artifacts, warnings, and dry-run support. Use one or the other.
 
 Custom skills are registered at startup by `LoadCustomSkills()` and appear in
 `GET /skills` with `"source": "custom"` or `"source": "forge"` (for Forge-generated
-skills). The model cannot distinguish them from built-ins.
+skills). The Skills UI groups them under **Custom Extensions**; Forge-generated
+extensions use a **Generated** badge. The model cannot distinguish them from built-ins.
+
+The Skills UI also exposes module-owned **Automation Control** and **Workflow Control**
+catalog entries. These map to canonical `automation.*` and `workflow.*` agent actions;
+legacy `gremlin.*` aliases remain compatibility-only and should not be the visible user
+surface.
 
 **Subprocess protocol (custom skills):**
 ```
@@ -409,7 +415,7 @@ POST /forge/installed/:skillID/uninstall
 ```
 
 Forge-generated skills appear in `GET /skills` with `"source": "forge"` and are
-shown in the **Custom Skills** group with a purple Forge badge. The agent calls them
+shown in the **Custom Extensions** group with a Generated badge. The agent calls them
 identically to any other custom skill — one JSON line in, one JSON line out.
 
 ---
@@ -573,9 +579,9 @@ Phases 2–5 require an AI provider. Phases 1 (prune) always runs even if no pro
 | `SKILLS.md` | Skills-layer memory — learned routines appended by `internal/mind` skills learner + dream Phase 3 |
 | `DIARY.md` | Per-day diary entries (max 3/day) — written by `diary.record` skill and reflection pipeline |
 | `dream-state.json` | Last successful dream cycle timestamp — used for catch-up detection at startup |
-| `GREMLINS.md` | Automation definitions |
-| `workflow-definitions.json` | Workflow definitions |
-| `workflow-runs.json` | Workflow run records |
+| `GREMLINS.md` | Legacy/import-export automation definitions; SQLite is canonical for module-owned automation definitions |
+| `workflow-definitions.json` | Legacy/import workflow definitions; SQLite is canonical |
+| `workflow-runs.json` | Legacy workflow run records; SQLite is canonical |
 | `forge-proposals.json` | Forge proposal records |
 | `forge-installed.json` | Installed Forge skill records |
 | `go-skill-states.json` | Skill enable/disable overrides |

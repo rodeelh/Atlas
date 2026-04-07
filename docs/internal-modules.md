@@ -1,6 +1,6 @@
 # Atlas Internal Module Contract
 
-**Last updated: 2026-04-05**
+**Last updated: 2026-04-07**
 
 This document defines the private internal module model used by the Go runtime.
 
@@ -95,7 +95,8 @@ A module should have a clear owner and a bounded responsibility.
 Examples:
 - `communications` owns bridge management routes and lifecycle
 - `approvals` owns approval resolution routes and policy behavior
-- `workflows` owns workflow run routes and workflow persistence glue
+- `automations` owns schedules, trigger execution, run state, delivery, and the canonical `automation.*` agent control surface
+- `workflows` owns reusable process definitions, trust-bounded workflow runs, summaries, and the canonical `workflow.*` agent control surface
 
 ---
 

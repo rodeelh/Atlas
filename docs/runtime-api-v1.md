@@ -169,6 +169,53 @@ These are already part of the current runtime surface and should remain grouped 
 - workflows
 - forge
 
+### Automations API
+
+Automations own trigger timing, enabled state, delivery, and optional workflow binding.
+
+Core routes:
+
+- `GET /automations`
+- `GET /automations/summaries`
+- `POST /automations`
+- `PUT /automations/{id}`
+- `DELETE /automations/{id}`
+- `POST /automations/{id}/enable`
+- `POST /automations/{id}/disable`
+- `POST /automations/{id}/run`
+- `GET /automations/{id}/runs`
+- `GET /automations/advanced/file`
+- `PUT /automations/advanced/import`
+
+Required payload expectations:
+
+- `/automations/summaries` returns health, delivery health, next run, last run, and destination label fields used by the web UI.
+- Advanced import/export routes are compatibility/repair tooling, not the normal UI path.
+
+### Workflows API
+
+Workflows own reusable process definitions, trust scope, structured runs, and direct execution.
+
+Core routes:
+
+- `GET /workflows`
+- `GET /workflows/summaries`
+- `POST /workflows`
+- `GET /workflows/{id}`
+- `PUT /workflows/{id}`
+- `DELETE /workflows/{id}`
+- `POST /workflows/{id}/run`
+- `GET /workflows/{id}/runs`
+- `GET /workflows/runs`
+- `POST /workflows/runs/{runID}/approve`
+- `POST /workflows/runs/{runID}/deny`
+
+Required payload expectations:
+
+- `/workflows/summaries` returns health, last run, error, enabled state, and step count fields used by the web UI.
+- Workflow runs include structured `stepRuns`; prompt steps may complete, fail, or be skipped if unsupported.
+- Runtime tools invoked inside workflow runs are constrained by the workflow trust scope and action safety policy.
+
 ### Memory API
 
 Long-term memories are stored in SQLite and recalled via BM25 FTS5 before each agent turn.

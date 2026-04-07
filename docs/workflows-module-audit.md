@@ -13,11 +13,12 @@ Goal: prepare workflows to become a powerful standalone process layer integrated
 | Data durability | 5/10 | 9/10 | SQLite is canonical for definitions and runs; JSON definitions import lazily. |
 | Agent usefulness | 4/10 | 9/10 | `workflow.*` actions are module-owned and auto-approved local controls. |
 | Automation integration | 6/10 | 9/10 | Workflow-bound automations create linked workflow runs via canonical storage. |
-| Dashboard readiness | 5/10 | 8.5/10 | Summary endpoint and structured run metadata are available. |
+| Dashboard/UI readiness | 5/10 | 9/10 | Summary endpoint, structured run metadata, and refreshed web UI rows are available. |
 | Trust/safety enforcement | 5/10 | 9/10 | Control actions are classified correctly and workflow runs enforce tool policies before execution or approval deferral. |
 | Test coverage | 6/10 | 8.5/10 | Full runtime tests pass after the migration. |
 
 Overall backend readiness: 9.4/10.
+Overall product/UI readiness: 9.0/10.
 
 ## Key Findings Addressed
 
@@ -49,6 +50,13 @@ The UI and future dashboards needed a cleaner summary contract.
 Resolution:
 `GET /workflows/summaries` returns workflow health, enabled state, step count, and last run fields.
 
+### P2 - Web UI still reflected the old prompt-library model
+
+The Workflows page previously presented workflows mostly as prompt templates. The Automations page also emphasized prompt text over trigger/delivery state, which made the stronger architecture less visible.
+
+Resolution:
+The Workflows page now presents workflows as reusable processes with health, step count, trust scope, tags, and last-run state. The Automations page now presents automations as schedule/delivery surfaces with task mode, destination health, next run, and last-run state. Both pages consume summary endpoints instead of relying only on definition lists.
+
 ### P1 - Trust scope was prompt-only
 
 Prompt-only guardrails were not enough because the model could still request a disallowed tool.
@@ -66,9 +74,9 @@ Prompt steps now execute sequentially and persist structured step-run status, ou
 ## Remaining Risks
 
 1. Advanced workflow DAG behavior such as branching, retries, and tool-step input mapping is still out of scope.
-2. The Workflows web UI still reflects the older architecture and should be refreshed after the backend hardening.
+2. Mobile visual QA still needs a pass with seeded automation/workflow data.
 3. Legacy JSON run files remain as fallback helpers only; new runtime paths should read SQLite.
 
 ## Recommendation
 
-Proceed with the Workflows web UI refresh. Avoid building a full DAG engine yet; Atlas benefits most from workflows as reusable, inspectable, trust-bounded process templates that automations and the agent can invoke.
+Keep workflows as reusable, inspectable, trust-bounded process templates that automations and the agent can invoke. Avoid building a full DAG engine until branching/retry use cases are concrete.

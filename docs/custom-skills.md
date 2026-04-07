@@ -29,7 +29,7 @@ warning log — they never prevent Atlas from starting.
 
 ### Via the Skills UI
 1. Open Atlas → **Skills**
-2. Scroll to **Custom Skills**
+2. Scroll to **Custom Extensions**
 3. Click **Install from Folder** → select your skill directory
 4. Restart the Atlas daemon: `make daemon-restart` (or `launchctl kickstart -k gui/$(id -u)/Atlas`)
 
@@ -489,7 +489,7 @@ When you install a Forge skill (Settings → Forge → Install), Atlas automatic
 2. Generates a Python `run` script with the HTTP plan embedded
 3. Writes both to `skills/<skillID>/` so the agent can call them
 
-Forge skills appear in the **Custom Skills** group with a purple **Forge** badge.
+Forge skills appear in the **Custom Extensions** group with a **Generated** badge.
 They are managed by the Forge screen — use Forge Uninstall to remove them.
 Their `run` script supports bearer, API-key-header, query-param, and basic auth
 and is regenerated if you re-install the proposal.
@@ -498,7 +498,7 @@ and is regenerated if you re-install the proposal.
 
 ## Removing a custom skill
 
-**Via the Skills UI:** Skills screen → Custom Skills → click **Remove** next to the skill.
+**Via the Skills UI:** Skills screen → Custom Extensions → click **Remove** next to the skill.
 
 **Via the API:**
 ```bash

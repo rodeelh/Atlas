@@ -16,7 +16,7 @@ Workflows reach production-ready status when they meet these gates:
 | Durable definitions | SQLite is canonical for workflow definitions; `workflow-definitions.json` is import compatibility only. |
 | Structured runs | Workflow runs persist status, outcome, inputs, summary, errors, conversation ID, trigger source, duration, and step-run placeholders. |
 | One runner | HTTP, agent, and automation-bound runs use the same workflow execution helper. |
-| Dashboard readiness | `/workflows/summaries` returns health, last run, error, enabled state, and step count. |
+| Dashboard/UI readiness | `/workflows/summaries` returns health, last run, error, enabled state, and step count; the web UI consumes it. |
 | Safety boundaries | Workflow control actions are auto-approved local operations; runtime tools inside workflows still follow action safety and trust scope. |
 | Tests | Regression tests cover SQLite-backed run persistence, route shape, automation binding, and full runtime integration. |
 
@@ -87,22 +87,41 @@ What now works:
 4. Unsupported step kinds are represented as skipped placeholders and warned by `workflow.validate`.
 5. Branching/retry DAG behavior remains intentionally out of scope.
 
+15. Refreshed the Workflows web UI so workflows are presented as reusable processes with health, step count, trust scope, tags, and last-run state.
+16. Refreshed the Automations web UI so automations are presented as triggers/delivery surfaces with task mode, destination health, next run, and last-run state.
+17. Updated the Skills catalog/UI language so canonical `automation.*` and `workflow.*` controls replace the legacy Gremlin-facing catalog entry.
+
+## UI Contract - 2026-04-07
+
+The web UI now reflects the product boundary:
+
+| Page | Primary job |
+| --- | --- |
+| Automations | Configure schedule, enabled state, delivery destination, and linked workflow/prompt task. |
+| Workflows | Configure reusable process instructions, steps, trust scope, tags, and run history. |
+| Skills | Show canonical agent control surfaces: `Automation Control` and `Workflow Control`. |
+
+Automations can bind to a workflow, but workflows remain independently runnable by the agent, HTTP, and the web UI.
+
 ### Phase 3 - UI Refresh
 
-Goal: make the Workflows UI reflect the stronger backend contract.
+Status: implemented first production slice.
 
-Tasks:
+What now works:
 
-1. Add summary cards using `/workflows/summaries`.
-2. Surface last run, health, enabled state, linked automation context, and step count.
-3. Improve the run history panel with error/summary/duration.
-4. Clarify the relationship between workflows and automations in copy.
-5. Keep creation simple: prompt-first, steps/trust scope as advanced sections.
+1. Workflows page consumes `/workflows/summaries`.
+2. Workflows rows surface health, step count, trust scope, approval mode, tags, and last run.
+3. Automations page consumes `/automations/summaries`.
+4. Automations rows surface task mode, delivery destination/health, next run, last run, and last error.
+5. Secondary row actions are grouped behind a compact action menu to keep mobile density under control.
 
-Expected readiness after phase: 9.5/10.
+Follow-up:
+1. Do a visual mobile pass with seeded automations/workflows data.
+2. Consider adding linked-automation context to workflow summaries when dashboards need it.
 
 ## Current Readiness Estimate
 
 Current backend readiness: 9.4/10.
+Current product/UI readiness: 9.0/10.
 
-The core architecture is now aligned with automations: durable storage, module-owned agent control, structured runs, one execution path, runtime tool-policy enforcement, and persisted prompt-step execution. The main remaining gap is the UI refresh plus any future advanced DAG features such as branching and retries.
+The core architecture is now aligned with automations: durable storage, module-owned agent control, structured runs, one execution path, runtime tool-policy enforcement, persisted prompt-step execution, and a refreshed web UI. Remaining gaps are mainly future advanced DAG behavior such as branching/retries and mobile visual QA with real data.
