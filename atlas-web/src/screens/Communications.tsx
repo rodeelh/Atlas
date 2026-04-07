@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api, CommunicationChannel, CommunicationPlatformStatus, CommunicationsSnapshot, RuntimeConfig } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
+import { Portal } from '../components/Portal'
 import { ErrorBanner } from '../components/ErrorBanner'
 
 type PlatformID = CommunicationPlatformStatus['platform']
@@ -580,7 +581,8 @@ function QuickSetupModal({
   const qrCodeDataURL = platform.platform === 'whatsapp' ? platform.metadata.qrCodeDataURL : ''
 
   return (
-      <div class="modal-overlay" onClick={(event) => { if ((event.target as HTMLElement).classList.contains('modal-overlay')) onCancel() }}>
+    <Portal>
+    <div class="modal-overlay" onClick={(event) => { if ((event.target as HTMLElement).classList.contains('modal-overlay')) onCancel() }}>
       <div class="modal communication-setup-modal">
         <div class="modal-header communication-modal-header">
           <div class="communication-modal-title-wrap">
@@ -665,6 +667,7 @@ function QuickSetupModal({
         </div>
       </div>
     </div>
+    </Portal>
   )
 }
 

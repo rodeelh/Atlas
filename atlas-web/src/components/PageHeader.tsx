@@ -23,8 +23,6 @@ export function PageHeader({ title, subtitle, actions }: PageHeaderProps) {
       {mobileLead && <div class="page-header-mobile-lead">{mobileLead}</div>}
       <div class="page-header-left">
         <div class="page-header-title">
-          <span class="page-header-prefix">Atlas</span>
-          <span class="page-header-sep"> — </span>
           {title}
         </div>
         <div class="page-header-sub">{subtitle}</div>

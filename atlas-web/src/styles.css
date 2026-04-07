@@ -736,15 +736,6 @@ html, body {
   text-overflow: ellipsis;
 }
 
-.page-header-prefix {
-  color: var(--theme-text-secondary);
-  font-weight: 400;
-}
-
-.page-header-sep {
-  color: var(--theme-text-muted);
-  font-weight: 300;
-}
 
 .page-header-sub {
   font-size: 14px;
@@ -5120,7 +5111,7 @@ input[type=number] { -moz-appearance: textfield; }
   flex-direction: column;
   gap: 6px;
   padding: 12px 18px 16px;
-  border-top: 1px solid color-mix(in srgb, var(--theme-border-subtle) 50%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-border-subtle) 50%, transparent);
   background: color-mix(in srgb, var(--theme-bg-elevated) 38%, transparent);
 }
 

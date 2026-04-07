@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { JSX } from 'preact'
 import { api, WorkflowDefinition, WorkflowRun, WorkflowSummary } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
+import { Portal } from '../components/Portal'
 
 const MoreIcon = () => (
   <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
@@ -121,6 +122,7 @@ function WorkflowModal({ workflow, onSave, onClose }: WorkflowModalProps) {
   }
 
   return (
+    <Portal>
     <div class="modal-overlay" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-overlay')) onClose() }}>
       <div class="modal automation-modal" style={{ maxWidth: 820, width: '94vw' }}>
 
@@ -218,6 +220,7 @@ function WorkflowModal({ workflow, onSave, onClose }: WorkflowModalProps) {
         </div>
       </div>
     </div>
+    </Portal>
   )
 }
 
@@ -239,6 +242,7 @@ function WorkflowRunsPanel({ workflow, onClose }: { workflow: WorkflowDefinition
   }
 
   return (
+    <Portal>
     <div class="modal-overlay" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-overlay')) onClose() }}>
       <div class="modal automation-modal" style={{ maxWidth: 760, width: '92vw' }}>
 
@@ -286,6 +290,7 @@ function WorkflowRunsPanel({ workflow, onClose }: { workflow: WorkflowDefinition
         </div>
       </div>
     </div>
+    </Portal>
   )
 }
 

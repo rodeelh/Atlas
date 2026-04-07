@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'preact/hooks'
 import { JSX } from 'preact'
 import { api, AutomationSummary, CommunicationChannel, GremlinItem, GremlinRun, WorkflowDefinition } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
+import { Portal } from '../components/Portal'
 
 // ── Icons ────────────────────────────────────────────────────────────────────
 
@@ -163,6 +164,7 @@ function RunsPanel({ gremlin, onClose }: { gremlin: GremlinItem; onClose: () => 
   }, [gremlin.id])
 
   return (
+    <Portal>
     <div class="modal-overlay" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-overlay')) onClose() }}>
       <div class="modal automation-modal" style={{ maxWidth: 640, width: '90vw' }}>
 
@@ -190,6 +192,7 @@ function RunsPanel({ gremlin, onClose }: { gremlin: GremlinItem; onClose: () => 
         </div>
       </div>
     </div>
+    </Portal>
   )
 }
 
@@ -281,6 +284,7 @@ function EditModal({ gremlin, onSave, onClose }: EditModalProps) {
   }
 
   return (
+    <Portal>
     <div class="modal-overlay" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-overlay')) onClose() }}>
       <div class="modal automation-modal" style={{ maxWidth: 820, width: '94vw' }}>
 
@@ -373,6 +377,7 @@ function EditModal({ gremlin, onSave, onClose }: EditModalProps) {
         </div>
       </div>
     </div>
+    </Portal>
   )
 }
 
@@ -521,6 +526,12 @@ export function Automations() {
                   </CompactActionMenu>
                 </div>
               </div>
+              {(!item.workflowID && item.prompt) && (
+                <div class="automation-prompt-section">
+                  <span class="automation-console-label">Prompt</span>
+                  <p class="automation-prompt">{item.prompt}</p>
+                </div>
+              )}
               <div class="automation-console-grid">
                 <div class="automation-console-cell">
                   <span class="automation-console-label">Task</span>
@@ -543,12 +554,6 @@ export function Automations() {
                   <span>{summary?.lastRunStatus || item.lastRunStatus ? statusBadge(summary?.lastRunStatus ?? item.lastRunStatus ?? '') : 'No runs yet'}</span>
                 </div>
               </div>
-              {(!item.workflowID && item.prompt) && (
-                <div class="automation-prompt-section">
-                  <span class="automation-console-label">Prompt</span>
-                  <p class="automation-prompt">{item.prompt}</p>
-                </div>
-              )}
               {summary?.lastRunError && (
                 <p class="automation-prompt automation-prompt-error">
                   {summary.lastRunError}
