@@ -10,8 +10,10 @@
 
 /* ── Shared tokens (theme-independent) ──────────────────────── */
 :root {
-  /* Chat content column — thread and composer always match */
-  --chat-content-max: clamp(480px, 80%, 740px);
+  /* Chat content column — thread and composer always match.
+     Fills available space with 48px breathing room each side,
+     caps at 900px so it stays anchored on large displays. */
+  --chat-content-max: min(900px, calc(100% - 96px));
 
   /* Chat bubble geometry */
   --bubble-pad-v:    14px;
@@ -2142,7 +2144,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   max-width: var(--chat-content-max);
   margin: 0 auto;
   width: 100%;
-  padding: 30px 48px 176px;
+  padding: 30px 24px 176px;
   display: flex;
   flex-direction: column;
   gap: calc(var(--chat-msg-gap) + 2px);
@@ -2459,35 +2461,23 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   50%       { opacity: 0.4; transform: scale(0.75); }
 }
 
-/* ─── Code blocks ────────────────────────────────────────── */
-
-/* ─── Code blocks — theme-aware ─────────────────────────────
-   Dark  → VS Code Dark+ palette (#1e1e1e body / #252526 header)
-   Light → VS Code Light+ palette (#f3f3f3 body / #e8e8e8 header)  */
+/* ─── Code blocks — Atlas-themed ────────────────────────────
+   Uses Atlas surface tokens so code blocks feel native to
+   the active theme rather than a standalone VS Code widget.  */
 
 .code-block {
-  --cb-bg:          #1e1e1e;
-  --cb-header-bg:   #252526;
-  --cb-border:      rgba(255,255,255,0.06);
-  --cb-text:        #d4d4d4;
-  --cb-lang-color:  rgba(255,255,255,0.38);
-  --cb-btn-color:   rgba(255,255,255,0.32);
-  --cb-btn-hover:   rgba(255,255,255,0.72);
+  --cb-bg:         var(--surface);
+  --cb-header-bg:  var(--surface-2);
+  --cb-border:     var(--border);
+  --cb-text:       var(--text);
+  --cb-lang-color: var(--text-2);
+  --cb-btn-color:  var(--text-2);
+  --cb-btn-hover:  var(--text);
   margin: 10px 0;
   border-radius: 10px;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--cb-border);
   background: var(--cb-bg);
-}
-
-[data-theme="light"] .code-block {
-  --cb-bg:          #f3f3f3;
-  --cb-header-bg:   #e8e8e8;
-  --cb-border:      rgba(0,0,0,0.08);
-  --cb-text:        #1f1f1f;
-  --cb-lang-color:  rgba(0,0,0,0.38);
-  --cb-btn-color:   rgba(0,0,0,0.30);
-  --cb-btn-hover:   rgba(0,0,0,0.70);
 }
 
 .code-block-header {
