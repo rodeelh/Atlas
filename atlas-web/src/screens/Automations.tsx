@@ -127,7 +127,7 @@ function deliveryBadge(health?: string) {
     case 'success': return <span class="badge badge-green">delivered</span>
     case 'failed': return <span class="badge badge-red">delivery failed</span>
     case 'not_configured': return <span class="badge badge-gray">no destination</span>
-    default: return <span class="badge badge-gray">delivery unknown</span>
+    default: return null
   }
 }
 
@@ -525,7 +525,7 @@ export function Automations() {
                 <div class="automation-console-cell">
                   <span class="automation-console-label">Task</span>
                   <strong>{workflowLabel(item, workflows)}</strong>
-                  <span>{item.workflowID ? 'Reusable workflow' : (item.prompt || 'No prompt set')}</span>
+                  {item.workflowID && <span>Reusable workflow</span>}
                 </div>
                 <div class="automation-console-cell">
                   <span class="automation-console-label">Delivery</span>
@@ -543,9 +543,15 @@ export function Automations() {
                   <span>{summary?.lastRunStatus || item.lastRunStatus ? statusBadge(summary?.lastRunStatus ?? item.lastRunStatus ?? '') : 'No runs yet'}</span>
                 </div>
               </div>
-              {(summary?.lastRunError || item.prompt) && (
-                <p class={`automation-prompt ${summary?.lastRunError ? 'automation-prompt-error' : ''}`}>
-                  {summary?.lastRunError ?? item.prompt}
+              {(!item.workflowID && item.prompt) && (
+                <div class="automation-prompt-section">
+                  <span class="automation-console-label">Prompt</span>
+                  <p class="automation-prompt">{item.prompt}</p>
+                </div>
+              )}
+              {summary?.lastRunError && (
+                <p class="automation-prompt automation-prompt-error">
+                  {summary.lastRunError}
                 </p>
               )}
             </div>

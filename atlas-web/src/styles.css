@@ -13,6 +13,16 @@
   /* Chat content column — thread and composer always match */
   --chat-content-max: clamp(480px, 80%, 740px);
 
+  /* Chat bubble geometry */
+  --bubble-pad-v:    14px;
+  --bubble-pad-h:    20px;
+  --bubble-radius:   20px;
+  --bubble-font-size: 15px;
+  --bubble-font:     var(--font);
+  /* gap between groups — 28px padding-bottom on each group already reserves
+     meta row space, so this is purely the extra breathing room between messages */
+  --chat-msg-gap:    6px;
+
   /* Semantic colours — same across themes */
   --green:        #22c55e;
   --green-dim:    rgba(34,197,94,0.12);
@@ -2132,20 +2142,24 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   max-width: var(--chat-content-max);
   margin: 0 auto;
   width: 100%;
-  padding: 30px 48px 148px;
+  padding: 30px 48px 176px;
   display: flex;
   flex-direction: column;
   gap: calc(var(--chat-msg-gap) + 2px);
   flex: 1;
 }
 
-/* Group wraps the row + meta, controls alignment and max-width */
+/* Group wraps the row + meta, controls alignment and max-width.
+   padding-bottom reserves layout space for the absolutely-positioned
+   meta row (~20px tall, 5px below bubble = 25px total). Without this
+   the meta row overlaps the next message at compact densities. */
 .chat-message-group {
   display: flex;
   flex-direction: column;
   align-self: flex-start;
   width: fit-content;
   max-width: 80%;
+  padding-bottom: 28px;
 }
 
 .chat-message-group.user {
@@ -2447,69 +2461,150 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 
 /* ─── Code blocks ────────────────────────────────────────── */
 
+/* ─── Code blocks — theme-aware ─────────────────────────────
+   Dark  → VS Code Dark+ palette (#1e1e1e body / #252526 header)
+   Light → VS Code Light+ palette (#f3f3f3 body / #e8e8e8 header)  */
+
 .code-block {
+  --cb-bg:          #1e1e1e;
+  --cb-header-bg:   #252526;
+  --cb-border:      rgba(255,255,255,0.06);
+  --cb-text:        #d4d4d4;
+  --cb-lang-color:  rgba(255,255,255,0.38);
+  --cb-btn-color:   rgba(255,255,255,0.32);
+  --cb-btn-hover:   rgba(255,255,255,0.72);
   margin: 10px 0;
-  border-radius: 8px;
+  border-radius: 10px;
   overflow: hidden;
   border: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--cb-bg);
+}
+
+[data-theme="light"] .code-block {
+  --cb-bg:          #f3f3f3;
+  --cb-header-bg:   #e8e8e8;
+  --cb-border:      rgba(0,0,0,0.08);
+  --cb-text:        #1f1f1f;
+  --cb-lang-color:  rgba(0,0,0,0.38);
+  --cb-btn-color:   rgba(0,0,0,0.30);
+  --cb-btn-hover:   rgba(0,0,0,0.70);
 }
 
 .code-block-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border);
+  padding: 7px 14px;
+  background: var(--cb-header-bg);
+  border-bottom: 1px solid var(--cb-border);
 }
 
 .code-block-lang {
-  font-size: 11px;
+  font-size: 10px;
   font-family: var(--font-mono);
-  color: var(--text-2);
-  text-transform: lowercase;
-  letter-spacing: 0.03em;
+  color: var(--cb-lang-color);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 500;
 }
 
 .code-copy-btn {
   appearance: none;
   -webkit-appearance: none;
   background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: var(--text-2);
-  font-size: 11px;
-  padding: 2px 8px;
+  border: none;
+  color: var(--cb-btn-color);
+  padding: 2px;
   cursor: pointer;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
-  line-height: 1.6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.12s;
+  line-height: 1;
 }
 
-.code-copy-btn:hover {
-  background: var(--hover);
-  color: var(--text);
-  border-color: var(--border-2);
-}
+.code-copy-btn:hover  { color: var(--cb-btn-hover); }
+.code-copy-btn.copied { color: #4ec9b0; }
 
 .code-block pre {
   margin: 0;
-  padding: 14px 16px;
+  padding: 16px 18px;
   overflow-x: auto;
   font-family: var(--font-mono);
   font-size: 13px;
-  line-height: 1.6;
-  color: var(--text);
+  line-height: 1.65;
+  color: var(--cb-text);
+  background: transparent;
 }
 
-.code-block code {
-  font-family: inherit;
-  background: none;
-  padding: 0;
+/* Prevent .message-markdown pre from double-styling code-block pre */
+.message-markdown .code-block pre {
+  margin: 0;
+  padding: 16px 18px;
+  background: transparent;
+  border: none;
   border-radius: 0;
-  font-size: inherit;
-  color: inherit;
 }
+
+/* ─── highlight.js — VS Code Dark+ tokens (dark theme) ──────── */
+.hljs-comment,
+.hljs-quote             { color: #6a9955; font-style: italic; }
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-name,
+.hljs-tag               { color: #569cd6; }
+.hljs-string,
+.hljs-attr,
+.hljs-attribute,
+.hljs-selector-attr     { color: #ce9178; }
+.hljs-number,
+.hljs-literal           { color: #b5cea8; }
+.hljs-title,
+.hljs-section,
+.hljs-selector-id       { color: #dcdcaa; }
+.hljs-type,
+.hljs-class             { color: #4ec9b0; }
+.hljs-variable,
+.hljs-template-variable { color: #9cdcfe; }
+.hljs-operator,
+.hljs-punctuation       { color: #d4d4d4; }
+.hljs-symbol,
+.hljs-bullet            { color: #c586c0; }
+.hljs-meta              { color: #9cdcfe; }
+.hljs-deletion          { color: #f44747; }
+.hljs-addition          { color: #4ec9b0; }
+.hljs-emphasis          { font-style: italic; }
+.hljs-strong            { font-weight: bold; }
+
+/* ─── highlight.js — VS Code Light+ tokens (light theme) ────── */
+[data-theme="light"] .hljs-comment,
+[data-theme="light"] .hljs-quote             { color: #008000; font-style: italic; }
+[data-theme="light"] .hljs-keyword,
+[data-theme="light"] .hljs-selector-tag,
+[data-theme="light"] .hljs-built_in,
+[data-theme="light"] .hljs-name,
+[data-theme="light"] .hljs-tag               { color: #0000ff; }
+[data-theme="light"] .hljs-string,
+[data-theme="light"] .hljs-attr,
+[data-theme="light"] .hljs-attribute,
+[data-theme="light"] .hljs-selector-attr     { color: #a31515; }
+[data-theme="light"] .hljs-number,
+[data-theme="light"] .hljs-literal           { color: #098658; }
+[data-theme="light"] .hljs-title,
+[data-theme="light"] .hljs-section,
+[data-theme="light"] .hljs-selector-id       { color: #795e26; }
+[data-theme="light"] .hljs-type,
+[data-theme="light"] .hljs-class             { color: #267f99; }
+[data-theme="light"] .hljs-variable,
+[data-theme="light"] .hljs-template-variable { color: #001080; }
+[data-theme="light"] .hljs-operator,
+[data-theme="light"] .hljs-punctuation       { color: #1f1f1f; }
+[data-theme="light"] .hljs-symbol,
+[data-theme="light"] .hljs-bullet            { color: #811f3f; }
+[data-theme="light"] .hljs-meta              { color: #001080; }
+[data-theme="light"] .hljs-deletion          { color: #cd3131; }
+[data-theme="light"] .hljs-addition          { color: #267f99; }
 
 /* ─── Empty state prompt chips ───────────────────────────── */
 
@@ -3145,7 +3240,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 
 @media (max-width: 760px) {
   .chat-thread {
-    padding: 22px 20px calc(124px + env(safe-area-inset-bottom, 0px));
+    padding: 22px 20px calc(152px + env(safe-area-inset-bottom, 0px));
   }
 
   .chat-composer {
@@ -4871,6 +4966,22 @@ input[type=number] { -moz-appearance: textfield; }
   line-height: 1.6;
 }
 
+.automation-prompt-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid color-mix(in srgb, var(--theme-border-subtle) 50%, transparent);
+  background: color-mix(in srgb, var(--theme-bg-elevated) 38%, transparent);
+}
+
+.automation-prompt-section .automation-prompt {
+  margin: 0;
+  color: var(--theme-text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .automation-console-card .automation-prompt,
 .workflow-console-card .automation-prompt {
   margin: 0;
@@ -4886,7 +4997,7 @@ input[type=number] { -moz-appearance: textfield; }
 
 .automation-console-grid {
   display: grid;
-  grid-template-columns: 1.2fr 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
   border-top: 1px solid color-mix(in srgb, var(--theme-border-subtle) 55%, transparent);
   background: color-mix(in srgb, var(--theme-bg-elevated) 24%, transparent);
 }
@@ -7084,7 +7195,7 @@ select.field-input {
 
   /* Chat: tighter padding */
   .chat-thread {
-    padding: 16px 14px calc(98px + env(safe-area-inset-bottom, 0px));
+    padding: 16px 14px calc(126px + env(safe-area-inset-bottom, 0px));
   }
 
   .chat-message-group.user {

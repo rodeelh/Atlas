@@ -238,10 +238,16 @@ function resolveMode(mode: ThemeMode): 'dark' | 'light' {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
+// chat-msg-gap is the *extra* gap between groups on top of the 28px padding-bottom
+// already reserved for the absolutely-positioned meta row.
+// Total space between bubbles = 28px + gap:
+//   compact → 28 + 2  = 30px
+//   comfortable → 28 + 6  = 34px
+//   spacious → 28 + 14 = 42px
 const DENSITY_TOKENS: Record<DensityMode, Record<string, string>> = {
-  compact:     { '--bubble-pad-v': '6px',  '--bubble-pad-h': '10px', '--chat-msg-gap': '8px'  },
-  comfortable: { '--bubble-pad-v': '10px', '--bubble-pad-h': '14px', '--chat-msg-gap': '14px' },
-  spacious:    { '--bubble-pad-v': '14px', '--bubble-pad-h': '18px', '--chat-msg-gap': '22px' },
+  compact:     { '--bubble-pad-v': '8px',  '--bubble-pad-h': '13px', '--chat-msg-gap': '2px'  },
+  comfortable: { '--bubble-pad-v': '12px', '--bubble-pad-h': '18px', '--chat-msg-gap': '6px'  },
+  spacious:    { '--bubble-pad-v': '16px', '--bubble-pad-h': '24px', '--chat-msg-gap': '14px' },
 }
 
 const FONT_SIZE_TOKENS: Record<ChatFontSize, Record<string, string>> = {

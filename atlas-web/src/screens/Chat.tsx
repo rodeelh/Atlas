@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'preact/hooks'
 import type { JSX } from 'preact/jsx-runtime'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import hljs from 'highlight.js/lib/common'
 import { api, MessageAttachment, LinkPreview, ConversationSummary, ConversationDetail, CloudModelHealth } from '../api/client'
 import { toast } from '../toast'
 import { PageHeader } from '../components/PageHeader'
@@ -21,9 +22,18 @@ marked.use({
       return `<a href="${safeHref}"${titleAttr} target="_blank" rel="noopener noreferrer" class="chat-link">${text}</a>`
     },
     code({ text, lang }: { text: string; lang?: string }) {
-      const label   = lang?.trim() || 'code'
-      const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      return `<div class="code-block"><div class="code-block-header"><span class="code-block-lang">${label}</span><button class="code-copy-btn" type="button">Copy</button></div><pre><code>${escaped}</code></pre></div>`
+      const rawLang   = lang?.trim() || ''
+      const label     = (rawLang || 'code').toUpperCase()
+      const copyIcon  = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"/></svg>`
+      let highlighted: string
+      try {
+        highlighted = rawLang && hljs.getLanguage(rawLang)
+          ? hljs.highlight(text, { language: rawLang }).value
+          : hljs.highlightAuto(text).value
+      } catch {
+        highlighted = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      }
+      return `<div class="code-block"><div class="code-block-header"><span class="code-block-lang">${label}</span><button class="code-copy-btn" type="button" title="Copy code" aria-label="Copy code">${copyIcon}</button></div><pre>${highlighted}</pre></div>`
     }
   }
 })
@@ -225,12 +235,16 @@ function renderMessageContent(
   const normalized = content.replace(/<br\s*\/?>/gi, '\n')
   const rawHtml = marked.parse(normalized) as string
   const safeHtml = DOMPurify.sanitize(rawHtml, {
-    ADD_ATTR: ['target', 'rel', 'class', 'type'],
+    ADD_ATTR: ['target', 'rel', 'class', 'type', 'title', 'aria-label', 'aria-hidden',
+               'width', 'height', 'viewBox', 'fill', 'stroke', 'stroke-width',
+               'stroke-linecap', 'stroke-linejoin', 'd', 'x', 'y', 'rx', 'ry'],
+    FORCE_BODY: false,
     ALLOWED_TAGS: [
       'p', 'br', 'strong', 'b', 'em', 'i', 'code', 'pre', 'a',
       'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
       'table', 'thead', 'tbody', 'tr', 'th', 'td',
-      'blockquote', 'hr', 's', 'del', 'span', 'div', 'button'
+      'blockquote', 'hr', 's', 'del', 'span', 'div', 'button',
+      'svg', 'path', 'rect', 'circle', 'line', 'polyline', 'polygon'
     ]
   })
 
@@ -453,10 +467,11 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     if (!btn) return
     e.stopPropagation()
     const code = btn.closest('.code-block')?.querySelector('code')?.textContent ?? ''
-    navigator.clipboard.writeText(code).catch(() => {})
-    const orig = btn.textContent
-    btn.textContent = 'Copied!'
-    setTimeout(() => { if (btn) btn.textContent = orig }, 2000)
+    const origHTML = btn.innerHTML
+    navigator.clipboard.writeText(code).then(() => {
+      btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8l4 4 6-7"/></svg>`
+      setTimeout(() => { if (btn) btn.innerHTML = origHTML }, 2000)
+    }).catch(() => {})
   }, [])
 
   const bottomRef      = useRef<HTMLDivElement>(null)
@@ -1152,13 +1167,23 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
 
           // ── Streaming text events ──────────────────────────────────────────────
           case 'assistant_started':
-            // A new model turn is beginning. For the resume path, create the
-            // new message bubble now; for the first turn it already exists.
+            // A new model turn is beginning. For the resume path we need a typing
+            // bubble. If the original assistantMsg is empty (tool-only pre-approval
+            // turn), reuse it — avoids a blank ghost bubble sitting above the dots.
+            // If it already has text, create a fresh bubble for the new turn.
             if (awaitingResume && !resumedMsgID) {
-              const newMsg: Message = { id: uuid(), role: 'assistant', content: '', isTyping: true }
-              resumedMsgID = newMsg.id
-              activeMsgId.current = newMsg.id   // update active bubble for presence dots
-              setMessages(prev => [...prev, newMsg])
+              if (!accumulatedContent) {
+                // Original bubble has no text — flip it back to typing and reuse it
+                resumedMsgID = assistantMsg.id
+                activeMsgId.current = assistantMsg.id
+                setMessages(prev => prev.map(m => m.id === assistantMsg.id ? { ...m, isTyping: true } : m))
+              } else {
+                // Original bubble has text — open a new bubble for the resumed turn
+                const newMsg: Message = { id: uuid(), role: 'assistant', content: '', isTyping: true }
+                resumedMsgID = newMsg.id
+                activeMsgId.current = newMsg.id
+                setMessages(prev => [...prev, newMsg])
+              }
             }
             break
 
@@ -1587,6 +1612,9 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
           )}
 
           {messages.map((msg, i) => {
+            // Skip ghost bubbles — empty assistant messages that are no longer typing.
+            // These can appear on tool-only approval turns where no text was produced.
+            if (!msg.content && !msg.isTyping && msg.id !== activeMsgId.current) return null
             const prevMsg = messages[i - 1]
             const msgDate = formatDateLabel(msg.createdAt ?? Date.now())
             const showDateSep = !prevMsg || formatDateLabel(prevMsg.createdAt ?? Date.now()) !== msgDate
@@ -1673,7 +1701,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
           {approvalBanner && (
             <div class="chat-approval-banner">
               <span class="chat-approval-text">⚠ Waiting for your approval before continuing.</span>
-              <a href="#approvals" onClick={(e) => { e.preventDefault(); window.location.hash = 'approvals' }}
+              <a href="#approvals" onClick={(e) => { e.preventDefault(); setApprovalBanner(false); window.location.hash = 'approvals' }}
                 class="btn btn-sm" style={{ color: 'var(--yellow)', borderColor: 'rgba(245,158,11,0.35)' }}>
                 Review
               </a>

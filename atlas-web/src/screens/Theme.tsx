@@ -127,15 +127,15 @@ const RADIUS_PX: Record<ChatRadius, string> = {
 }
 
 const DENSITY_GAP: Record<DensityMode, string> = {
-  compact: '8px',
-  comfortable: '13px',
-  spacious: '18px',
+  compact:     '6px',
+  comfortable: '10px',
+  spacious:    '16px',
 }
 
 const PREVIEW_BUBBLE_PADDING: Record<DensityMode, [string, string]> = {
-  compact: ['7px', '11px'],
-  comfortable: ['10px', '14px'],
-  spacious: ['13px', '18px'],
+  compact:     ['8px',  '13px'],
+  comfortable: ['12px', '18px'],
+  spacious:    ['16px', '24px'],
 }
 
 const DENSITY_LINE_SCALE: Record<DensityMode, number[]> = {
