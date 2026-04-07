@@ -159,6 +159,7 @@ func (b *Bridge) run() {
 
 	backoff := 2 * time.Second
 	maxBackoff := 60 * time.Second
+	retryCount := 0
 
 	for {
 		select {
@@ -173,11 +174,21 @@ func (b *Bridge) run() {
 
 		err := b.connect()
 		if err != nil {
+			retryCount++
 			b.mu.Lock()
 			b.lastErr = err.Error()
 			b.connected = false
 			b.mu.Unlock()
-			logstore.Write("error", "Discord bridge error: "+err.Error(), map[string]string{"platform": "discord"})
+			nextDelay := backoff
+			logstore.Write(
+				"error",
+				fmt.Sprintf("Discord bridge error (attempt %d): %s", retryCount, err.Error()),
+				map[string]string{
+					"platform":      "discord",
+					"retryAttempt":  fmt.Sprintf("%d", retryCount),
+					"retryDelaySec": fmt.Sprintf("%.0f", nextDelay.Seconds()),
+				},
+			)
 			select {
 			case <-b.stopCh:
 				return
@@ -186,6 +197,7 @@ func (b *Bridge) run() {
 			}
 			continue
 		}
+		retryCount = 0
 		backoff = 2 * time.Second
 	}
 }
@@ -504,6 +516,26 @@ func (b *Bridge) sendMessage(channelID, refMsgID, text string) {
 		return
 	}
 	resp.Body.Close()
+}
+
+// SendAutomationMessage sends automation output to a Discord channel/thread.
+func (b *Bridge) SendAutomationMessage(channelID, threadID, text string) error {
+	if !b.Connected() {
+		return fmt.Errorf("discord bridge is not connected")
+	}
+	content := strings.TrimSpace(text)
+	if content == "" {
+		return nil
+	}
+	// For thread delivery use the thread ID as target channel if provided.
+	targetChannel := channelID
+	if strings.TrimSpace(threadID) != "" {
+		targetChannel = threadID
+	}
+	for _, chunk := range chunkText(content, 1900) {
+		b.sendMessage(targetChannel, "", chunk)
+	}
+	return nil
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

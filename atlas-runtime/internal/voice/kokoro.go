@@ -31,8 +31,9 @@ const KokoroVoiceDefault = "am_onyx"
 
 // pcmStreamChunkBytes is the target size in bytes for each streamed PCM chunk
 // read from the Kokoro subprocess stdout. Each chunk is emitted as a single
-// SSE voice_audio event to the browser. 4 KB at 24 kHz 16-bit mono ≈ 85 ms.
-const pcmStreamChunkBytes = 4096
+// SSE voice_audio event to the browser. 2 KB at 24 kHz 16-bit mono ≈ 43 ms,
+// which improves first-audio responsiveness and perceived snappiness.
+const pcmStreamChunkBytes = 2048
 
 // KokoroBinaryPath returns the bundled Python wrapper script path. The script
 // is extracted on first use from the embedded copy.

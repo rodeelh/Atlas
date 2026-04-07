@@ -121,6 +121,8 @@
       "routes": [
         { "method": "GET", "path": "/automations" },
         { "method": "POST", "path": "/automations" },
+        { "method": "GET", "path": "/automations/advanced/file" },
+        { "method": "PUT", "path": "/automations/advanced/import" },
         { "method": "GET", "path": "/automations/file" },
         { "method": "PUT", "path": "/automations/file" },
         { "method": "GET", "path": "/automations/{id}" },

@@ -2,9 +2,13 @@ package features
 
 import (
 	"bufio"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"atlas-runtime-go/internal/storage"
@@ -12,36 +16,59 @@ import (
 
 const gremlinsFile = "GREMLINS.md"
 
+var gremlinsMu sync.Mutex
+
 // GremlinItem mirrors Swift GremlinItem (camelCase JSON tags).
 type GremlinItem struct {
-	ID                  string            `json:"id"`
-	Name                string            `json:"name"`
-	Emoji               string            `json:"emoji"`
-	Prompt              string            `json:"prompt"`
-	ScheduleRaw         string            `json:"scheduleRaw"`
-	IsEnabled           bool              `json:"isEnabled"`
-	SourceType          string            `json:"sourceType"`
-	CreatedAt           string            `json:"createdAt"`
-	WorkflowID          *string           `json:"workflowID,omitempty"`
-	WorkflowInputValues map[string]string `json:"workflowInputValues,omitempty"`
-	GremlinDescription  *string           `json:"gremlinDescription,omitempty"`
-	Tags                []string          `json:"tags"`
-	MaxRetries          int               `json:"maxRetries"`
-	TimeoutSeconds      *int              `json:"timeoutSeconds,omitempty"`
-	LastModifiedAt      *string           `json:"lastModifiedAt,omitempty"`
+	ID                       string                    `json:"id"`
+	Name                     string                    `json:"name"`
+	Emoji                    string                    `json:"emoji"`
+	Prompt                   string                    `json:"prompt"`
+	ScheduleRaw              string                    `json:"scheduleRaw"`
+	ScheduleJSON             *string                   `json:"scheduleJSON,omitempty"`
+	IsEnabled                bool                      `json:"isEnabled"`
+	SourceType               string                    `json:"sourceType"`
+	CreatedAt                string                    `json:"createdAt"`
+	WorkflowID               *string                   `json:"workflowID,omitempty"`
+	WorkflowInputValues      map[string]string         `json:"workflowInputValues,omitempty"`
+	TelegramChatID           *int64                    `json:"telegramChatID,omitempty"`
+	CommunicationDestination *CommunicationDestination `json:"communicationDestination,omitempty"`
+	GremlinDescription       *string                   `json:"gremlinDescription,omitempty"`
+	Tags                     []string                  `json:"tags"`
+	MaxRetries               int                       `json:"maxRetries"`
+	TimeoutSeconds           *int                      `json:"timeoutSeconds,omitempty"`
+	NextRunAt                *string                   `json:"nextRunAt,omitempty"`
+	LastModifiedAt           *string                   `json:"lastModifiedAt,omitempty"`
+}
+
+type CommunicationDestination struct {
+	ID          string  `json:"id"`
+	Platform    string  `json:"platform"`
+	ChannelID   string  `json:"channelID"`
+	ChannelName *string `json:"channelName,omitempty"`
+	UserID      *string `json:"userID,omitempty"`
+	ThreadID    *string `json:"threadID,omitempty"`
 }
 
 // GremlinRunRecord mirrors the gremlin_runs SQLite schema for JSON output.
 type GremlinRunRecord struct {
-	RunID          string  `json:"id"`
-	GremlinID      string  `json:"gremlinID"`
-	StartedAt      string  `json:"startedAt"`
-	FinishedAt     *string `json:"finishedAt,omitempty"`
-	Status         string  `json:"status"`
-	Output         *string `json:"output,omitempty"`
-	ErrorMessage   *string `json:"errorMessage,omitempty"`
-	ConversationID *string `json:"conversationID,omitempty"`
-	WorkflowRunID  *string `json:"workflowRunID,omitempty"`
+	RunID           string  `json:"id"`
+	GremlinID       string  `json:"gremlinID"`
+	StartedAt       string  `json:"startedAt"`
+	FinishedAt      *string `json:"finishedAt,omitempty"`
+	Status          string  `json:"status"`
+	Output          *string `json:"output,omitempty"`
+	ErrorMessage    *string `json:"errorMessage,omitempty"`
+	ConversationID  *string `json:"conversationID,omitempty"`
+	WorkflowRunID   *string `json:"workflowRunID,omitempty"`
+	TriggerSource   string  `json:"triggerSource,omitempty"`
+	ExecutionStatus string  `json:"executionStatus,omitempty"`
+	DeliveryStatus  string  `json:"deliveryStatus,omitempty"`
+	DeliveryError   *string `json:"deliveryError,omitempty"`
+	DestinationJSON *string `json:"destinationJSON,omitempty"`
+	DurationMs      int64   `json:"durationMs,omitempty"`
+	RetryCount      int     `json:"retryCount,omitempty"`
+	ArtifactsJSON   *string `json:"artifactsJSON,omitempty"`
 }
 
 // ReadGremlinsRaw returns the raw content of GREMLINS.md, or "" if not found.
@@ -55,6 +82,15 @@ func ReadGremlinsRaw(supportDir string) string {
 
 // WriteGremlinsRaw atomically overwrites GREMLINS.md.
 func WriteGremlinsRaw(supportDir, content string) error {
+	gremlinsMu.Lock()
+	defer gremlinsMu.Unlock()
+	if err := validateGremlinContent(content); err != nil {
+		return err
+	}
+	return writeGremlinsRawLocked(supportDir, content)
+}
+
+func writeGremlinsRawLocked(supportDir, content string) error {
 	path := filepath.Join(supportDir, gremlinsFile)
 	tmp, err := os.CreateTemp(filepath.Dir(path), "GREMLINS-*.md")
 	if err != nil {
@@ -73,6 +109,21 @@ func WriteGremlinsRaw(supportDir, content string) error {
 	return os.Rename(tmpPath, path)
 }
 
+func validateGremlinContent(content string) error {
+	items := parseGremlinMarkdown(content)
+	seen := map[string]bool{}
+	for _, item := range items {
+		if strings.TrimSpace(item.ID) == "" {
+			continue
+		}
+		if seen[item.ID] {
+			return fmt.Errorf("duplicate automation id %q", item.ID)
+		}
+		seen[item.ID] = true
+	}
+	return nil
+}
+
 // ParseGremlins parses GREMLINS.md and returns the list of GremlinItems.
 func ParseGremlins(supportDir string) []GremlinItem {
 	raw := ReadGremlinsRaw(supportDir)
@@ -84,18 +135,22 @@ func ParseGremlins(supportDir string) []GremlinItem {
 
 // gremlinBlock accumulates fields for one gremlin while scanning the file.
 type gremlinBlock struct {
-	name        string
-	emoji       string
-	schedule    string
-	isEnabled   bool
-	sourceType  string
-	createdAt   string
-	id          string
-	desc        *string
-	tags        []string
-	promptLines []string
-	inMetadata  bool
-	active      bool
+	name           string
+	emoji          string
+	schedule       string
+	isEnabled      bool
+	sourceType     string
+	createdAt      string
+	workflowID     *string
+	workflowInputs map[string]string
+	telegramChatID *int64
+	destination    *CommunicationDestination
+	id             string
+	desc           *string
+	tags           []string
+	promptLines    []string
+	inMetadata     bool
+	active         bool
 }
 
 func newGremlinBlock() gremlinBlock {
@@ -118,17 +173,21 @@ func (b *gremlinBlock) toItem() (GremlinItem, bool) {
 		tags = []string{}
 	}
 	return GremlinItem{
-		ID:                 b.id,
-		Name:               b.name,
-		Emoji:              b.emoji,
-		Prompt:             prompt,
-		ScheduleRaw:        b.schedule,
-		IsEnabled:          b.isEnabled,
-		SourceType:         b.sourceType,
-		CreatedAt:          b.createdAt,
-		GremlinDescription: b.desc,
-		Tags:               tags,
-		MaxRetries:         0,
+		ID:                       b.id,
+		Name:                     b.name,
+		Emoji:                    b.emoji,
+		Prompt:                   prompt,
+		ScheduleRaw:              b.schedule,
+		IsEnabled:                b.isEnabled,
+		SourceType:               b.sourceType,
+		CreatedAt:                b.createdAt,
+		WorkflowID:               b.workflowID,
+		WorkflowInputValues:      b.workflowInputs,
+		TelegramChatID:           b.telegramChatID,
+		CommunicationDestination: b.destination,
+		GremlinDescription:       b.desc,
+		Tags:                     tags,
+		MaxRetries:               0,
 	}, true
 }
 
@@ -206,6 +265,56 @@ func parseGremlinMarkdown(content string) []GremlinItem {
 					d := val
 					cur.desc = &d
 					continue
+				case "workflow_id":
+					if strings.TrimSpace(val) == "" {
+						cur.workflowID = nil
+					} else {
+						v := strings.TrimSpace(val)
+						cur.workflowID = &v
+					}
+					continue
+				case "workflow_inputs":
+					if strings.TrimSpace(val) == "" {
+						cur.workflowInputs = nil
+						continue
+					}
+					var parsed map[string]string
+					if err := json.Unmarshal([]byte(val), &parsed); err == nil {
+						cur.workflowInputs = parsed
+					}
+					continue
+				case "notify_telegram":
+					if strings.TrimSpace(val) == "" {
+						cur.telegramChatID = nil
+						continue
+					}
+					if id, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64); err == nil {
+						cur.telegramChatID = &id
+						channelID := strconv.FormatInt(id, 10)
+						cur.destination = &CommunicationDestination{
+							ID:        "telegram:" + channelID,
+							Platform:  "telegram",
+							ChannelID: channelID,
+						}
+					}
+					continue
+				case "notify_destination":
+					if strings.TrimSpace(val) == "" {
+						cur.destination = nil
+						continue
+					}
+					var dest CommunicationDestination
+					if err := json.Unmarshal([]byte(val), &dest); err == nil && strings.TrimSpace(dest.Platform) != "" && strings.TrimSpace(dest.ChannelID) != "" {
+						if strings.TrimSpace(dest.ID) == "" {
+							if dest.ThreadID != nil && strings.TrimSpace(*dest.ThreadID) != "" {
+								dest.ID = dest.Platform + ":" + dest.ChannelID + ":" + *dest.ThreadID
+							} else {
+								dest.ID = dest.Platform + ":" + dest.ChannelID
+							}
+						}
+						cur.destination = &dest
+					}
+					continue
 				case "tags":
 					for _, t := range strings.Split(val, ",") {
 						if trimmed := strings.TrimSpace(t); trimmed != "" {
@@ -213,9 +322,7 @@ func parseGremlinMarkdown(content string) []GremlinItem {
 						}
 					}
 					continue
-				case "modified", "max_retries", "timeout_seconds",
-					"notify_telegram", "notify_destination",
-					"workflow_id", "workflow_inputs":
+				case "modified", "max_retries", "timeout_seconds":
 					continue // parse but ignore optional fields we don't need
 				}
 			}
@@ -263,14 +370,22 @@ func ListGremlinRuns(db *storage.DB, gremlinID string, limit int) []GremlinRunRe
 	out := make([]GremlinRunRecord, 0, len(rows))
 	for _, r := range rows {
 		rec := GremlinRunRecord{
-			RunID:          r.RunID,
-			GremlinID:      r.GremlinID,
-			StartedAt:      unixToISO(r.StartedAt),
-			Status:         r.Status,
-			Output:         r.Output,
-			ErrorMessage:   r.ErrorMessage,
-			ConversationID: r.ConversationID,
-			WorkflowRunID:  r.WorkflowRunID,
+			RunID:           r.RunID,
+			GremlinID:       r.GremlinID,
+			StartedAt:       unixToISO(r.StartedAt),
+			Status:          r.Status,
+			Output:          r.Output,
+			ErrorMessage:    r.ErrorMessage,
+			ConversationID:  r.ConversationID,
+			WorkflowRunID:   r.WorkflowRunID,
+			TriggerSource:   r.TriggerSource,
+			ExecutionStatus: r.ExecutionStatus,
+			DeliveryStatus:  r.DeliveryStatus,
+			DeliveryError:   r.DeliveryError,
+			DestinationJSON: r.DestinationJSON,
+			DurationMs:      r.DurationMs,
+			RetryCount:      r.RetryCount,
+			ArtifactsJSON:   r.ArtifactsJSON,
 		}
 		if r.FinishedAt != nil {
 			s := unixToISO(*r.FinishedAt)
@@ -283,8 +398,15 @@ func ListGremlinRuns(db *storage.DB, gremlinID string, limit int) []GremlinRunRe
 
 // AppendGremlin adds a new GremlinItem block to GREMLINS.md.
 func AppendGremlin(supportDir string, item GremlinItem) error {
+	gremlinsMu.Lock()
+	defer gremlinsMu.Unlock()
 	if item.ID == "" {
 		item.ID = slugify(item.Name)
+	}
+	for _, existing := range parseGremlinMarkdown(ReadGremlinsRaw(supportDir)) {
+		if existing.ID == item.ID {
+			return fmt.Errorf("automation id already exists: %s", item.ID)
+		}
 	}
 	if item.CreatedAt == "" {
 		item.CreatedAt = time.Now().Format("2006-01-02")
@@ -303,12 +425,14 @@ func AppendGremlin(supportDir string, item GremlinItem) error {
 	} else {
 		updated = strings.TrimRight(raw, "\n") + "\n\n" + block
 	}
-	return WriteGremlinsRaw(supportDir, updated)
+	return writeGremlinsRawLocked(supportDir, updated)
 }
 
 // UpdateGremlin rewrites the block for the given gremlinID in GREMLINS.md.
 // Returns the updated item, or nil if not found.
 func UpdateGremlin(supportDir, gremlinID string, updates GremlinItem) (*GremlinItem, error) {
+	gremlinsMu.Lock()
+	defer gremlinsMu.Unlock()
 	items := ParseGremlins(supportDir)
 	var found *GremlinItem
 	for i := range items {
@@ -328,13 +452,15 @@ func UpdateGremlin(supportDir, gremlinID string, updates GremlinItem) (*GremlinI
 	if updates.Emoji != "" {
 		found.Emoji = updates.Emoji
 	}
-	if updates.Prompt != "" {
-		found.Prompt = updates.Prompt
-	}
+	found.Prompt = updates.Prompt
 	if updates.ScheduleRaw != "" {
 		found.ScheduleRaw = updates.ScheduleRaw
 	}
 	found.IsEnabled = updates.IsEnabled
+	found.WorkflowID = updates.WorkflowID
+	found.WorkflowInputValues = updates.WorkflowInputValues
+	found.TelegramChatID = updates.TelegramChatID
+	found.CommunicationDestination = updates.CommunicationDestination
 	if updates.GremlinDescription != nil {
 		found.GremlinDescription = updates.GremlinDescription
 	}
@@ -351,7 +477,7 @@ func UpdateGremlin(supportDir, gremlinID string, updates GremlinItem) (*GremlinI
 			blocks = append(blocks, formatGremlinBlock(items[i]))
 		}
 	}
-	if err := WriteGremlinsRaw(supportDir, strings.Join(blocks, "\n\n")); err != nil {
+	if err := writeGremlinsRawLocked(supportDir, strings.Join(blocks, "\n\n")); err != nil {
 		return nil, err
 	}
 	return found, nil
@@ -359,6 +485,8 @@ func UpdateGremlin(supportDir, gremlinID string, updates GremlinItem) (*GremlinI
 
 // DeleteGremlin removes the block for the given gremlinID from GREMLINS.md.
 func DeleteGremlin(supportDir, gremlinID string) (bool, error) {
+	gremlinsMu.Lock()
+	defer gremlinsMu.Unlock()
 	items := ParseGremlins(supportDir)
 	var remaining []GremlinItem
 	found := false
@@ -376,7 +504,29 @@ func DeleteGremlin(supportDir, gremlinID string) (bool, error) {
 	for _, item := range remaining {
 		blocks = append(blocks, formatGremlinBlock(item))
 	}
-	return true, WriteGremlinsRaw(supportDir, strings.Join(blocks, "\n\n"))
+	return true, writeGremlinsRawLocked(supportDir, strings.Join(blocks, "\n\n"))
+}
+
+// WriteGremlinItems rewrites GREMLINS.md from typed automation definitions.
+// This keeps the legacy markdown file usable as import/export compatibility
+// while SQLite-backed modules own canonical state.
+func WriteGremlinItems(supportDir string, items []GremlinItem) error {
+	gremlinsMu.Lock()
+	defer gremlinsMu.Unlock()
+	seen := map[string]bool{}
+	blocks := make([]string, 0, len(items))
+	for _, item := range items {
+		id := item.ID
+		if strings.TrimSpace(id) == "" {
+			id = slugify(item.Name)
+		}
+		if seen[id] {
+			return fmt.Errorf("duplicate automation id %q", id)
+		}
+		seen[id] = true
+		blocks = append(blocks, formatGremlinBlock(item))
+	}
+	return writeGremlinsRawLocked(supportDir, strings.Join(blocks, "\n\n"))
 }
 
 // formatGremlinBlock serialises a GremlinItem as a GREMLINS.md section.
@@ -400,6 +550,21 @@ func formatGremlinBlock(item GremlinItem) string {
 	if len(item.Tags) > 0 {
 		sb.WriteString("tags: " + strings.Join(item.Tags, ", ") + "\n")
 	}
+	if item.WorkflowID != nil && strings.TrimSpace(*item.WorkflowID) != "" {
+		sb.WriteString("workflow_id: " + strings.TrimSpace(*item.WorkflowID) + "\n")
+	}
+	if len(item.WorkflowInputValues) > 0 {
+		if data, err := json.Marshal(item.WorkflowInputValues); err == nil {
+			sb.WriteString("workflow_inputs: " + string(data) + "\n")
+		}
+	}
+	if item.CommunicationDestination != nil && strings.TrimSpace(item.CommunicationDestination.Platform) != "" && strings.TrimSpace(item.CommunicationDestination.ChannelID) != "" {
+		if data, err := json.Marshal(item.CommunicationDestination); err == nil {
+			sb.WriteString("notify_destination: " + string(data) + "\n")
+		}
+	} else if item.TelegramChatID != nil {
+		sb.WriteString("notify_telegram: " + strconv.FormatInt(*item.TelegramChatID, 10) + "\n")
+	}
 	sb.WriteString("\n")
 	sb.WriteString(item.Prompt)
 	sb.WriteString("\n---")
@@ -414,6 +579,8 @@ func unixToISO(ts float64) string {
 
 // SetAutomationEnabled toggles the status: field for the given automation in GREMLINS.md.
 func SetAutomationEnabled(supportDir, gremlinID string, enabled bool) error {
+	gremlinsMu.Lock()
+	defer gremlinsMu.Unlock()
 	raw := ReadGremlinsRaw(supportDir)
 	if raw == "" {
 		return nil
@@ -442,5 +609,5 @@ func SetAutomationEnabled(supportDir, gremlinID string, enabled bool) error {
 			lines[i] = "status: " + newStatus
 		}
 	}
-	return WriteGremlinsRaw(supportDir, strings.Join(lines, "\n"))
+	return writeGremlinsRawLocked(supportDir, strings.Join(lines, "\n"))
 }

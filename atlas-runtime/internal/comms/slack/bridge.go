@@ -122,6 +122,7 @@ func (b *Bridge) run() {
 
 	backoff := 2 * time.Second
 	maxBackoff := 60 * time.Second
+	retryCount := 0
 
 	for {
 		select {
@@ -136,11 +137,21 @@ func (b *Bridge) run() {
 
 		err := b.connect()
 		if err != nil {
+			retryCount++
 			b.mu.Lock()
 			b.lastErr = err.Error()
 			b.connected = false
 			b.mu.Unlock()
-			logstore.Write("error", "Slack bridge error: "+err.Error(), map[string]string{"platform": "slack"})
+			nextDelay := backoff
+			logstore.Write(
+				"error",
+				fmt.Sprintf("Slack bridge error (attempt %d): %s", retryCount, err.Error()),
+				map[string]string{
+					"platform":      "slack",
+					"retryAttempt":  fmt.Sprintf("%d", retryCount),
+					"retryDelaySec": fmt.Sprintf("%.0f", nextDelay.Seconds()),
+				},
+			)
 			select {
 			case <-b.stopCh:
 				return
@@ -149,6 +160,7 @@ func (b *Bridge) run() {
 			}
 			continue
 		}
+		retryCount = 0
 		backoff = 2 * time.Second
 	}
 }
@@ -446,6 +458,21 @@ func (b *Bridge) postMessage(channelID, threadTS, text string) {
 		return
 	}
 	resp.Body.Close()
+}
+
+// SendAutomationMessage sends automation output to a Slack channel/thread.
+func (b *Bridge) SendAutomationMessage(channelID, threadTS, text string) error {
+	if !b.Connected() {
+		return fmt.Errorf("slack bridge is not connected")
+	}
+	content := strings.TrimSpace(text)
+	if content == "" {
+		return nil
+	}
+	for _, chunk := range chunkText(content, 3000) {
+		b.postMessage(channelID, threadTS, chunk)
+	}
+	return nil
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

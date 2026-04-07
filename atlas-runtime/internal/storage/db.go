@@ -184,6 +184,31 @@ func (db *DB) migrate() error {
 			DELETE FROM memories_fts WHERE memory_id = old.memory_id;
 		END`,
 
+		// automations — canonical automation definitions.
+		// GREMLINS.md remains an import/export compatibility surface.
+		`CREATE TABLE IF NOT EXISTS automations (
+			id                              TEXT PRIMARY KEY,
+			name                            TEXT NOT NULL,
+			emoji                           TEXT NOT NULL DEFAULT '⚡',
+			prompt                          TEXT NOT NULL,
+			schedule_raw                    TEXT NOT NULL,
+			schedule_json                   TEXT,
+			is_enabled                      INTEGER NOT NULL DEFAULT 1,
+			source_type                     TEXT NOT NULL DEFAULT 'manual',
+			created_at                      TEXT NOT NULL,
+			updated_at                      TEXT NOT NULL,
+			next_run_at                     TEXT,
+			workflow_id                     TEXT,
+			workflow_inputs_json            TEXT,
+			communication_destination_json  TEXT,
+			gremlin_description             TEXT,
+			tags_json                       TEXT NOT NULL DEFAULT '[]'
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_automations_enabled
+			ON automations(is_enabled)`,
+		`CREATE INDEX IF NOT EXISTS idx_automations_updated_at
+			ON automations(updated_at DESC)`,
+
 		// gremlin_runs — stores automation run history.
 		// started_at / finished_at stored as Unix timestamp doubles (REAL).
 		`CREATE TABLE IF NOT EXISTS gremlin_runs (
@@ -195,7 +220,15 @@ func (db *DB) migrate() error {
 			output          TEXT,
 			error_message   TEXT,
 			conversation_id TEXT,
-			workflow_run_id TEXT
+			workflow_run_id TEXT,
+			trigger_source  TEXT NOT NULL DEFAULT '',
+			execution_status TEXT NOT NULL DEFAULT '',
+			delivery_status TEXT NOT NULL DEFAULT '',
+			delivery_error TEXT,
+			destination_json TEXT,
+			duration_ms INTEGER NOT NULL DEFAULT 0,
+			retry_count INTEGER NOT NULL DEFAULT 0,
+			artifacts_json TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_gremlin_runs_gremlin_id
 			ON gremlin_runs(gremlin_id)`,
@@ -268,6 +301,25 @@ func (db *DB) migrate() error {
 	alterBrowserSessions := []string{
 		`ALTER TABLE browser_sessions ADD COLUMN session_name TEXT NOT NULL DEFAULT ''`,
 	}
+	alterGremlinRuns := []string{
+		`ALTER TABLE gremlin_runs ADD COLUMN trigger_source TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE gremlin_runs ADD COLUMN execution_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE gremlin_runs ADD COLUMN delivery_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE gremlin_runs ADD COLUMN delivery_error TEXT`,
+		`ALTER TABLE gremlin_runs ADD COLUMN destination_json TEXT`,
+		`ALTER TABLE gremlin_runs ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE gremlin_runs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE gremlin_runs ADD COLUMN artifacts_json TEXT`,
+	}
+	alterAutomations := []string{
+		`ALTER TABLE automations ADD COLUMN schedule_json TEXT`,
+		`ALTER TABLE automations ADD COLUMN next_run_at TEXT`,
+		`ALTER TABLE automations ADD COLUMN workflow_id TEXT`,
+		`ALTER TABLE automations ADD COLUMN workflow_inputs_json TEXT`,
+		`ALTER TABLE automations ADD COLUMN communication_destination_json TEXT`,
+		`ALTER TABLE automations ADD COLUMN gremlin_description TEXT`,
+		`ALTER TABLE automations ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'`,
+	}
 
 	for _, stmt := range stmts {
 		if _, err := db.conn.Exec(stmt); err != nil {
@@ -285,6 +337,12 @@ func (db *DB) migrate() error {
 		db.conn.Exec(stmt) //nolint:errcheck
 	}
 	for _, stmt := range alterBrowserSessions {
+		db.conn.Exec(stmt) //nolint:errcheck
+	}
+	for _, stmt := range alterGremlinRuns {
+		db.conn.Exec(stmt) //nolint:errcheck
+	}
+	for _, stmt := range alterAutomations {
 		db.conn.Exec(stmt) //nolint:errcheck
 	}
 	return nil
@@ -865,19 +923,145 @@ func (db *DB) ListCommunicationChannels(platform string) ([]CommSessionRow, erro
 	return out, rows.Err()
 }
 
+// ── Automation definitions ───────────────────────────────────────────────────
+
+// AutomationRow is a canonical automation definition row.
+type AutomationRow struct {
+	ID                           string
+	Name                         string
+	Emoji                        string
+	Prompt                       string
+	ScheduleRaw                  string
+	ScheduleJSON                 *string
+	IsEnabled                    bool
+	SourceType                   string
+	CreatedAt                    string
+	UpdatedAt                    string
+	NextRunAt                    *string
+	WorkflowID                   *string
+	WorkflowInputsJSON           *string
+	CommunicationDestinationJSON *string
+	GremlinDescription           *string
+	TagsJSON                     string
+}
+
+// ListAutomations returns canonical automation definitions ordered by name.
+func (db *DB) ListAutomations() ([]AutomationRow, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, name, emoji, prompt, schedule_raw, schedule_json, is_enabled, source_type,
+		        created_at, updated_at, next_run_at, workflow_id, workflow_inputs_json, communication_destination_json,
+		        gremlin_description, tags_json
+		 FROM automations ORDER BY lower(name), id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []AutomationRow
+	for rows.Next() {
+		row, err := scanAutomationRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// GetAutomation returns one canonical automation definition by ID.
+func (db *DB) GetAutomation(id string) (*AutomationRow, error) {
+	row := db.conn.QueryRow(
+		`SELECT id, name, emoji, prompt, schedule_raw, schedule_json, is_enabled, source_type,
+		        created_at, updated_at, next_run_at, workflow_id, workflow_inputs_json, communication_destination_json,
+		        gremlin_description, tags_json
+		 FROM automations WHERE id = ?`, id)
+	out, err := scanAutomationRow(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SaveAutomation upserts one canonical automation definition.
+func (db *DB) SaveAutomation(row AutomationRow) error {
+	enabled := 0
+	if row.IsEnabled {
+		enabled = 1
+	}
+	_, err := db.conn.Exec(
+		`INSERT INTO automations
+		 (id, name, emoji, prompt, schedule_raw, schedule_json, is_enabled, source_type,
+		  created_at, updated_at, next_run_at, workflow_id, workflow_inputs_json, communication_destination_json, gremlin_description, tags_json)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(id) DO UPDATE SET
+		  name=excluded.name,
+		  emoji=excluded.emoji,
+		  prompt=excluded.prompt,
+		  schedule_raw=excluded.schedule_raw,
+		  schedule_json=excluded.schedule_json,
+		  is_enabled=excluded.is_enabled,
+		  source_type=excluded.source_type,
+		  updated_at=excluded.updated_at,
+		  next_run_at=excluded.next_run_at,
+		  workflow_id=excluded.workflow_id,
+		  workflow_inputs_json=excluded.workflow_inputs_json,
+		  communication_destination_json=excluded.communication_destination_json,
+		  gremlin_description=excluded.gremlin_description,
+		  tags_json=excluded.tags_json`,
+		row.ID, row.Name, row.Emoji, row.Prompt, row.ScheduleRaw, row.ScheduleJSON,
+		enabled, row.SourceType, row.CreatedAt, row.UpdatedAt, row.NextRunAt, row.WorkflowID,
+		row.WorkflowInputsJSON, row.CommunicationDestinationJSON, row.GremlinDescription, row.TagsJSON,
+	)
+	return err
+}
+
+// DeleteAutomation deletes one canonical automation definition.
+func (db *DB) DeleteAutomation(id string) (bool, error) {
+	res, err := db.conn.Exec(`DELETE FROM automations WHERE id = ?`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func scanAutomationRow(row interface{ Scan(...any) error }) (AutomationRow, error) {
+	var out AutomationRow
+	var enabled int
+	err := row.Scan(&out.ID, &out.Name, &out.Emoji, &out.Prompt, &out.ScheduleRaw, &out.ScheduleJSON,
+		&enabled, &out.SourceType, &out.CreatedAt, &out.UpdatedAt, &out.NextRunAt, &out.WorkflowID,
+		&out.WorkflowInputsJSON, &out.CommunicationDestinationJSON, &out.GremlinDescription, &out.TagsJSON)
+	out.IsEnabled = enabled != 0
+	return out, err
+}
+
 // ── Gremlin runs ──────────────────────────────────────────────────────────────
 
 // GremlinRunRow is a raw gremlin_runs row.
 type GremlinRunRow struct {
-	RunID          string
-	GremlinID      string
-	StartedAt      float64
-	FinishedAt     *float64
-	Status         string
-	Output         *string
-	ErrorMessage   *string
-	ConversationID *string
-	WorkflowRunID  *string
+	RunID           string
+	GremlinID       string
+	StartedAt       float64
+	FinishedAt      *float64
+	Status          string
+	Output          *string
+	ErrorMessage    *string
+	ConversationID  *string
+	WorkflowRunID   *string
+	TriggerSource   string
+	ExecutionStatus string
+	DeliveryStatus  string
+	DeliveryError   *string
+	DestinationJSON *string
+	DurationMs      int64
+	RetryCount      int
+	ArtifactsJSON   *string
 }
 
 // ListGremlinRuns returns runs for a gremlin (or all runs when gremlinID is empty),
@@ -892,11 +1076,13 @@ func (db *DB) ListGremlinRuns(gremlinID string, limit int) ([]GremlinRunRow, err
 	)
 	if gremlinID != "" {
 		rows, err = db.conn.Query(
-			`SELECT run_id, gremlin_id, started_at, finished_at, status, output, error_message, conversation_id, workflow_run_id
+			`SELECT run_id, gremlin_id, started_at, finished_at, status, output, error_message, conversation_id, workflow_run_id,
+			        trigger_source, execution_status, delivery_status, delivery_error, destination_json, duration_ms, retry_count, artifacts_json
 			 FROM gremlin_runs WHERE gremlin_id = ? ORDER BY started_at DESC LIMIT ?`, gremlinID, limit)
 	} else {
 		rows, err = db.conn.Query(
-			`SELECT run_id, gremlin_id, started_at, finished_at, status, output, error_message, conversation_id, workflow_run_id
+			`SELECT run_id, gremlin_id, started_at, finished_at, status, output, error_message, conversation_id, workflow_run_id,
+			        trigger_source, execution_status, delivery_status, delivery_error, destination_json, duration_ms, retry_count, artifacts_json
 			 FROM gremlin_runs ORDER BY started_at DESC LIMIT ?`, limit)
 	}
 	if err != nil {
@@ -908,7 +1094,9 @@ func (db *DB) ListGremlinRuns(gremlinID string, limit int) ([]GremlinRunRow, err
 	for rows.Next() {
 		var r GremlinRunRow
 		if err := rows.Scan(&r.RunID, &r.GremlinID, &r.StartedAt, &r.FinishedAt,
-			&r.Status, &r.Output, &r.ErrorMessage, &r.ConversationID, &r.WorkflowRunID); err != nil {
+			&r.Status, &r.Output, &r.ErrorMessage, &r.ConversationID, &r.WorkflowRunID,
+			&r.TriggerSource, &r.ExecutionStatus, &r.DeliveryStatus, &r.DeliveryError,
+			&r.DestinationJSON, &r.DurationMs, &r.RetryCount, &r.ArtifactsJSON); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -920,19 +1108,39 @@ func (db *DB) ListGremlinRuns(gremlinID string, limit int) ([]GremlinRunRow, err
 func (db *DB) SaveGremlinRun(r GremlinRunRow) error {
 	_, err := db.conn.Exec(
 		`INSERT INTO gremlin_runs
-		 (run_id, gremlin_id, started_at, finished_at, status, output, error_message, conversation_id, workflow_run_id)
-		 VALUES (?,?,?,?,?,?,?,?,?)`,
+		 (run_id, gremlin_id, started_at, finished_at, status, output, error_message, conversation_id, workflow_run_id,
+		  trigger_source, execution_status, delivery_status, delivery_error, destination_json, duration_ms, retry_count, artifacts_json)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.RunID, r.GremlinID, r.StartedAt, r.FinishedAt, r.Status,
 		r.Output, r.ErrorMessage, r.ConversationID, r.WorkflowRunID,
+		r.TriggerSource, r.ExecutionStatus, r.DeliveryStatus, r.DeliveryError,
+		r.DestinationJSON, r.DurationMs, r.RetryCount, r.ArtifactsJSON,
 	)
 	return err
 }
 
 // UpdateGremlinRun sets finished_at, status, and output on an existing run.
 func (db *DB) UpdateGremlinRun(runID, status string, output *string, finishedAt float64) error {
+	return db.CompleteGremlinRun(runID, status, output, nil, finishedAt, "", nil, 0, nil)
+}
+
+// CompleteGremlinRun stores structured run completion state.
+func (db *DB) CompleteGremlinRun(runID, status string, output, errorMessage *string, finishedAt float64, deliveryStatus string, deliveryError *string, durationMs int64, artifactsJSON *string) error {
 	_, err := db.conn.Exec(
-		`UPDATE gremlin_runs SET finished_at=?, status=?, output=? WHERE run_id=?`,
-		finishedAt, status, output, runID,
+		`UPDATE gremlin_runs
+		 SET finished_at=?, status=?, output=?, error_message=?,
+		     execution_status=?, delivery_status=?, delivery_error=?, duration_ms=?, artifacts_json=?
+		 WHERE run_id=?`,
+		finishedAt, status, output, errorMessage, status, deliveryStatus, deliveryError, durationMs, artifactsJSON, runID,
+	)
+	return err
+}
+
+// UpdateGremlinRunWorkflowRunID links an automation run to a workflow run.
+func (db *DB) UpdateGremlinRunWorkflowRunID(runID, workflowRunID string) error {
+	_, err := db.conn.Exec(
+		`UPDATE gremlin_runs SET workflow_run_id=? WHERE run_id=?`,
+		workflowRunID, runID,
 	)
 	return err
 }

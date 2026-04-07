@@ -24,6 +24,12 @@ type Module struct {
 	cfgStore *config.Store
 }
 
+const (
+	// Keep speech natural but a bit snappier than default real-time.
+	ttsDefaultSpeed = 1.08
+	ttsDefaultLang  = "en-us"
+)
+
 func New(mgr *runtimevoice.Manager, cfgStore *config.Store) *Module {
 	return &Module{mgr: mgr, cfgStore: cfgStore}
 }
@@ -155,7 +161,7 @@ func (m *Module) postTranscribe(w http.ResponseWriter, r *http.Request) {
 
 // postSynthesize runs Kokoro TTS on the request body text and streams raw PCM
 // chunks to the client via SSE. Voice/speed/lang are fixed at the runtime
-// level (am_onyx / 1.0 / en-us); the request body only carries text.
+// level (am_onyx / 1.08 / en-us); the request body only carries text.
 func (m *Module) postSynthesize(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Text string `json:"text"`
@@ -192,7 +198,7 @@ func (m *Module) postSynthesize(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	err := m.mgr.SynthesizeKokoroStream(ctx, req.Text, runtimevoice.KokoroVoiceDefault, 1.0, "en-us", port, func(c runtimevoice.SynthesizeChunk) error {
+	err := m.mgr.SynthesizeKokoroStream(ctx, req.Text, runtimevoice.KokoroVoiceDefault, ttsDefaultSpeed, ttsDefaultLang, port, func(c runtimevoice.SynthesizeChunk) error {
 		emit("voice_audio", map[string]any{
 			"index":      c.Index,
 			"text":       c.Text,

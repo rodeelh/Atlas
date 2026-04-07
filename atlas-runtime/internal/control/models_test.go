@@ -128,7 +128,7 @@ func TestModelsService_OpenRouterModelCacheTTLAndRefresh(t *testing.T) {
 	}
 
 	// Fresh cache hit: no remote fetch.
-	out := svc.openRouterModels(false, "key", cfgStore.Load())
+	out := svc.openRouterModels(false, "key", cfgStore.Load(), 25)
 	if len(out) != 1 || out[0].ID != "cached/model" {
 		t.Fatalf("expected cached model, got %+v", out)
 	}
@@ -142,13 +142,13 @@ func TestModelsService_OpenRouterModelCacheTTLAndRefresh(t *testing.T) {
 	if err := cfgStore.Save(older); err != nil {
 		t.Fatalf("cfgStore.Save older: %v", err)
 	}
-	out = svc.openRouterModels(false, "key", cfgStore.Load())
+	out = svc.openRouterModels(false, "key", cfgStore.Load(), 25)
 	if len(out) != 1 || out[0].ID != "openai/gpt-4.1-mini" {
 		t.Fatalf("expected fetched model after ttl miss, got %+v", out)
 	}
 
 	// Refresh bypasses cache.
-	out = svc.openRouterModels(true, "key", cfgStore.Load())
+	out = svc.openRouterModels(true, "key", cfgStore.Load(), 25)
 	if len(out) != 1 || out[0].ID != "openai/gpt-4.1-mini" {
 		t.Fatalf("expected fetched model on refresh, got %+v", out)
 	}

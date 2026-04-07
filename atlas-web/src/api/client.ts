@@ -279,8 +279,10 @@ export const api = {
 
   // Automations (Gremlins)
   automations: () => get<GremlinItem[]>('/automations'),
-  automationsFile: () => get<{ content: string }>('/automations/file'),
-  writeAutomationsFile: (content: string) => put<object>('/automations/file', { content }),
+  automationsAdvancedFile: () => get<{ content: string }>('/automations/advanced/file'),
+  importAutomationsAdvancedFile: (content: string) => put<object>('/automations/advanced/import', { content }),
+  automationsFile: () => get<{ content: string }>('/automations/advanced/file'),
+  writeAutomationsFile: (content: string) => put<object>('/automations/advanced/import', { content }),
   createAutomation: (item: Omit<GremlinItem, 'id'> & { id?: string }) =>
     post<GremlinItem>('/automations', item),
   updateAutomation: (item: GremlinItem) =>

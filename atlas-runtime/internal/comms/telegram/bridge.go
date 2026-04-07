@@ -238,6 +238,7 @@ func (b *Bridge) run() {
 	}
 	backoff := baseBackoff
 	maxBackoff := 30 * time.Second
+	retryCount := 0
 	pollTimeout := cfg.TelegramPollingTimeoutSeconds
 	if pollTimeout <= 0 {
 		pollTimeout = 30
@@ -256,10 +257,20 @@ func (b *Bridge) run() {
 
 		updates, err := b.getUpdates(pollTimeout)
 		if err != nil {
+			retryCount++
 			b.mu.Lock()
 			b.lastErr = err.Error()
 			b.mu.Unlock()
-			logstore.Write("error", "Telegram poll error: "+err.Error(), map[string]string{"platform": "telegram"})
+			nextDelay := backoff
+			logstore.Write(
+				"error",
+				fmt.Sprintf("Telegram poll error (attempt %d): %s", retryCount, err.Error()),
+				map[string]string{
+					"platform":      "telegram",
+					"retryAttempt":  fmt.Sprintf("%d", retryCount),
+					"retryDelaySec": fmt.Sprintf("%.0f", nextDelay.Seconds()),
+				},
+			)
 			select {
 			case <-b.stopCh:
 				return
@@ -267,6 +278,17 @@ func (b *Bridge) run() {
 				backoff = minDur(backoff*2, maxBackoff)
 			}
 			continue
+		}
+		if retryCount > 0 {
+			logstore.Write(
+				"info",
+				fmt.Sprintf("Telegram poll recovered after %d retries", retryCount),
+				map[string]string{"platform": "telegram"},
+			)
+			b.mu.Lock()
+			b.lastErr = ""
+			b.mu.Unlock()
+			retryCount = 0
 		}
 		backoff = baseBackoff
 
@@ -869,6 +891,22 @@ func (b *Bridge) setMyCommands() {
 // sendMessage sends a plain text message (calls sendMessageWithKeyboard with no keyboard).
 func (b *Bridge) sendMessage(chatID int64, text string) {
 	b.sendMessageWithKeyboard(chatID, text, nil)
+}
+
+// SendAutomationMessage sends automation output to a Telegram chat.
+// Message text is markdown-normalized and chunked to Telegram-safe size.
+func (b *Bridge) SendAutomationMessage(chatID int64, text string) error {
+	if !b.Connected() {
+		return fmt.Errorf("telegram bridge is not connected")
+	}
+	content := strings.TrimSpace(text)
+	if content == "" {
+		return nil
+	}
+	for _, chunk := range chunkText(markdownToHTML(content), maxChunk) {
+		b.sendMessage(chatID, chunk)
+	}
+	return nil
 }
 
 // sendMessageWithKeyboard sends an HTML message with an optional inline keyboard.

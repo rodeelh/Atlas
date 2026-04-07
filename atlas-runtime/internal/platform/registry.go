@@ -9,6 +9,7 @@ import (
 type ModuleRegistry struct {
 	host    Host
 	modules map[string]Module
+	order   []string
 	started []Module
 }
 
@@ -34,6 +35,7 @@ func (r *ModuleRegistry) Register(module Module) error {
 		return fmt.Errorf("platform: register %s: %w", id, err)
 	}
 	r.modules[id] = module
+	r.order = append(r.order, id)
 	return nil
 }
 
@@ -96,7 +98,7 @@ func (r *ModuleRegistry) orderModules() ([]Module, error) {
 		return nil
 	}
 
-	for id := range r.modules {
+	for _, id := range r.order {
 		if err := visit(id); err != nil {
 			return nil, err
 		}

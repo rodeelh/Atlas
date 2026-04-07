@@ -142,7 +142,6 @@ type Registry struct {
 	browserMgr     *browser.Manager
 	voiceMgr       *voice.Manager
 	visionFn       VisionFn
-	runAutoFn      func(ctx context.Context, gremlinID, prompt string) (string, error)
 	forgePersistFn ForgePersistFn
 
 	// policyCache avoids a per-tool-call disk read of action-policies.json.
@@ -197,6 +196,13 @@ func (r *Registry) register(entry SkillEntry) {
 		entry.ActionClass = defaultActionClass(entry.PermLevel)
 	}
 	r.entries[entry.Def.Name] = entry
+}
+
+// RegisterExternal adds a module-owned action to the skill registry.
+// Runtime modules use this to expose canonical agent controls without moving
+// their implementation back into the legacy skills package.
+func (r *Registry) RegisterExternal(entry SkillEntry) {
+	r.register(entry)
 }
 
 // defaultActionClass derives a reasonable ActionClass from the legacy PermLevel.
@@ -276,7 +282,7 @@ func toolCapabilityGroup(name string) string {
 		return "voice"
 	case strings.HasPrefix(name, "image."):
 		return "creative"
-	case strings.HasPrefix(name, "gremlin."):
+	case strings.HasPrefix(name, "automation."), strings.HasPrefix(name, "gremlin."):
 		return "automation"
 	case strings.HasPrefix(name, "forge."):
 		return "forge"
@@ -525,12 +531,6 @@ func (r *Registry) Execute(ctx context.Context, actionID string, args json.RawMe
 	// Legacy Fn path — wrap string result in ToolResult.
 	s, err := e.Fn(ctx, args)
 	return wrapStringResult(actionID, s, err), err
-}
-
-// SetRunAutomationFn wires in a callback used by gremlin.run_now.
-// Must be called after the chat service is constructed.
-func (r *Registry) SetRunAutomationFn(fn func(ctx context.Context, gremlinID, prompt string) (string, error)) {
-	r.runAutoFn = fn
 }
 
 // SetVisionFn wires in a vision inference callback used by browser.solve_captcha.

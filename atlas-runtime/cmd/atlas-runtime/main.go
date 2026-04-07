@@ -172,6 +172,8 @@ func main() {
 		log.Fatalf("Atlas: register approvals module: %v", err)
 	}
 	automationsModule := automationsmodule.New(config.SupportDir())
+	automationsModule.SetDeliveryService(commsSvc)
+	automationsModule.SetSkillRegistry(skillsRegistry)
 	if err := moduleRegistry.Register(automationsModule); err != nil {
 		log.Fatalf("Atlas: register automations module: %v", err)
 	}
@@ -229,20 +231,6 @@ func main() {
 		err error,
 	) {
 		return forgeSvc.PersistProposalFromJSON(specJSON, plansJSON, summary, rationale, contractJSON)
-	})
-
-	// Wire gremlin.run_now → chat service.
-	skillsRegistry.SetRunAutomationFn(func(ctx context.Context, gremlinID, prompt string) (string, error) {
-		resp, err := chatSvc.HandleMessage(ctx, chat.MessageRequest{
-			Message: prompt,
-		})
-		if err != nil {
-			return "", err
-		}
-		if resp.Response.ErrorMessage != "" {
-			return "", fmt.Errorf("%s", resp.Response.ErrorMessage)
-		}
-		return resp.Response.AssistantMessage, nil
 	})
 
 	// Wire approval resolver to Telegram bridge (allows inline approve/deny buttons).

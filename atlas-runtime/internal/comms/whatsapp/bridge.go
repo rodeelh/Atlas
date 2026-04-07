@@ -12,13 +12,14 @@ import (
 	"atlas-runtime-go/internal/storage"
 
 	"github.com/skip2/go-qrcode"
-	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/store/sqlstore"
-	waStore "go.mau.fi/whatsmeow/store"
-	waLog "go.mau.fi/whatsmeow/util/log"
-	"go.mau.fi/whatsmeow/types/events"
+	waProto "go.mau.fi/whatsmeow/binary/proto"
 	waCompanionReg "go.mau.fi/whatsmeow/proto/waCompanionReg"
+	waStore "go.mau.fi/whatsmeow/store"
+	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
+	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -132,6 +133,34 @@ func (b *Bridge) QRCodeDataURL() string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.qrDataURL
+}
+
+// SendAutomationMessage sends automation output to a specific WhatsApp chat JID.
+func (b *Bridge) SendAutomationMessage(chatJID, text string) error {
+	if !b.Connected() {
+		return fmt.Errorf("whatsapp bridge is not connected")
+	}
+	content := strings.TrimSpace(text)
+	if content == "" {
+		return nil
+	}
+	jid, err := types.ParseJID(chatJID)
+	if err != nil {
+		return fmt.Errorf("invalid whatsapp destination JID %q: %w", chatJID, err)
+	}
+	b.mu.RLock()
+	client := b.client
+	b.mu.RUnlock()
+	if client == nil {
+		return fmt.Errorf("whatsapp bridge client unavailable")
+	}
+	out := &waProto.Message{Conversation: proto.String(content)}
+	resp, err := client.SendMessage(context.Background(), jid, out)
+	if err != nil {
+		return fmt.Errorf("whatsapp send: %w", err)
+	}
+	b.markSentByBridge(resp.ID)
+	return nil
 }
 
 func (b *Bridge) consumeQR(ch <-chan whatsmeow.QRChannelItem) {

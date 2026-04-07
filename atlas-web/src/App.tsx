@@ -124,6 +124,14 @@ const Icon = {
       <path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.1 3.1l1 1M11.9 11.9l1 1M12.9 3.1l-1 1M4.1 11.9l-1 1" />
     </svg>
   ),
+  aiProviders: (
+    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="2" y1="5" x2="14" y2="5" />
+      <line x1="2" y1="11" x2="14" y2="11" />
+      <circle cx="6" cy="5" r="2" />
+      <circle cx="10" cy="11" r="2" />
+    </svg>
+  ),
   theme: (
     <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="8" cy="8" r="6.5" />
@@ -252,7 +260,7 @@ const NAV_GROUPS: NavGroup[] = [
     defaultExpanded: false,
     items: [
       { id: 'settings',        icon: Icon.settings,        label: 'General' },
-      { id: 'ai-providers',    icon: Icon.settings,        label: 'AI Providers' },
+      { id: 'ai-providers',    icon: Icon.aiProviders,     label: 'AI Providers' },
       { id: 'api-keys',        icon: Icon.apiKeys,         label: 'Credentials' },
       { id: 'theme',           icon: Icon.theme,           label: 'Appearance' },
       { id: 'communications',  icon: Icon.communications,  label: 'Communications' },

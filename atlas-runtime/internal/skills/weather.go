@@ -3,9 +3,11 @@ package skills
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -136,30 +138,101 @@ type geoResult struct {
 	Country   string  `json:"country"`
 }
 
+const (
+	weatherHTTPTimeout   = 10 * time.Second
+	weatherMaxAttempts   = 3
+	weatherRetryInterval = 350 * time.Millisecond
+)
+
+func doWeatherJSON(ctx context.Context, op, u string, out any) error {
+	client := &http.Client{Timeout: weatherHTTPTimeout}
+	backoff := weatherRetryInterval
+	var lastErr error
+
+	for attempt := 1; attempt <= weatherMaxAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+		if err != nil {
+			return fmt.Errorf("%s request failed: %w", op, err)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("%s request failed: %w", op, err)
+			if !isRetryableWeatherErr(err) || attempt == weatherMaxAttempts || ctx.Err() != nil {
+				return lastErr
+			}
+			if !sleepWithContext(ctx, backoff) {
+				return lastErr
+			}
+			backoff *= 2
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			_ = resp.Body.Close()
+			lastErr = fmt.Errorf("%s API error %d: %s", op, resp.StatusCode, strings.TrimSpace(string(b)))
+			if isRetryableWeatherStatus(resp.StatusCode) && attempt < weatherMaxAttempts && ctx.Err() == nil {
+				if !sleepWithContext(ctx, backoff) {
+					return lastErr
+				}
+				backoff *= 2
+				continue
+			}
+			return lastErr
+		}
+
+		decodeErr := json.NewDecoder(resp.Body).Decode(out)
+		_ = resp.Body.Close()
+		if decodeErr != nil {
+			return fmt.Errorf("%s parse failed: %w", op, decodeErr)
+		}
+		return nil
+	}
+
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("%s request failed", op)
+}
+
+func isRetryableWeatherStatus(status int) bool {
+	return status == http.StatusTooManyRequests || status == http.StatusRequestTimeout || status >= http.StatusInternalServerError
+}
+
+func isRetryableWeatherErr(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout() || netErr.Temporary()
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "temporarily unavailable") ||
+		strings.Contains(msg, "eof")
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
 func geocode(ctx context.Context, location string) (geoResult, error) {
 	u := "https://geocoding-api.open-meteo.com/v1/search?name=" +
 		url.QueryEscape(location) + "&count=1&language=en&format=json"
 
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-	if err != nil {
-		return geoResult{}, err
-	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return geoResult{}, fmt.Errorf("geocoding request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return geoResult{}, fmt.Errorf("geocoding API error %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-
 	var result struct {
 		Results []geoResult `json:"results"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return geoResult{}, fmt.Errorf("geocoding parse failed: %w", err)
+	if err := doWeatherJSON(ctx, "geocoding", u, &result); err != nil {
+		return geoResult{}, err
 	}
 	if len(result.Results) == 0 {
 		return geoResult{}, fmt.Errorf("location not found: %s", location)
@@ -226,21 +299,6 @@ func weatherCurrent(ctx context.Context, args json.RawMessage) (string, error) {
 		geo.Latitude, geo.Longitude, tUnit, wUnit,
 	)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-	if err != nil {
-		return "", fmt.Errorf("weather request failed: %w", err)
-	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("weather request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("weather API error %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-
 	var data struct {
 		Current struct {
 			Temperature  float64 `json:"temperature_2m"`
@@ -249,8 +307,8 @@ func weatherCurrent(ctx context.Context, args json.RawMessage) (string, error) {
 			WeatherCode  int     `json:"weathercode"`
 		} `json:"current"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return "", fmt.Errorf("weather parse failed: %w", err)
+	if err := doWeatherJSON(ctx, "weather", u, &data); err != nil {
+		return "", err
 	}
 
 	c := data.Current
@@ -290,21 +348,6 @@ func weatherForecast(ctx context.Context, args json.RawMessage) (string, error) 
 		geo.Latitude, geo.Longitude, tUnit, days,
 	)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-	if err != nil {
-		return "", fmt.Errorf("forecast request failed: %w", err)
-	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("forecast request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("forecast API error %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-
 	var data struct {
 		Daily struct {
 			Time        []string  `json:"time"`
@@ -314,8 +357,8 @@ func weatherForecast(ctx context.Context, args json.RawMessage) (string, error) 
 			WeatherCode []int     `json:"weathercode"`
 		} `json:"daily"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return "", fmt.Errorf("forecast parse failed: %w", err)
+	if err := doWeatherJSON(ctx, "forecast", u, &data); err != nil {
+		return "", err
 	}
 
 	var sb strings.Builder
@@ -362,29 +405,14 @@ func weatherHourly(ctx context.Context, args json.RawMessage) (string, error) {
 		geo.Latitude, geo.Longitude, tUnit,
 	)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-	if err != nil {
-		return "", fmt.Errorf("hourly request failed: %w", err)
-	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("hourly request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("hourly API error %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-
 	var data struct {
 		Hourly struct {
 			Time  []string  `json:"time"`
 			Temps []float64 `json:"temperature_2m"`
 		} `json:"hourly"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return "", fmt.Errorf("hourly parse failed: %w", err)
+	if err := doWeatherJSON(ctx, "hourly", u, &data); err != nil {
+		return "", err
 	}
 
 	var sb strings.Builder
@@ -418,29 +446,14 @@ func weatherBrief(ctx context.Context, args json.RawMessage) (string, error) {
 		geo.Latitude, geo.Longitude, tUnit,
 	)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-	if err != nil {
-		return "", fmt.Errorf("brief request failed: %w", err)
-	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("brief request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("brief API error %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-
 	var data struct {
 		Current struct {
 			Temperature float64 `json:"temperature_2m"`
 			WeatherCode int     `json:"weathercode"`
 		} `json:"current"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return "", fmt.Errorf("brief parse failed: %w", err)
+	if err := doWeatherJSON(ctx, "brief", u, &data); err != nil {
+		return "", err
 	}
 
 	return fmt.Sprintf("%s: %s, %.1f%s",
@@ -469,21 +482,6 @@ func fetchHourlyRich(ctx context.Context, geo geoResult, hours int) ([]hourlySli
 			"&temperature_unit=%s&wind_speed_unit=%s&forecast_days=1",
 		geo.Latitude, geo.Longitude, tUnit, wUnit,
 	)
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-	if err != nil {
-		return nil, fmt.Errorf("hourly rich request failed: %w", err)
-	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("hourly rich request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("weather API error %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-
 	var data struct {
 		Hourly struct {
 			Time   []string  `json:"time"`
@@ -493,8 +491,8 @@ func fetchHourlyRich(ctx context.Context, geo geoResult, hours int) ([]hourlySli
 			Wind   []float64 `json:"wind_speed_10m"`
 		} `json:"hourly"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, fmt.Errorf("hourly rich parse failed: %w", err)
+	if err := doWeatherJSON(ctx, "hourly rich", u, &data); err != nil {
+		return nil, err
 	}
 
 	n := len(data.Hourly.Time)

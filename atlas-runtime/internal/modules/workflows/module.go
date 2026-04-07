@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -11,6 +12,7 @@ import (
 	"atlas-runtime-go/internal/chat"
 	"atlas-runtime-go/internal/features"
 	"atlas-runtime-go/internal/platform"
+	"atlas-runtime-go/internal/workflowexec"
 )
 
 const (
@@ -142,18 +144,10 @@ func (m *Module) deleteWorkflow(w http.ResponseWriter, r *http.Request) {
 
 func (m *Module) runWorkflow(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	raw := features.GetWorkflowDefinition(m.supportDir, id)
-	if raw == nil {
+	if features.GetWorkflowDefinition(m.supportDir, id) == nil {
 		writeError(w, http.StatusNotFound, "workflow not found: "+id)
 		return
 	}
-
-	var def map[string]any
-	if err := json.Unmarshal(raw, &def); err != nil {
-		writeError(w, http.StatusInternalServerError, "corrupt workflow definition")
-		return
-	}
-
 	if m.agent == nil {
 		writeError(w, http.StatusNotImplemented, "agent loop not available")
 		return
@@ -161,27 +155,15 @@ func (m *Module) runWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	runID := newID()
 	convID := newID()
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	prompt, _ := def["prompt"].(string)
-	if prompt == "" {
-		if desc, _ := def["description"].(string); desc != "" {
-			prompt = desc
-		} else if name, _ := def["name"].(string); name != "" {
-			prompt = "Execute workflow: " + name
-		} else {
-			prompt = "Execute this workflow."
+	prepared, err := workflowexec.PrepareRun(m.supportDir, id, runID, convID, nil, "")
+	if err != nil {
+		if strings.HasPrefix(err.Error(), "workflow not found:") {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
 		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-
-	run := map[string]any{
-		"id":             runID,
-		"workflowID":     id,
-		"status":         "running",
-		"startedAt":      now,
-		"conversationID": convID,
-	}
-	_ = features.AppendWorkflowRun(m.supportDir, run)
 
 	if m.bus != nil {
 		_ = m.bus.Publish(context.Background(), startedEventName, map[string]string{
@@ -200,7 +182,7 @@ func (m *Module) runWorkflow(w http.ResponseWriter, r *http.Request) {
 		if execErr != nil || resp.Response.Status == "error" {
 			status = "failed"
 		}
-		_, _ = features.UpdateWorkflowRunStatus(m.supportDir, runID, status)
+		_, _ = workflowexec.CompleteRun(m.supportDir, runID, status)
 		if m.bus != nil {
 			_ = m.bus.Publish(context.Background(), completedEventName, map[string]string{
 				"id":             runID,
@@ -209,9 +191,9 @@ func (m *Module) runWorkflow(w http.ResponseWriter, r *http.Request) {
 				"status":         status,
 			})
 		}
-	}(prompt, runID, id, convID)
+	}(prepared.Prompt, runID, id, convID)
 
-	writeJSON(w, http.StatusAccepted, run)
+	writeJSON(w, http.StatusAccepted, prepared.Record)
 }
 
 func (m *Module) approveWorkflowRun(w http.ResponseWriter, r *http.Request) {

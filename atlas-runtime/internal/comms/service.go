@@ -9,6 +9,7 @@ import (
 	"log"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,12 @@ type BridgeRequest struct {
 
 // ChatHandler is the function type used by bridges to route messages to Atlas.
 type ChatHandler func(ctx context.Context, req BridgeRequest) (string, string, error)
+
+type AutomationDestination struct {
+	Platform  string
+	ChannelID string
+	ThreadID  string
+}
 
 // ── JSON shapes that match the Swift CommunicationsSnapshot / CommunicationChannel ──
 
@@ -692,10 +699,10 @@ func (s *Service) platformStatus(
 		}
 	case "slack":
 		enabled = cfg.SlackEnabled
-		credConfigured = strVal(bundle.SlackBotToken) != ""
+		credConfigured = strVal(bundle.SlackBotToken) != "" && strVal(bundle.SlackAppToken) != ""
 		requiredCreds = []string{"slack_bot_token", "slack_app_token"}
 		if !credConfigured {
-			br := "Add a Slack bot token to finish setup."
+			br := "Add Slack bot and app tokens to finish setup."
 			blockingReason = &br
 		}
 	case "whatsapp":
@@ -710,9 +717,16 @@ func (s *Service) platformStatus(
 
 	setupState := computeSetupState(enabled, credConfigured, connected, lastErr)
 	statusLabel := computeStatusLabel(setupState, lastErr)
+	health := computeHealthLabel(setupState, lastErr)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 
 	if lastErr != nil {
 		blockingReason = lastErr
+	}
+
+	meta := map[string]string{
+		"health":        health,
+		"lastCheckedAt": now,
 	}
 
 	return PlatformStatus{
@@ -728,8 +742,8 @@ func (s *Service) platformStatus(
 		BlockingReason:       blockingReason,
 		RequiredCredentials:  requiredCreds,
 		LastError:            lastErr,
-		LastUpdatedAt:        nil,
-		Metadata:             map[string]string{},
+		LastUpdatedAt:        &now,
+		Metadata:             meta,
 	}
 }
 
@@ -764,9 +778,76 @@ func computeStatusLabel(setupState string, lastErr *string) string {
 	}
 }
 
+func computeHealthLabel(setupState string, lastErr *string) string {
+	if lastErr != nil {
+		return "error"
+	}
+	switch setupState {
+	case "ready":
+		return "healthy"
+	case "partial_setup":
+		return "degraded"
+	case "missing_credentials", "not_started":
+		return "idle"
+	default:
+		return "unknown"
+	}
+}
+
 func strVal(p *string) string {
 	if p == nil {
 		return ""
 	}
 	return *p
+}
+
+// SendAutomationResult delivers automation output to a configured external destination.
+func (s *Service) SendAutomationResult(ctx context.Context, dest AutomationDestination, text string) error {
+	_ = ctx // reserved for future cancellation-aware bridge methods
+	platform := strings.ToLower(strings.TrimSpace(dest.Platform))
+	channelID := strings.TrimSpace(dest.ChannelID)
+	threadID := strings.TrimSpace(dest.ThreadID)
+	content := strings.TrimSpace(text)
+	if platform == "" || channelID == "" {
+		return fmt.Errorf("invalid automation destination")
+	}
+	if content == "" {
+		return nil
+	}
+
+	s.mu.RLock()
+	tg := s.tgBridge
+	disc := s.discBridge
+	sl := s.slackBridge
+	wa := s.waBridge
+	s.mu.RUnlock()
+
+	switch platform {
+	case "telegram":
+		if tg == nil {
+			return fmt.Errorf("telegram bridge is not running")
+		}
+		chatID, err := strconv.ParseInt(channelID, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid telegram chat id %q: %w", channelID, err)
+		}
+		return tg.SendAutomationMessage(chatID, content)
+	case "discord":
+		if disc == nil {
+			return fmt.Errorf("discord bridge is not running")
+		}
+		return disc.SendAutomationMessage(channelID, threadID, content)
+	case "slack":
+		if sl == nil {
+			return fmt.Errorf("slack bridge is not running")
+		}
+		return sl.SendAutomationMessage(channelID, threadID, content)
+	case "whatsapp":
+		if wa == nil {
+			return fmt.Errorf("whatsapp bridge is not running")
+		}
+		return wa.SendAutomationMessage(channelID, content)
+	default:
+		return fmt.Errorf("unsupported destination platform: %s", platform)
+	}
 }

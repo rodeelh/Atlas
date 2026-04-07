@@ -462,7 +462,7 @@ function RemoteAccessSection({
               </button>
             </div>
           ) : status !== null ? (
-            <span style={{ fontSize: '12px', color: 'var(--text-3)' }}>Tailscale not detected — is it running?</span>
+            <span style={{ fontSize: '12px', color: 'var(--text-3)' }}>Tailscale not detected</span>
           ) : (
             <span style={{ fontSize: '12px', color: 'var(--text-3)' }}>Detecting…</span>
           )}
