@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'preact/hooks'
+import { useState, useEffect, useCallback, useRef } from 'preact/hooks'
 import { api } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
@@ -53,8 +53,22 @@ function providerBadgeClass(provider: string): string {
 /* ── Daily cost bar chart ─────────────────────────────────────────────────── */
 
 function DailyChart({ series }: { series: DailyUsageSeries[] }) {
-  const [hovered, setHovered] = useState<number | null>(null)
-  const [mouse, setMouse]     = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+  const [hovered, setHovered]   = useState<number | null>(null)
+  const [mouse, setMouse]       = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+  const containerRef            = useRef<HTMLDivElement>(null)
+  const [width, setWidth]       = useState(400)
+
+  // Track actual container width so bars always fill it regardless of window size
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0].contentRect.width
+      if (w > 0) setWidth(w)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   if (series.length === 0) {
     return (
@@ -65,37 +79,54 @@ function DailyChart({ series }: { series: DailyUsageSeries[] }) {
   }
 
   const maxCost    = Math.max(...series.map(d => d.costUSD), 0.000001)
-  const chartH     = 96
-  const labelH     = 18
-  const totalW     = 560
+  const chartH     = 140
+  const labelH     = 20
+  const leftW      = 44   // y-axis label column (px)
+  const chartW     = Math.max(1, width - leftW)
+  const gridLevels = [0.25, 0.5, 0.75, 1.0]
 
-  // Distribute bars evenly across the full viewBox so sparse data
-  // (even a single bar) fills the chart rather than clustering left.
-  const slotW      = totalW / series.length
-  const barW       = Math.max(4, Math.min(48, slotW * 0.65))
+  const slotW      = chartW / series.length
+  const barW       = Math.max(4, Math.min(52, slotW * 0.6))
   const labelEvery = Math.max(1, Math.ceil(series.length / 8))
 
   return (
     <div
-      style={{ position: 'relative', overflowX: 'auto' }}
-      onMouseMove={(e: MouseEvent) => {
-        setMouse({ x: e.clientX, y: e.clientY })
-      }}
+      ref={containerRef}
+      style={{ position: 'relative', width: '100%' }}
+      onMouseMove={(e: MouseEvent) => setMouse({ x: e.clientX, y: e.clientY })}
     >
       <svg
-        width="100%"
+        width={width}
         height={chartH + labelH}
-        viewBox={`0 0 ${totalW} ${chartH + labelH}`}
-        preserveAspectRatio="none"
-        style={{ display: 'block', minHeight: `${chartH + labelH}px` }}
+        style={{ display: 'block', width: '100%', height: `${chartH + labelH}px` }}
       >
-        {/* Baseline only */}
-        <line x1="0" y1={chartH} x2={totalW} y2={chartH} stroke="var(--border-1, #e5e7eb)" stroke-width="1" />
+        {/* Y-axis labels + grid lines — left column then chart area */}
+        {gridLevels.map(level => {
+          const gy = chartH - level * (chartH - 4)
+          return (
+            <g key={level}>
+              <text
+                x={leftW - 6} y={gy + 3.5}
+                text-anchor="end"
+                font-size="10"
+                fill="var(--text-2)"
+              >
+                {fmtCost(maxCost * level)}
+              </text>
+              <line
+                x1={leftW} y1={gy} x2={width} y2={gy}
+                stroke="var(--border)"
+                stroke-width={level === 1.0 ? 1 : 0.5}
+                stroke-dasharray={level === 1.0 ? undefined : '3 4'}
+              />
+            </g>
+          )
+        })}
 
+        {/* Bars + date labels */}
         {series.map((d, i) => {
           const h     = Math.max(3, (d.costUSD / maxCost) * (chartH - 4))
-          // Center each bar within its slot
-          const slotX = i * slotW
+          const slotX = leftW + i * slotW
           const x     = slotX + (slotW - barW) / 2
           const y     = chartH - h
           const isHov = hovered === i
@@ -103,10 +134,10 @@ function DailyChart({ series }: { series: DailyUsageSeries[] }) {
             <g key={d.date}>
               <rect
                 x={x} y={y} width={barW} height={h}
-                rx="2"
+                rx="3"
                 fill="var(--accent)"
-                opacity={isHov ? 1 : 0.6}
-                style={{ cursor: 'default', transition: 'opacity 0.12s' }}
+                fill-opacity={isHov ? 0.95 : 0.55}
+                style={{ cursor: 'default', transition: 'fill-opacity 0.12s' }}
                 onMouseEnter={() => setHovered(i)}
                 onMouseLeave={() => setHovered(null)}
               />
@@ -115,8 +146,8 @@ function DailyChart({ series }: { series: DailyUsageSeries[] }) {
                   x={slotX + slotW / 2}
                   y={chartH + labelH - 3}
                   text-anchor="middle"
-                  font-size="9"
-                  fill="var(--text-3, #9ca3af)"
+                  font-size="10"
+                  fill="var(--text-2)"
                 >
                   {d.date.slice(5)}
                 </text>
@@ -127,29 +158,13 @@ function DailyChart({ series }: { series: DailyUsageSeries[] }) {
       </svg>
 
       {hovered !== null && (
-        <div style={{
-          position: 'fixed',
-          top: `${mouse.y + 16}px`,
-          left: `${mouse.x + 16}px`,
-          background: 'var(--theme-surface-card, #fff)',
-          border: '1px solid var(--theme-border-subtle, #e5e7eb)',
-          borderRadius: '8px',
-          padding: '8px 12px',
-          fontSize: '12px',
-          pointerEvents: 'none',
-          whiteSpace: 'nowrap',
-          zIndex: 1000,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-          transform: 'translate(0, 0)',
-        }}>
-          <div style={{ fontWeight: 600, marginBottom: '3px' }}>{series[hovered].date}</div>
-          <div style={{ color: 'var(--theme-text-secondary, #6b7280)' }}>{fmtTokens(series[hovered].totalTokens)} tokens</div>
-          <div style={{ fontWeight: 500 }}>{fmtCost(series[hovered].costUSD)}</div>
-          <div style={{ color: 'var(--theme-text-secondary, #6b7280)' }}>{series[hovered].turnCount} turn{series[hovered].turnCount !== 1 ? 's' : ''}</div>
+        <div class="usage-chart-tooltip" style={{ top: `${mouse.y + 14}px`, left: `${mouse.x + 14}px` }}>
+          <div class="usage-chart-tooltip-date">{series[hovered].date}</div>
+          <div class="usage-chart-tooltip-row">{fmtTokens(series[hovered].totalTokens)} tokens</div>
+          <div class="usage-chart-tooltip-cost">{fmtCost(series[hovered].costUSD)}</div>
+          <div class="usage-chart-tooltip-row">{series[hovered].turnCount} turn{series[hovered].turnCount !== 1 ? 's' : ''}</div>
           {series[hovered].turnCount > 0 && (
-            <div style={{ color: 'var(--theme-text-secondary, #6b7280)' }}>
-              {fmtCost(series[hovered].costUSD / series[hovered].turnCount)} / turn
-            </div>
+            <div class="usage-chart-tooltip-row">{fmtCost(series[hovered].costUSD / series[hovered].turnCount)} / turn</div>
           )}
         </div>
       )}

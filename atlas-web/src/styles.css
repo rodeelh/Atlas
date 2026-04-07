@@ -2756,6 +2756,40 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* ─── Usage chart tooltip ───────────────────────────────── */
+
+.usage-chart-tooltip {
+  position: fixed;
+  background: var(--theme-bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 1000;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.10);
+}
+
+[data-theme="dark"] .usage-chart-tooltip {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.32);
+}
+
+.usage-chart-tooltip-date {
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--theme-text-primary);
+}
+
+.usage-chart-tooltip-cost {
+  font-weight: 500;
+  color: var(--theme-text-primary);
+}
+
+.usage-chart-tooltip-row {
+  color: var(--theme-text-secondary);
+}
+
 /* ─── Date separator ─────────────────────────────────────── */
 
 .chat-date-separator {

@@ -439,7 +439,7 @@ export function AIProviders() {
         <SettingsRow
           label="Tool Selection"
           sublabel="Controls which tools Atlas makes available to the model each turn"
-          hint={"Smart: fast, low tokens.\nKeywords: topic pre-matched.\nAI Router: precise, needs Engine LM.\nOff: all tools, always."}
+          hint={"Smart: asks for tools, then expands from short list to category/broad list if needed.\nKeywords: topic pre-matched.\nAI Router: precise, needs Engine LM.\nOff: all tools, always."}
         >
           <select class="input input"
             value={draft.toolSelectionMode ?? 'lazy'}
