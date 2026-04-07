@@ -247,14 +247,10 @@ func TestWorkflowRunRoute_CurrentShape(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		runs := features.ListWorkflowRuns(h.support, "wf-shape")
-		for _, raw := range runs {
-			var run map[string]any
-			if err := json.Unmarshal(raw, &run); err != nil {
-				continue
-			}
-			if run["id"] == runID {
-				if status, _ := run["status"].(string); status != "" && status != "running" {
+		runs, err := h.db.ListWorkflowRuns("wf-shape", 10)
+		if err == nil {
+			for _, run := range runs {
+				if run.RunID == runID && run.Status != "" {
 					return
 				}
 			}

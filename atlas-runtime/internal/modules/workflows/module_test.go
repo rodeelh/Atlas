@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,10 +23,12 @@ type stubAgentRuntime struct {
 	response chat.MessageResponse
 	err      error
 	lastReq  chat.MessageRequest
+	requests []chat.MessageRequest
 }
 
 func (s *stubAgentRuntime) HandleMessage(_ context.Context, req chat.MessageRequest) (chat.MessageResponse, error) {
 	s.lastReq = req
+	s.requests = append(s.requests, req)
 	return s.response, s.err
 }
 
@@ -80,15 +83,14 @@ func TestModule_RunWorkflowCreatesRunAndRoutesPrompt(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		runs := features.ListWorkflowRuns(dir, "wf-1")
+		runs, err := db.ListWorkflowRuns("wf-1", 10)
+		if err != nil {
+			t.Fatalf("ListWorkflowRuns: %v", err)
+		}
 		if len(runs) > 0 {
-			var record map[string]any
-			if err := json.Unmarshal(runs[0], &record); err != nil {
-				t.Fatalf("json.Unmarshal(run): %v", err)
-			}
-			status, _ := record["status"].(string)
-			if status == "completed" {
-				if stub.lastReq.Message != "Summarize the day" {
+			if runs[0].Status == "completed" {
+				if !strings.Contains(stub.lastReq.Message, "Summarize the day") ||
+					!strings.Contains(stub.lastReq.Message, "Workflow trust scope") {
 					t.Fatalf("unexpected prompt: %+v", stub.lastReq)
 				}
 				return
@@ -137,5 +139,109 @@ func TestModule_ListWorkflowsReturnsCurrentShape(t *testing.T) {
 	}
 	if body == nil {
 		t.Fatal("expected [] not null")
+	}
+}
+
+func TestModule_RunWorkflowExecutesPromptStepsAndPersistsStepRuns(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := features.AppendWorkflowDefinition(dir, map[string]any{
+		"id":             "wf-steps",
+		"name":           "Stepped Review",
+		"promptTemplate": "Review the source material",
+		"steps": []map[string]any{
+			{"id": "extract", "title": "Extract", "kind": "prompt", "prompt": "Extract the key facts."},
+			{"id": "summarize", "title": "Summarize", "kind": "prompt", "prompt": "Summarize the facts."},
+		},
+	}); err != nil {
+		t.Fatalf("AppendWorkflowDefinition: %v", err)
+	}
+
+	stub := &stubAgentRuntime{}
+	stub.response.Response.AssistantMessage = "step done"
+	host := platform.NewHost(stubConfig{}, platform.NewSQLiteStorage(db), stub, platform.NoopContextAssembler{}, platform.NewInProcessBus(8))
+	module := New(dir)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	record, err := module.runWorkflowSync(context.Background(), "wf-steps", nil, "test")
+	if err != nil {
+		t.Fatalf("runWorkflowSync: %v", err)
+	}
+	if record["status"] != "completed" {
+		t.Fatalf("expected completed run, got %+v", record)
+	}
+	if len(stub.requests) != 2 {
+		t.Fatalf("expected two step turns, got %d", len(stub.requests))
+	}
+	if !strings.Contains(stub.requests[0].Message, "Workflow step 1 of 2: Extract") ||
+		!strings.Contains(stub.requests[1].Message, "Workflow step 2 of 2: Summarize") {
+		t.Fatalf("unexpected step prompts: %+v", stub.requests)
+	}
+	runs, err := db.ListWorkflowRuns("wf-steps", 1)
+	if err != nil {
+		t.Fatalf("ListWorkflowRuns: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected one workflow run, got %+v", runs)
+	}
+	var stepRuns []map[string]any
+	if err := json.Unmarshal([]byte(runs[0].StepRunsJSON), &stepRuns); err != nil {
+		t.Fatalf("decode step runs: %v", err)
+	}
+	if len(stepRuns) != 2 || stepRuns[0]["status"] != "completed" || stepRuns[1]["status"] != "completed" {
+		t.Fatalf("expected completed step runs, got %+v", stepRuns)
+	}
+}
+
+func TestModule_RunWorkflowPropagatesTrustScopeToolPolicy(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := features.AppendWorkflowDefinition(dir, map[string]any{
+		"id":             "wf-policy",
+		"name":           "Policy Review",
+		"promptTemplate": "Read the approved file only",
+		"trustScope": map[string]any{
+			"approvedRootPaths":   []string{"/tmp/atlas-approved"},
+			"allowedApps":         []string{"filesystem"},
+			"allowsSensitiveRead": false,
+			"allowsLiveWrite":     false,
+		},
+	}); err != nil {
+		t.Fatalf("AppendWorkflowDefinition: %v", err)
+	}
+
+	stub := &stubAgentRuntime{}
+	stub.response.Response.AssistantMessage = "done"
+	host := platform.NewHost(stubConfig{}, platform.NewSQLiteStorage(db), stub, platform.NoopContextAssembler{}, platform.NewInProcessBus(8))
+	module := New(dir)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if _, err := module.runWorkflowSync(context.Background(), "wf-policy", nil, "test"); err != nil {
+		t.Fatalf("runWorkflowSync: %v", err)
+	}
+	if stub.lastReq.ToolPolicy == nil || !stub.lastReq.ToolPolicy.Enabled {
+		t.Fatalf("expected workflow tool policy, got %+v", stub.lastReq.ToolPolicy)
+	}
+	if stub.lastReq.ToolPolicy.AllowsLiveWrite || stub.lastReq.ToolPolicy.AllowsSensitiveRead {
+		t.Fatalf("expected restrictive trust policy, got %+v", stub.lastReq.ToolPolicy)
+	}
+	if len(stub.lastReq.ToolPolicy.ApprovedRootPaths) != 1 || stub.lastReq.ToolPolicy.ApprovedRootPaths[0] != "/tmp/atlas-approved" {
+		t.Fatalf("unexpected approved roots: %+v", stub.lastReq.ToolPolicy.ApprovedRootPaths)
+	}
+	if len(stub.lastReq.ToolPolicy.AllowedToolPrefixes) != 1 || stub.lastReq.ToolPolicy.AllowedToolPrefixes[0] != "fs." {
+		t.Fatalf("unexpected allowed prefixes: %+v", stub.lastReq.ToolPolicy.AllowedToolPrefixes)
 	}
 }

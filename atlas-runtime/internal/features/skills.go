@@ -128,7 +128,7 @@ func builtInSkills() []SkillRecord {
 		{
 			Manifest: SkillManifestInfo{
 				ID: "weather", Name: "Weather", Version: "1.0",
-				Description:    "Real-time weather data and forecasts using Open-Meteo.",
+				Description:    "Current conditions, forecasts, and weather planning.",
 				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,
 				Category: "information", Capabilities: []string{"weather"}, Tags: []string{"weather"},
 			},
@@ -144,7 +144,7 @@ func builtInSkills() []SkillRecord {
 		{
 			Manifest: SkillManifestInfo{
 				ID: "web-research", Name: "Web Research", Version: "1.0",
-				Description:    "Search the web, fetch pages, and research topics.",
+				Description:    "Search, fetch, and summarize web sources.",
 				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,
 				Category: "research", Capabilities: []string{"web_search", "web_fetch"}, Tags: []string{"web", "search"},
 			},
@@ -162,7 +162,7 @@ func builtInSkills() []SkillRecord {
 		{
 			Manifest: SkillManifestInfo{
 				ID: "file-system", Name: "File System", Version: "1.1",
-				Description:    "Read and write files and directories from approved locations. Writes require approval and return a unified diff.",
+				Description:    "Read and edit files in approved folders.",
 				LifecycleState: "enabled", RiskLevel: "medium", IsUserVisible: true,
 				Category: "system", Capabilities: []string{"file_read", "file_write"}, Tags: []string{"files"},
 			},
@@ -180,7 +180,7 @@ func builtInSkills() []SkillRecord {
 		{
 			Manifest: SkillManifestInfo{
 				ID: "atlas.info", Name: "Atlas Info", Version: "1.0",
-				Description:    "Runtime introspection — status and version.",
+				Description:    "Runtime status and version details.",
 				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,
 				Category: "system", Capabilities: []string{"runtime_info"}, Tags: []string{"atlas"},
 			},
@@ -191,7 +191,7 @@ func builtInSkills() []SkillRecord {
 		{
 			Manifest: SkillManifestInfo{
 				ID: "info", Name: "Info", Version: "1.0",
-				Description:    "Time, date, timezone, and currency utilities.",
+				Description:    "Time, date, timezone, and currency lookups.",
 				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,
 				Category: "information", Capabilities: []string{"time", "currency"}, Tags: []string{"time", "date", "currency", "timezone"},
 			},
@@ -206,7 +206,7 @@ func builtInSkills() []SkillRecord {
 		{
 			Manifest: SkillManifestInfo{
 				ID: "system-actions", Name: "System Actions", Version: "1.0",
-				Description:    "Open apps, manage clipboard, and send notifications on macOS.",
+				Description:    "Open apps, use the clipboard, and send notifications.",
 				LifecycleState: "enabled", RiskLevel: "medium", IsUserVisible: true,
 				Category: "system", Capabilities: []string{"system_control"}, Tags: []string{"macos", "system"},
 			},
@@ -231,7 +231,7 @@ func builtInSkills() []SkillRecord {
 		{
 			Manifest: SkillManifestInfo{
 				ID: "terminal-control", Name: "Terminal Control", Version: "1.0",
-				Description:    "Run shell commands, inspect and manage processes, and interact with the terminal environment.",
+				Description:    "Run commands and inspect local processes.",
 				LifecycleState: "enabled", RiskLevel: "high", IsUserVisible: true,
 				Category: "system", Capabilities: []string{"shell_exec", "process_management"}, Tags: []string{"terminal", "shell", "processes"},
 			},
@@ -248,7 +248,7 @@ func builtInSkills() []SkillRecord {
 		{
 			Manifest: SkillManifestInfo{
 				ID: "applescript-automation", Name: "AppleScript Automation", Version: "1.0",
-				Description:    "Control Calendar, Reminders, Contacts, Mail, Safari, Notes, and Music via AppleScript.",
+				Description:    "Control supported macOS apps with AppleScript.",
 				LifecycleState: "enabled", RiskLevel: "medium", IsUserVisible: true,
 				Category: "automation", Capabilities: []string{"apple_apps"}, Tags: []string{"applescript", "macos"},
 			},
@@ -276,7 +276,7 @@ func builtInSkills() []SkillRecord {
 		{
 			Manifest: SkillManifestInfo{
 				ID: "finance", Name: "Finance", Version: "1.0",
-				Description:    "Real-time stock and crypto quotes, price history, and portfolio lookups via Yahoo Finance.",
+				Description:    "Quotes, price history, and portfolio lookups.",
 				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,
 				Category: "information", Capabilities: []string{"finance"}, Tags: []string{"finance", "stocks", "crypto"},
 			},
@@ -289,7 +289,7 @@ func builtInSkills() []SkillRecord {
 		{
 			Manifest: SkillManifestInfo{
 				ID: "voice", Name: "Voice", Version: "2.0",
-				Description:    "Local Whisper speech-to-text and Kokoro text-to-speech. Voice servers start on demand and stop when the session ends.",
+				Description:    "Local speech-to-text and text-to-speech.",
 				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,
 				Category: "system", Capabilities: []string{"speech_to_text", "text_to_speech"}, Tags: []string{"voice", "whisper", "kokoro", "stt", "tts"},
 			},
@@ -301,7 +301,7 @@ func builtInSkills() []SkillRecord {
 		{
 			Manifest: SkillManifestInfo{
 				ID: "image-generation", Name: "Image Generation", Version: "1.0",
-				Description:    "Generate and edit images using OpenAI DALL-E.",
+				Description:    "Generate and edit images.",
 				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,
 				Category: "creative", Capabilities: []string{"image_generation"}, Tags: []string{"image", "dalle", "openai"},
 			},
@@ -312,41 +312,61 @@ func builtInSkills() []SkillRecord {
 		},
 		{
 			Manifest: SkillManifestInfo{
-				ID: "gremlin-management", Name: "Gremlin Management", Version: "1.0",
-				Description:    "Full lifecycle management of Atlas automations (Gremlins) — create, update, delete, enable/disable, run, and inspect history.",
+				ID: "automation-control", Name: "Automation Control", Version: "2.0",
+				Description:    "Create, run, and manage automations.",
 				LifecycleState: "enabled", RiskLevel: "medium", IsUserVisible: true,
-				Category: "automation", Capabilities: []string{"automation_management"}, Tags: []string{"gremlins", "automations"},
+				Category: "automation", Capabilities: []string{"automation_management"}, Tags: []string{"automations", "scheduler"},
 			},
 			Actions: []SkillAction{
-				{ID: "gremlin.create", Name: "Create Automation", Description: "Create a new scheduled automation.", PermissionLevel: "execute", IsEnabled: true},
-				{ID: "gremlin.update", Name: "Update Automation", Description: "Update an existing automation.", PermissionLevel: "execute", IsEnabled: true},
-				{ID: "gremlin.delete", Name: "Delete Automation", Description: "Delete an automation.", PermissionLevel: "execute", IsEnabled: true},
-				{ID: "gremlin.list", Name: "List Automations", Description: "List all automations.", PermissionLevel: "read", IsEnabled: true},
-				{ID: "gremlin.get", Name: "Get Automation", Description: "Get full details of a single automation.", PermissionLevel: "read", IsEnabled: true},
-				{ID: "gremlin.enable", Name: "Enable Automation", Description: "Enable a disabled automation.", PermissionLevel: "execute", IsEnabled: true},
-				{ID: "gremlin.disable", Name: "Disable Automation", Description: "Disable a running automation.", PermissionLevel: "execute", IsEnabled: true},
-				{ID: "gremlin.run_now", Name: "Run Now", Description: "Immediately trigger an automation.", PermissionLevel: "execute", IsEnabled: true},
-				{ID: "gremlin.run_history", Name: "Run History", Description: "Show recent run history for an automation.", PermissionLevel: "read", IsEnabled: true},
-				{ID: "gremlin.next_run", Name: "Next Run", Description: "Calculate the next scheduled run time.", PermissionLevel: "read", IsEnabled: true},
-				{ID: "gremlin.duplicate", Name: "Duplicate Automation", Description: "Clone an automation under a new name.", PermissionLevel: "execute", IsEnabled: true},
-				{ID: "gremlin.validate_schedule", Name: "Validate Schedule", Description: "Validate a schedule string.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "automation.create", Name: "Create Automation", Description: "Create a new Atlas automation.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "automation.update", Name: "Update Automation", Description: "Update an existing automation.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "automation.delete", Name: "Delete Automation", Description: "Delete an automation by ID or exact name.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "automation.list", Name: "List Automations", Description: "List Atlas automations and their current state.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "automation.get", Name: "Get Automation", Description: "Inspect a single automation.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "automation.enable", Name: "Enable Automation", Description: "Enable a disabled automation.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "automation.disable", Name: "Disable Automation", Description: "Disable an automation.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "automation.run", Name: "Run Automation", Description: "Run an automation immediately.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "automation.run_history", Name: "Run History", Description: "Show recent automation run history.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "automation.next_run", Name: "Next Run", Description: "Estimate the next scheduled run time.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "automation.duplicate", Name: "Duplicate Automation", Description: "Duplicate an automation under a new name.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "automation.validate_schedule", Name: "Validate Schedule", Description: "Validate an automation schedule string.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
+			},
+		},
+		{
+			Manifest: SkillManifestInfo{
+				ID: "workflow-control", Name: "Workflow Control", Version: "1.0",
+				Description:    "Create, run, and inspect reusable workflows.",
+				LifecycleState: "enabled", RiskLevel: "medium", IsUserVisible: true,
+				Category: "automation", Capabilities: []string{"workflow_management"}, Tags: []string{"workflows", "processes"},
+			},
+			Actions: []SkillAction{
+				{ID: "workflow.create", Name: "Create Workflow", Description: "Create a reusable Atlas workflow.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "workflow.update", Name: "Update Workflow", Description: "Update an existing workflow.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "workflow.delete", Name: "Delete Workflow", Description: "Delete a workflow by ID or exact name.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "workflow.list", Name: "List Workflows", Description: "List Atlas workflows and their current state.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "workflow.get", Name: "Get Workflow", Description: "Inspect a single workflow.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "workflow.run", Name: "Run Workflow", Description: "Run a workflow immediately.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "workflow.run_history", Name: "Run History", Description: "Show recent workflow run history.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "workflow.duplicate", Name: "Duplicate Workflow", Description: "Duplicate a workflow under a new name.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "workflow.validate", Name: "Validate Workflow", Description: "Validate a workflow definition.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "workflow.explain", Name: "Explain Workflow", Description: "Explain what a workflow does and how it is constrained.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
 			},
 		},
 		{
 			Manifest: SkillManifestInfo{
 				ID: "forge", Name: "Forge", Version: "1.4",
-				Description:    "Atlas Forge — propose new API skill integrations directly from conversation. Runs 8-gate quality validation including live API pre-validation before persisting a proposal.",
+				Description:    "Draft and validate new API skill integrations.",
 				LifecycleState: "enabled", RiskLevel: "medium", IsUserVisible: true,
 				Category: "development", Capabilities: []string{"skill_forge"}, Tags: []string{"forge", "api", "integration"},
 			},
 			Actions: []SkillAction{
-				{ID: "forge.orchestration.propose", Name: "Propose Forge Skill", Description: "Propose a new Forge skill with full quality-gate validation. For API skills, provide contract_json capturing your API research.", PermissionLevel: "draft", IsEnabled: true},
+				{ID: "forge.orchestration.propose", Name: "Propose Forge Skill", Description: "Draft a skill proposal with validation checks.", PermissionLevel: "draft", IsEnabled: true},
 			},
 		},
 		{
 			Manifest: SkillManifestInfo{
 				ID: "browser-control", Name: "Browser Control", Version: "1.1",
-				Description:    "Control a real browser — navigate, screenshot, fill forms, manage multi-tab sessions, run JS, upload files, and handle 2FA. Requires Google Chrome.",
+				Description:    "Navigate, inspect, and interact with browser pages.",
 				LifecycleState: "enabled", RiskLevel: "high", IsUserVisible: true,
 				Category: "automation", Capabilities: []string{"browser_automation", "web_interaction", "session_management", "multi_tab", "iframe_support"}, Tags: []string{"browser", "web", "automation"},
 			},
@@ -388,7 +408,7 @@ func builtInSkills() []SkillRecord {
 		{
 			Manifest: SkillManifestInfo{
 				ID: "vault", Name: "Vault", Version: "1.0",
-				Description:    "Secure credential vault — store, retrieve, and manage passwords, tokens, and TOTP 2FA secrets created or discovered by the agent.",
+				Description:    "Store and retrieve credentials securely.",
 				LifecycleState: "enabled", RiskLevel: "medium", IsUserVisible: false,
 				Category: "security", Capabilities: []string{"credential_storage", "totp_generation"}, Tags: []string{"vault", "credentials", "2fa", "security"},
 			},
@@ -404,7 +424,7 @@ func builtInSkills() []SkillRecord {
 		{
 			Manifest: SkillManifestInfo{
 				ID: "memory", Name: "Memory", Version: "1.0",
-				Description:    "Save facts to and recall facts from Atlas's long-term memory store. Use memory.save for explicit user directives and commitments. Use memory.recall to check what you already know before asking.",
+				Description:    "Save and recall long-term context.",
 				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,
 				Category: "core", Capabilities: []string{"memory_write", "memory_read"}, Tags: []string{"memory", "recall"},
 			},
@@ -433,6 +453,10 @@ func ListSkills(supportDir string) []SkillRecord {
 			action := &records[i].Actions[j]
 			if policy, ok := policies[action.ID]; ok {
 				action.ApprovalPolicy = policy
+			} else if action.ApprovalPolicy != "" {
+				// Preserve explicit defaults for module-owned control surfaces such
+				// as automation.* and workflow.*.
+				continue
 			} else {
 				// Default: read → auto_approve, others → always_ask
 				if action.PermissionLevel == "read" {

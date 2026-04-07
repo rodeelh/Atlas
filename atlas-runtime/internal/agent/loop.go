@@ -6,8 +6,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -144,6 +146,17 @@ type LoopConfig struct {
 	// when the model calls request_tools, SelectiveToolDefs runs against this
 	// message to pick the right capability groups for the upgrade.
 	UserMessage string
+	// ToolPolicy optionally constrains tool calls for workflow/trust-bound runs.
+	ToolPolicy *ToolPolicy
+}
+
+// ToolPolicy constrains tools available to a trust-bounded agent run.
+type ToolPolicy struct {
+	ApprovedRootPaths   []string
+	AllowedToolPrefixes []string
+	AllowsSensitiveRead bool
+	AllowsLiveWrite     bool
+	Enabled             bool
 }
 
 // Loop is the multi-turn agent loop.
@@ -340,7 +353,12 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 
 		var needApproval []OAIToolCall
 		var canRun []OAIToolCall
+		var blocked []toolPolicyBlock
 		for _, tc := range sr.ToolCalls {
+			if block, ok := l.blockedByToolPolicy(cfg.ToolPolicy, tc); ok {
+				blocked = append(blocked, block)
+				continue
+			}
 			if l.Skills.NeedsApproval(tc.Function.Name) {
 				needApproval = append(needApproval, tc)
 			} else {
@@ -350,6 +368,16 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 
 		if len(needApproval) > 0 {
 			messages = append(messages, assistantMsg)
+			for _, block := range blocked {
+				messages = append(messages, block.message())
+				l.BC.Emit(convID, EmitEvent{
+					Type:       "tool_failed",
+					ToolName:   block.ActionID,
+					ToolCallID: block.ToolCallID,
+					ConvID:     convID,
+					Error:      block.Reason,
+				})
+			}
 			pendingApprovals, deferErr := l.deferToolCalls(ctx, needApproval, messages, convID, cfg.SupportDir)
 			if deferErr != nil {
 				return RunResult{Status: "error", Error: deferErr, TotalUsage: totalUsage}
@@ -373,6 +401,20 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 
 		// All tool calls can run without approval.
 		messages = append(messages, assistantMsg)
+		for _, block := range blocked {
+			logstore.Write("warn", "Workflow tool policy blocked: "+block.ActionID, map[string]string{
+				"conv":   shortConv,
+				"reason": block.Reason,
+			})
+			messages = append(messages, block.message())
+			l.BC.Emit(convID, EmitEvent{
+				Type:       "tool_failed",
+				ToolName:   block.ActionID,
+				ToolCallID: block.ToolCallID,
+				ConvID:     convID,
+				Error:      block.Reason,
+			})
+		}
 
 		// Execute tool calls with parallelism for stateless tools.
 		// Stateful tools (browser.*) run serially to protect shared Chrome state.
@@ -702,6 +744,117 @@ type toolExecResult struct {
 	result    skills.ToolResult
 	execErr   error
 	elapsedMs int64
+}
+
+type toolPolicyBlock struct {
+	ToolCallID string
+	ActionID   string
+	Reason     string
+}
+
+func (b toolPolicyBlock) message() OAIMessage {
+	result := skills.ErrResult("run "+b.ActionID, "workflow trust scope", false, errors.New(b.Reason))
+	return OAIMessage{
+		Role:       "tool",
+		Content:    result.FormatForModel(),
+		ToolCallID: b.ToolCallID,
+		Name:       b.ActionID,
+	}
+}
+
+func (l *Loop) blockedByToolPolicy(policy *ToolPolicy, tc OAIToolCall) (toolPolicyBlock, bool) {
+	if policy == nil || !policy.Enabled {
+		return toolPolicyBlock{}, false
+	}
+	actionID := l.Skills.Canonicalize(tc.Function.Name)
+	block := toolPolicyBlock{ToolCallID: tc.ID, ActionID: tc.Function.Name}
+	if len(policy.AllowedToolPrefixes) > 0 && !hasAllowedToolPrefix(actionID, policy.AllowedToolPrefixes) && !isCoreTool(actionID) {
+		block.Reason = fmt.Sprintf("workflow trust scope does not allow tool %s", actionID)
+		return block, true
+	}
+	if !policy.AllowsLiveWrite {
+		switch l.Skills.GetActionClass(actionID) {
+		case skills.ActionClassLocalWrite, skills.ActionClassDestructiveLocal, skills.ActionClassExternalSideEffect, skills.ActionClassSendPublishDelete:
+			block.Reason = fmt.Sprintf("workflow trust scope blocks live-write or side-effect tool %s", actionID)
+			return block, true
+		}
+	}
+	if !policy.AllowsSensitiveRead && isSensitiveReadTool(actionID) {
+		block.Reason = fmt.Sprintf("workflow trust scope blocks sensitive-read tool %s", actionID)
+		return block, true
+	}
+	if strings.HasPrefix(actionID, "fs.") {
+		if path, ok := toolPathArgument(tc.Function.Arguments); ok {
+			if len(policy.ApprovedRootPaths) == 0 {
+				block.Reason = fmt.Sprintf("workflow trust scope blocks filesystem tool %s because no approved workflow roots are configured", actionID)
+				return block, true
+			}
+			if !pathWithinRoots(path, policy.ApprovedRootPaths) {
+				block.Reason = fmt.Sprintf("workflow trust scope blocks path %q outside approved workflow roots", path)
+				return block, true
+			}
+		}
+	}
+	return toolPolicyBlock{}, false
+}
+
+func hasAllowedToolPrefix(actionID string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		prefix = strings.TrimSpace(prefix)
+		if prefix != "" && strings.HasPrefix(actionID, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCoreTool(actionID string) bool {
+	return strings.HasPrefix(actionID, "info.") || actionID == requestToolsName
+}
+
+func isSensitiveReadTool(actionID string) bool {
+	switch {
+	case strings.HasPrefix(actionID, "vault."),
+		strings.HasPrefix(actionID, "memory."),
+		strings.HasPrefix(actionID, "browser."),
+		strings.HasPrefix(actionID, "applescript.mail_"),
+		strings.HasPrefix(actionID, "applescript.contacts_"):
+		return true
+	}
+	return false
+}
+
+func toolPathArgument(args string) (string, bool) {
+	var p struct {
+		Path       string `json:"path"`
+		TargetPath string `json:"targetPath"`
+	}
+	if err := json.Unmarshal([]byte(args), &p); err != nil {
+		return "", false
+	}
+	path := strings.TrimSpace(p.Path)
+	if path == "" {
+		path = strings.TrimSpace(p.TargetPath)
+	}
+	if path == "" {
+		return "", false
+	}
+	return path, true
+}
+
+func pathWithinRoots(path string, roots []string) bool {
+	clean := filepath.Clean(path)
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		cleanRoot := filepath.Clean(root)
+		if clean == cleanRoot || strings.HasPrefix(clean, cleanRoot+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // execTool runs one tool call and returns a toolExecResult.

@@ -50,6 +50,41 @@ func TestModule_ListSkillsReturnsCurrentShape(t *testing.T) {
 	if body == nil {
 		t.Fatal("expected [] not null")
 	}
+	var foundAutomation, foundWorkflow bool
+	for _, rec := range body {
+		manifest, _ := rec["manifest"].(map[string]any)
+		switch manifest["id"] {
+		case "gremlin-management":
+			t.Fatal("legacy gremlin-management should not be visible in the skills catalog")
+		case "automation-control":
+			foundAutomation = true
+			assertActionPolicy(t, rec, "automation.run", "auto_approve")
+		case "workflow-control":
+			foundWorkflow = true
+			assertActionPolicy(t, rec, "workflow.run", "auto_approve")
+		}
+	}
+	if !foundAutomation {
+		t.Fatal("expected automation-control skill")
+	}
+	if !foundWorkflow {
+		t.Fatal("expected workflow-control skill")
+	}
+}
+
+func assertActionPolicy(t *testing.T, rec map[string]any, actionID, want string) {
+	t.Helper()
+	actions, _ := rec["actions"].([]any)
+	for _, raw := range actions {
+		action, _ := raw.(map[string]any)
+		if action["id"] == actionID {
+			if got, _ := action["approvalPolicy"].(string); got != want {
+				t.Fatalf("%s approvalPolicy = %q, want %q", actionID, got, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing action %s", actionID)
 }
 
 func TestModule_AddFsRootPersistsRoot(t *testing.T) {

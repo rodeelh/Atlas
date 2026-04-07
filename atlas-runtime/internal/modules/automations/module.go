@@ -30,6 +30,7 @@ type Module struct {
 	supportDir string
 	store      platform.AutomationStore
 	commsStore platform.CommunicationsStore
+	workflows  platform.WorkflowStore
 	agent      platform.AgentRuntime
 	bus        platform.EventBus
 	delivery   AutomationDelivery
@@ -76,6 +77,7 @@ func (m *Module) Manifest() platform.Manifest {
 func (m *Module) Register(host platform.Host) error {
 	m.store = host.Storage().Automations()
 	m.commsStore = host.Storage().Communications()
+	m.workflows = host.Storage().Workflows()
 	m.agent = host.AgentRuntime()
 	m.bus = host.Bus()
 	if err := m.importLegacyDefinitions(false); err != nil {
@@ -424,7 +426,7 @@ func (m *Module) runAutomationSync(ctx context.Context, id, trigger string) (Run
 
 func (m *Module) executeAutomationRun(ctx context.Context, item features.GremlinItem, runID, convID string) RunResult {
 	started := time.Now()
-	prompt, workflowRunID, prepErr := m.prepareAutomationPrompt(item, runID, convID)
+	prompt, workflowRunID, workflowStartedAt, prepErr := m.prepareAutomationPrompt(item, runID, convID)
 	if workflowRunID != "" {
 		_ = m.store.UpdateGremlinRunWorkflowRunID(runID, workflowRunID)
 	}
@@ -433,9 +435,6 @@ func (m *Module) executeAutomationRun(ctx context.Context, item features.Gremlin
 		output := prepErr.Error()
 		durationMs := time.Since(started).Milliseconds()
 		_ = m.store.CompleteGremlinRun(runID, "failed", nil, &output, finishedAt, "skipped", nil, durationMs, runArtifactsJSON("failed", "skipped", nil))
-		if workflowRunID != "" {
-			_, _ = workflowexec.CompleteRun(m.supportDir, workflowRunID, "failed")
-		}
 		return RunResult{
 			RunID:          runID,
 			GremlinID:      item.ID,
@@ -483,7 +482,7 @@ func (m *Module) executeAutomationRun(ctx context.Context, item features.Gremlin
 		}
 	}
 	if workflowRunID != "" {
-		_, _ = workflowexec.CompleteRun(m.supportDir, workflowRunID, status)
+		_ = workflowexec.CompleteRun(m.workflows, workflowRunID, status, output, strVal(errorMessage), workflowStartedAt)
 	}
 	durationMs := time.Since(started).Milliseconds()
 	artifactsJSON := runArtifactsJSON(status, deliveryStatus, deliveryError)
@@ -514,10 +513,10 @@ func (m *Module) executeAutomationRun(ctx context.Context, item features.Gremlin
 	}
 }
 
-func (m *Module) prepareAutomationPrompt(item features.GremlinItem, runID, convID string) (string, string, error) {
+func (m *Module) prepareAutomationPrompt(item features.GremlinItem, runID, convID string) (string, string, time.Time, error) {
 	basePrompt := buildAutomationPrompt(item)
 	if item.WorkflowID == nil || strings.TrimSpace(*item.WorkflowID) == "" {
-		return basePrompt, "", nil
+		return basePrompt, "", time.Time{}, nil
 	}
 	workflowID := strings.TrimSpace(*item.WorkflowID)
 	workflowRunID := "workflow-" + runID
@@ -525,11 +524,11 @@ func (m *Module) prepareAutomationPrompt(item features.GremlinItem, runID, convI
 	if strings.TrimSpace(item.Prompt) != "" {
 		extraInstruction = basePrompt
 	}
-	prepared, err := workflowexec.PrepareRun(m.supportDir, workflowID, workflowRunID, convID, item.WorkflowInputValues, extraInstruction)
+	prepared, err := workflowexec.PrepareRun(m.workflows, workflowID, workflowRunID, convID, "automation", item.WorkflowInputValues, extraInstruction)
 	if err != nil {
-		return "", "", err
+		return "", "", time.Time{}, err
 	}
-	return prepared.Prompt, workflowRunID, nil
+	return prepared.Prompt, workflowRunID, prepared.StartedAt, nil
 }
 
 func (m *Module) deliverAutomationOutput(item features.GremlinItem, output string) error {

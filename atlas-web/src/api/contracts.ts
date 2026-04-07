@@ -315,6 +315,25 @@ export interface GremlinItem {
   communicationDestination?: CommunicationDestination
 }
 
+export interface AutomationSummary {
+  id: string
+  name: string
+  emoji: string
+  prompt: string
+  scheduleRaw: string
+  isEnabled: boolean
+  sourceType: string
+  createdAt: string
+  communicationDestination?: CommunicationDestination
+  lastRunAt?: string
+  lastRunStatus?: string
+  lastRunError?: string
+  nextRunAt?: string
+  health: string
+  deliveryHealth: string
+  destinationLabel?: string
+}
+
 export type ForgeProposalStatus = 'pending' | 'installed' | 'enabled' | 'rejected' | 'uninstalled'
 
 export interface ForgeProposalRecord {
@@ -453,6 +472,18 @@ export interface WorkflowDefinition {
   updatedAt: string
   sourceConversationID?: string
   isEnabled: boolean
+}
+
+export interface WorkflowSummary {
+  id: string
+  name: string
+  description: string
+  isEnabled: boolean
+  stepCount: number
+  health: string
+  lastRunAt?: string
+  lastRunStatus?: string
+  lastRunError?: string
 }
 
 export interface WorkflowApproval {

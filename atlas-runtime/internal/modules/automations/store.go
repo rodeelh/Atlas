@@ -196,38 +196,6 @@ func (m *Module) deleteDefinition(id string) (bool, error) {
 	return found, nil
 }
 
-func mergeAutomationUpdate(existing, updates features.GremlinItem) features.GremlinItem {
-	out := existing
-	if strings.TrimSpace(updates.Name) != "" {
-		out.Name = updates.Name
-	}
-	if strings.TrimSpace(updates.Emoji) != "" {
-		out.Emoji = updates.Emoji
-	}
-	if strings.TrimSpace(updates.Prompt) != "" {
-		out.Prompt = updates.Prompt
-	}
-	if strings.TrimSpace(updates.ScheduleRaw) != "" {
-		out.ScheduleRaw = updates.ScheduleRaw
-	}
-	out.IsEnabled = updates.IsEnabled
-	if updates.SourceType != "" {
-		out.SourceType = updates.SourceType
-	}
-	out.WorkflowID = updates.WorkflowID
-	out.WorkflowInputValues = updates.WorkflowInputValues
-	out.TelegramChatID = updates.TelegramChatID
-	out.CommunicationDestination = updates.CommunicationDestination
-	if updates.GremlinDescription != nil {
-		out.GremlinDescription = updates.GremlinDescription
-	}
-	if updates.Tags != nil {
-		out.Tags = updates.Tags
-	}
-	out.LastModifiedAt = strPtr(time.Now().UTC().Format(time.RFC3339))
-	return out
-}
-
 func mergeAutomationPatch(existing features.GremlinItem, raw map[string]json.RawMessage) (features.GremlinItem, error) {
 	out := existing
 	if value, ok, err := patchString(raw, "name"); err != nil {

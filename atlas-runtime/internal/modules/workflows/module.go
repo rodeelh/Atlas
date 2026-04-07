@@ -3,15 +3,15 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
-	"atlas-runtime-go/internal/chat"
-	"atlas-runtime-go/internal/features"
 	"atlas-runtime-go/internal/platform"
+	"atlas-runtime-go/internal/skills"
 	"atlas-runtime-go/internal/workflowexec"
 )
 
@@ -22,8 +22,10 @@ const (
 
 type Module struct {
 	supportDir string
+	store      platform.WorkflowStore
 	agent      platform.AgentRuntime
 	bus        platform.EventBus
+	skills     *skills.Registry
 }
 
 func New(supportDir string) *Module {
@@ -40,8 +42,13 @@ func (m *Module) Manifest() platform.Manifest {
 }
 
 func (m *Module) Register(host platform.Host) error {
+	m.store = host.Storage().Workflows()
 	m.agent = host.AgentRuntime()
 	m.bus = host.Bus()
+	if err := m.importLegacyDefinitions(); err != nil {
+		return fmt.Errorf("import legacy workflows: %w", err)
+	}
+	m.registerAgentActions()
 	host.MountProtected(m.registerRoutes)
 	return nil
 }
@@ -50,9 +57,14 @@ func (m *Module) Start(context.Context) error { return nil }
 
 func (m *Module) Stop(context.Context) error { return nil }
 
+func (m *Module) SetSkillRegistry(registry *skills.Registry) {
+	m.skills = registry
+}
+
 func (m *Module) registerRoutes(r chi.Router) {
 	r.Get("/workflows", m.listWorkflows)
 	r.Post("/workflows", m.createWorkflow)
+	r.Get("/workflows/summaries", m.listWorkflowSummaries)
 	r.Get("/workflows/runs", m.listWorkflowRuns)
 	r.Post("/workflows/runs/{runID}/approve", m.approveWorkflowRun)
 	r.Post("/workflows/runs/{runID}/deny", m.denyWorkflowRun)
@@ -64,28 +76,48 @@ func (m *Module) registerRoutes(r chi.Router) {
 }
 
 func (m *Module) listWorkflows(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, features.ListWorkflowDefinitions(m.supportDir))
+	items, err := m.listDefinitions()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list workflows: "+err.Error())
+		return
+	}
+	if items == nil {
+		items = []map[string]any{}
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (m *Module) getWorkflow(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	raw := features.GetWorkflowDefinition(m.supportDir, id)
-	if raw == nil {
+	def, ok, err := m.getDefinition(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load workflow: "+err.Error())
+		return
+	}
+	if !ok {
 		writeError(w, http.StatusNotFound, "workflow not found: "+id)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(raw)
+	writeJSON(w, http.StatusOK, def)
 }
 
 func (m *Module) listWorkflowRuns(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, features.ListWorkflowRuns(m.supportDir, ""))
+	runs, err := m.listRuns("", 100)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list workflow runs: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, runs)
 }
 
 func (m *Module) getWorkflowRuns(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	writeJSON(w, http.StatusOK, features.ListWorkflowRuns(m.supportDir, id))
+	runs, err := m.listRuns(id, 100)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list workflow runs: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, runs)
 }
 
 func (m *Module) createWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -94,15 +126,9 @@ func (m *Module) createWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if _, ok := body["id"]; !ok {
-		body["id"] = newID()
-	}
-	if _, ok := body["createdAt"]; !ok {
-		body["createdAt"] = time.Now().UTC().Format(time.RFC3339)
-	}
-	result, err := features.AppendWorkflowDefinition(m.supportDir, body)
+	result, err := m.createDefinition(body)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, result)
@@ -115,13 +141,12 @@ func (m *Module) updateWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	body["id"] = id
-	result, err := features.UpdateWorkflowDefinition(m.supportDir, id, body)
+	result, ok, err := m.updateDefinition(id, body)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if result == nil {
+	if !ok {
 		writeError(w, http.StatusNotFound, "workflow not found: "+id)
 		return
 	}
@@ -130,7 +155,7 @@ func (m *Module) updateWorkflow(w http.ResponseWriter, r *http.Request) {
 
 func (m *Module) deleteWorkflow(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	found, err := features.DeleteWorkflowDefinition(m.supportDir, id)
+	found, err := m.deleteDefinition(id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -144,61 +169,24 @@ func (m *Module) deleteWorkflow(w http.ResponseWriter, r *http.Request) {
 
 func (m *Module) runWorkflow(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if features.GetWorkflowDefinition(m.supportDir, id) == nil {
-		writeError(w, http.StatusNotFound, "workflow not found: "+id)
-		return
+	var body struct {
+		InputValues map[string]string `json:"inputValues"`
 	}
-	if m.agent == nil {
-		writeError(w, http.StatusNotImplemented, "agent loop not available")
-		return
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
-
-	runID := newID()
-	convID := newID()
-	prepared, err := workflowexec.PrepareRun(m.supportDir, id, runID, convID, nil, "")
+	prepared, err := m.startWorkflowRun(id, body.InputValues, "http")
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "workflow not found:") {
-			writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeWorkflowRunError(w, err)
 		return
 	}
-
-	if m.bus != nil {
-		_ = m.bus.Publish(context.Background(), startedEventName, map[string]string{
-			"id":             runID,
-			"workflowID":     id,
-			"conversationID": convID,
-		})
-	}
-
-	go func(prompt, runID, workflowID, conversationID string) {
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		defer cancel()
-		req := chat.MessageRequest{Message: prompt, ConversationID: conversationID}
-		resp, execErr := m.agent.HandleMessage(ctx, req)
-		status := "completed"
-		if execErr != nil || resp.Response.Status == "error" {
-			status = "failed"
-		}
-		_, _ = workflowexec.CompleteRun(m.supportDir, runID, status)
-		if m.bus != nil {
-			_ = m.bus.Publish(context.Background(), completedEventName, map[string]string{
-				"id":             runID,
-				"workflowID":     workflowID,
-				"conversationID": conversationID,
-				"status":         status,
-			})
-		}
-	}(prepared.Prompt, runID, id, convID)
-
+	go m.finishWorkflowRun(context.Background(), prepared)
 	writeJSON(w, http.StatusAccepted, prepared.Record)
 }
 
 func (m *Module) approveWorkflowRun(w http.ResponseWriter, r *http.Request) {
 	runID := chi.URLParam(r, "runID")
-	result, err := features.UpdateWorkflowRunStatus(m.supportDir, runID, "approved")
+	result, err := m.updateRunStatus(runID, "approved")
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -208,12 +196,108 @@ func (m *Module) approveWorkflowRun(w http.ResponseWriter, r *http.Request) {
 
 func (m *Module) denyWorkflowRun(w http.ResponseWriter, r *http.Request) {
 	runID := chi.URLParam(r, "runID")
-	result, err := features.UpdateWorkflowRunStatus(m.supportDir, runID, "denied")
+	result, err := m.updateRunStatus(runID, "denied")
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (m *Module) startWorkflowRun(id string, inputValues map[string]string, triggerSource string) (workflowexec.PreparedRun, error) {
+	if m.agent == nil {
+		return workflowexec.PreparedRun{}, errAgentUnavailable
+	}
+	def, ok, err := m.getDefinition(id)
+	if err != nil {
+		return workflowexec.PreparedRun{}, err
+	}
+	if !ok {
+		return workflowexec.PreparedRun{}, fmt.Errorf("workflow not found: %s", id)
+	}
+	if enabled, ok := def["isEnabled"].(bool); ok && !enabled {
+		return workflowexec.PreparedRun{}, fmt.Errorf("workflow disabled: %s", id)
+	}
+	runID := newID()
+	convID := newID()
+	prepared, err := workflowexec.PrepareRun(m.store, id, runID, convID, triggerSource, inputValues, "")
+	if err != nil {
+		return workflowexec.PreparedRun{}, err
+	}
+	m.publishStarted(prepared)
+	return prepared, nil
+}
+
+func (m *Module) finishWorkflowRun(parent context.Context, prepared workflowexec.PreparedRun) map[string]any {
+	ctx, cancel := context.WithTimeout(parent, 120*time.Second)
+	defer cancel()
+	status, summary, errorMessage, stepRuns := m.executePreparedWorkflow(ctx, prepared)
+	_ = workflowexec.CompleteRun(m.store, prepared.RunID, status, summary, errorMessage, prepared.StartedAt)
+	m.publishCompleted(prepared, status)
+	record := prepared.Record
+	record["status"] = status
+	record["stepRuns"] = stepRuns
+	if summary != "" {
+		record["assistantSummary"] = summary
+	}
+	if errorMessage != "" {
+		record["errorMessage"] = errorMessage
+	}
+	return record
+}
+
+func (m *Module) runWorkflowSync(ctx context.Context, id string, inputValues map[string]string, triggerSource string) (map[string]any, error) {
+	prepared, err := m.startWorkflowRun(id, inputValues, triggerSource)
+	if err != nil {
+		return nil, err
+	}
+	record := m.finishWorkflowRun(ctx, prepared)
+	if status, _ := record["status"].(string); status == "failed" {
+		if msg, _ := record["errorMessage"].(string); msg != "" {
+			return record, fmt.Errorf("workflow %q failed: %s", id, msg)
+		}
+		return record, fmt.Errorf("workflow %q failed", id)
+	}
+	return record, nil
+}
+
+func (m *Module) publishStarted(prepared workflowexec.PreparedRun) {
+	if m.bus == nil {
+		return
+	}
+	_ = m.bus.Publish(context.Background(), startedEventName, map[string]string{
+		"id":             prepared.RunID,
+		"workflowID":     prepared.WorkflowID,
+		"conversationID": prepared.ConversationID,
+	})
+}
+
+func (m *Module) publishCompleted(prepared workflowexec.PreparedRun, status string) {
+	if m.bus == nil {
+		return
+	}
+	_ = m.bus.Publish(context.Background(), completedEventName, map[string]string{
+		"id":             prepared.RunID,
+		"workflowID":     prepared.WorkflowID,
+		"conversationID": prepared.ConversationID,
+		"status":         status,
+	})
+}
+
+var errAgentUnavailable = fmt.Errorf("agent loop not available")
+
+func writeWorkflowRunError(w http.ResponseWriter, err error) {
+	msg := err.Error()
+	switch {
+	case err == errAgentUnavailable:
+		writeError(w, http.StatusNotImplemented, msg)
+	case strings.HasPrefix(msg, "workflow not found:"):
+		writeError(w, http.StatusNotFound, msg)
+	case strings.HasPrefix(msg, "workflow disabled:"):
+		writeError(w, http.StatusConflict, msg)
+	default:
+		writeError(w, http.StatusInternalServerError, msg)
+	}
 }
 
 func newID() string {

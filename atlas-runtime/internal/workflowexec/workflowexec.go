@@ -6,8 +6,16 @@ import (
 	"strings"
 	"time"
 
-	"atlas-runtime-go/internal/features"
+	"atlas-runtime-go/internal/storage"
 )
+
+// Store is the workflow persistence surface used by HTTP, agent actions, and automations.
+type Store interface {
+	GetWorkflow(id string) (*storage.WorkflowRow, error)
+	SaveWorkflowRun(row storage.WorkflowRunRow) error
+	CompleteWorkflowRun(runID, status string, outcome, assistantSummary, errorMessage, finishedAt *string, durationMs int64, artifactsJSON *string) error
+	UpdateWorkflowRunStepRuns(runID, stepRunsJSON string) error
+}
 
 // PreparedRun contains the runtime state needed to execute a workflow prompt.
 type PreparedRun struct {
@@ -17,35 +25,77 @@ type PreparedRun struct {
 	Prompt         string
 	Definition     map[string]any
 	Record         map[string]any
+	StartedAt      time.Time
 }
 
 // PrepareRun creates a workflow run record and returns the composed prompt for the agent.
-func PrepareRun(supportDir, workflowID, runID, conversationID string, inputValues map[string]string, extraInstruction string) (PreparedRun, error) {
+func PrepareRun(store Store, workflowID, runID, conversationID, triggerSource string, inputValues map[string]string, extraInstruction string) (PreparedRun, error) {
 	workflowID = strings.TrimSpace(workflowID)
 	if workflowID == "" {
 		return PreparedRun{}, fmt.Errorf("workflow ID is required")
 	}
-	raw := features.GetWorkflowDefinition(supportDir, workflowID)
-	if raw == nil {
+	if store == nil {
+		return PreparedRun{}, fmt.Errorf("workflow store is required")
+	}
+	row, err := store.GetWorkflow(workflowID)
+	if err != nil {
+		return PreparedRun{}, fmt.Errorf("load workflow %s: %w", workflowID, err)
+	}
+	if row == nil {
 		return PreparedRun{}, fmt.Errorf("workflow not found: %s", workflowID)
 	}
 	var def map[string]any
-	if err := json.Unmarshal(raw, &def); err != nil {
+	if err := json.Unmarshal([]byte(row.DefinitionJSON), &def); err != nil {
 		return PreparedRun{}, fmt.Errorf("corrupt workflow definition %s: %w", workflowID, err)
 	}
 
 	prompt := ComposePrompt(def, inputValues, extraInstruction)
+	started := time.Now().UTC()
+	workflowName := stringField(def, "name")
+	if workflowName == "" {
+		workflowName = row.Name
+	}
+	stepRuns := InitialStepRuns(def)
 	run := map[string]any{
 		"id":             runID,
 		"workflowID":     workflowID,
+		"workflowName":   workflowName,
 		"status":         "running",
-		"startedAt":      time.Now().UTC().Format(time.RFC3339),
+		"startedAt":      started.Format(time.RFC3339),
 		"conversationID": conversationID,
+		"triggerSource":  triggerSource,
+		"inputValues":    map[string]string{},
+		"stepRuns":       stepRuns,
 	}
 	if len(inputValues) > 0 {
 		run["inputValues"] = inputValues
 	}
-	if err := features.AppendWorkflowRun(supportDir, run); err != nil {
+	inputsJSON := "{}"
+	if len(inputValues) > 0 {
+		if data, err := json.Marshal(inputValues); err == nil {
+			inputsJSON = string(data)
+		}
+	}
+	recordJSON := "{}"
+	if data, err := json.Marshal(run); err == nil {
+		recordJSON = string(data)
+	}
+	stepRunsJSON := "[]"
+	if data, err := json.Marshal(stepRuns); err == nil {
+		stepRunsJSON = string(data)
+	}
+	if err := store.SaveWorkflowRun(storage.WorkflowRunRow{
+		RunID:           runID,
+		WorkflowID:      workflowID,
+		WorkflowName:    workflowName,
+		Status:          "running",
+		InputValuesJSON: inputsJSON,
+		StepRunsJSON:    stepRunsJSON,
+		StartedAt:       started.Format(time.RFC3339),
+		ConversationID:  strPtr(conversationID),
+		TriggerSource:   triggerSource,
+		RecordJSON:      recordJSON,
+	}); err != nil {
 		return PreparedRun{}, fmt.Errorf("create workflow run: %w", err)
 	}
 
@@ -56,16 +106,20 @@ func PrepareRun(supportDir, workflowID, runID, conversationID string, inputValue
 		Prompt:         prompt,
 		Definition:     def,
 		Record:         run,
+		StartedAt:      started,
 	}, nil
 }
 
 // ComposePrompt resolves the workflow prompt and appends optional inputs/instructions.
 func ComposePrompt(def map[string]any, inputValues map[string]string, extraInstruction string) string {
-	workflowPrompt, _ := def["prompt"].(string)
+	workflowPrompt := stringField(def, "promptTemplate")
 	if strings.TrimSpace(workflowPrompt) == "" {
-		if desc, _ := def["description"].(string); strings.TrimSpace(desc) != "" {
+		workflowPrompt = stringField(def, "prompt")
+	}
+	if strings.TrimSpace(workflowPrompt) == "" {
+		if desc := stringField(def, "description"); strings.TrimSpace(desc) != "" {
 			workflowPrompt = desc
-		} else if name, _ := def["name"].(string); strings.TrimSpace(name) != "" {
+		} else if name := stringField(def, "name"); strings.TrimSpace(name) != "" {
 			workflowPrompt = "Execute workflow: " + name
 		} else {
 			workflowPrompt = "Execute this workflow."
@@ -73,6 +127,12 @@ func ComposePrompt(def map[string]any, inputValues map[string]string, extraInstr
 	}
 
 	parts := []string{strings.TrimSpace(workflowPrompt)}
+	if steps := promptSteps(def); len(steps) > 0 {
+		parts = append(parts, "Workflow steps:\n"+strings.Join(steps, "\n"))
+	}
+	if scope := trustScopeInstructions(def); scope != "" {
+		parts = append(parts, "Workflow trust scope:\n"+scope)
+	}
 	if len(inputValues) > 0 {
 		if data, err := json.Marshal(inputValues); err == nil {
 			parts = append(parts, "Workflow input values:\n"+string(data))
@@ -85,6 +145,138 @@ func ComposePrompt(def map[string]any, inputValues map[string]string, extraInstr
 }
 
 // CompleteRun updates a workflow run status and returns the updated record.
-func CompleteRun(supportDir, runID, status string) (map[string]any, error) {
-	return features.UpdateWorkflowRunStatus(supportDir, runID, status)
+func CompleteRun(store Store, runID, status, assistantSummary, errorMessage string, startedAt time.Time) error {
+	if store == nil {
+		return fmt.Errorf("workflow store is required")
+	}
+	finished := time.Now().UTC()
+	finishedStr := finished.Format(time.RFC3339)
+	durationMs := int64(0)
+	if !startedAt.IsZero() {
+		durationMs = finished.Sub(startedAt).Milliseconds()
+	}
+	var outcome *string
+	if status == "completed" {
+		outcome = strPtr("success")
+	} else if status != "" {
+		outcome = strPtr(status)
+	}
+	var summary *string
+	if strings.TrimSpace(assistantSummary) != "" {
+		summary = strPtr(strings.TrimSpace(assistantSummary))
+	}
+	var errMsg *string
+	if strings.TrimSpace(errorMessage) != "" {
+		errMsg = strPtr(strings.TrimSpace(errorMessage))
+	}
+	return store.CompleteWorkflowRun(runID, status, outcome, summary, errMsg, &finishedStr, durationMs, nil)
+}
+
+func stringField(def map[string]any, key string) string {
+	value, _ := def[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func promptSteps(def map[string]any) []string {
+	raw, ok := def["steps"].([]any)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for idx, item := range raw {
+		step, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		title := stringField(step, "title")
+		if title == "" {
+			title = fmt.Sprintf("Step %d", idx+1)
+		}
+		kind := stringField(step, "kind")
+		prompt := stringField(step, "prompt")
+		if prompt == "" {
+			continue
+		}
+		if kind == "" {
+			kind = "prompt"
+		}
+		out = append(out, fmt.Sprintf("%d. %s (%s): %s", idx+1, title, kind, prompt))
+	}
+	return out
+}
+
+// InitialStepRuns builds the persisted step-run placeholders for a workflow definition.
+func InitialStepRuns(def map[string]any) []map[string]any {
+	raw, ok := def["steps"].([]any)
+	if !ok {
+		return []map[string]any{}
+	}
+	out := make([]map[string]any, 0, len(raw))
+	for idx, item := range raw {
+		step, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := stringField(step, "id")
+		if id == "" {
+			id = fmt.Sprintf("step-%d", idx+1)
+		}
+		title := stringField(step, "title")
+		if title == "" {
+			title = fmt.Sprintf("Step %d", idx+1)
+		}
+		status := "pending"
+		if kind := stringField(step, "kind"); kind != "" && kind != "prompt" {
+			status = "skipped"
+		}
+		out = append(out, map[string]any{
+			"id":     id + "-run",
+			"stepID": id,
+			"title":  title,
+			"status": status,
+		})
+	}
+	return out
+}
+
+func trustScopeInstructions(def map[string]any) string {
+	scope, ok := def["trustScope"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	var parts []string
+	if paths := stringSlice(scope["approvedRootPaths"]); len(paths) > 0 {
+		parts = append(parts, "Approved root paths: "+strings.Join(paths, ", "))
+	}
+	if apps := stringSlice(scope["allowedApps"]); len(apps) > 0 {
+		parts = append(parts, "Allowed apps/tools: "+strings.Join(apps, ", "))
+	}
+	if sensitive, ok := scope["allowsSensitiveRead"].(bool); ok && !sensitive {
+		parts = append(parts, "Do not read sensitive data unless the user explicitly provides it in this run.")
+	}
+	if liveWrite, ok := scope["allowsLiveWrite"].(bool); ok && !liveWrite {
+		parts = append(parts, "Do not perform live writes or external side effects unless the runtime action-safety policy separately allows them.")
+	}
+	return strings.Join(parts, "\n")
+}
+
+func stringSlice(value any) []string {
+	raw, ok := value.([]any)
+	if !ok {
+		if typed, ok := value.([]string); ok {
+			return typed
+		}
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+			out = append(out, strings.TrimSpace(s))
+		}
+	}
+	return out
+}
+
+func strPtr(v string) *string {
+	return &v
 }

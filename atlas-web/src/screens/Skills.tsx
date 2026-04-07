@@ -26,6 +26,20 @@ function permissionBadge(level: string) {
   }
 }
 
+function sourceBadge(source?: string) {
+  switch ((source ?? '').toLowerCase()) {
+    case 'custom': return <span class="badge badge-blue">Custom</span>
+    case 'forge': return <span class="badge badge-blue">Generated</span>
+    default: return null
+  }
+}
+
+function validationBadge(skill: SkillRecord) {
+  if (!skill.validation) return null
+  const ok = skill.validation.status === 'passed' || skill.validation.status === 'warning'
+  return <span class={`badge ${ok ? 'badge-green' : 'badge-red'}`}>{skill.validation.status}</span>
+}
+
 /* ── Icons ──────────────────────────────────────────────── */
 
 const RefreshIcon = () => (
@@ -57,25 +71,23 @@ const POLICY_LABELS: Record<string, string> = {
 
 /* ── Skill grouping ─────────────────────────────────────── */
 
-type SkillGroupKey = 'capabilities' | 'system' | 'automation' | 'custom'
+type SkillGroupKey = 'agent' | 'capabilities' | 'system' | 'custom'
 
 const SKILL_GROUPS: Array<{ key: SkillGroupKey; label: string; sub: string }> = [
-  { key: 'capabilities', label: 'Capabilities',    sub: 'What Atlas can do for you' },
-  { key: 'system',       label: 'System Skills',    sub: 'File access and system automation' },
-  { key: 'automation',   label: 'Automation',       sub: 'Scheduled task management' },
-  { key: 'custom',       label: 'Custom Skills',    sub: 'User-installed skill extensions' },
+  { key: 'agent',        label: 'Agent Control',     sub: 'Automation and workflow controls exposed to Atlas' },
+  { key: 'capabilities', label: 'Capabilities',      sub: 'Information, research, and creative tools' },
+  { key: 'system',       label: 'System Access',     sub: 'Local files, apps, browser, and device controls' },
+  { key: 'custom',       label: 'Custom Extensions', sub: 'User-installed and generated skill extensions' },
 ]
 
 function classifySkill(skill: SkillRecord): SkillGroupKey | 'hidden' {
   const { id, isUserVisible, category, source } = skill.manifest
   if (!isUserVisible || id === 'websearch-api') return 'hidden'
-  // Both user-installed and forge-generated custom skills land in the custom group.
-  // Forge-generated skills show the purple Forge badge; user-installed show teal Custom badge.
   if (source === 'custom' || source === 'forge') return 'custom'
-  if (id === 'gremlin-management') return 'automation'
+  if (id === 'gremlin-management') return 'hidden'
+  if (id === 'automation-control' || id === 'workflow-control') return 'agent'
   if (id === 'atlas.info') return 'hidden'
-  if (category === 'system' || category === 'productivity') return 'system'
-  if (category === 'automation') return 'automation'
+  if (category === 'system' || category === 'productivity' || category === 'automation') return 'system'
   return 'capabilities'
 }
 
@@ -248,37 +260,28 @@ export function Skills() {
           const isEnabled = skill.manifest.lifecycleState === 'enabled'
           const isExpanded = expanded.has(id)
           return (
-            <div key={id} style={{ borderBottom: isExpanded || i < total - 1 ? '1px solid var(--border)' : 'none' }}>
-              <div class="row" style={{ borderBottom: 'none' }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div class="skill-name" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    {skill.manifest.name}
+            <div key={id} class={`skill-row-shell ${isExpanded ? 'skill-row-shell-expanded' : ''} ${i >= total - 1 ? 'skill-row-shell-last' : ''}`}>
+              <div class="skill-row">
+                <div class="skill-row-copy">
+                  <div class="skill-title-line">
+                    <span class="skill-name">{skill.manifest.name}</span>
                     {riskBadge(skill.manifest.riskLevel)}
-                    {skill.manifest.source === 'forge' && (
-                      <span class="badge" style={{ background: 'var(--badge-forge-bg)', color: 'var(--badge-forge-text)', border: '1px solid var(--badge-forge-border)' }}>Forge</span>
-                    )}
-                    {skill.manifest.source === 'custom' && (
-                      <span class="badge" style={{ background: 'var(--badge-custom-bg)', color: 'var(--badge-custom-text)', border: '1px solid var(--badge-custom-border)' }}>Custom</span>
-                    )}
-                    {skill.validation && (
-                      <span class={`badge ${skill.validation.status === 'passed' || skill.validation.status === 'warning' ? 'badge-green' : 'badge-red'}`}>
-                        {skill.validation.status}
-                      </span>
-                    )}
+                    {sourceBadge(skill.manifest.source)}
+                    {validationBadge(skill)}
                   </div>
                   <div class="skill-meta">
-                    v{skill.manifest.version} · {skill.actions.length} action{skill.actions.length !== 1 ? 's' : ''}
-                    {skill.manifest.description && <> · {skill.manifest.description}</>}
+                    <span>v{skill.manifest.version}</span>
+                    <span>{skill.actions.length} action{skill.actions.length !== 1 ? 's' : ''}</span>
+                    {skill.manifest.description && <span>{skill.manifest.description}</span>}
                   </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <div class="skill-row-controls">
                   <button class="btn btn-sm btn-icon" disabled={acting.has(`v:${id}`)} onClick={() => validate(id)} title="Re-validate">
                     {acting.has(`v:${id}`) ? <span class="spinner" style={{ width: '11px', height: '11px' }} /> : <RefreshIcon />}
                   </button>
                   {skill.manifest.source === 'custom' && (
                     <button
-                      class="btn btn-sm btn-ghost"
-                      style={{ color: 'var(--red)', fontSize: '11px', padding: '2px 7px' }}
+                      class="btn btn-sm btn-ghost skill-remove-btn"
                       disabled={customRemoving.has(id)}
                       onClick={() => removeCustomSkill(id)}
                       title="Remove this custom skill"
@@ -299,43 +302,44 @@ export function Skills() {
               </div>
               {isExpanded && skill.actions.length > 0 && (
                 <div class="skill-actions-list">
-                  <div class="skill-actions-header">
-                    <span class="col-name">Name</span>
-                    <span class="col-desc">Description</span>
-                    <span class="col-level">Level</span>
-                    <span class="col-approval">Approval</span>
+                  <div class="skill-actions-toolbar">
+                    <span>Actions</span>
+                    <span>{skill.actions.length} available</span>
                   </div>
                   {skill.actions.map(action => (
                     <div class="skill-action-row" key={action.id}>
-                      <span class="col-name skill-action-name">{action.name}</span>
-                      <span class="col-desc skill-action-desc">{action.description ?? '—'}</span>
-                      <span class="col-level">{permissionBadge(action.permissionLevel)}</span>
-                      <span class="col-approval">
+                      <div class="skill-action-copy">
+                        <div class="skill-action-heading">
+                          <span class="skill-action-name">{action.name}</span>
+                          {permissionBadge(action.permissionLevel)}
+                        </div>
+                        <div class="skill-action-id">{action.id}</div>
+                        <div class="skill-action-desc">{action.description ?? 'No description provided.'}</div>
+                      </div>
+                      <div class="skill-action-policy">
                         <select class="policy-select" value={policies[action.id] ?? action.approvalPolicy}
                           onChange={e => changePolicy(action.id, (e.target as HTMLSelectElement).value)}>
                           {Object.entries(POLICY_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
                         </select>
-                      </span>
+                      </div>
                     </div>
                   ))}
                   {id === 'file-system' && (
-                    <div style={{ borderTop: '1px solid var(--border)', padding: '14px 16px' }}>
-                      <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-2)', marginBottom: '10px' }}>
-                        Approved Folders
-                      </div>
+                    <div class="skill-fs-roots">
+                      <div class="skill-actions-toolbar"><span>Approved Folders</span></div>
                       {fsRoots.length === 0
-                        ? <div style={{ fontSize: '12.5px', color: 'var(--text-2)', marginBottom: '10px' }}>No folders approved yet. Atlas cannot read or write any files until at least one folder is added.</div>
-                        : <div style={{ marginBottom: '10px' }}>
+                        ? <div class="skill-fs-empty">No folders approved yet. Atlas cannot read or write files until at least one folder is added.</div>
+                        : <div class="skill-fs-list">
                             {fsRoots.map(root => (
-                              <div key={root.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 0', borderBottom: '1px solid var(--border)' }}>
-                                <span style={{ flex: 1, fontSize: '12px', fontFamily: 'monospace', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{root.path}</span>
-                                <button class="btn btn-sm btn-ghost" style={{ color: 'var(--red)', flexShrink: 0 }} onClick={() => removeFsRoot(root.id)}>Remove</button>
+                              <div key={root.id} class="skill-fs-row">
+                                <span>{root.path}</span>
+                                <button class="btn btn-sm btn-ghost skill-remove-btn" onClick={() => removeFsRoot(root.id)}>Remove</button>
                               </div>
                             ))}
                           </div>
                       }
-                      {fsRootError && <div style={{ fontSize: '12px', color: 'var(--red)', marginBottom: '8px' }}>{fsRootError}</div>}
-                      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      {fsRootError && <div class="skill-inline-error">{fsRootError}</div>}
+                      <div class="skill-fs-footer">
                         <button class="btn btn-primary btn-sm" disabled={fsRootAdding} onClick={browseFsFolder}>
                           {fsRootAdding ? <span class="spinner" style={{ width: '11px', height: '11px' }} /> : 'Add Folder'}
                         </button>
@@ -358,7 +362,7 @@ export function Skills() {
               if (!groupSkills.length && !isCustomGroup) return null
 
               return (
-                <div key={group.key} style={{ marginBottom: '20px' }}>
+                <div key={group.key} class="skill-group">
                   <div class="skill-group-header">
                     <span>{group.label}</span>
                     {group.sub && <p class="skill-group-sub">{group.sub}</p>}
@@ -366,31 +370,31 @@ export function Skills() {
 
                   {/* Install feedback */}
                   {isCustomGroup && customInstallMsg && (
-                    <div style={{ fontSize: '12px', color: 'var(--green)', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div class="skill-inline-message skill-inline-message-success">
                       <span>{customInstallMsg}</span>
-                      <button class="btn btn-sm btn-ghost" onClick={() => setCustomInstallMsg(null)}>✕</button>
+                      <button class="btn btn-sm btn-ghost" onClick={() => setCustomInstallMsg(null)}>Close</button>
                     </div>
                   )}
                   {isCustomGroup && customInstallErr && (
-                    <div style={{ fontSize: '12px', color: 'var(--red)', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div class="skill-inline-message skill-inline-message-error">
                       <span>{customInstallErr}</span>
-                      <button class="btn btn-sm btn-ghost" onClick={() => setCustomInstallErr(null)}>✕</button>
+                      <button class="btn btn-sm btn-ghost" onClick={() => setCustomInstallErr(null)}>Close</button>
                     </div>
                   )}
 
                   {isCustomGroup && groupSkills.length === 0 ? (
-                    <div class="card" style={{ padding: '24px 20px', textAlign: 'center' }}>
-                      <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text)', marginBottom: '6px' }}>No custom skills installed</div>
-                      <div style={{ fontSize: '12px', color: 'var(--text-2)', marginBottom: '16px', maxWidth: '400px', margin: '0 auto 16px' }}>
-                        Custom skills are executables in their own folder with a <code style={{ fontFamily: 'monospace', fontSize: '11px' }}>skill.json</code> manifest.
-                        Forge-generated skills also appear here once installed.
+                    <div class="card skill-empty-card">
+                      <div class="skill-empty-title">No custom extensions installed</div>
+                      <div class="skill-empty-copy">
+                        Install a folder that contains a <code>skill.json</code> manifest and executable <code>run</code> entrypoint.
+                        Generated extensions also appear here once installed.
                       </div>
                       <button class="btn btn-primary btn-sm" disabled={customInstalling} onClick={installCustomSkill}>
                         {customInstalling ? <span class="spinner" style={{ width: '11px', height: '11px' }} /> : 'Install from Folder'}
                       </button>
                     </div>
                   ) : (
-                    <div class="card">
+                    <div class="card skill-card">
                       {groupSkills.map((skill, i) => renderSkillRow(skill, i, groupSkills.length))}
                     </div>
                   )}

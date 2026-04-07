@@ -1,6 +1,6 @@
 {
   "version": "v1-draft",
-  "updatedAt": "2026-03-31",
+  "updatedAt": "2026-04-07",
   "phaseStatus": "phase1-complete",
   "sourceFiles": [
     "/Users/ralhassan/Desktop/CODING/Project Atlas/Atlas/atlas-core/Sources/AtlasCore/AgentRuntime.swift",
@@ -139,6 +139,7 @@
       "routes": [
         { "method": "GET", "path": "/workflows" },
         { "method": "POST", "path": "/workflows" },
+        { "method": "GET", "path": "/workflows/summaries" },
         { "method": "GET", "path": "/workflows/runs" },
         { "method": "POST", "path": "/workflows/runs/{runID}/approve" },
         { "method": "POST", "path": "/workflows/runs/{runID}/deny" },

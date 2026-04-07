@@ -575,6 +575,17 @@ func TestModule_WorkflowBoundAutomationCreatesWorkflowRunLink(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("AppendWorkflowDefinition: %v", err)
 	}
+	workflowDefJSON := `{"id":"wf-brief","name":"Briefing Workflow","description":"Workflow description","prompt":"Run the workflow prompt","promptTemplate":"Run the workflow prompt","isEnabled":true,"createdAt":"2026-04-05T00:00:00Z","updatedAt":"2026-04-05T00:00:00Z","steps":[],"tags":[]}`
+	if err := db.SaveWorkflow(storage.WorkflowRow{
+		ID:             "wf-brief",
+		Name:           "Briefing Workflow",
+		DefinitionJSON: workflowDefJSON,
+		IsEnabled:      true,
+		CreatedAt:      "2026-04-05T00:00:00Z",
+		UpdatedAt:      "2026-04-05T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("SaveWorkflow: %v", err)
+	}
 	workflowID := "wf-brief"
 	if err := features.AppendGremlin(dir, features.GremlinItem{
 		Name:        "Workflow Automation",
@@ -629,16 +640,15 @@ func TestModule_WorkflowBoundAutomationCreatesWorkflowRunLink(t *testing.T) {
 	if len(runs) != 1 || runs[0].WorkflowRunID == nil || !strings.HasPrefix(*runs[0].WorkflowRunID, "workflow-") {
 		t.Fatalf("expected workflow run link, got %+v", runs)
 	}
-	workflowRuns := features.ListWorkflowRuns(dir, workflowID)
+	workflowRuns, err := db.ListWorkflowRuns(workflowID, 10)
+	if err != nil {
+		t.Fatalf("ListWorkflowRuns: %v", err)
+	}
 	if len(workflowRuns) != 1 {
 		t.Fatalf("expected one workflow run, got %+v", workflowRuns)
 	}
-	var wfRun map[string]any
-	if err := json.Unmarshal(workflowRuns[0], &wfRun); err != nil {
-		t.Fatalf("decode workflow run: %v", err)
-	}
-	if wfRun["status"] != "completed" {
-		t.Fatalf("expected completed workflow run, got %+v", wfRun)
+	if workflowRuns[0].Status != "completed" {
+		t.Fatalf("expected completed workflow run, got %+v", workflowRuns[0])
 	}
 }
 

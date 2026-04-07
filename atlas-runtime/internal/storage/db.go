@@ -235,6 +235,46 @@ func (db *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_gremlin_runs_started_at
 			ON gremlin_runs(started_at DESC)`,
 
+		// workflows — canonical workflow definitions.
+		// workflow-definitions.json remains an import compatibility surface.
+		`CREATE TABLE IF NOT EXISTS workflows (
+			id               TEXT PRIMARY KEY,
+			name             TEXT NOT NULL,
+			definition_json  TEXT NOT NULL,
+			is_enabled       INTEGER NOT NULL DEFAULT 1,
+			created_at       TEXT NOT NULL,
+			updated_at       TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_workflows_name
+			ON workflows(lower(name), id)`,
+		`CREATE INDEX IF NOT EXISTS idx_workflows_updated_at
+			ON workflows(updated_at DESC)`,
+
+		// workflow_runs — structured workflow run history.
+		`CREATE TABLE IF NOT EXISTS workflow_runs (
+			run_id             TEXT PRIMARY KEY,
+			workflow_id        TEXT NOT NULL,
+			workflow_name      TEXT NOT NULL DEFAULT '',
+			status             TEXT NOT NULL,
+			outcome            TEXT,
+			input_values_json  TEXT NOT NULL DEFAULT '{}',
+			step_runs_json     TEXT NOT NULL DEFAULT '[]',
+			approval_json      TEXT,
+			assistant_summary  TEXT,
+			error_message      TEXT,
+			started_at         TEXT NOT NULL,
+			finished_at        TEXT,
+			conversation_id    TEXT,
+			trigger_source     TEXT NOT NULL DEFAULT '',
+			duration_ms        INTEGER NOT NULL DEFAULT 0,
+			artifacts_json     TEXT,
+			record_json        TEXT NOT NULL DEFAULT '{}'
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_id
+			ON workflow_runs(workflow_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_workflow_runs_started_at
+			ON workflow_runs(started_at DESC)`,
+
 		// browser_sessions — persists login cookies across Atlas restarts.
 		// cookies_json holds a JSON array of simplified cookie records.
 		// Sessions expire after 7 days of non-use.
@@ -320,6 +360,21 @@ func (db *DB) migrate() error {
 		`ALTER TABLE automations ADD COLUMN gremlin_description TEXT`,
 		`ALTER TABLE automations ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'`,
 	}
+	alterWorkflowRuns := []string{
+		`ALTER TABLE workflow_runs ADD COLUMN workflow_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE workflow_runs ADD COLUMN outcome TEXT`,
+		`ALTER TABLE workflow_runs ADD COLUMN input_values_json TEXT NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE workflow_runs ADD COLUMN step_runs_json TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE workflow_runs ADD COLUMN approval_json TEXT`,
+		`ALTER TABLE workflow_runs ADD COLUMN assistant_summary TEXT`,
+		`ALTER TABLE workflow_runs ADD COLUMN error_message TEXT`,
+		`ALTER TABLE workflow_runs ADD COLUMN finished_at TEXT`,
+		`ALTER TABLE workflow_runs ADD COLUMN conversation_id TEXT`,
+		`ALTER TABLE workflow_runs ADD COLUMN trigger_source TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE workflow_runs ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE workflow_runs ADD COLUMN artifacts_json TEXT`,
+		`ALTER TABLE workflow_runs ADD COLUMN record_json TEXT NOT NULL DEFAULT '{}'`,
+	}
 
 	for _, stmt := range stmts {
 		if _, err := db.conn.Exec(stmt); err != nil {
@@ -343,6 +398,9 @@ func (db *DB) migrate() error {
 		db.conn.Exec(stmt) //nolint:errcheck
 	}
 	for _, stmt := range alterAutomations {
+		db.conn.Exec(stmt) //nolint:errcheck
+	}
+	for _, stmt := range alterWorkflowRuns {
 		db.conn.Exec(stmt) //nolint:errcheck
 	}
 	return nil
@@ -1143,6 +1201,216 @@ func (db *DB) UpdateGremlinRunWorkflowRunID(runID, workflowRunID string) error {
 		workflowRunID, runID,
 	)
 	return err
+}
+
+// ── Workflow definitions and runs ────────────────────────────────────────────
+
+// WorkflowRow is a canonical workflow definition row.
+type WorkflowRow struct {
+	ID             string
+	Name           string
+	DefinitionJSON string
+	IsEnabled      bool
+	CreatedAt      string
+	UpdatedAt      string
+}
+
+// WorkflowRunRow is a structured workflow run row.
+type WorkflowRunRow struct {
+	RunID            string
+	WorkflowID       string
+	WorkflowName     string
+	Status           string
+	Outcome          *string
+	InputValuesJSON  string
+	StepRunsJSON     string
+	ApprovalJSON     *string
+	AssistantSummary *string
+	ErrorMessage     *string
+	StartedAt        string
+	FinishedAt       *string
+	ConversationID   *string
+	TriggerSource    string
+	DurationMs       int64
+	ArtifactsJSON    *string
+	RecordJSON       string
+}
+
+// ListWorkflows returns canonical workflow definitions ordered by name.
+func (db *DB) ListWorkflows() ([]WorkflowRow, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, name, definition_json, is_enabled, created_at, updated_at
+		 FROM workflows ORDER BY lower(name), id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []WorkflowRow
+	for rows.Next() {
+		row, err := scanWorkflowRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// GetWorkflow returns one canonical workflow definition by ID.
+func (db *DB) GetWorkflow(id string) (*WorkflowRow, error) {
+	row := db.conn.QueryRow(
+		`SELECT id, name, definition_json, is_enabled, created_at, updated_at
+		 FROM workflows WHERE id = ?`, id)
+	out, err := scanWorkflowRow(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SaveWorkflow upserts one canonical workflow definition.
+func (db *DB) SaveWorkflow(row WorkflowRow) error {
+	enabled := 0
+	if row.IsEnabled {
+		enabled = 1
+	}
+	_, err := db.conn.Exec(
+		`INSERT INTO workflows (id, name, definition_json, is_enabled, created_at, updated_at)
+		 VALUES (?,?,?,?,?,?)
+		 ON CONFLICT(id) DO UPDATE SET
+		  name=excluded.name,
+		  definition_json=excluded.definition_json,
+		  is_enabled=excluded.is_enabled,
+		  updated_at=excluded.updated_at`,
+		row.ID, row.Name, row.DefinitionJSON, enabled, row.CreatedAt, row.UpdatedAt,
+	)
+	return err
+}
+
+// DeleteWorkflow deletes one canonical workflow definition.
+func (db *DB) DeleteWorkflow(id string) (bool, error) {
+	res, err := db.conn.Exec(`DELETE FROM workflows WHERE id = ?`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func scanWorkflowRow(row interface{ Scan(...any) error }) (WorkflowRow, error) {
+	var out WorkflowRow
+	var enabled int
+	err := row.Scan(&out.ID, &out.Name, &out.DefinitionJSON, &enabled, &out.CreatedAt, &out.UpdatedAt)
+	out.IsEnabled = enabled != 0
+	return out, err
+}
+
+// ListWorkflowRuns returns workflow runs ordered newest first.
+func (db *DB) ListWorkflowRuns(workflowID string, limit int) ([]WorkflowRunRow, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if workflowID != "" {
+		rows, err = db.conn.Query(
+			`SELECT run_id, workflow_id, workflow_name, status, outcome, input_values_json, step_runs_json,
+			        approval_json, assistant_summary, error_message, started_at, finished_at, conversation_id,
+			        trigger_source, duration_ms, artifacts_json, record_json
+			 FROM workflow_runs WHERE workflow_id = ? ORDER BY started_at DESC LIMIT ?`, workflowID, limit)
+	} else {
+		rows, err = db.conn.Query(
+			`SELECT run_id, workflow_id, workflow_name, status, outcome, input_values_json, step_runs_json,
+			        approval_json, assistant_summary, error_message, started_at, finished_at, conversation_id,
+			        trigger_source, duration_ms, artifacts_json, record_json
+			 FROM workflow_runs ORDER BY started_at DESC LIMIT ?`, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []WorkflowRunRow
+	for rows.Next() {
+		row, err := scanWorkflowRunRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// SaveWorkflowRun inserts one workflow run row.
+func (db *DB) SaveWorkflowRun(row WorkflowRunRow) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO workflow_runs
+		 (run_id, workflow_id, workflow_name, status, outcome, input_values_json, step_runs_json,
+		  approval_json, assistant_summary, error_message, started_at, finished_at, conversation_id,
+		  trigger_source, duration_ms, artifacts_json, record_json)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		row.RunID, row.WorkflowID, row.WorkflowName, row.Status, row.Outcome,
+		row.InputValuesJSON, row.StepRunsJSON, row.ApprovalJSON, row.AssistantSummary,
+		row.ErrorMessage, row.StartedAt, row.FinishedAt, row.ConversationID,
+		row.TriggerSource, row.DurationMs, row.ArtifactsJSON, row.RecordJSON,
+	)
+	return err
+}
+
+// CompleteWorkflowRun stores structured workflow completion state.
+func (db *DB) CompleteWorkflowRun(runID, status string, outcome, assistantSummary, errorMessage, finishedAt *string, durationMs int64, artifactsJSON *string) error {
+	_, err := db.conn.Exec(
+		`UPDATE workflow_runs
+		 SET status=?, outcome=?, assistant_summary=?, error_message=?, finished_at=?, duration_ms=?, artifacts_json=?
+		 WHERE run_id=?`,
+		status, outcome, assistantSummary, errorMessage, finishedAt, durationMs, artifactsJSON, runID,
+	)
+	return err
+}
+
+// UpdateWorkflowRunStepRuns stores the latest structured per-step run state.
+func (db *DB) UpdateWorkflowRunStepRuns(runID, stepRunsJSON string) error {
+	_, err := db.conn.Exec(`UPDATE workflow_runs SET step_runs_json=? WHERE run_id=?`, stepRunsJSON, runID)
+	return err
+}
+
+// UpdateWorkflowRunStatus updates one workflow run status for approval routes.
+func (db *DB) UpdateWorkflowRunStatus(runID, status string) (*WorkflowRunRow, error) {
+	_, err := db.conn.Exec(`UPDATE workflow_runs SET status=? WHERE run_id=?`, status, runID)
+	if err != nil {
+		return nil, err
+	}
+	row := db.conn.QueryRow(
+		`SELECT run_id, workflow_id, workflow_name, status, outcome, input_values_json, step_runs_json,
+		        approval_json, assistant_summary, error_message, started_at, finished_at, conversation_id,
+		        trigger_source, duration_ms, artifacts_json, record_json
+		 FROM workflow_runs WHERE run_id = ?`, runID)
+	out, err := scanWorkflowRunRow(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &out, nil
+}
+
+func scanWorkflowRunRow(row interface{ Scan(...any) error }) (WorkflowRunRow, error) {
+	var out WorkflowRunRow
+	err := row.Scan(&out.RunID, &out.WorkflowID, &out.WorkflowName, &out.Status, &out.Outcome,
+		&out.InputValuesJSON, &out.StepRunsJSON, &out.ApprovalJSON, &out.AssistantSummary,
+		&out.ErrorMessage, &out.StartedAt, &out.FinishedAt, &out.ConversationID,
+		&out.TriggerSource, &out.DurationMs, &out.ArtifactsJSON, &out.RecordJSON)
+	return out, err
 }
 
 // ── Memories ──────────────────────────────────────────────────────────────────

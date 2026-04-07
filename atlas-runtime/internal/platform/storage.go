@@ -8,6 +8,7 @@ type Storage interface {
 	Approvals() ApprovalStore
 	Automations() AutomationStore
 	Communications() CommunicationsStore
+	Workflows() WorkflowStore
 	Memories() MemoryStore
 }
 
@@ -35,6 +36,18 @@ type CommunicationsStore interface {
 	FetchCommSession(platform, channelID, threadID string) (*storage.CommSessionRow, error)
 }
 
+type WorkflowStore interface {
+	ListWorkflows() ([]storage.WorkflowRow, error)
+	GetWorkflow(id string) (*storage.WorkflowRow, error)
+	SaveWorkflow(row storage.WorkflowRow) error
+	DeleteWorkflow(id string) (bool, error)
+	ListWorkflowRuns(workflowID string, limit int) ([]storage.WorkflowRunRow, error)
+	SaveWorkflowRun(row storage.WorkflowRunRow) error
+	CompleteWorkflowRun(runID, status string, outcome, assistantSummary, errorMessage, finishedAt *string, durationMs int64, artifactsJSON *string) error
+	UpdateWorkflowRunStepRuns(runID, stepRunsJSON string) error
+	UpdateWorkflowRunStatus(runID, status string) (*storage.WorkflowRunRow, error)
+}
+
 type MemoryStore interface {
 	SaveMemory(row storage.MemoryRow) error
 }
@@ -53,6 +66,8 @@ func (s *SQLiteStorage) Approvals() ApprovalStore { return approvalStore{s.db} }
 func (s *SQLiteStorage) Automations() AutomationStore { return automationStore{s.db} }
 
 func (s *SQLiteStorage) Communications() CommunicationsStore { return communicationsStore{s.db} }
+
+func (s *SQLiteStorage) Workflows() WorkflowStore { return workflowStore{s.db} }
 
 func (s *SQLiteStorage) Memories() MemoryStore { return memoryStore{s.db} }
 
@@ -126,6 +141,46 @@ func (s communicationsStore) ListCommunicationChannels(platform string) ([]stora
 
 func (s communicationsStore) FetchCommSession(platform, channelID, threadID string) (*storage.CommSessionRow, error) {
 	return s.db.FetchCommSession(platform, channelID, threadID)
+}
+
+type workflowStore struct {
+	db *storage.DB
+}
+
+func (s workflowStore) ListWorkflows() ([]storage.WorkflowRow, error) {
+	return s.db.ListWorkflows()
+}
+
+func (s workflowStore) GetWorkflow(id string) (*storage.WorkflowRow, error) {
+	return s.db.GetWorkflow(id)
+}
+
+func (s workflowStore) SaveWorkflow(row storage.WorkflowRow) error {
+	return s.db.SaveWorkflow(row)
+}
+
+func (s workflowStore) DeleteWorkflow(id string) (bool, error) {
+	return s.db.DeleteWorkflow(id)
+}
+
+func (s workflowStore) ListWorkflowRuns(workflowID string, limit int) ([]storage.WorkflowRunRow, error) {
+	return s.db.ListWorkflowRuns(workflowID, limit)
+}
+
+func (s workflowStore) SaveWorkflowRun(row storage.WorkflowRunRow) error {
+	return s.db.SaveWorkflowRun(row)
+}
+
+func (s workflowStore) CompleteWorkflowRun(runID, status string, outcome, assistantSummary, errorMessage, finishedAt *string, durationMs int64, artifactsJSON *string) error {
+	return s.db.CompleteWorkflowRun(runID, status, outcome, assistantSummary, errorMessage, finishedAt, durationMs, artifactsJSON)
+}
+
+func (s workflowStore) UpdateWorkflowRunStepRuns(runID, stepRunsJSON string) error {
+	return s.db.UpdateWorkflowRunStepRuns(runID, stepRunsJSON)
+}
+
+func (s workflowStore) UpdateWorkflowRunStatus(runID, status string) (*storage.WorkflowRunRow, error) {
+	return s.db.UpdateWorkflowRunStatus(runID, status)
 }
 
 type memoryStore struct {

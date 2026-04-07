@@ -1,6 +1,28 @@
 import { useEffect, useState } from 'preact/hooks'
-import { api, WorkflowDefinition, WorkflowRun } from '../api/client'
+import { JSX } from 'preact'
+import { api, WorkflowDefinition, WorkflowRun, WorkflowSummary } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
+
+const MoreIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
+    <circle cx="3" cy="7" r="1.1" />
+    <circle cx="7" cy="7" r="1.1" />
+    <circle cx="11" cy="7" r="1.1" />
+  </svg>
+)
+
+function CompactActionMenu({ children }: { children: JSX.Element | JSX.Element[] }) {
+  return (
+    <details class="automation-more-actions">
+      <summary class="btn btn-sm btn-icon automation-action-btn automation-action-icon" title="More actions">
+        <MoreIcon />
+      </summary>
+      <div class="automation-more-actions-panel">
+        {children}
+      </div>
+    </details>
+  )
+}
 
 function formatDate(value?: string) {
   if (!value) return '—'
@@ -9,12 +31,36 @@ function formatDate(value?: string) {
 
 function statusBadge(status: string) {
   switch (status) {
+    case 'healthy':
     case 'completed': return <span class="badge badge-green">{status}</span>
+    case 'running': return <span class="badge badge-yellow">{status}</span>
     case 'failed':
     case 'denied': return <span class="badge badge-red">{status}</span>
     case 'waiting_for_approval': return <span class="badge badge-yellow">needs approval</span>
+    case 'never_run': return <span class="badge badge-gray">never run</span>
+    case 'disabled': return <span class="badge badge-gray">disabled</span>
     default: return <span class="badge badge-gray">{status}</span>
   }
+}
+
+function workflowCopy(workflow: WorkflowDefinition) {
+  return workflow.description || workflow.promptTemplate.slice(0, 120) || 'No prompt template yet.'
+}
+
+function promptPreview(workflow: WorkflowDefinition) {
+  const trimmed = workflow.promptTemplate.trim()
+  if (!trimmed) return ''
+  if (workflow.description && workflow.description.trim() === trimmed) return ''
+  return trimmed
+}
+
+function trustSummary(workflow: WorkflowDefinition) {
+  const parts: string[] = []
+  if (workflow.trustScope.allowedApps.length > 0) parts.push(`${workflow.trustScope.allowedApps.length} apps`)
+  if (workflow.trustScope.approvedRootPaths.length > 0) parts.push(`${workflow.trustScope.approvedRootPaths.length} paths`)
+  if (workflow.trustScope.allowsSensitiveRead) parts.push('sensitive reads')
+  if (workflow.trustScope.allowsLiveWrite) parts.push('live writes')
+  return parts.length ? parts.join(' · ') : 'Default trust scope'
 }
 
 interface WorkflowModalProps {
@@ -245,6 +291,7 @@ function WorkflowRunsPanel({ workflow, onClose }: { workflow: WorkflowDefinition
 
 export function Workflows() {
   const [workflows, setWorkflows] = useState<WorkflowDefinition[]>([])
+  const [summaries, setSummaries] = useState<Record<string, WorkflowSummary>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState<WorkflowDefinition | 'new' | null>(null)
@@ -255,7 +302,12 @@ export function Workflows() {
     setLoading(true)
     setError(null)
     try {
-      setWorkflows(await api.workflows())
+      const [workflowData, summaryData] = await Promise.all([
+        api.workflows(),
+        api.workflowSummaries().catch(() => [] as WorkflowSummary[]),
+      ])
+      setWorkflows(workflowData)
+      setSummaries(Object.fromEntries(summaryData.map(summary => [summary.id, summary])))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load workflows.')
     } finally {
@@ -285,6 +337,7 @@ export function Workflows() {
     setRunningID(workflow.id)
     try {
       await api.runWorkflow(workflow.id)
+      await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to run workflow.')
     } finally {
@@ -296,7 +349,7 @@ export function Workflows() {
     <div class="screen">
       <PageHeader
         title="Workflows"
-        subtitle="Reusable, trust-bounded operator flows Atlas can run directly or schedule."
+        subtitle="Reusable processes Atlas can run directly or through automations."
         actions={
           <>
             <button class="btn btn-primary btn-sm" onClick={() => setEditing('new')}>+ New</button>
@@ -319,35 +372,60 @@ export function Workflows() {
 
       {!loading && workflows.length > 0 && (
         <div class="automation-list">
-          {workflows.map(workflow => (
-            <div key={workflow.id} class="card automation-card">
+          {workflows.map(workflow => {
+            const summary = summaries[workflow.id]
+            const preview = promptPreview(workflow)
+            return (
+            <div key={workflow.id} class={`card automation-card workflow-console-card${workflow.isEnabled ? '' : ' disabled'}`}>
               <div class="automation-card-header">
                 <div class="automation-meta">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div class="automation-title-row">
                     <span class="automation-name">{workflow.name}</span>
-                    {workflow.steps.length > 0 && <span class="badge badge-gray">{workflow.steps.length} steps</span>}
+                    {statusBadge(summary?.health ?? (workflow.isEnabled ? 'never_run' : 'disabled'))}
                   </div>
-                  <span class="automation-schedule">{workflow.description || workflow.promptTemplate.slice(0, 90)}</span>
+                  <span class="automation-schedule">{workflowCopy(workflow)}</span>
                 </div>
                 <div class="automation-actions">
                   <button class="btn btn-ghost btn-xs" onClick={() => handleRun(workflow)} disabled={runningID === workflow.id}>
                     {runningID === workflow.id ? '…' : 'Run'}
                   </button>
-                  <button class="btn btn-ghost btn-xs" onClick={() => setRunsTarget(workflow)}>Runs</button>
-                  <button class="btn btn-ghost btn-xs" onClick={() => setEditing(workflow)}>Edit</button>
-                  <button class="btn btn-ghost btn-xs btn-danger" onClick={() => handleDelete(workflow)}>Delete</button>
+                  <CompactActionMenu>
+                    <button class="btn btn-sm automation-action-btn" onClick={() => setRunsTarget(workflow)}>Runs</button>
+                    <button class="btn btn-sm automation-action-btn" onClick={() => setEditing(workflow)}>Edit</button>
+                    <button class="btn btn-sm automation-action-btn automation-action-danger" onClick={() => handleDelete(workflow)}>Delete</button>
+                  </CompactActionMenu>
                 </div>
               </div>
 
-              <p class="automation-prompt">{workflow.promptTemplate}</p>
-
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '10px' }}>
-                {workflow.tags.map(tag => <span key={tag} class="badge badge-gray">{tag}</span>)}
-                {workflow.trustScope.allowedApps.map(app => <span key={app} class="badge badge-gray">app:{app}</span>)}
-                {workflow.trustScope.approvedRootPaths.slice(0, 2).map(path => <span key={path} class="badge badge-gray">path:{path}</span>)}
+              <div class="automation-console-grid workflow-console-grid">
+                <div class="automation-console-cell">
+                  <span class="automation-console-label">Process</span>
+                  <strong>{workflow.steps.length || summary?.stepCount || 1} step{(workflow.steps.length || summary?.stepCount || 1) !== 1 ? 's' : ''}</strong>
+                  <span>{workflow.steps.length > 0 ? workflow.steps.map(step => step.title).slice(0, 2).join(' · ') : 'Prompt template'}</span>
+                </div>
+                <div class="automation-console-cell">
+                  <span class="automation-console-label">Trust Scope</span>
+                  <strong>{workflow.approvalMode === 'step_by_step' ? 'Step by step' : 'Workflow boundary'}</strong>
+                  <span>{trustSummary(workflow)}</span>
+                </div>
+                <div class="automation-console-cell">
+                  <span class="automation-console-label">Last Run</span>
+                  <strong>{formatDate(summary?.lastRunAt)}</strong>
+                  <span>{summary?.lastRunStatus ? statusBadge(summary.lastRunStatus) : 'No runs yet'}</span>
+                </div>
               </div>
+              {workflow.tags.length > 0 && (
+                <div class="workflow-tag-strip">
+                  {workflow.tags.map(tag => <span key={tag} class="badge badge-gray">{tag}</span>)}
+                </div>
+              )}
+              {(summary?.lastRunError || preview) && (
+                <p class={`automation-prompt ${summary?.lastRunError ? 'automation-prompt-error' : ''}`}>
+                  {summary?.lastRunError ?? preview}
+                </p>
+              )}
             </div>
-          ))}
+          )})}
         </div>
       )}
 

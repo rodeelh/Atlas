@@ -186,6 +186,7 @@ func main() {
 		log.Fatalf("Atlas: register forge module: %v", err)
 	}
 	workflowsModule := workflowsmodule.New(config.SupportDir())
+	workflowsModule.SetSkillRegistry(skillsRegistry)
 	if err := moduleRegistry.Register(workflowsModule); err != nil {
 		log.Fatalf("Atlas: register workflows module: %v", err)
 	}

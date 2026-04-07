@@ -282,6 +282,8 @@ func toolCapabilityGroup(name string) string {
 		return "voice"
 	case strings.HasPrefix(name, "image."):
 		return "creative"
+	case strings.HasPrefix(name, "workflow."):
+		return "workflow"
 	case strings.HasPrefix(name, "automation."), strings.HasPrefix(name, "gremlin."):
 		return "automation"
 	case strings.HasPrefix(name, "forge."):
@@ -314,6 +316,7 @@ var groupThresholds = map[string]int{
 	"browser":    2,
 	"voice":      1,
 	"creative":   1,
+	"workflow":   1,
 	"automation": 1,
 	"forge":      1,
 }

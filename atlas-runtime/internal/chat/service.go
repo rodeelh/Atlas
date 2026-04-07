@@ -39,6 +39,7 @@ type MessageRequest struct {
 	ConversationID string              `json:"conversationId,omitempty"`
 	Platform       string              `json:"platform,omitempty"`
 	Attachments    []MessageAttachment `json:"attachments,omitempty"`
+	ToolPolicy     *agent.ToolPolicy   `json:"toolPolicy,omitempty"`
 }
 
 // MessageResponse is the JSON body returned by POST /message.
@@ -956,6 +957,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		ConvID:        convID,
 		Tools:         selectedTools, // nil → loop uses full ToolDefinitions()
 		UserMessage:   req.Message,   // used by lazy tool upgrade in the agent loop
+		ToolPolicy:    req.ToolPolicy,
 	}
 
 	agentLoop := &agent.Loop{

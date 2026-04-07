@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'preact/hooks'
-import { api, CommunicationChannel, GremlinItem, GremlinRun, WorkflowDefinition } from '../api/client'
+import { JSX } from 'preact'
+import { api, AutomationSummary, CommunicationChannel, GremlinItem, GremlinRun, WorkflowDefinition } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 
 // ── Icons ────────────────────────────────────────────────────────────────────
@@ -15,6 +16,27 @@ const TrashIcon = () => (
     <path d="M2 3h8M4.5 3V2h3v1M10 3l-.75 7.5H2.75L2 3" />
   </svg>
 )
+
+const MoreIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
+    <circle cx="3" cy="7" r="1.1" />
+    <circle cx="7" cy="7" r="1.1" />
+    <circle cx="11" cy="7" r="1.1" />
+  </svg>
+)
+
+function CompactActionMenu({ children }: { children: JSX.Element | JSX.Element[] }) {
+  return (
+    <details class="automation-more-actions">
+      <summary class="btn btn-sm btn-icon automation-action-btn automation-action-icon" title="More actions">
+        <MoreIcon />
+      </summary>
+      <div class="automation-more-actions-panel">
+        {children}
+      </div>
+    </details>
+  )
+}
 
 // ── Emoji picker ─────────────────────────────────────────────────────────────
 
@@ -77,17 +99,54 @@ function EmojiPicker({ value, onChange }: { value: string; onChange: (e: string)
 
 function statusBadge(status: string) {
   switch (status) {
+    case 'healthy':
     case 'success': return <span class="badge badge-green">{status}</span>
     case 'failed':  return <span class="badge badge-red">{status}</span>
     case 'running': return <span class="badge badge-yellow">{status}</span>
+    case 'never_run': return <span class="badge badge-gray">never run</span>
     case 'skipped': return <span class="badge badge-gray">{status}</span>
     default:        return <span class="badge badge-gray">{status}</span>
+  }
+}
+
+function healthBadge(health?: string) {
+  switch (health) {
+    case 'healthy':
+    case 'success': return <span class="badge badge-green">healthy</span>
+    case 'running': return <span class="badge badge-yellow">running</span>
+    case 'failed': return <span class="badge badge-red">failed</span>
+    case 'disabled': return <span class="badge badge-gray">disabled</span>
+    case 'never_run': return <span class="badge badge-gray">never run</span>
+    default: return <span class="badge badge-gray">unknown</span>
+  }
+}
+
+function deliveryBadge(health?: string) {
+  switch (health) {
+    case 'delivered':
+    case 'success': return <span class="badge badge-green">delivered</span>
+    case 'failed': return <span class="badge badge-red">delivery failed</span>
+    case 'not_configured': return <span class="badge badge-gray">no destination</span>
+    default: return <span class="badge badge-gray">delivery unknown</span>
   }
 }
 
 function formatDate(iso?: string) {
   if (!iso) return '—'
   try { return new Date(iso).toLocaleString() } catch { return iso }
+}
+
+function destinationLabel(item: GremlinItem, summary?: AutomationSummary) {
+  if (summary?.destinationLabel) return summary.destinationLabel
+  const dest = item.communicationDestination
+  if (dest) return `${dest.platform} · ${dest.channelName ?? dest.channelID}`
+  if (item.telegramChatID != null) return `Telegram · ${item.telegramChatID}`
+  return 'Not configured'
+}
+
+function workflowLabel(item: GremlinItem, workflows: WorkflowDefinition[]) {
+  if (!item.workflowID) return 'Prompt only'
+  return workflows.find(workflow => workflow.id === item.workflowID)?.name ?? item.workflowID
 }
 
 // ── Sub-component: Run history modal ─────────────────────────────────────────
@@ -321,6 +380,8 @@ function EditModal({ gremlin, onSave, onClose }: EditModalProps) {
 
 export function Automations() {
   const [items, setItems]           = useState<GremlinItem[]>([])
+  const [summaries, setSummaries]   = useState<Record<string, AutomationSummary>>({})
+  const [workflows, setWorkflows]   = useState<WorkflowDefinition[]>([])
   const [loading, setLoading]       = useState(true)
   const [error, setError]           = useState<string | null>(null)
   const [editTarget, setEditTarget] = useState<GremlinItem | 'new' | null>(null)
@@ -332,8 +393,14 @@ export function Automations() {
     setLoading(true)
     setError(null)
     try {
-      const data = await api.automations()
+      const [data, summaryData, workflowData] = await Promise.all([
+        api.automations(),
+        api.automationSummaries().catch(() => [] as AutomationSummary[]),
+        api.workflows().catch(() => [] as WorkflowDefinition[]),
+      ])
       setItems(data)
+      setSummaries(Object.fromEntries(summaryData.map(summary => [summary.id, summary])))
+      setWorkflows(workflowData)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load automations.')
     } finally {
@@ -346,10 +413,9 @@ export function Automations() {
   async function handleToggle(item: GremlinItem) {
     setTogglingID(item.id)
     try {
-      const updated = item.isEnabled
-        ? await api.disableAutomation(item.id)
-        : await api.enableAutomation(item.id)
-      setItems(prev => prev.map(i => i.id === item.id ? updated : i))
+      if (item.isEnabled) await api.disableAutomation(item.id)
+      else await api.enableAutomation(item.id)
+      await load()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Toggle failed.')
     } finally {
@@ -382,19 +448,18 @@ export function Automations() {
 
   async function handleSave(item: GremlinItem) {
     if (editTarget === 'new') {
-      const created = await api.createAutomation(item)
-      setItems(prev => [...prev, created])
+      await api.createAutomation(item)
     } else {
-      const updated = await api.updateAutomation(item)
-      setItems(prev => prev.map(i => i.id === item.id ? updated : i))
+      await api.updateAutomation(item)
     }
+    await load()
   }
 
   return (
     <div class="screen">
       <PageHeader
         title="Automations"
-        subtitle="Scheduled prompts Atlas runs automatically."
+        subtitle="Triggers and delivery for scheduled Atlas work."
         actions={<>
           <button class="btn btn-primary btn-sm" onClick={() => setEditTarget('new')}>+ New</button>
         </>}
@@ -417,18 +482,20 @@ export function Automations() {
 
       {!loading && items.length > 0 && (
         <div class="automation-list">
-          {items.map(item => (
-            <div key={item.id} class={`card automation-card${item.isEnabled ? '' : ' disabled'}`}>
+          {items.map(item => {
+            const summary = summaries[item.id]
+            return (
+            <div key={item.id} class={`card automation-card automation-console-card${item.isEnabled ? '' : ' disabled'}`}>
               <div class="automation-card-header">
-                <span class="automation-emoji">{item.emoji}</span>
+                <div class="automation-identity">
+                  <span class="automation-emoji">{item.emoji}</span>
+                </div>
                 <div class="automation-meta">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div class="automation-title-row">
                     <span class="automation-name">{item.name}</span>
-                    {item.communicationDestination != null && (
-                      <span title={`Notifies ${item.communicationDestination.platform} channel ${item.communicationDestination.channelID}`} style={{ fontSize: 12, opacity: 0.7 }}>📨</span>
-                    )}
+                    {healthBadge(summary?.health ?? (item.isEnabled ? 'unknown' : 'disabled'))}
                   </div>
-                  <span class="automation-schedule">{item.scheduleRaw}</span>
+                  <span class="automation-schedule">Runs {item.scheduleRaw}</span>
                 </div>
                 <div class="automation-actions">
                   <button
@@ -447,41 +514,42 @@ export function Automations() {
                   >
                     {runningID === item.id ? '…' : <PlayIcon />}
                   </button>
-                  <button
-                    class="btn btn-sm automation-action-btn"
-                    onClick={() => setRunsTarget(item)}
-                    title="View run history"
-                  >
-                    Runs
-                  </button>
-                  <button
-                    class="btn btn-sm automation-action-btn"
-                    onClick={() => setEditTarget(item)}
-                    title="Edit"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    class="btn btn-sm btn-icon automation-action-btn automation-action-icon automation-action-danger"
-                    onClick={() => handleDelete(item)}
-                    title="Delete"
-                  >
-                    <TrashIcon />
-                  </button>
+                  <CompactActionMenu>
+                    <button class="btn btn-sm automation-action-btn" onClick={() => setRunsTarget(item)}>Runs</button>
+                    <button class="btn btn-sm automation-action-btn" onClick={() => setEditTarget(item)}>Edit</button>
+                    <button class="btn btn-sm automation-action-btn automation-action-danger" onClick={() => handleDelete(item)}>Delete</button>
+                  </CompactActionMenu>
                 </div>
               </div>
-              <p class="automation-prompt">{item.prompt}</p>
-              {item.workflowID && (
-                <p class="automation-last-run">Workflow: <strong>{item.workflowID}</strong></p>
-              )}
-              {item.lastRunAt && (
-                <p class="automation-last-run">
-                  Last run: {formatDate(item.lastRunAt)}
-                  {item.lastRunStatus && <> — {statusBadge(item.lastRunStatus)}</>}
+              <div class="automation-console-grid">
+                <div class="automation-console-cell">
+                  <span class="automation-console-label">Task</span>
+                  <strong>{workflowLabel(item, workflows)}</strong>
+                  <span>{item.workflowID ? 'Reusable workflow' : (item.prompt || 'No prompt set')}</span>
+                </div>
+                <div class="automation-console-cell">
+                  <span class="automation-console-label">Delivery</span>
+                  <strong>{destinationLabel(item, summary)}</strong>
+                  <span>{deliveryBadge(summary?.deliveryHealth)}</span>
+                </div>
+                <div class="automation-console-cell">
+                  <span class="automation-console-label">Next Run</span>
+                  <strong>{summary?.nextRunAt ? formatDate(summary.nextRunAt) : '—'}</strong>
+                  <span>{item.isEnabled ? 'Enabled schedule' : 'Paused'}</span>
+                </div>
+                <div class="automation-console-cell">
+                  <span class="automation-console-label">Last Run</span>
+                  <strong>{formatDate(summary?.lastRunAt ?? item.lastRunAt)}</strong>
+                  <span>{summary?.lastRunStatus || item.lastRunStatus ? statusBadge(summary?.lastRunStatus ?? item.lastRunStatus ?? '') : 'No runs yet'}</span>
+                </div>
+              </div>
+              {(summary?.lastRunError || item.prompt) && (
+                <p class={`automation-prompt ${summary?.lastRunError ? 'automation-prompt-error' : ''}`}>
+                  {summary?.lastRunError ?? item.prompt}
                 </p>
               )}
             </div>
-          ))}
+          )})}
         </div>
       )}
 
