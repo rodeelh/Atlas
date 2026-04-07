@@ -3,7 +3,6 @@ package server
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -30,32 +29,22 @@ func BuildRouter(
 ) http.Handler {
 	r := chi.NewRouter()
 
-	// Request logger (dev-friendly output).
-	r.Use(chimw.Logger)
+	// Request logger (query strings redacted to avoid leaking auth tokens).
+	r.Use(requestLogger)
 	r.Use(chimw.Recoverer)
 
 	// CORS — reflect the Origin back for trusted sources.
 	// Using AllowedOrigins: ["*"] with AllowCredentials: true is spec-invalid
 	// (browsers will reject it). Instead we use AllowOriginFunc to:
-	//   • always allow localhost origins (local browser sessions)
-	//   • allow any non-localhost origin when remote access is enabled
+	//   • allow localhost origins only for localhost-hosted requests
+	//   • require non-localhost origins to match the request host exactly
+	//     (prevents credentialed cross-site reads from arbitrary origins)
 	r.Use(cors.Handler(cors.Options{
 		AllowOriginFunc: func(r *http.Request, origin string) bool {
-			if strings.HasPrefix(origin, "http://localhost") ||
-				strings.HasPrefix(origin, "http://127.0.0.1") {
-				return true
-			}
-			if remoteEnabled() {
-				return true
-			}
-			// Tailscale: only allow cross-origin requests that physically
-			// originate from a Tailscale IP. Checking the Origin header alone
-			// is insufficient — an attacker could forge Origin: http://100.x.x.x.
-			// r.RemoteAddr is the actual TCP peer address and cannot be spoofed.
-			return tailscaleEnabled() && auth.IsTailscaleAddr(r.RemoteAddr)
+			return auth.IsAllowedCORSOrigin(r, origin, remoteEnabled, tailscaleEnabled)
 		},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "Cookie", "X-Request-ID"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "Cookie", "X-Request-ID", "X-CSRF-Token"},
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))

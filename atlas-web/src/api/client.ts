@@ -24,6 +24,8 @@ import type {
   MessageAttachment,
   MessageResponse,
   ModelSelectorInfo,
+  CloudModelHealth,
+  OpenRouterModelHealth,
   OnboardingStatus,
   RuntimeConfig,
   RuntimeConfigUpdateResponse,
@@ -34,6 +36,9 @@ import type {
   WorkflowRun,
   TokenUsageSummary,
   TokenUsageEvent,
+  VoiceStatus,
+  VoiceModelInfo,
+  VoiceTranscribeResult,
 } from './contracts'
 
 export type {
@@ -65,6 +70,8 @@ export type {
   MessageAttachment,
   MessageResponse,
   ModelSelectorInfo,
+  CloudModelHealth,
+  OpenRouterModelHealth,
   OnboardingStatus,
   RuntimeConfig,
   RuntimeConfigUpdateResponse,
@@ -77,6 +84,9 @@ export type {
   WorkflowStep,
   WorkflowStepRun,
   WorkflowTrustScope,
+  VoiceStatus,
+  VoiceModelInfo,
+  VoiceTranscribeResult,
 } from './contracts'
 
 export function getPort(): string {
@@ -91,13 +101,39 @@ const BASE = () => {
   if (typeof window !== 'undefined' &&
       window.location.hostname !== 'localhost' &&
       window.location.hostname !== '127.0.0.1') {
-    return `http://${window.location.host}`
+    return `${window.location.protocol}//${window.location.host}`
   }
   try {
     const stored = localStorage.getItem('atlasHost')
     if (stored) return `http://${stored}`
   } catch { /* localStorage blocked */ }
   return `http://localhost:${getPort()}`
+}
+
+let csrfTokenCache: string | null = null
+
+function isRemoteHostRuntime(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+}
+
+function requiresCSRF(method: string): boolean {
+  return method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS'
+}
+
+async function ensureCSRFToken(): Promise<string> {
+  if (csrfTokenCache) return csrfTokenCache
+  const res = await fetch(`${BASE()}/auth/csrf`)
+  if (!res.ok) {
+    throw new Error('Failed to fetch CSRF token')
+  }
+  const body = await res.json() as { token?: string }
+  const token = (body?.token ?? '').trim()
+  if (!token) {
+    throw new Error('Missing CSRF token')
+  }
+  csrfTokenCache = token
+  return token
 }
 
 // ---- HTTP helpers ----
@@ -107,18 +143,25 @@ async function request<T>(
   options: RequestInit = {}
 ): Promise<T> {
   const url = `${BASE()}${path}`
+  const method = (options.method ?? 'GET').toUpperCase()
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((options.headers ?? {}) as Record<string, string>),
+  }
+  if (isRemoteHostRuntime() && requiresCSRF(method)) {
+    headers['X-CSRF-Token'] = await ensureCSRFToken()
+  }
   const res = await fetch(url, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers ?? {}),
-    },
+    headers,
   })
   if (!res.ok) {
-    // On remote device, a 401 means the session expired — redirect to the auth gate
+    // On remote device, a 401 means the session expired — redirect to root.
+    // Root will route unauthenticated users to /auth/remote-gate.
     if (res.status === 401 && typeof window !== 'undefined' &&
         window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-      window.location.href = `http://${window.location.host}/auth/remote-gate`
+      window.location.href = `${window.location.origin}/`
+      csrfTokenCache = null
       throw new Error('Session expired — redirecting to login')
     }
     const text = await res.text().catch(() => res.statusText)
@@ -209,8 +252,20 @@ export const api = {
 
   // Model selector
   models: () => get<ModelSelectorInfo>('/models'),
-  modelsForProvider: (provider: string) => get<ModelSelectorInfo>(`/models/available?provider=${provider}`),
+  modelsForProvider: (provider: string, refresh = false) =>
+    get<ModelSelectorInfo>('/models/available', {
+      provider,
+      ...(refresh ? { refresh: 1, _t: Date.now() } : {}),
+    }),
   refreshModels: () => post<ModelSelectorInfo>('/models/refresh', {}),
+  openRouterModels: (refresh = false, limit = 25) => get<ModelSelectorInfo>(
+    '/providers/openrouter/models',
+    { limit, ...(refresh ? { refresh: 1, _t: Date.now() } : {}) },
+  ),
+  openRouterModelHealth: (model: string) =>
+    get<OpenRouterModelHealth>('/providers/openrouter/model-health', { model, _t: Date.now() }),
+  cloudModelHealth: (provider: string, model: string) =>
+    get<CloudModelHealth>('/providers/cloud/model-health', { provider, model, _t: Date.now() }),
 
   // Telegram
   telegramChats: () => get<TelegramChat[]>('/telegram/chats'),
@@ -321,4 +376,107 @@ export const api = {
     return get<{ events: TokenUsageEvent[] }>(`/usage/events?${q}`)
   },
   deleteUsage: (before: string) => request<{ deleted: number }>(`/usage?before=${encodeURIComponent(before)}`, { method: 'DELETE' }),
+
+  // Voice (Phase 1: Whisper STT)
+  voiceStatus: () => get<VoiceStatus>('/voice/status'),
+  voiceStartSession: (whisperModel?: string, whisperPort?: number) =>
+    post<{ sessionID: string; status: VoiceStatus }>('/voice/session/start', { whisperModel, whisperPort }),
+  voiceEndSession: () => post<VoiceStatus>('/voice/session/end', {}),
+  voiceModels: (component: 'whisper' | 'kokoro') =>
+    get<VoiceModelInfo[]>(`/voice/models/${component}`),
+  voiceDeleteModel: (component: 'whisper' | 'kokoro', name: string) =>
+    request<VoiceModelInfo[]>(`/voice/models/${component}/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  /**
+   * Pre-warm the Kokoro subprocess so the next /voice/synthesize call doesn't
+   * pay the ~600 ms cold-start cost. Idempotent.
+   */
+  voiceKokoroWarmup: () => post<{ ok: boolean; port: number }>('/voice/kokoro/warmup', {}),
+  voiceTranscribe: async (blob: Blob, language?: string): Promise<VoiceTranscribeResult> => {
+    const form = new FormData()
+    const ext = blob.type.includes('wav') ? 'wav' : 'webm'
+    form.append('audio', blob, `audio.${ext}`)
+    const q = language ? `?language=${encodeURIComponent(language)}` : ''
+    const res = await fetch(`${BASE()}/voice/transcribe${q}`, { method: 'POST', body: form })
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText)
+      let message = text
+      try { const j = JSON.parse(text); if (j?.error) message = j.error } catch { /* use raw */ }
+      throw new Error(message || 'voice transcription failed')
+    }
+    return (await res.json()) as VoiceTranscribeResult
+  },
+  /**
+   * Synthesize speech via /voice/synthesize and stream SSE audio chunks back.
+   * Returns an object with an `abort()` method; the caller supplies handlers
+   * for each chunk and the end-of-stream event.
+   */
+  voiceSynthesize: (
+    text: string,
+    handlers: {
+      onChunk: (b64: string, index: number, sampleRate: number, final: boolean) => void
+      onEnd: () => void
+      onError?: (message: string) => void
+    },
+  ): { abort: () => void } => {
+    const ctrl = new AbortController()
+    void (async () => {
+      try {
+        const body: Record<string, unknown> = { text }
+        const res = await fetch(`${BASE()}/voice/synthesize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+          body: JSON.stringify(body),
+          signal: ctrl.signal,
+        })
+        if (!res.ok || !res.body) {
+          const msg = await res.text().catch(() => res.statusText)
+          handlers.onError?.(msg || `voice synthesize HTTP ${res.status}`)
+          return
+        }
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder('utf-8')
+        let buf = ''
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += decoder.decode(value, { stream: true })
+          // SSE messages separated by blank line
+          let idx: number
+          while ((idx = buf.indexOf('\n\n')) >= 0) {
+            const frame = buf.slice(0, idx)
+            buf = buf.slice(idx + 2)
+            let event = 'message'
+            let data = ''
+            for (const line of frame.split('\n')) {
+              if (line.startsWith('event: ')) event = line.slice(7).trim()
+              else if (line.startsWith('data: ')) data += line.slice(6)
+            }
+            if (!data) continue
+            try {
+              const parsed = JSON.parse(data)
+              if (event === 'voice_audio' && typeof parsed.pcm === 'string') {
+                handlers.onChunk(parsed.pcm, parsed.index ?? 0, parsed.sampleRate ?? 22050, !!parsed.final)
+              } else if (event === 'voice_audio_end') {
+                handlers.onEnd()
+                return
+              } else if (event === 'error') {
+                handlers.onError?.(parsed.message || 'voice synthesize failed')
+                return
+              }
+            } catch {
+              // ignore malformed frame
+            }
+          }
+        }
+        // Stream ended without an explicit end event — still fire onEnd.
+        handlers.onEnd()
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return
+        handlers.onError?.((err as Error).message || 'voice synthesize failed')
+      }
+    })()
+    return {
+      abort() { ctrl.abort() },
+    }
+  },
 }

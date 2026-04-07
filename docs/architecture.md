@@ -591,9 +591,12 @@ Phases 2–5 require an AI provider. Phases 1 (prune) always runs even if no pro
 
 | Request type | Auth mechanism |
 |-------------|----------------|
-| Localhost (no `Origin`, loopback `RemoteAddr`) | Bypass — process-trust model |
-| Remote access (`remoteAccessEnabled: true`) | `Authorization: Bearer <remoteAccessKey>` — key in Keychain |
-| Web sessions | HMAC-SHA256 token from `/auth/token`, stored in `web_sessions`, validated by `RequireSession` middleware |
+| Localhost (loopback peer) | Bypass — process-trust model |
+| Remote LAN (`remoteAccessEnabled: true`) | `/auth/remote-gate` + `POST /auth/remote` with remote access key (Keychain), issuing remote session cookie |
+| Remote LAN transport | HTTPS required for non-Tailscale remote requests (or trusted loopback TLS-terminating proxy) |
+| Remote state-changing calls | Session-bound CSRF token from `GET /auth/csrf` required in `X-CSRF-Token` header |
+| Tailscale (`tailscaleEnabled: true`) | Direct Tailnet peer trust path (no Atlas remote key/session required) |
+| Web sessions | HMAC-SHA256 launch token bootstrap (`/auth/token` local-only, `/auth/bootstrap`) persisted in `web_sessions`, validated by `RequireSession` |
 
 ---
 

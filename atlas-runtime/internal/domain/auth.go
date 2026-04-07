@@ -30,11 +30,13 @@ import (
 //	GET      /auth/bootstrap       — exchange token → session cookie → /web
 //	GET      /auth/ping            — diagnostic HTML ping
 //	GET      /auth/remote-gate     — remote login page HTML
+//	GET      /auth/https-required  — explains HTTPS requirement for remote LAN
 //	POST     /auth/remote          — API key auth → session cookie → /web
 //
 // Auth-required (registered inside RequireSession group):
 //
 //	GET      /auth/remote-status   — LAN access info (lanIP, accessURL, port)
+//	GET      /auth/csrf            — CSRF token for remote state-changing calls
 //	GET      /auth/remote-key      — remote access key (authenticated)
 //	POST     /auth/remote-key      — rotate remote access key (authenticated)
 //	DELETE   /auth/remote-sessions — revoke all remote sessions + rotate key
@@ -85,6 +87,7 @@ func (d *AuthDomain) RegisterPublic(r chi.Router) {
 	r.Get("/auth/bootstrap", d.bootstrap)
 	r.Get("/auth/ping", d.ping)
 	r.Get("/auth/remote-gate", d.remoteGate)
+	r.Get("/auth/https-required", d.httpsRequired)
 	// /auth/remote is rate-limited
 	r.Post("/auth/remote", d.limiter.Middleware(http.HandlerFunc(d.remoteAuth)).ServeHTTP)
 }
@@ -92,6 +95,7 @@ func (d *AuthDomain) RegisterPublic(r chi.Router) {
 // Register mounts auth-required routes. Call inside a RequireSession group.
 func (d *AuthDomain) Register(r chi.Router) {
 	r.Get("/auth/remote-status", d.remoteStatus)
+	r.Get("/auth/csrf", d.csrfToken)
 	r.Get("/auth/remote-key", d.remoteKey)
 	r.Post("/auth/remote-key", d.rotateRemoteKey)
 	r.Delete("/auth/remote-sessions", d.revokeRemoteSessions)
@@ -107,10 +111,14 @@ func (d *AuthDomain) rootRedirect(w http.ResponseWriter, r *http.Request) {
 	// Tailscale devices go straight to /web — no token required.
 	// LAN devices without a valid remote session are sent to the auth gate.
 	// Localhost always goes straight to /web.
-	if isRemoteHost(r.Host) {
+	if isRemoteRequest(r) {
 		cfg := d.cfgStore.Load()
 		if cfg.TailscaleEnabled && auth.IsTailscaleAddr(r.RemoteAddr) {
 			http.Redirect(w, r, "/web", http.StatusFound)
+			return
+		}
+		if !auth.IsSecureRequest(r) {
+			http.Redirect(w, r, "/auth/https-required", http.StatusFound)
 			return
 		}
 		sessionID := auth.SessionIDFromCookie(r.Header.Get("Cookie"))
@@ -131,24 +139,6 @@ func (d *AuthDomain) serveWeb(w http.ResponseWriter, r *http.Request) {
 
 	urlPath := r.URL.Path
 
-	// For remote (non-localhost) requests serving the SPA root:
-	//   - Tailscale devices load the SPA directly — no token needed.
-	//   - LAN devices without a valid remote session are redirected to the gate.
-	isSPARoot := urlPath == "/web" || urlPath == "/web/" || urlPath == "/web/index.html"
-	if isSPARoot && isRemoteHost(r.Host) {
-		cfg := d.cfgStore.Load()
-		if cfg.TailscaleEnabled && auth.IsTailscaleAddr(r.RemoteAddr) {
-			// Tailscale — serve SPA directly.
-		} else {
-			sessionID := auth.SessionIDFromCookie(r.Header.Get("Cookie"))
-			sess := d.svc.SessionDetail(sessionID)
-			if sess == nil || !sess.IsRemote {
-				http.Redirect(w, r, "/auth/remote-gate", http.StatusFound)
-				return
-			}
-		}
-	}
-
 	if urlPath == "/web" || urlPath == "/web/" {
 		urlPath = "/web/index.html"
 	}
@@ -162,20 +152,47 @@ func (d *AuthDomain) serveWeb(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filePath := filepath.Join(d.webDir, relPath)
+	isSPAShell := relPath == "index.html"
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		// SPA fallback — serve index.html for unrecognised paths.
 		filePath = filepath.Join(d.webDir, "index.html")
+		isSPAShell = true
+	}
+
+	// Gate all remote requests that resolve to the SPA shell, including fallback
+	// routes (/web/foo that map to index.html). Static assets remain cacheable
+	// and do not carry sensitive data.
+	if isSPAShell && isRemoteRequest(r) {
+		cfg := d.cfgStore.Load()
+		if cfg.TailscaleEnabled && auth.IsTailscaleAddr(r.RemoteAddr) {
+			// Tailscale — serve SPA directly.
+		} else {
+			if !auth.IsSecureRequest(r) {
+				http.Redirect(w, r, "/auth/https-required", http.StatusFound)
+				return
+			}
+			sessionID := auth.SessionIDFromCookie(r.Header.Get("Cookie"))
+			sess := d.svc.SessionDetail(sessionID)
+			if sess == nil || !sess.IsRemote {
+				http.Redirect(w, r, "/auth/remote-gate", http.StatusFound)
+				return
+			}
+		}
 	}
 
 	http.ServeFile(w, r, filePath)
 }
 
-// isRemoteHost returns true if host is NOT a loopback address.
-func isRemoteHost(host string) bool {
-	return !auth.IsLocalhostHost(host)
+// isRemoteRequest returns true for non-loopback TCP peers.
+func isRemoteRequest(r *http.Request) bool {
+	return !auth.IsLocalRequest(r)
 }
 
 func (d *AuthDomain) getToken(w http.ResponseWriter, r *http.Request) {
+	if !auth.IsLocalRequest(r) {
+		writeError(w, http.StatusForbidden, "Launch token endpoint is local-only.")
+		return
+	}
 	token := d.svc.IssueLaunchToken()
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
@@ -191,7 +208,7 @@ func (d *AuthDomain) bootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess := d.svc.CreateSession(false)
-	w.Header().Set("Set-Cookie", auth.SessionSetCookieValue(sess))
+	w.Header().Set("Set-Cookie", auth.SessionSetCookieValueForRequest(sess, r))
 	http.Redirect(w, r, "/web", http.StatusFound)
 }
 
@@ -208,9 +225,19 @@ func (d *AuthDomain) ping(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *AuthDomain) remoteGate(w http.ResponseWriter, r *http.Request) {
+	if isRemoteRequest(r) && !auth.IsTailscaleAddr(r.RemoteAddr) && !auth.IsSecureRequest(r) {
+		http.Redirect(w, r, "/auth/https-required", http.StatusFound)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, remoteGateHTML())
+}
+
+func (d *AuthDomain) httpsRequired(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusUpgradeRequired)
+	fmt.Fprint(w, httpsRequiredHTML())
 }
 
 func (d *AuthDomain) remoteAuth(w http.ResponseWriter, r *http.Request) {
@@ -242,6 +269,10 @@ func (d *AuthDomain) remoteAuth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "Tailscale access is not enabled.")
 		return
 	}
+	if isRemoteRequest(r) && !auth.IsTailscaleAddr(r.RemoteAddr) && !auth.IsSecureRequest(r) {
+		writeError(w, http.StatusUpgradeRequired, "HTTPS is required for remote LAN authentication.")
+		return
+	}
 	storedKey := readRemoteAccessKey(cfg)
 	if !auth.ValidateAPIKey(key, storedKey) {
 		log.Printf("Atlas: remote login rejected — invalid key (ip=%s)", remoteClientIP(r))
@@ -249,7 +280,7 @@ func (d *AuthDomain) remoteAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess := d.svc.CreateSession(true)
-	w.Header().Set("Set-Cookie", auth.SessionSetCookieValue(sess))
+	w.Header().Set("Set-Cookie", auth.SessionSetCookieValueForRequest(sess, r))
 	log.Printf("Atlas: remote session created (ip=%s, expires=%s)", remoteClientIP(r), sess.ExpiresAt.Format("2006-01-02 15:04:05 UTC"))
 	// Return 200 JSON so the gate page JS can navigate to /web after the cookie
 	// is reliably applied. Using 302 with fetch redirect:'manual' is unreliable
@@ -269,7 +300,8 @@ func (d *AuthDomain) remoteStatus(w http.ResponseWriter, r *http.Request) {
 	lanIP := detectLANIP()
 	var accessURL string
 	if lanIP != "" && port > 0 {
-		accessURL = fmt.Sprintf("http://%s:%d/auth/remote-gate", lanIP, port)
+		// LAN access requires HTTPS for non-Tailscale remote requests.
+		accessURL = fmt.Sprintf("https://%s:%d", lanIP, port)
 	}
 
 	// Always detect the Tailscale IP so the UI can show "Tailscale detected —
@@ -292,6 +324,41 @@ func (d *AuthDomain) remoteStatus(w http.ResponseWriter, r *http.Request) {
 		"tailscaleURL":        tailscaleURL,
 		"tailscaleConnected":  tailscaleIP != "",
 	})
+}
+
+func httpsRequiredHTML() string {
+	return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Atlas — HTTPS Required</title>
+<style>
+body{font-family:-apple-system,system-ui,sans-serif;background:#111;color:#f5f5f5;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:20px}
+.card{max-width:520px;background:#1a1a1a;border:1px solid #333;border-radius:12px;padding:24px;line-height:1.5}
+h1{margin:0 0 8px;font-size:20px}
+p{margin:0 0 10px;color:#cfcfcf}
+code{background:#0f0f0f;border:1px solid #333;padding:2px 6px;border-radius:6px}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>HTTPS Required For Remote LAN Access</h1>
+  <p>Atlas now blocks remote LAN authentication over plain HTTP to protect access keys and sessions from interception.</p>
+  <p>Use a local HTTPS reverse proxy (for example Caddy or Nginx) in front of Atlas and forward to <code>http://127.0.0.1:1984</code>.</p>
+  <p>Tailscale access remains available without this requirement because transport encryption is provided by Tailscale.</p>
+</div>
+</body>
+</html>`
+}
+
+func (d *AuthDomain) csrfToken(w http.ResponseWriter, r *http.Request) {
+	sessionID := auth.SessionIDFromCookie(r.Header.Get("Cookie"))
+	if sessionID == "" || d.svc.SessionDetail(sessionID) == nil {
+		writeError(w, http.StatusUnauthorized, "No valid session.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": d.svc.CSRFToken(sessionID)})
 }
 
 func (d *AuthDomain) remoteKey(w http.ResponseWriter, r *http.Request) {
@@ -469,8 +536,8 @@ func isPrivateIPv4(ip net.IP) bool {
 
 // remoteClientIP extracts the best-effort client IP from a request.
 func remoteClientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		return strings.TrimSpace(strings.SplitN(fwd, ",", 2)[0])
+	if ip := auth.ClientIP(r); ip != "" {
+		return ip
 	}
 	host := r.RemoteAddr
 	if idx := strings.LastIndex(host, ":"); idx >= 0 {

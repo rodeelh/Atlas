@@ -31,6 +31,7 @@ Primary sources:
 - Authentication:
   - local native bootstrap via launch token and session cookie
   - remote browser access via remote access key and session cookie
+  - remote state-changing calls require `X-CSRF-Token` from `GET /auth/csrf`
 - Static web shell is served from `/web`.
 
 ## Contract rules
@@ -60,6 +61,7 @@ Required behavior:
 - trusted local clients can mint a launch token
 - a browser can exchange a launch token for a session cookie
 - remote access uses a separate login gate and remote key flow
+- LAN remote access requires HTTPS (or trusted loopback TLS-terminating proxy)
 - remote session revocation is explicit
 
 Core routes:
@@ -67,10 +69,19 @@ Core routes:
 - `GET /auth/token`
 - `GET /auth/bootstrap`
 - `GET /auth/remote-gate`
+- `GET /auth/https-required`
 - `POST /auth/remote`
 - `GET /auth/remote-status`
+- `GET /auth/csrf`
 - `GET /auth/remote-key`
 - `DELETE /auth/remote-sessions`
+
+Route-specific constraints:
+
+- `GET /auth/token` is local-only (loopback peer).
+- `GET /auth/bootstrap` consumes `?token=` and sets session cookie.
+- `GET /auth/csrf` requires authenticated session and returns `{ "token": string }`.
+- For remote LAN requests (non-Tailscale), runtime enforces HTTPS before auth/session processing.
 
 ### Runtime status and config
 

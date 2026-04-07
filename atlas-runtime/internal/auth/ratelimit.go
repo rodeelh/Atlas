@@ -1,8 +1,8 @@
 package auth
 
 import (
+	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
@@ -62,15 +62,16 @@ func (l *RemoteAuthLimiter) Middleware(h http.Handler) http.Handler {
 	})
 }
 
-// remoteIP extracts the real client IP from the request, preferring
-// X-Forwarded-For (set by reverse proxies) over RemoteAddr.
+// remoteIP extracts the effective client IP for throttling decisions.
+// Forwarded headers are only accepted when the immediate peer is loopback.
 func remoteIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		return strings.TrimSpace(strings.SplitN(fwd, ",", 2)[0])
+	ip := ClientIP(r)
+	if ip != "" {
+		return ip
 	}
-	host := r.RemoteAddr
-	if idx := strings.LastIndex(host, ":"); idx >= 0 {
-		return host[:idx]
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
 	}
-	return host
+	return r.RemoteAddr
 }

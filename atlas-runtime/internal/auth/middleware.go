@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -16,21 +17,35 @@ func init() {
 }
 
 // RequireSession is a chi middleware that enforces the Atlas session model:
-//   - Requests from localhost with no Origin header (native URLSession / macOS app) — bypass auth.
+//   - Requests from localhost — bypass auth (native macOS app AND local browsers).
 //   - Requests from a Tailscale IP when tailscaleEnabled() — bypass auth entirely.
 //     Tailscale's cryptographic device identity is the trust mechanism; no Atlas token needed.
 //   - All other remote requests (LAN) require an Atlas remote session via /auth/remote-gate.
 //
-// NOTE: browsers omit the Origin header on same-origin GET requests, so we must
-// also inspect r.Host to distinguish a local browser from a LAN browser.
+// NOTE: browsers omit the Origin header on same-origin GET requests but SEND it
+// on POST requests (even same-origin). Previously this bypass only fired when
+// Origin was empty, which silently broke every POST from a localhost browser
+// after its bootstrap cookie expired. We now bypass on any localhost-hosted
+// request whose Origin is either empty or also localhost. Remote LAN requests
+// still fall through to session validation because their Host is non-local.
 func RequireSession(svc *Service, tailscaleEnabled func() bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
-			isLocalHost := isLocalhostHost(r.Host)
+			isLocalReq := IsLocalRequest(r)
+
+			// Cross-origin guard for remote requests: if a browser sends an Origin,
+			// it must resolve to the same host as the request target.
+			// This blocks credentialed CSRF attempts from unrelated sites.
+			if origin != "" && !isLocalReq && !isSameHostOrigin(origin, r.Host) {
+				writeError(w, http.StatusForbidden, "Cross-origin request blocked.")
+				return
+			}
 
 			// Native client or same-origin local browser — bypass auth.
-			if origin == "" && isLocalHost {
+			// Accepts: empty Origin (native URLSession / browser GET) OR
+			// an Origin that is itself a localhost URL (browser POST).
+			if isLocalReq && (origin == "" || isLocalhostOrigin(origin)) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -50,22 +65,38 @@ func RequireSession(svc *Service, tailscaleEnabled func() bool) func(http.Handle
 				return
 			}
 
+			// Remote LAN auth is only permitted over HTTPS (direct TLS or trusted
+			// loopback reverse proxy with X-Forwarded-Proto=https). This prevents
+			// plaintext key/cookie exposure on local networks.
+			if !IsSecureRequest(r) {
+				writeError(w, http.StatusUpgradeRequired,
+					"HTTPS is required for remote LAN access.")
+				return
+			}
+
 			// All other remote requests (LAN) require a valid Atlas session.
 			sessionID := SessionIDFromCookie(r.Header.Get("Cookie"))
 			if !svc.ValidateSession(sessionID) {
 				writeError(w, http.StatusUnauthorized,
-					"Not authenticated. Open Atlas on the host Mac or visit /auth/remote-gate.")
+					"Not authenticated. Open Atlas on the host Mac or visit / (redirects to /auth/remote-gate).")
 				return
 			}
 
 			// Non-localhost requests require a remote session specifically.
-			isRemoteReq := !isLocalHost || (origin != "" && !isLocalhostOrigin(origin))
+			isRemoteReq := !isLocalReq || (origin != "" && !isLocalhostOrigin(origin))
 			if isRemoteReq {
 				sess := svc.SessionDetail(sessionID)
 				if sess == nil || !sess.IsRemote {
 					writeError(w, http.StatusUnauthorized,
-						"Remote access requires authentication via /auth/remote-gate.")
+						"Remote access requires authentication via / (redirects to /auth/remote-gate).")
 					return
+				}
+				if requiresCSRF(r.Method) {
+					token := strings.TrimSpace(r.Header.Get("X-CSRF-Token"))
+					if !svc.ValidateCSRF(sessionID, token) {
+						writeError(w, http.StatusForbidden, "CSRF token invalid or missing.")
+						return
+					}
 				}
 			}
 
@@ -82,7 +113,7 @@ func RequireSession(svc *Service, tailscaleEnabled func() bool) func(http.Handle
 func LanGate(remoteEnabled func() bool, tailscaleEnabled func() bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !isLocalhostHost(r.Host) && !remoteEnabled() {
+			if !IsLocalRequest(r) && !remoteEnabled() {
 				// Tailscale connections bypass the LAN gate — they have their own trust model.
 				if tailscaleEnabled != nil && tailscaleEnabled() && isTailscaleRequest(r) {
 					next.ServeHTTP(w, r)
@@ -169,6 +200,25 @@ func isLocalhostOrigin(origin string) bool {
 		strings.HasPrefix(origin, "http://127.0.0.1")
 }
 
+func requiresCSRF(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	default:
+		return true
+	}
+}
+
+// isSameHostOrigin reports whether origin resolves to the same canonical host
+// as host (ignoring port differences, comparing case-insensitively).
+func isSameHostOrigin(origin, host string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(CanonicalHost(u.Host), CanonicalHost(host))
+}
+
 // CanonicalHost strips any port and IPv6 brackets so host comparisons are stable
 // across localhost forms such as localhost:1984, 127.0.0.1:1984, and [::1]:1984.
 func CanonicalHost(host string) string {
@@ -196,7 +246,10 @@ func isLocalhostHost(host string) bool {
 // isTailscaleRequest returns true if the request originates from a Tailscale
 // node IP (100.64.0.0/10 CGNAT range assigned by Tailscale).
 func isTailscaleRequest(r *http.Request) bool {
-	ip := requestIP(r)
+	// Tailscale trust is bound to the immediate network peer address.
+	// Do not use forwarded headers here; a local reverse proxy could otherwise
+	// let spoofed client IP chains influence trust decisions.
+	ip := PeerIP(r)
 	if ip == "" {
 		return false
 	}
@@ -223,15 +276,6 @@ func IsTailscaleIP(ipStr string) bool {
 		return false
 	}
 	return tailscaleNet.Contains(ip)
-}
-
-// requestIP extracts the bare IP address from r.RemoteAddr.
-func requestIP(r *http.Request) string {
-	addr := r.RemoteAddr
-	if host, _, err := net.SplitHostPort(addr); err == nil {
-		return host
-	}
-	return addr
 }
 
 // writeError writes a JSON error response.

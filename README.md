@@ -37,6 +37,12 @@ cd ../atlas-runtime
 
 Open [http://localhost:1984/web](http://localhost:1984/web).
 
+### Remote Access Security Notes
+
+- LAN remote access now requires HTTPS end-to-end (or a trusted local reverse proxy that terminates TLS and forwards to `http://127.0.0.1:1984`).
+- Tailscale access can connect directly over the Tailnet address shown in Settings.
+- Remote state-changing API calls require a session-bound CSRF token (`X-CSRF-Token`), fetched from `GET /auth/csrf`.
+
 ## Development
 
 ```bash

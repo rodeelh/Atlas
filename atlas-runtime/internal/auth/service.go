@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -249,6 +250,17 @@ func ValidateAPIKey(presented, stored string) bool {
 // SessionSetCookieValue returns the Set-Cookie header value for a session.
 // Matches WebAuthService.sessionSetCookieValue(for:).
 func SessionSetCookieValue(sess *Session) string {
+	return sessionSetCookieValue(sess, false)
+}
+
+// SessionSetCookieValueForRequest returns the Set-Cookie header value for a
+// session, enabling Secure when the request arrived over HTTPS directly or via
+// a trusted TLS-terminating proxy that sets X-Forwarded-Proto=https.
+func SessionSetCookieValueForRequest(sess *Session, r *http.Request) string {
+	return sessionSetCookieValue(sess, IsSecureRequest(r))
+}
+
+func sessionSetCookieValue(sess *Session, secure bool) string {
 	sameSite := "Strict"
 	if sess.IsRemote {
 		sameSite = "Lax"
@@ -257,10 +269,35 @@ func SessionSetCookieValue(sess *Session) string {
 	if maxAge < 0 {
 		maxAge = 0
 	}
+	secureAttr := ""
+	if secure {
+		secureAttr = "; Secure"
+	}
 	return fmt.Sprintf(
-		"%s=%s; HttpOnly; SameSite=%s; Path=/; Max-Age=%d",
-		SessionCookieName, sess.ID, sameSite, maxAge,
+		"%s=%s; HttpOnly; SameSite=%s; Path=/; Max-Age=%d%s",
+		SessionCookieName, sess.ID, sameSite, maxAge, secureAttr,
 	)
+}
+
+// CSRFToken returns the session-bound CSRF token.
+// Token format: hex(HMAC_SHA256(signingKey, "csrf:"+sessionID)).
+func (s *Service) CSRFToken(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, s.signingKey)
+	mac.Write([]byte("csrf:"))
+	mac.Write([]byte(sessionID))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// ValidateCSRF reports whether token matches the expected token for sessionID.
+func (s *Service) ValidateCSRF(sessionID, token string) bool {
+	if sessionID == "" || token == "" {
+		return false
+	}
+	expected := s.CSRFToken(sessionID)
+	return hmac.Equal([]byte(token), []byte(expected))
 }
 
 // SessionIDFromCookie extracts the atlas_session value from a Cookie header.
