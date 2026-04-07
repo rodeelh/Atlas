@@ -2172,7 +2172,6 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  margin-top: 2px;
   position: relative;
   z-index: 2;
 }
@@ -2303,8 +2302,6 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   flex: 0 1 auto;
   position: relative;
   isolation: isolate;
-  /* extra bottom clearance so the absolutely-positioned meta isn't clipped */
-  padding-bottom: 22px;
 }
 
 .chat-message-actions {
@@ -2582,7 +2579,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   align-items: center;
   justify-content: space-between;
   position: absolute;
-  bottom: 2px;
+  top: calc(100% + 5px);
   left: 0;
   right: 0;
   padding: 0 2px;
