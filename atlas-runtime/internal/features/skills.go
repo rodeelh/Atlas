@@ -190,6 +190,20 @@ func builtInSkills() []SkillRecord {
 		},
 		{
 			Manifest: SkillManifestInfo{
+				ID: "dashboards", Name: "Dashboards", Version: "1.0",
+				Description:    "Build, list, and remove live data dashboards composed of widgets that pull from runtime endpoints, read-only skills, or read-only SQL.",
+				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,
+				Category: "productivity", Capabilities: []string{"dashboards"}, Tags: []string{"dashboards", "widgets", "data"},
+			},
+			Actions: []SkillAction{
+				{ID: "dashboard.list", Name: "List Dashboards", Description: "List all saved dashboards with widget counts.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "dashboard.get", Name: "Get Dashboard", Description: "Fetch the full definition of a saved dashboard by id.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "dashboard.create", Name: "Create Dashboard", Description: "Generate and save a new dashboard from a natural-language description.", PermissionLevel: "draft", IsEnabled: true},
+				{ID: "dashboard.delete", Name: "Delete Dashboard", Description: "Permanently delete a saved dashboard.", PermissionLevel: "execute", IsEnabled: true},
+			},
+		},
+		{
+			Manifest: SkillManifestInfo{
 				ID: "info", Name: "Info", Version: "1.0",
 				Description:    "Time, date, timezone, and currency lookups.",
 				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,

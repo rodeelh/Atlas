@@ -40,7 +40,7 @@ Swift packages are archived at `archive/swift/`. They are not built and not refe
 | `internal/domain` | Core HTTP domains that remain private core-owned: `auth`, `chat`, `control`, plus shared handler helpers |
 | `internal/features` | Automations (GREMLINS.md), workflows (JSON), API validation history, skills state, diary (DIARY.md) |
 | `internal/platform` | Private runtime host, module registry, scoped storage, agent/context seams, selective event bus |
-| `internal/modules` | First-party extracted feature modules: approvals, automations, communications, forge, workflows, skills, engine, usage, api-validation |
+| `internal/modules` | First-party extracted feature modules: approvals, automations, communications, dashboards, forge, workflows, skills, engine, usage, api-validation |
 | `internal/forge` | Forge proposal lifecycle — AI research, JSON persistence, install/uninstall |
 | `internal/logstore` | In-memory log ring buffer (500 entries) — written by agent loop and services, read by `GET /logs` |
 | `internal/memory` | Per-turn memory extraction — two-stage pipeline (regex 7 categories + LLM); saves to SQLite `memories` table |
@@ -89,6 +89,9 @@ Core rule:
 | `internal/modules/communications/module.go` | Communications module — routes + bridge lifecycle |
 | `internal/modules/forge/module.go` | Forge module — proposal/install routes |
 | `internal/modules/workflows/module.go` | Workflows module — definitions + run routes |
+| `internal/modules/dashboards/module.go` | Dashboards module — list/CRUD + per-widget data resolution |
+| `internal/modules/dashboards/safety.go` | Runtime endpoint allowlist, web SSRF guard, SQL lexer |
+| `internal/modules/dashboards/skills.go` | `dashboard.list/get/create/delete` skill family |
 | `internal/modules/skills/module.go` | Skills module — skills routes + fs roots |
 | `internal/skills/registry.go` | `NewRegistry` — registers all built-in skills |
 | `internal/forge/service.go` | `Propose` — AI research pipeline, in-memory researching list |
@@ -201,6 +204,9 @@ DELETE /skills/:id             — remove custom skill directory
 | New credential field | `internal/creds/bundle.go` `Bundle` struct + update `domain/control.go` `storeAPIKey` mapping |
 | New web UI screen | `atlas-web/src/screens/<Name>.tsx` + route in `atlas-web/src/App.tsx` + types/methods in `atlas-web/src/api/contracts.ts` + `atlas-web/src/api/client.ts` |
 | New Forge skill type | `internal/forge/types.go` |
+| New dashboard widget kind | `atlas-web/src/screens/DashboardWidgets.tsx` (renderer) + add the constant to `internal/modules/dashboards/types.go` + relax `isAllowedGeneratedKind` in `generate.go` |
+| New dashboard starter template | `internal/modules/dashboards/templates.go` — append to the slice returned by `Templates()` |
+| New dashboard runtime data source | Add the path prefix to `runtimeEndpointAllowlist` in `internal/modules/dashboards/safety.go` |
 | New storage table | `internal/storage/db.go` `createSchema()` + add query methods |
 | Add a log entry | Call `logstore.Write(level, message, meta)` — visible at `GET /logs` |
 | Extend diary context | `internal/features/diary.go` — `DiaryContext` is injected into system prompt by `chat/service.go` |
@@ -302,6 +308,7 @@ make uninstall                             # unload daemon, remove installed fil
 | `workflow-runs.json` | Go runtime | Workflow run records |
 | `forge-proposals.json` | Go runtime | Forge proposal records |
 | `forge-installed.json` | Go runtime | Installed forge skill records |
+| `dashboards.json` | Go runtime | Saved dashboard definitions (atomic temp+rename writes) |
 | `go-skill-states.json` | Go runtime | Skill enable/disable overrides |
 | `action-policies.json` | Web UI / approvals | Per-action approval policies |
 | `fs-roots.json` | Web UI | Approved filesystem roots |

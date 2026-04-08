@@ -11,6 +11,7 @@ import { Settings } from './screens/Settings'
 import { AIProviders } from './screens/AIProviders'
 import { Automations } from './screens/Automations'
 import { Workflows } from './screens/Workflows'
+import { Dashboards } from './screens/Dashboards'
 import { APIKeys } from './screens/APIKeys'
 import { Theme } from './screens/Theme'
 import { Docs } from './screens/Docs'
@@ -31,6 +32,7 @@ type Screen =
   | 'mind'
   | 'automations'
   | 'workflows'
+  | 'dashboards'
   | 'activity'
   | 'settings'
   | 'ai-providers'
@@ -42,7 +44,7 @@ type Screen =
 
 const VALID_SCREENS: Screen[] = [
   'chat', 'onboarding', 'communications', 'approvals', 'skills', 'forge', 'mind',
-  'automations', 'workflows', 'activity', 'settings', 'ai-providers', 'api-keys', 'theme',
+  'automations', 'workflows', 'dashboards', 'activity', 'settings', 'ai-providers', 'api-keys', 'theme',
   'atlas-engine', 'usage',
   'docs',
 ]
@@ -203,6 +205,14 @@ const Icon = {
       <path d="M2 4h11M2 7.5h11M2 11h11" />
     </svg>
   ),
+  dashboards: (
+    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="2" width="5" height="5" rx="0.7" />
+      <rect x="9" y="2" width="5" height="3" rx="0.7" />
+      <rect x="9" y="7" width="5" height="7" rx="0.7" />
+      <rect x="2" y="9" width="5" height="5" rx="0.7" />
+    </svg>
+  ),
 }
 
 const SCREEN_LABELS: Partial<Record<Screen, string>> = {
@@ -215,6 +225,7 @@ const SCREEN_LABELS: Partial<Record<Screen, string>> = {
   mind: 'Mind',
   automations: 'Automations',
   workflows: 'Workflows',
+  dashboards: 'Dashboards',
   activity: 'Activity',
   settings: 'General',
   'ai-providers': 'AI Providers',
@@ -239,6 +250,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'automations', icon: Icon.automations, label: 'Automations' },
       { id: 'workflows',   icon: Icon.workflows,   label: 'Workflows' },
+      { id: 'dashboards',  icon: Icon.dashboards,  label: 'Dashboards' },
       { id: 'approvals',   icon: Icon.approvals,   label: 'Approvals' },
       { id: 'usage',       icon: Icon.usage,       label: 'Usage' },
     ],
@@ -690,6 +702,7 @@ export function App() {
         {screen === 'forge'       && <Forge />}
         {screen === 'automations' && <Automations />}
         {screen === 'workflows'   && <Workflows />}
+        {screen === 'dashboards'  && <Dashboards />}
         {screen === 'mind'        && <Mind />}
         {screen === 'activity'    && <Activity />}
         {screen === 'settings'    && <Settings />}

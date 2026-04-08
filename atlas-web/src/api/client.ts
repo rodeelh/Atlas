@@ -2,6 +2,10 @@
 import type {
   APIKeyStatus,
   Approval,
+  DashboardDefinition,
+  DashboardSummary,
+  DashboardTemplate,
+  DashboardWidgetData,
   EngineDownloadStatus,
   EngineModelInfo,
   EngineStatus,
@@ -46,6 +50,14 @@ import type {
 export type {
   AIModelRecord,
   APIKeyStatus,
+  DashboardDataSource,
+  DashboardDefinition,
+  DashboardSourceKind,
+  DashboardSummary,
+  DashboardTemplate,
+  DashboardWidget,
+  DashboardWidgetData,
+  DashboardWidgetKind,
   EngineModelInfo,
   EngineStatus,
   Approval,
@@ -308,6 +320,19 @@ export const api = {
   workflowRuns: (id?: string) => get<WorkflowRun[]>(id ? `/workflows/${encodeURIComponent(id)}/runs` : '/workflows/runs'),
   approveWorkflowRun: (runID: string) => post<WorkflowRun>(`/workflows/runs/${encodeURIComponent(runID)}/approve`, {}),
   denyWorkflowRun: (runID: string) => post<WorkflowRun>(`/workflows/runs/${encodeURIComponent(runID)}/deny`, {}),
+
+  // Dashboards
+  dashboards: () => get<DashboardSummary[]>('/dashboards'),
+  dashboardTemplates: () => get<DashboardTemplate[]>('/dashboards/templates'),
+  dashboard: (id: string) => get<DashboardDefinition>(`/dashboards/${encodeURIComponent(id)}`),
+  createDashboard: (body: { template?: string; definition?: Partial<DashboardDefinition> }) =>
+    post<DashboardDefinition>('/dashboards', body),
+  updateDashboard: (def: DashboardDefinition) =>
+    put<DashboardDefinition>(`/dashboards/${encodeURIComponent(def.id)}`, def),
+  deleteDashboard: (id: string) =>
+    request<void>(`/dashboards/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  resolveDashboardWidget: (dashboardID: string, widgetID: string) =>
+    post<DashboardWidgetData>(`/dashboards/${encodeURIComponent(dashboardID)}/resolve`, { widgetId: widgetID }),
 
   // Conversation History
   conversations: (limit = 50, offset = 0) =>

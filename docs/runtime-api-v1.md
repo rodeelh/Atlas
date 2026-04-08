@@ -223,6 +223,34 @@ Required payload expectations:
 - Workflow runs include structured `stepRuns`; prompt steps may complete, fail, or be skipped if unsupported.
 - Runtime tools invoked inside workflow runs are constrained by the workflow trust scope and action safety policy.
 
+### Dashboards API
+
+Dashboards are user-visible compositions of widgets that pull live data from runtime endpoints, read-only skills, the open web, or read-only SQL. The agent can author them from chat via the `dashboard.*` skill family; the web UI ships a viewer + template installer.
+
+Core routes:
+
+- `GET /dashboards` — list dashboard summaries (id, name, widget count, timestamps)
+- `GET /dashboards/templates` — list shipped starter templates
+- `GET /dashboards/{id}` — full definition with widgets
+- `POST /dashboards` — create from `{ "template": "<id>" }` or `{ "definition": { ... } }`
+- `PUT /dashboards/{id}` — replace definition
+- `DELETE /dashboards/{id}` — remove
+- `POST /dashboards/{id}/resolve` — body `{ "widgetId": "..." }` returns the resolved data for one widget
+
+Built-in widget kinds: `metric`, `table`, `line_chart`, `bar_chart`, `markdown`, `list`, `custom_html`. Custom HTML widgets render inside a sandboxed iframe (`sandbox="allow-scripts"`, opaque origin) with a strict CSP (`default-src 'none'`) that blocks all outbound network. The parent posts resolved data into the iframe via `postMessage`; the widget defines `window.atlasRender(data)` to consume it.
+
+Data source kinds and safety rules:
+
+- `runtime` — GET against an allowlisted runtime endpoint. Allowlist (in `internal/modules/dashboards/safety.go`): `/status`, `/logs`, `/memories`, `/diary`, `/mind`, `/skills`, `/skills-memory`, `/workflows`, `/workflows/`, `/automations`, `/automations/`, `/communications`, `/communications/`, `/forge/proposals`, `/forge/installed`, `/forge/researching`, `/usage/summary`, `/usage/events`. Anything else returns 403.
+- `skill` — calls a skill action on the runtime registry, but only if `permission_level == "read"`. Non-read or unknown actions return 403.
+- `web` — proxied GET via the runtime. Scheme must be `http`/`https`; localhost, `.local`, all RFC1918, IPv6 loopback, and `0.0.0.0` are rejected. Response capped at 256 KB; redirects re-validated on every hop (max 3).
+- `sql` — read-only `SELECT` (or `WITH … SELECT`) against `atlas.sqlite3`. Lexer rejects 16 forbidden keywords (DELETE, UPDATE, DROP, PRAGMA, ATTACH, …) and multi-statement input; the connection itself is opened with `?mode=ro&_pragma=query_only(1)` as defence in depth. 2 s timeout, default `LIMIT 500`.
+
+Required payload expectations:
+
+- `POST /dashboards/{id}/resolve` returns `{ widgetId, success, data, error?, sourceKind, resolvedAt, durationMs }`. Safety/allowlist rejections return HTTP 403; upstream/runtime failures return 200 with `success=false` so the dashboard can render an error tile without losing the rest of the grid.
+- AI generation (via `dashboard.create` skill) validates the model output against the same allowlist before persisting — the `web` source kind is reserved (not authorable by the model), and `custom_html` widgets must declare a non-empty `html` field.
+
 ### Memory API
 
 Long-term memories are stored in SQLite and recalled via BM25 FTS5 before each agent turn.

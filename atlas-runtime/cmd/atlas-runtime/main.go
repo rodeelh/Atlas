@@ -30,6 +30,7 @@ import (
 	approvalsmodule "atlas-runtime-go/internal/modules/approvals"
 	automationsmodule "atlas-runtime-go/internal/modules/automations"
 	communicationsmodule "atlas-runtime-go/internal/modules/communications"
+	dashboardsmodule "atlas-runtime-go/internal/modules/dashboards"
 	enginemodule "atlas-runtime-go/internal/modules/engine"
 	forgemodule "atlas-runtime-go/internal/modules/forge"
 	skillsmodule "atlas-runtime-go/internal/modules/skills"
@@ -191,6 +192,16 @@ func main() {
 	if err := moduleRegistry.Register(workflowsModule); err != nil {
 		log.Fatalf("Atlas: register workflows module: %v", err)
 	}
+	dashboardsModule := dashboardsmodule.New(config.SupportDir(), dbPath)
+	dashboardsModule.SetRuntimeFetcher(dashboardsmodule.NewLoopbackFetcher(port))
+	dashboardsModule.SetSkillExecutor(skillsRegistry)
+	dashboardsModule.SetProviderResolver(func() (agent.ProviderConfig, error) {
+		return chat.ResolveProvider(cfgStore.Load())
+	})
+	if err := moduleRegistry.Register(dashboardsModule); err != nil {
+		log.Fatalf("Atlas: register dashboards module: %v", err)
+	}
+	dashboardsModule.RegisterSkills(skillsRegistry)
 	skillsModule := skillsmodule.New(config.SupportDir())
 	if err := moduleRegistry.Register(skillsModule); err != nil {
 		log.Fatalf("Atlas: register skills module: %v", err)

@@ -633,3 +633,80 @@ export interface VoiceSynthesizeChunkEvent {
   final: boolean
   chunk: string // base64 WAV
 }
+
+// ── Dashboards ──────────────────────────────────────────────────────────────
+
+export type DashboardSourceKind = 'runtime' | 'skill' | 'web' | 'sql'
+
+export type DashboardWidgetKind =
+  | 'metric'
+  | 'table'
+  | 'line_chart'
+  | 'bar_chart'
+  | 'markdown'
+  | 'list'
+  | 'custom_html'
+
+export interface DashboardDataSource {
+  kind: DashboardSourceKind
+  endpoint?: string
+  query?: Record<string, string>
+  action?: string
+  args?: Record<string, unknown>
+  url?: string
+  sql?: string
+}
+
+export interface DashboardWidget {
+  id: string
+  kind: DashboardWidgetKind
+  title?: string
+  description?: string
+  gridX: number
+  gridY: number
+  gridW: number
+  gridH: number
+  source?: DashboardDataSource
+  options?: Record<string, unknown>
+  html?: string
+  css?: string
+  js?: string
+  refreshIntervalSeconds?: number
+}
+
+export interface DashboardDefinition {
+  id: string
+  name: string
+  description?: string
+  template?: string
+  widgets: DashboardWidget[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DashboardSummary {
+  id: string
+  name: string
+  description?: string
+  template?: string
+  widgetCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DashboardTemplate {
+  id: string
+  name: string
+  description: string
+  definition: DashboardDefinition
+}
+
+export interface DashboardWidgetData {
+  widgetId: string
+  success: boolean
+  data?: unknown
+  error?: string
+  resolvedAt: string
+  sourceKind: string
+  durationMs: number
+}
