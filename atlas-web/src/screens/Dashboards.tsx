@@ -6,7 +6,7 @@
 // per-widget data resolution. Custom HTML widgets fall through to a
 // placeholder until stage 5.
 
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { JSX } from 'preact'
 import {
   api,
@@ -38,11 +38,16 @@ function formatDate(iso?: string): string {
 }
 
 // ── widget cell ───────────────────────────────────────────────────────────────
-//
-// One cell in the grid. Owns its own fetch lifecycle so widgets resolve in
-// parallel and a single failure doesn't poison the whole dashboard.
 
-function WidgetCell({ dashboardID, widget }: { dashboardID: string; widget: DashboardWidget }): JSX.Element {
+interface WidgetCellProps {
+  dashboardID: string
+  widget: DashboardWidget
+  editMode?: boolean
+  onDragStart?: (e: PointerEvent, widget: DashboardWidget) => void
+  onResizeStart?: (e: PointerEvent, widget: DashboardWidget) => void
+}
+
+function WidgetCell({ dashboardID, widget, editMode, onDragStart, onResizeStart }: WidgetCellProps): JSX.Element {
   const [resolved, setResolved] = useState<DashboardWidgetData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -62,12 +67,7 @@ function WidgetCell({ dashboardID, widget }: { dashboardID: string; widget: Dash
   }
 
   useEffect(() => {
-    // Widgets with no backend source render their own embedded content
-    // (markdown text, custom_html mini-apps) — no resolve round-trip needed.
-    if (!widget.source) {
-      setLoading(false)
-      return
-    }
+    if (!widget.source) { setLoading(false); return }
     resolve()
     if (widget.refreshIntervalSeconds && widget.refreshIntervalSeconds > 0) {
       const interval = window.setInterval(resolve, widget.refreshIntervalSeconds * 1000)
@@ -77,32 +77,163 @@ function WidgetCell({ dashboardID, widget }: { dashboardID: string; widget: Dash
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dashboardID, widget.id])
 
+  const x = Math.max(0, widget.gridX ?? 0)
+  const y = Math.max(0, widget.gridY ?? 0)
+  const w = Math.max(1, Math.min(12, widget.gridW || 4))
+  const h = Math.max(1, Math.min(12, widget.gridH || 3))
+
   const style: JSX.CSSProperties = {
-    gridColumn: `span ${Math.max(1, Math.min(12, widget.gridW || 4))}`,
-    gridRow: `span ${Math.max(1, Math.min(12, widget.gridH || 3))}`,
+    gridColumn: `${x + 1} / span ${w}`,
+    gridRow:    `${y + 1} / span ${h}`,
   }
 
   return (
-    <div class="dashboard-widget-card" style={style}>
-      {(widget.title || widget.description) && (
+    <div class={`dw-cell${editMode ? ' dw-cell-edit' : ''}`} style={style}>
+      <div class={`dashboard-widget-card${editMode ? ' dw-edit-mode' : ''}`}>
         <div class="dashboard-widget-header">
-          {widget.title && <h4>{widget.title}</h4>}
-          {widget.description && <span class="dashboard-widget-sub">{widget.description}</span>}
+          <div class="dashboard-widget-header-left">
+            {widget.title && <h4>{widget.title}</h4>}
+            {widget.description && <span class="dashboard-widget-sub">{widget.description}</span>}
+          </div>
+          {!editMode && (
+            <button class="dashboard-widget-refresh" onClick={resolve} disabled={loading}
+              title={resolved?.resolvedAt ? `Updated ${formatDate(resolved.resolvedAt)}` : 'Refresh'}>
+              {loading ? '⟳' : '↺'}
+            </button>
+          )}
+        </div>
+        <div class={`dashboard-widget-content${editMode ? ' dw-no-interact' : ''}`}>
+          {loading
+            ? <div class="dashboard-widget-body dashboard-empty">Loading…</div>
+            : <WidgetRenderer widget={widget} data={resolved?.data} error={error ?? undefined} />}
+        </div>
+      </div>
+      {editMode && (
+        <div
+          class="dw-drag-handle"
+          onPointerDown={onDragStart ? (e) => { e.stopPropagation(); onDragStart(e as unknown as PointerEvent, widget) } : undefined}
+          title="Drag to move"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <circle cx="2" cy="2" r="1.4" fill="currentColor"/>
+            <circle cx="8" cy="2" r="1.4" fill="currentColor"/>
+            <circle cx="2" cy="8" r="1.4" fill="currentColor"/>
+            <circle cx="8" cy="8" r="1.4" fill="currentColor"/>
+          </svg>
         </div>
       )}
-      {loading
-        ? <div class="dashboard-widget-body dashboard-empty">Loading…</div>
-        : <WidgetRenderer widget={widget} data={resolved?.data} error={error ?? undefined} />}
-      <div class="dashboard-widget-foot">
-        <button class="btn btn-sm" onClick={resolve} disabled={loading} title="Refresh">
-          {loading ? '…' : 'Refresh'}
-        </button>
-        {resolved?.resolvedAt && (
-          <span class="dashboard-widget-time">Updated {formatDate(resolved.resolvedAt)}</span>
-        )}
-      </div>
+      {editMode && (
+        <div
+          class="dw-resize-handle"
+          onPointerDown={onResizeStart ? (e) => { e.stopPropagation(); onResizeStart(e as unknown as PointerEvent, widget) } : undefined}
+          title="Drag to resize"
+        />
+      )}
     </div>
   )
+}
+
+// ── drag/resize constants ──────────────────────────────────────────────────────
+
+const GRID_COLS = 12
+const ROW_H     = 82  // grid-auto-rows (72px) + gap (10px)
+
+function minSize(kind: string): { w: number; h: number } {
+  switch (kind) {
+    case 'metric':     return { w: 2, h: 2 }
+    case 'line_chart':
+    case 'bar_chart':  return { w: 3, h: 4 }
+    case 'table':      return { w: 3, h: 3 }
+    case 'list':       return { w: 2, h: 3 }
+    case 'news':       return { w: 3, h: 3 }
+    case 'markdown':   return { w: 2, h: 2 }
+    default:           return { w: 2, h: 2 }
+  }
+}
+
+type Rect = { gridX: number; gridY: number; gridW: number; gridH: number }
+
+function rectsOverlap(a: Rect, b: Rect): boolean {
+  return a.gridX          < b.gridX + b.gridW &&
+         a.gridX + a.gridW > b.gridX &&
+         a.gridY          < b.gridY + b.gridH &&
+         a.gridY + a.gridH > b.gridY
+}
+
+// Gravity-compact: slide every widget (except the pinned one) as far up as
+// possible without overlapping anything already placed. Pinned widget is
+// treated as an immovable obstacle so dragging / resizing doesn't pull it.
+function compact(widgets: DashboardWidget[], pinnedId?: string): DashboardWidget[] {
+  const pinned  = widgets.find(w => w.id === pinnedId)
+  const free    = widgets.filter(w => w.id !== pinnedId)
+  // Process top-to-bottom, left-to-right so earlier widgets don't block later ones unnecessarily
+  const sorted  = [...free].sort((a, b) => a.gridY !== b.gridY ? a.gridY - b.gridY : a.gridX - b.gridX)
+  const placed: DashboardWidget[] = pinned ? [pinned] : []
+
+  for (const w of sorted) {
+    // Walk upward from y=0; take the first row where the widget fits
+    let bestY = w.gridY
+    for (let tryY = 0; tryY <= w.gridY; tryY++) {
+      const candidate = { ...w, gridY: tryY }
+      if (!placed.some(p => rectsOverlap(candidate, p))) {
+        bestY = tryY
+        break
+      }
+    }
+    placed.push({ ...w, gridY: bestY })
+  }
+  // Restore original order so React keys stay stable
+  const order = new Map(widgets.map((w, i) => [w.id, i]))
+  return placed.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+}
+
+function centerOf(w: Rect) {
+  return { cx: w.gridX + w.gridW / 2, cy: w.gridY + w.gridH / 2 }
+}
+
+// During a drag: if the dragged widget's center lands inside another widget,
+// swap positions. Otherwise just place and compact.
+function applyDrag(
+  prev: DashboardWidget[],
+  updated: DashboardWidget,
+  origX: number,
+  origY: number,
+): DashboardWidget[] {
+  const { cx, cy } = centerOf(updated)
+  const swapTarget = prev.find(w =>
+    w.id !== updated.id &&
+    cx > w.gridX && cx < w.gridX + w.gridW &&
+    cy > w.gridY && cy < w.gridY + w.gridH,
+  )
+  if (swapTarget) {
+    // Swap: move target to dragged widget's original position
+    const swapped = prev.map(w => {
+      if (w.id === updated.id) return updated
+      if (w.id === swapTarget.id) return { ...w, gridX: origX, gridY: origY }
+      return w
+    })
+    return compact(swapped, updated.id)
+  }
+  // No swap — push any overlapping widgets down, then compact
+  const pushed = prev.map(w => {
+    if (w.id === updated.id) return updated
+    if (rectsOverlap(updated, w)) return { ...w, gridY: updated.gridY + updated.gridH }
+    return w
+  })
+  return compact(pushed, updated.id)
+}
+
+// Apply a resize to the active widget, push overlapping widgets, compact.
+function applyResize(
+  prev: DashboardWidget[],
+  updated: DashboardWidget,
+): DashboardWidget[] {
+  const pushed = prev.map(w => {
+    if (w.id === updated.id) return updated
+    if (rectsOverlap(updated, w)) return { ...w, gridY: updated.gridY + updated.gridH }
+    return w
+  })
+  return compact(pushed, updated.id)
 }
 
 // ── detail view ───────────────────────────────────────────────────────────────
@@ -113,15 +244,30 @@ function DashboardDetail(
   const [def, setDef] = useState<DashboardDefinition | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [editMode, setEditMode] = useState(false)
+  const [localWidgets, setLocalWidgets] = useState<DashboardWidget[]>([])
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const gridRef = useRef<HTMLDivElement>(null)
+
+  // Drag and resize state — stored in refs to avoid triggering re-renders on
+  // every pointermove. Only setLocalWidgets (React state) triggers re-renders
+  // when the snapped grid position actually changes.
+  const dragRef  = useRef<{ id: string; startX: number; startY: number; origX: number; origY: number; origW: number; colW: number } | null>(null)
+  const resizeRef = useRef<{ id: string; startX: number; startY: number; origW: number; origH: number; origX: number; colW: number } | null>(null)
+  // Snapshot of widget positions at the moment drag/resize started — used as
+  // the immutable base for every frame calculation so mutations don't compound.
+  const snapWidgets = useRef<DashboardWidget[]>([])
+  // Track last snapped value to skip redundant setLocalWidgets calls
+  const lastSnapRef = useRef<{ x?: number; y?: number; w?: number; h?: number }>({})
 
   useEffect(() => {
     let cancelled = false
     async function load() {
-      setLoading(true)
-      setError(null)
+      setLoading(true); setError(null)
       try {
         const d = await api.dashboard(id)
-        if (!cancelled) setDef(d)
+        if (!cancelled) { setDef(d); setLocalWidgets(d.widgets) }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load dashboard.')
       } finally {
@@ -131,6 +277,102 @@ function DashboardDetail(
     load()
     return () => { cancelled = true }
   }, [id])
+
+  // Attach pointer listeners to window while edit mode is active
+  useEffect(() => {
+    if (!editMode) return
+    function onMove(e: PointerEvent) {
+      if (dragRef.current) {
+        const { id: wid, startX, startY, origX, origY, origW, colW } = dragRef.current
+        const dx = Math.round((e.clientX - startX) / colW)
+        const dy = Math.round((e.clientY - startY) / ROW_H)
+        const newX = Math.max(0, Math.min(GRID_COLS - origW, origX + dx))
+        const newY = Math.max(0, origY + dy)
+        if (newX !== lastSnapRef.current.x || newY !== lastSnapRef.current.y) {
+          lastSnapRef.current = { x: newX, y: newY }
+          // Always compute from the pre-drag snapshot so each frame is independent
+          const base = snapWidgets.current
+          const dragged = base.find(w => w.id === wid)
+          if (!dragged) return
+          setLocalWidgets(applyDrag(base, { ...dragged, gridX: newX, gridY: newY }, origX, origY))
+        }
+        return
+      }
+      if (resizeRef.current) {
+        const { id: wid, startX, startY, origW, origH, origX, colW } = resizeRef.current
+        const dx = Math.round((e.clientX - startX) / colW)
+        const dy = Math.round((e.clientY - startY) / ROW_H)
+        const resized = snapWidgets.current.find(w => w.id === wid)
+        const min = resized ? minSize(resized.kind) : { w: 2, h: 2 }
+        const newW = Math.max(min.w, Math.min(GRID_COLS - origX, origW + dx))
+        const newH = Math.max(min.h, origH + dy)
+        if (newW !== lastSnapRef.current.w || newH !== lastSnapRef.current.h) {
+          lastSnapRef.current = { w: newW, h: newH }
+          const base = snapWidgets.current
+          const resized = base.find(w => w.id === wid)
+          if (!resized) return
+          setLocalWidgets(applyResize(base, { ...resized, gridW: newW, gridH: newH }))
+        }
+      }
+    }
+    function onUp() {
+      dragRef.current = null
+      resizeRef.current = null
+      lastSnapRef.current = {}
+      // Commit: update snapshot to whatever was last rendered
+      snapWidgets.current = []
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+  }, [editMode])
+
+  function handleDragStart(e: PointerEvent, widget: DashboardWidget) {
+    if (!gridRef.current) return
+    e.preventDefault()
+    const colW = (gridRef.current.getBoundingClientRect().width + 10) / GRID_COLS
+    dragRef.current = { id: widget.id, startX: e.clientX, startY: e.clientY, origX: widget.gridX, origY: widget.gridY, origW: widget.gridW, colW }
+    snapWidgets.current = localWidgets.map(w => ({ ...w }))
+    lastSnapRef.current = {}
+  }
+
+  function handleResizeStart(e: PointerEvent, widget: DashboardWidget) {
+    if (!gridRef.current) return
+    e.preventDefault()
+    const colW = (gridRef.current.getBoundingClientRect().width + 10) / GRID_COLS
+    resizeRef.current = { id: widget.id, startX: e.clientX, startY: e.clientY, origW: widget.gridW, origH: widget.gridH, origX: widget.gridX, colW }
+    snapWidgets.current = localWidgets.map(w => ({ ...w }))
+    lastSnapRef.current = {}
+  }
+
+  function handleEditToggle() {
+    if (editMode) {
+      // Cancel — revert to saved def
+      if (def) setLocalWidgets(def.widgets)
+      setEditMode(false)
+      setSaveError(null)
+    } else {
+      setEditMode(true)
+    }
+  }
+
+  async function handleSave() {
+    if (!def) return
+    setSaving(true); setSaveError(null)
+    try {
+      const updated = await api.updateDashboard({ ...def, widgets: localWidgets })
+      setDef(updated)
+      setLocalWidgets(updated.widgets)
+      setEditMode(false)
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Failed to save layout.')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   async function handleDelete() {
     if (!def) return
@@ -143,6 +385,8 @@ function DashboardDetail(
     }
   }
 
+  const displayWidgets = editMode ? localWidgets : (def?.widgets ?? [])
+
   return (
     <div class="screen">
       <PageHeader
@@ -151,17 +395,28 @@ function DashboardDetail(
         actions={
           <>
             <button class="btn btn-sm" onClick={onBack}>← Back</button>
-            {def && <button class="btn btn-sm" onClick={handleDelete}>Delete</button>}
+            {def && !editMode && <button class="btn btn-sm" onClick={handleEditToggle}>Edit Layout</button>}
+            {editMode && <button class="btn btn-sm" onClick={handleEditToggle}>Cancel</button>}
+            {editMode && <button class="btn btn-sm btn-primary" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save Layout'}</button>}
+            {def && !editMode && <button class="btn btn-sm" onClick={handleDelete}>Delete</button>}
           </>
         }
       />
-      {error && <p class="error-banner">{error}</p>}
+      {(error || saveError) && <p class="error-banner">{error || saveError}</p>}
+      {editMode && <p class="dw-edit-banner">Drag widgets to reposition · drag the ◢ handle to resize · click Save when done</p>}
       {loading && <p class="empty-state">Loading dashboard…</p>}
-      {def && def.widgets.length === 0 && <p class="empty-state">This dashboard has no widgets.</p>}
-      {def && def.widgets.length > 0 && (
-        <div class="dashboard-grid">
-          {def.widgets.map(w => (
-            <WidgetCell key={w.id} dashboardID={def.id} widget={w} />
+      {!loading && displayWidgets.length === 0 && <p class="empty-state">This dashboard has no widgets.</p>}
+      {!loading && displayWidgets.length > 0 && (
+        <div class="dashboard-grid" ref={gridRef}>
+          {displayWidgets.map(w => (
+            <WidgetCell
+              key={w.id}
+              dashboardID={def!.id}
+              widget={w}
+              editMode={editMode}
+              onDragStart={handleDragStart}
+              onResizeStart={handleResizeStart}
+            />
           ))}
         </div>
       )}

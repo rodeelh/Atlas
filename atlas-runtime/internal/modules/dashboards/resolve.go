@@ -15,6 +15,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -173,14 +175,141 @@ func (m *Module) resolveSkill(ctx context.Context, src *DataSource) (any, error)
 	if !result.Success {
 		return nil, fmt.Errorf("skill %s failed: %s", src.Action, result.Summary)
 	}
-	// Prefer structured artifacts when present; otherwise fall back to summary.
+	// Prefer structured artifacts when present.
 	if result.Artifacts != nil {
 		return map[string]any{
 			"summary":   result.Summary,
 			"artifacts": result.Artifacts,
 		}, nil
 	}
+	// Parse known skill text outputs into structured JSON so widgets can use
+	// standard field-path options without writing custom JS parsers.
+	if structured := parseSkillOutput(src.Action, result.Summary); structured != nil {
+		return structured, nil
+	}
 	return map[string]any{"summary": result.Summary}, nil
+}
+
+// parseSkillOutput converts plain-text skill output to structured JSON for
+// well-known skill actions. Returns nil when the action is not recognised or
+// parsing fails — the caller falls back to {"summary": text}.
+func parseSkillOutput(action, text string) map[string]any {
+	switch action {
+	case "finance.history":
+		return parseFinanceHistory(text)
+	case "finance.quote":
+		return parseFinanceQuote(text)
+	case "websearch.query":
+		return parseWebsearchQuery(text)
+	}
+	return nil
+}
+
+// parseFinanceHistory parses lines like "  2026-04-06: 258.86" into
+// {"history":[{"date":"2026-04-06","price":258.86}], "symbol":"AAPL"}.
+func parseFinanceHistory(text string) map[string]any {
+	var history []map[string]any
+	var symbol string
+	for _, line := range strings.Split(text, "\n") {
+		// Header line: "AAPL — last N trading days:"
+		if symbol == "" {
+			if parts := strings.SplitN(line, " ", 2); len(parts) > 0 {
+				sym := strings.TrimSpace(parts[0])
+				if sym != "" && !strings.Contains(sym, ":") {
+					symbol = sym
+				}
+			}
+		}
+		// Data line: "  2026-04-06: 258.86"
+		trimmed := strings.TrimSpace(line)
+		if len(trimmed) < 12 {
+			continue
+		}
+		colonIdx := strings.LastIndex(trimmed, ":")
+		if colonIdx < 1 {
+			continue
+		}
+		date  := strings.TrimSpace(trimmed[:colonIdx])
+		priceS := strings.TrimSpace(trimmed[colonIdx+1:])
+		if len(date) != 10 || date[4] != '-' {
+			continue
+		}
+		price, err := strconv.ParseFloat(priceS, 64)
+		if err != nil {
+			continue
+		}
+		history = append(history, map[string]any{"date": date, "price": price})
+	}
+	if len(history) == 0 {
+		return nil
+	}
+	return map[string]any{
+		"symbol":  symbol,
+		"history": history,
+		"summary": text,
+	}
+}
+
+// parseFinanceQuote extracts a current price from quote text output.
+// Returns {"symbol","price","summary"} — best-effort, nil on failure.
+func parseFinanceQuote(text string) map[string]any {
+	// Look for a dollar amount like "$253.50" or "Price: 253.50"
+	re := regexp.MustCompile(`\$?([\d,]+\.?\d*)`)
+	for _, line := range strings.Split(text, "\n") {
+		if m := re.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			price, err := strconv.ParseFloat(strings.ReplaceAll(m[1], ",", ""), 64)
+			if err == nil && price > 0 {
+				return map[string]any{
+					"price":   price,
+					"summary": text,
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// parseWebsearchQuery parses numbered search results into
+// {"results":[{"title","url","description"}]}.
+func parseWebsearchQuery(text string) map[string]any {
+	// Split on lines that start a new numbered result: "1. ", "2. " etc.
+	blocks := regexp.MustCompile(`(?m)^\d+\.\s`).Split(text, -1)
+	var results []map[string]any
+	for _, block := range blocks {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+		lines := strings.Split(block, "\n")
+		title := strings.TrimSpace(lines[0])
+		url   := ""
+		desc  := ""
+		for _, line := range lines[1:] {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if url == "" && (strings.HasPrefix(line, "http://") || strings.HasPrefix(line, "https://")) {
+				url = line
+			} else if desc == "" {
+				desc = line
+			}
+		}
+		if title != "" {
+			results = append(results, map[string]any{
+				"title":       title,
+				"url":         url,
+				"description": desc,
+			})
+		}
+	}
+	if len(results) == 0 {
+		return nil
+	}
+	return map[string]any{
+		"results": results,
+		"summary": text,
+	}
 }
 
 // ── web ───────────────────────────────────────────────────────────────────────

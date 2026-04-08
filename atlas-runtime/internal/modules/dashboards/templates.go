@@ -20,6 +20,110 @@ func Templates() []Template {
 		systemHealthTemplate(),
 		usageTemplate(),
 		memoryAtlasTemplate(),
+		mindHealthTemplate(),
+	}
+}
+
+// mindHealthTemplate — the "Mind Health" dashboard used during the few-day
+// review to see how the mind-thoughts subsystem is behaving. Every threshold
+// in the spec (95 auto-execute, 80 propose, 2 negatives, 3 ignores, 60 min
+// idle, 6 hour floor) is testable by looking at the widgets this template
+// renders.
+func mindHealthTemplate() Template {
+	return Template{
+		ID:          "mind_health",
+		Name:        "Mind Health",
+		Description: "How the mind-thoughts subsystem is behaving — naps, thought lifecycle, auto-execute outcomes.",
+		Definition: DashboardDefinition{
+			Name:        "Mind Health",
+			Description: "Naps, thoughts, auto-execute outcomes, engagement signals.",
+			Template:    "mind_health",
+			Widgets: []Widget{
+				{
+					ID:    "active-thoughts",
+					Kind:  WidgetKindMetric,
+					Title: "Active Thoughts",
+					GridX: 0, GridY: 0, GridW: 3, GridH: 2,
+					Source: &DataSource{
+						Kind:     SourceKindRuntime,
+						Endpoint: "/mind/thoughts",
+					},
+					Options: map[string]any{
+						"path": "count",
+					},
+					RefreshIntervalSeconds: 15,
+				},
+				{
+					ID:    "pending-greetings",
+					Kind:  WidgetKindMetric,
+					Title: "Pending Greetings",
+					GridX: 3, GridY: 0, GridW: 3, GridH: 2,
+					Source: &DataSource{
+						Kind:     SourceKindRuntime,
+						Endpoint: "/chat/pending-greetings",
+					},
+					Options: map[string]any{
+						"path": "count",
+					},
+					RefreshIntervalSeconds: 10,
+				},
+				{
+					ID:    "event-breakdown",
+					Kind:  WidgetKindTable,
+					Title: "Telemetry breakdown (last 24h)",
+					GridX: 6, GridY: 0, GridW: 6, GridH: 4,
+					Source: &DataSource{
+						Kind:     SourceKindRuntime,
+						Endpoint: "/mind/telemetry/summary",
+						Query:    map[string]string{"since": "24h"},
+					},
+					Options: map[string]any{
+						"path":    "by_kind",
+						"columns": []string{"kind", "count"},
+					},
+					RefreshIntervalSeconds: 30,
+				},
+				{
+					ID:    "recent-naps",
+					Kind:  WidgetKindTable,
+					Title: "Recent Naps",
+					GridX: 0, GridY: 2, GridW: 6, GridH: 4,
+					Source: &DataSource{
+						Kind:     SourceKindRuntime,
+						Endpoint: "/mind/telemetry",
+						Query: map[string]string{
+							"kind":  "nap_completed",
+							"since": "24h",
+							"limit": "20",
+						},
+					},
+					Options: map[string]any{
+						"path":    "rows",
+						"columns": []string{"ts", "payload"},
+					},
+					RefreshIntervalSeconds: 30,
+				},
+				{
+					ID:    "thought-lifecycle",
+					Kind:  WidgetKindTable,
+					Title: "Thought lifecycle events (last 24h)",
+					GridX: 0, GridY: 6, GridW: 12, GridH: 5,
+					Source: &DataSource{
+						Kind:     SourceKindRuntime,
+						Endpoint: "/mind/telemetry",
+						Query: map[string]string{
+							"since": "24h",
+							"limit": "100",
+						},
+					},
+					Options: map[string]any{
+						"path":    "rows",
+						"columns": []string{"ts", "kind", "thought_id", "payload"},
+					},
+					RefreshIntervalSeconds: 30,
+				},
+			},
+		},
 	}
 }
 

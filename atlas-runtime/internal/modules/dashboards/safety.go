@@ -39,6 +39,11 @@ var runtimeEndpointAllowlist = []string{
 	"/forge/researching",
 	"/usage/summary",
 	"/usage/events",
+	// Mind-thoughts telemetry — used by the Mind Health dashboard template.
+	"/mind/thoughts",
+	"/mind/telemetry",
+	"/mind/telemetry/summary",
+	"/chat/pending-greetings",
 }
 
 // allowedRuntimeEndpoint reports whether endpoint is reachable by a widget.

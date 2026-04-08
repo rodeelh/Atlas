@@ -8311,14 +8311,14 @@ select.field-input {
 }
 
 /* edit mode outline + shadow */
-.dashboard-widget-card.dw-edit-mode {
+.dw-cell-edit .dashboard-widget-card {
   border-color: var(--accent, #6366f1);
   box-shadow: 0 0 0 1px var(--accent, #6366f1)22;
 }
-.dashboard-widget-card.dw-edit-mode:active {
+.dw-cell-edit:active .dashboard-widget-card {
   box-shadow: 0 4px 20px rgba(0,0,0,0.18);
-  z-index: 10;
 }
+.dw-cell-edit:active { z-index: 10; }
 
 /* dim widget content in edit mode so it doesn't look clickable */
 .dw-no-interact {
@@ -8326,9 +8326,22 @@ select.field-input {
   opacity: 0.55;
 }
 
-/* drag handle — inline SVG grip in header, flex-shrink:0 so it never clips */
+/* grid cell wrapper — takes grid placement, handles sit here, overflow visible */
+.dw-cell {
+  position: relative;
+  min-height: 0;
+}
+.dw-cell > .dashboard-widget-card {
+  width: 100%;
+  height: 100%;
+}
+
+/* drag handle — top-right of cell, outside card overflow */
 .dw-drag-handle {
-  flex-shrink: 0;
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -8336,34 +8349,34 @@ select.field-input {
   height: 20px;
   cursor: grab;
   color: var(--accent, #6366f1);
-  opacity: 0.45;
+  opacity: 0.55;
   border-radius: 4px;
   transition: opacity 0.15s;
 }
-.dw-drag-handle:hover  { opacity: 0.9; }
+.dw-drag-handle:hover  { opacity: 1; }
 .dw-drag-handle:active { cursor: grabbing; opacity: 1; }
 
-/* resize handle — bottom-right corner */
+/* resize handle — bottom-right of cell, outside card overflow */
 .dw-resize-handle {
   position: absolute;
   bottom: 0;
   right: 0;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   cursor: nwse-resize;
-  z-index: 5;
+  z-index: 10;
 }
 .dw-resize-handle::after {
   content: '';
   position: absolute;
-  bottom: 3px;
-  right: 3px;
+  bottom: 4px;
+  right: 4px;
   width: 8px;
   height: 8px;
   border-right: 2px solid var(--accent, #6366f1);
   border-bottom: 2px solid var(--accent, #6366f1);
   border-radius: 1px;
-  opacity: 0.7;
+  opacity: 0.55;
 }
 .dw-resize-handle:hover::after { opacity: 1; }
 
@@ -8380,18 +8393,20 @@ select.field-input {
 
 .dashboard-widget-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 9px 12px 7px;
+  gap: 6px;
+  padding: 8px 10px 7px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .dashboard-widget-header-left {
+  flex: 1 1 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  min-width: 0;
 }
 
 .dashboard-widget-header h4 {

@@ -23,6 +23,7 @@ const (
 	WidgetKindBarChart   = "bar_chart"
 	WidgetKindMarkdown   = "markdown"
 	WidgetKindList       = "list"
+	WidgetKindNews       = "news"
 	WidgetKindCustomHTML = "custom_html"
 )
 

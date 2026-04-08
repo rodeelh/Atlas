@@ -40,7 +40,7 @@ SCHEMA:
   "widgets": [
     {
       "id": "lowercase-hyphenated-string (required, unique within dashboard)",
-      "kind": "metric | table | line_chart | bar_chart | markdown | list | custom_html",
+      "kind": "metric | table | line_chart | bar_chart | list | news | markdown",
       "title": "string (optional)",
       "description": "string (optional)",
       "gridX": 0-11, "gridY": 0+, "gridW": 1-12, "gridH": 1-12,
@@ -52,68 +52,141 @@ SCHEMA:
         "args":     { "key": "value" } (optional, when kind=skill),
         "sql":      "SELECT ... (when kind=sql, single SELECT only, no writes)"
       },
-      "options": { "free-form widget-specific config (optional)" },
-      "html": "full HTML body string (REQUIRED when kind=custom_html)",
-      "css":  "CSS string (optional, when kind=custom_html)",
-      "js":   "JS string (optional, when kind=custom_html)"
+      "options": { "widget-specific field paths and display config — see per-kind docs below" }
     }
   ]
 }
 
-ALLOWED RUNTIME ENDPOINTS (use only these):
-  /status, /logs, /memories, /diary, /mind, /skills, /skills-memory,
-  /workflows, /workflows/{id}/runs, /automations, /automations/{id}/runs,
-  /communications, /forge/proposals, /forge/installed, /forge/researching,
-  /usage/summary, /usage/events
+NO html/css/js fields. No custom_html kind. The built-in renderers handle all display.
 
-READ-ONLY SKILLS YOU CAN USE AS DATA SOURCES (source kind="skill"):
-  finance.quote    — args: {symbol}          — current price. Returns plain text summary.
-  finance.history  — args: {symbol: string, days: integer (NOT a string)}    — daily closing prices. Returns plain text:
-                     "SYMBOL — last N trading days:\n  YYYY-MM-DD: PRICE\n  YYYY-MM-DD: PRICE\n..."
-  finance.portfolio — args: {symbols}        — batch quotes. Returns plain text.
-  websearch.query  — args: {query, count}    — web search results. Returns plain text:
-                     numbered list "1. TITLE\nURL\nDESCRIPTION\n\n2. TITLE\n..."
-  weather.current  — args: {location}        — current weather. Returns plain text.
+────────────────────────────────────────────────────────────────
+WIDGET KINDS — options reference
+────────────────────────────────────────────────────────────────
 
-SKILL DATA FORMAT — CRITICAL:
-  When a skill source is used, the data passed to atlasRender(data) is:
-    { "summary": "<the plain-text string the skill returned>", "artifacts": null }
-  Always read data.summary (a string) — never data.history, data.news, data.prices, or any other key.
-  Parse the text yourself in JS if you need structured values.
-  Example for finance.history: lines are indented — always trim before matching.
-    data.summary.split('\n').map(l=>l.trim()).forEach(l=>{ const m=l.match(/^(\d{4}-\d{2}-\d{2}):\s*([\d.]+)/); if(m) rows.push({date:m[1],price:+m[2]}); });
-  Example for websearch.query: split data.summary on /\n(?=\d+\.\s)/ to get individual result blocks.
+  metric      — single number with optional trend indicator
+    options.path        dot-path to the value in resolved data  e.g. "totalCostUSD"
+    options.format      "currency" | "integer" | "percent" | "decimal"
+    options.label       subtitle text shown below the value
+    options.prefix      text before the value  e.g. "$"
+    options.suffix      text after the value   e.g. " USD"
+    options.changePath  dot-path to a change/delta value (shows ▲/▼ trend indicator)
 
-WIDGET KIND CONSTRAINT — CRITICAL:
-  Built-in kinds (metric, table, list, line_chart, bar_chart) ONLY work with runtime or sql sources
-  that return structured JSON. They will always show empty when fed skill data.
-  Rule: if source.kind is "skill", the widget kind MUST be "custom_html" with JS to parse data.summary.
-  Never pair a skill source with metric/table/list/line_chart/bar_chart — it will always be empty.
+  line_chart  — time-series line chart (Chart.js)
+    options.seriesPath  dot-path to the array of data points  e.g. "history"
+    options.x           key for the x-axis label  default "date"
+    options.y           key for the y-axis value  default "value"  e.g. "price"
+    options.color       hex color  default "#3b82f6"
+    options.filled      true/false area fill under line  default true
+    options.format      "currency" | "integer" | "decimal"  for y-axis tick labels
 
-CUSTOM HTML WIDGETS — use for charts, financial data, news panels, styled layouts:
-  Set "kind":"custom_html" and provide "html" (REQUIRED — non-empty HTML markup string).
-  Optional "css" and "js" fields.
-  The widget renders in a sandboxed iframe with NO network access (CSP default-src 'none').
-  The iframe cannot fetch URLs or load external scripts — use only inline DOM + data you receive.
-  Define window.atlasRender = function(data) { ... } in "js" to receive resolved source data.
-  Use SVG or Canvas for charts — no external chart libraries available.
+  bar_chart   — categorical bar chart (Chart.js)
+    options.seriesPath  dot-path to the array
+    options.x           key for bar labels  default "date"
+    options.y           key for bar values  default "value"
+    options.color       hex color  default "#6366f1"
+    options.format      format for y-axis tick labels
 
-FALLBACK RULE — IMPORTANT:
-  If no runtime endpoint or skill perfectly fits a widget's data need, fall back to
-  websearch.query with a precise query (e.g. "AAPL stock price last 5 days", "Apple news today").
-  Never embed static/hardcoded data and never leave a widget without a source when live data exists
-  via search. websearch.query is always available and covers any topic.
+  table       — scrollable rows
+    options.columns     array of column names to show  e.g. ["date","price"]
+    options.limit       max rows to render  default 100
 
-RULES:
-  1. ONLY use widget kinds and source kinds listed above. Do NOT invent kinds.
-  2. DO NOT use source kind "web" — it is reserved and will be rejected.
-  3. DO NOT include any field not in the schema.
+  list        — bulleted list of items
+    options.itemsPath   dot-path to array within data  e.g. "byModel"
+    options.labelKey    key to use as list item label  e.g. "model"
+    options.limit       max items
+
+  news        — card feed for search results or any titled-item list
+    options.itemsPath   dot-path to results array  default "results"
+    options.titleKey    key for card title  default "title"
+    options.bodyKey     key for card body text  default "description"
+    options.urlKey      key for URL  default "url"
+    options.limit       max cards  default 6
+
+  markdown    — static formatted text (NO source needed)
+    options.text        markdown string to render
+
+────────────────────────────────────────────────────────────────
+RUNTIME ENDPOINTS (source kind="runtime")
+────────────────────────────────────────────────────────────────
+
+  /status         → { isRunning, state, activeConversationCount, pendingApprovalCount,
+                       runtimePort, startedAt, tokensIn, tokensOut }
+  /usage/summary  → { totalTokens, totalInputTokens, totalOutputTokens, totalCostUSD,
+                       turnCount,
+                       byModel: [{provider, model, inputTokens, outputTokens, totalCostUSD, turnCount}] }
+                    query: { days: "N" }  (omit for all-time)
+                    NOTE: field is turnCount (AI turns). No tasks_executed / successful / failed.
+  /usage/events   → { events: [{id, conversationId, provider, model, inputTokens, outputTokens,
+                                 totalCostUSD, recordedAt}] }
+                    query: { limit: "N" }
+                    Use recordedAt as x-axis for time-series charts.
+  /logs           → [{level, message, timestamp, meta}]
+  /memories       → [{id, category, title, body, importance, createdAt, updatedAt}]
+  /skills         → [{id, name, description, enabled, source, actions:[...]}]
+  /workflows      → [{id, name, description, steps, createdAt}]
+  /automations    → [{id, name, schedule, enabled, lastRun}]
+  /forge/proposals → [{id, name, status, createdAt}]
+  /forge/installed → [{id, name, version, installedAt}]
+
+────────────────────────────────────────────────────────────────
+SKILLS (source kind="skill") — structured data shapes
+────────────────────────────────────────────────────────────────
+
+The runtime resolver parses skill output into structured JSON before widgets see it.
+Use the structured shapes below — NOT data.summary.
+
+  finance.history  — args: { symbol: "AAPL", days: 30 }   (days is an integer, not a string)
+    Resolved shape: { symbol: "AAPL", history: [{date: "2026-04-06", price: 258.86}, ...], summary: "..." }
+    → Use line_chart with seriesPath="history", x="date", y="price"
+
+  finance.quote    — args: { symbol: "AAPL" }
+    Resolved shape: { price: 253.50, summary: "AAPL — 253.50 USD | +1.20 (+0.48%) ..." }
+    → Use metric with path="price", format="currency"
+
+  finance.portfolio — args: { symbols: "AAPL,MSFT,GOOG" }
+    Resolved shape: { summary: "plain text multi-symbol quote" }
+    → Use markdown (no source needed — put summary text in options.text) OR
+      use list with a runtime SQL source if you need tabular display.
+    Note: portfolio returns plain text only; the line_chart/bar_chart/metric kinds won't work.
+
+  websearch.query  — args: { query: "...", count: 5 }
+    Resolved shape: { results: [{title: "...", url: "...", description: "..."}, ...], summary: "..." }
+    → Use news with itemsPath="results"
+
+  weather.current  — args: { location: "..." }
+    Resolved shape: { summary: "plain text weather description" }
+    → Use markdown (put in options.text by rendering the summary as static text is not ideal;
+      instead query weather and use a metric or markdown widget showing data.summary)
+    Note: weather returns plain text only. Use markdown kind.
+
+SKILL KIND RULE:
+  finance.history  → line_chart or bar_chart (structured history array)
+  finance.quote    → metric (structured price field)
+  websearch.query  → news (structured results array)
+  finance.portfolio / weather.current → markdown (plain text summary only)
+
+────────────────────────────────────────────────────────────────
+FALLBACK RULE
+────────────────────────────────────────────────────────────────
+
+If no runtime endpoint perfectly fits, use websearch.query with a precise query
+(e.g. "AAPL stock price today", "Apple earnings news").
+Never embed static/hardcoded data. websearch.query covers any topic.
+
+────────────────────────────────────────────────────────────────
+RULES
+────────────────────────────────────────────────────────────────
+
+  1. ONLY use widget kinds: metric, table, line_chart, bar_chart, list, news, markdown.
+     Do NOT use custom_html — it will be rejected.
+  2. ONLY use source kinds: runtime, skill, sql.
+     Do NOT use source kind "web" — it will be rejected.
+  3. Do NOT include html/css/js fields anywhere in the JSON.
   4. SQL must be a single SELECT (or WITH … SELECT). No writes, no DDL, no semicolons.
-  5. Every widget needs a source UNLESS kind is "markdown" (text in options.text) OR "custom_html".
-  6. custom_html widgets MUST have a non-empty "html" field.
-  7. Grid: 12 columns wide. Widgets must not overlap.
-  8. Honor any colors, themes, or layout preferences the user specifies.
-  9. Output ONE valid JSON object. Nothing else.`
+  5. Every widget needs a source EXCEPT markdown (text in options.text).
+  6. Grid: 12 columns wide. Widgets must not overlap.
+  7. Honor any colors, themes, or layout preferences the user specifies.
+  8. Output ONE valid JSON object. Nothing else.`
 
 // Generate asks the AI to produce a DashboardDefinition matching prompt.
 // The returned definition has been validated end-to-end against the
@@ -316,35 +389,23 @@ func validateGeneratedDefinition(def *DashboardDefinition) error {
 			if err := validateGeneratedSource(w.ID, w.Source); err != nil {
 				return err
 			}
-		} else if w.Kind != WidgetKindMarkdown && w.Kind != WidgetKindCustomHTML {
-			// Most widget kinds must have a source — otherwise the resolve
-			// handler returns an error tile, defeating the purpose.
-			// markdown and custom_html may be self-contained.
+		} else if w.Kind != WidgetKindMarkdown {
+			// All widget kinds except markdown must have a source.
 			return fmt.Errorf("widget %q (%s) is missing a source", w.ID, w.Kind)
 		}
 
-		if w.Kind == WidgetKindCustomHTML {
-			// custom_html widgets render inside a sandboxed iframe with strict
-			// CSP. The HTML body is required so the iframe has something to
-			// mount into.
-			if strings.TrimSpace(w.HTML) == "" {
-				return fmt.Errorf("widget %q (custom_html) must have a non-empty html field", w.ID)
-			}
-		} else {
-			// Strip stray html/css/js the model may have attached to a
-			// non-custom widget — those fields are only meaningful for
-			// custom_html and would otherwise be silently ignored.
-			w.HTML = ""
-			w.CSS = ""
-			w.JS = ""
-		}
+		// Strip any html/css/js fields — custom_html is not allowed in AI
+		// generation. Built-in widgets have pre-built renderers.
+		w.HTML = ""
+		w.CSS  = ""
+		w.JS   = ""
 	}
 	return nil
 }
 
 // isAllowedGeneratedKind reports whether the AI is permitted to use kind.
-// custom_html is allowed but rendered inside a sandboxed iframe (CSP-locked,
-// no network) so the safety surface is contained.
+// custom_html is intentionally excluded — AI-generated JS is unreliable.
+// Use the built-in widget kinds which have pre-built renderers.
 func isAllowedGeneratedKind(kind string) bool {
 	switch kind {
 	case WidgetKindMetric,
@@ -353,7 +414,7 @@ func isAllowedGeneratedKind(kind string) bool {
 		WidgetKindBarChart,
 		WidgetKindMarkdown,
 		WidgetKindList,
-		WidgetKindCustomHTML:
+		WidgetKindNews:
 		return true
 	}
 	return false
