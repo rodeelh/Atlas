@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"atlas-runtime-go/internal/agent"
+	"atlas-runtime-go/internal/logstore"
 )
 
 // ProviderResolver returns the AI provider config to use for generation.
@@ -39,7 +40,7 @@ SCHEMA:
   "widgets": [
     {
       "id": "lowercase-hyphenated-string (required, unique within dashboard)",
-      "kind": "metric | table | line_chart | bar_chart | markdown | list",
+      "kind": "metric | table | line_chart | bar_chart | markdown | list | custom_html",
       "title": "string (optional)",
       "description": "string (optional)",
       "gridX": 0-11, "gridY": 0+, "gridW": 1-12, "gridH": 1-12,
@@ -51,7 +52,10 @@ SCHEMA:
         "args":     { "key": "value" } (optional, when kind=skill),
         "sql":      "SELECT ... (when kind=sql, single SELECT only, no writes)"
       },
-      "options": { "free-form widget-specific config (optional)" }
+      "options": { "free-form widget-specific config (optional)" },
+      "html": "full HTML body string (REQUIRED when kind=custom_html)",
+      "css":  "CSS string (optional, when kind=custom_html)",
+      "js":   "JS string (optional, when kind=custom_html)"
     }
   ]
 }
@@ -62,22 +66,53 @@ ALLOWED RUNTIME ENDPOINTS (use only these):
   /communications, /forge/proposals, /forge/installed, /forge/researching,
   /usage/summary, /usage/events
 
-CUSTOM HTML WIDGETS (advanced — use sparingly):
-  Set "kind":"custom_html" and provide "html" (required), optional "css", optional "js".
-  The widget renders inside a sandboxed iframe with NO network access (CSP default-src 'none').
-  If you also set a "source", the parent posts the resolved data into the iframe via postMessage.
-  Define window.atlasRender = function(data) { ... } in your "js" — it's invoked with the data.
-  The iframe CANNOT fetch external URLs, load remote scripts, or read parent state. Assume only DOM + the data you're given.
+READ-ONLY SKILLS YOU CAN USE AS DATA SOURCES (source kind="skill"):
+  finance.quote    — args: {symbol}          — current price. Returns plain text summary.
+  finance.history  — args: {symbol: string, days: integer (NOT a string)}    — daily closing prices. Returns plain text:
+                     "SYMBOL — last N trading days:\n  YYYY-MM-DD: PRICE\n  YYYY-MM-DD: PRICE\n..."
+  finance.portfolio — args: {symbols}        — batch quotes. Returns plain text.
+  websearch.query  — args: {query, count}    — web search results. Returns plain text:
+                     numbered list "1. TITLE\nURL\nDESCRIPTION\n\n2. TITLE\n..."
+  weather.current  — args: {location}        — current weather. Returns plain text.
+
+SKILL DATA FORMAT — CRITICAL:
+  When a skill source is used, the data passed to atlasRender(data) is:
+    { "summary": "<the plain-text string the skill returned>", "artifacts": null }
+  Always read data.summary (a string) — never data.history, data.news, data.prices, or any other key.
+  Parse the text yourself in JS if you need structured values.
+  Example for finance.history: lines are indented — always trim before matching.
+    data.summary.split('\n').map(l=>l.trim()).forEach(l=>{ const m=l.match(/^(\d{4}-\d{2}-\d{2}):\s*([\d.]+)/); if(m) rows.push({date:m[1],price:+m[2]}); });
+  Example for websearch.query: split data.summary on /\n(?=\d+\.\s)/ to get individual result blocks.
+
+WIDGET KIND CONSTRAINT — CRITICAL:
+  Built-in kinds (metric, table, list, line_chart, bar_chart) ONLY work with runtime or sql sources
+  that return structured JSON. They will always show empty when fed skill data.
+  Rule: if source.kind is "skill", the widget kind MUST be "custom_html" with JS to parse data.summary.
+  Never pair a skill source with metric/table/list/line_chart/bar_chart — it will always be empty.
+
+CUSTOM HTML WIDGETS — use for charts, financial data, news panels, styled layouts:
+  Set "kind":"custom_html" and provide "html" (REQUIRED — non-empty HTML markup string).
+  Optional "css" and "js" fields.
+  The widget renders in a sandboxed iframe with NO network access (CSP default-src 'none').
+  The iframe cannot fetch URLs or load external scripts — use only inline DOM + data you receive.
+  Define window.atlasRender = function(data) { ... } in "js" to receive resolved source data.
+  Use SVG or Canvas for charts — no external chart libraries available.
+
+FALLBACK RULE — IMPORTANT:
+  If no runtime endpoint or skill perfectly fits a widget's data need, fall back to
+  websearch.query with a precise query (e.g. "AAPL stock price last 5 days", "Apple news today").
+  Never embed static/hardcoded data and never leave a widget without a source when live data exists
+  via search. websearch.query is always available and covers any topic.
 
 RULES:
   1. ONLY use widget kinds and source kinds listed above. Do NOT invent kinds.
-  2. DO NOT use the "web" source kind — it is reserved.
+  2. DO NOT use source kind "web" — it is reserved and will be rejected.
   3. DO NOT include any field not in the schema.
-  4. SQL queries must be a single SELECT (or WITH … SELECT). No writes, no DDL, no semicolons.
-  5. Every widget must declare a source UNLESS its kind is "markdown" with embedded text in options.text, OR its kind is "custom_html".
+  4. SQL must be a single SELECT (or WITH … SELECT). No writes, no DDL, no semicolons.
+  5. Every widget needs a source UNLESS kind is "markdown" (text in options.text) OR "custom_html".
   6. custom_html widgets MUST have a non-empty "html" field.
-  7. Grid: dashboards are 12 columns wide. Lay widgets out so they don't overlap.
-  8. Pick a clear, human "name" derived from the user's request.
+  7. Grid: 12 columns wide. Widgets must not overlap.
+  8. Honor any colors, themes, or layout preferences the user specifies.
   9. Output ONE valid JSON object. Nothing else.`
 
 // Generate asks the AI to produce a DashboardDefinition matching prompt.
@@ -108,17 +143,57 @@ func Generate(ctx context.Context, resolver ProviderResolver, name, prompt strin
 		{Role: "user", Content: userMsg},
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
-	_, text, _, err := agent.CallAINonStreamingExported(callCtx, provider, messages, nil)
+	firstMsg, _, _, err := agent.CallAINonStreamingExported(callCtx, provider, messages, nil)
 	if err != nil {
 		return nil, fmt.Errorf("dashboard generate: AI call failed: %w", err)
 	}
-	def, err := parseAndValidateDefinition(text)
-	if err != nil {
-		return nil, fmt.Errorf("dashboard generate: invalid AI response: %w", err)
+	text, _ := firstMsg.Content.(string)
+
+	def, valErr := parseAndValidateDefinition(text)
+	if valErr != nil {
+		// Log the raw model output so we can diagnose repeat failures.
+		preview := text
+		if len(preview) > 500 {
+			preview = preview[:500] + "…"
+		}
+		logstore.Write("warn",
+			fmt.Sprintf("dashboard generate: first attempt failed validation (%v); retrying. raw response: %s", valErr, preview),
+			map[string]string{"name": name})
+
+		// Retry once with the validation error fed back to the model so it can
+		// self-correct. This handles the most common failure modes: markdown
+		// fences, stray prose, "web" source kind, missing html field, etc.
+		retryMsg := fmt.Sprintf(
+			"Your previous response failed validation with this error:\n\n  %v\n\n"+
+				"Output ONLY a corrected JSON object. No explanation. No markdown. No extra text.",
+			valErr)
+		retryMessages := append(messages,
+			agent.OAIMessage{Role: "assistant", Content: text},
+			agent.OAIMessage{Role: "user", Content: retryMsg},
+		)
+		retryCtx, retryCancel := context.WithTimeout(ctx, 60*time.Second)
+		defer retryCancel()
+		retryMsg2, _, _, retryErr := agent.CallAINonStreamingExported(retryCtx, provider, retryMessages, nil)
+		if retryErr != nil {
+			return nil, fmt.Errorf("dashboard generate: AI call failed on retry: %w", retryErr)
+		}
+		retryText, _ := retryMsg2.Content.(string)
+		def, err = parseAndValidateDefinition(retryText)
+		if err != nil {
+			retryPreview := retryText
+			if len(retryPreview) > 500 {
+				retryPreview = retryPreview[:500] + "…"
+			}
+			logstore.Write("error",
+				fmt.Sprintf("dashboard generate: retry also failed (%v). raw: %s", err, retryPreview),
+				map[string]string{"name": name})
+			return nil, fmt.Errorf("dashboard generate: invalid AI response (after retry): %w", err)
+		}
 	}
+
 	if def.Name == "" && name != "" {
 		def.Name = name
 	}

@@ -309,6 +309,8 @@ func toolCapabilityGroup(name string) string {
 		return "automation"
 	case strings.HasPrefix(name, "forge."):
 		return "forge"
+	case strings.HasPrefix(name, "dashboard."):
+		return "dashboards"
 	default:
 		return "custom"
 	}
@@ -341,6 +343,8 @@ var groupThresholds = map[string]int{
 	"workflow":      1,
 	"automation":    1,
 	"forge":         1,
+	"dashboards":    1,
+	"custom":        1,
 }
 
 // SelectiveToolDefs returns a bounded tool set for the given user message.
@@ -351,7 +355,7 @@ var groupThresholds = map[string]int{
 // Score-triggered (added when group score meets its threshold):
 //   - meta ≥1 (atlas.info — only when user asks about Atlas/runtime status)
 //   - weather ≥1, web ≥1, finance ≥1, office ≥1, media ≥1, mac ≥1
-//   - vault ≥1, creative ≥1, automation ≥1, forge ≥1
+//   - vault ≥1, creative ≥1, automation ≥1, forge ≥1, dashboards ≥1
 //   - files ≥2, browser ≥2
 //   - shell ≥3
 //
@@ -378,22 +382,24 @@ func (r *Registry) SelectiveToolDefs(userMessage string) []map[string]any {
 		msgTokens[t] = true
 	}
 
+	// Custom skills behave like any other group: included only when the
+	// "custom" group fired (the user explicitly mentioned custom/installed
+	// skills — see intentSignals["custom"] in heuristic.go). msgTokens is no
+	// longer used for per-skill matching.
+	_ = msgTokens
+
 	out := make([]map[string]any, 0, len(r.entries))
 	var customIncluded, customTotal int
 	for _, e := range r.entries {
 		group := toolCapabilityGroup(e.Def.Name)
-		if group != "custom" {
-			if triggered[group] {
-				out = append(out, e.Def.MarshalOpenAI())
-			}
-			continue
+		if group == "custom" {
+			customTotal++
 		}
-		// Custom skill: include when name or description shares a meaningful
-		// token with the message. Avoids ballooning as forge skills accumulate.
-		customTotal++
-		if customSkillMatches(e.Def, msgTokens) {
+		if triggered[group] {
 			out = append(out, e.Def.MarshalOpenAI())
-			customIncluded++
+			if group == "custom" {
+				customIncluded++
+			}
 		}
 	}
 

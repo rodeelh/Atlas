@@ -348,6 +348,28 @@ var intentSignals = map[string]groupSignals{
 		},
 	},
 
+	// ── custom (user-installed custom skills) ────────────────────────────────
+	// Fires only when the user EXPLICITLY mentions custom/installed skills or
+	// tools. The custom group is a catch-all bucket — keeping the trigger tight
+	// avoids ballooning the tool list whenever an unrelated request happens to
+	// mention the word "skill".
+	"custom": {
+		phrases: []string{
+			"custom skill", "custom skills", "custom tool", "custom tools",
+			"my skill", "my skills", "my tool", "my tools",
+			"installed skill", "installed skills", "installed tool", "installed tools",
+			"user skill", "user skills", "third party skill", "third-party skill",
+			"plugin skill", "external skill",
+		},
+		words: []string{},
+		pairs: [][2]string{
+			{"custom", "skill"}, {"custom", "tool"},
+			{"my", "skill"}, {"my", "tool"},
+			{"installed", "skill"}, {"installed", "tool"},
+			{"use", "custom"}, {"run", "custom"},
+		},
+	},
+
 	// ── forge ────────────────────────────────────────────────────────────────
 	"forge": {
 		phrases: []string{
@@ -362,6 +384,37 @@ var intentSignals = map[string]groupSignals{
 			{"build", "skill"}, {"create", "skill"}, {"make", "skill"},
 			{"add", "skill"}, {"new", "skill"}, {"forge", "skill"},
 			{"install", "skill"},
+		},
+	},
+
+	// ── dashboards ───────────────────────────────────────────────────────────
+	"dashboards": {
+		phrases: []string{
+			"create a dashboard", "make a dashboard", "generate a dashboard",
+			"build a dashboard", "new dashboard", "create dashboard",
+			"make dashboard", "generate dashboard", "build dashboard",
+			"add a dashboard", "set up a dashboard", "design a dashboard",
+			"list dashboards", "my dashboards", "show dashboard",
+			"open dashboard", "delete dashboard", "update dashboard",
+			// common "dashboard page / view / screen" phrasing
+			"dashboard page", "dashboard view", "dashboard screen",
+			"data dashboard", "monitoring dashboard", "live dashboard",
+			// create a <thing> dashboard
+			"stock dashboard", "usage dashboard", "metrics dashboard",
+			"tracking dashboard", "analytics dashboard", "stats dashboard",
+		},
+		words: []string{
+			"dashboard", "widget",
+		},
+		pairs: [][2]string{
+			{"create", "dashboard"}, {"make", "dashboard"}, {"generate", "dashboard"},
+			{"build", "dashboard"}, {"new", "dashboard"}, {"add", "dashboard"},
+			{"list", "dashboards"}, {"my", "dashboards"}, {"show", "dashboard"},
+			{"open", "dashboard"}, {"delete", "dashboard"}, {"remove", "dashboard"},
+			{"update", "dashboard"}, {"edit", "dashboard"}, {"set", "dashboard"},
+			// "dashboard" as noun in any sentence scores the pair with common verbs
+			{"complete", "dashboard"}, {"full", "dashboard"}, {"live", "dashboard"},
+			{"track", "dashboard"}, {"monitor", "dashboard"}, {"view", "dashboard"},
 		},
 	},
 }

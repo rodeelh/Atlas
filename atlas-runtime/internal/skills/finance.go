@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,26 +74,40 @@ func financeQuote(_ context.Context, args json.RawMessage) (string, error) {
 }
 
 func financeHistory(_ context.Context, args json.RawMessage) (string, error) {
+	// Accept days as either integer or string (models sometimes pass "5" instead of 5).
 	var p struct {
-		Symbol string `json:"symbol"`
-		Days   int    `json:"days"`
+		Symbol string          `json:"symbol"`
+		Days   json.RawMessage `json:"days"`
 	}
-	if err := json.Unmarshal(args, &p); err != nil || p.Symbol == "" {
+	if err := json.Unmarshal(args, &p); err != nil || len(p.Symbol) == 0 {
 		return "", fmt.Errorf("symbol is required")
 	}
-	if p.Days <= 0 {
-		p.Days = 30
+	days := 30
+	if len(p.Days) > 0 {
+		var di int
+		var ds string
+		if json.Unmarshal(p.Days, &di) == nil && di > 0 {
+			days = di
+		} else if json.Unmarshal(p.Days, &ds) == nil {
+			if n, err2 := strconv.Atoi(ds); err2 == nil && n > 0 {
+				days = n
+			}
+		}
 	}
-	if p.Days > 365 {
-		p.Days = 365
+	if days > 365 {
+		days = 365
 	}
+	p2 := struct {
+		Symbol string
+		Days   int
+	}{Symbol: p.Symbol, Days: days}
 	bundle, _ := creds.Read()
 	if bundle.FinnhubAPIKey != "" {
-		if result, err := finnhubHistory(p.Symbol, p.Days, bundle.FinnhubAPIKey); err == nil {
+		if result, err := finnhubHistory(p2.Symbol, p2.Days, bundle.FinnhubAPIKey); err == nil {
 			return result, nil
 		}
 	}
-	return yahooHistory(p.Symbol, p.Days)
+	return yahooHistory(p2.Symbol, p2.Days)
 }
 
 func financePortfolio(_ context.Context, args json.RawMessage) (string, error) {

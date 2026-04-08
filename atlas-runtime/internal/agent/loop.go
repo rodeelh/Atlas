@@ -114,9 +114,11 @@ func RequestToolsDef() map[string]any {
 		"function": map[string]any{
 			"name": requestToolsName,
 			"description": "Call this ONLY if you need a real tool to answer — " +
-				"e.g. search the web, check weather, read a file, run a skill. " +
+				"e.g. search the web, check weather, read a file, run a skill, create a dashboard. " +
 				"Do NOT call it for conversational replies: greetings, acknowledgements ('ok', 'thanks', 'got it', 'sounds good'), " +
 				"casual chat, opinions, explanations, or anything you can answer from your own knowledge. " +
+				"IMPORTANT: if the user asks to create, build, generate, or make a dashboard or data page, " +
+				"use categories=[\"dashboards\"] — never write an HTML file to disk as a substitute. " +
 				"After calling it you will receive the relevant tools and should proceed immediately. " +
 				"If the provided short list is not enough, call request_tools again with broad=true or with categories.",
 			"parameters": map[string]any{
@@ -133,7 +135,7 @@ func RequestToolsDef() map[string]any {
 							"enum": []string{
 								"weather", "web", "finance", "office", "media", "mac", "shell",
 								"files", "vault", "browser", "voice", "communication", "creative",
-								"workflow", "automation", "forge", "meta",
+								"workflow", "automation", "forge", "dashboards", "meta",
 							},
 						},
 						"description": "Optional categories to request instead of the full broad list.",

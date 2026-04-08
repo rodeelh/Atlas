@@ -57,9 +57,14 @@ func (m *Module) RegisterSkills(reg *skills.Registry) {
 	reg.RegisterExternal(skills.SkillEntry{
 		Def: skills.ToolDef{
 			Name: "dashboard.create",
-			Description: "Generate and save a new dashboard from a natural-language description. " +
-				"The dashboard's widgets will pull live data from runtime endpoints, read-only skills, or read-only SQL — " +
-				"never from arbitrary web URLs or hand-coded HTML. Returns the saved dashboard id and name on success.",
+			Description: "Generate and save a live Atlas dashboard from a natural-language description. " +
+				"Use this whenever the user asks to create, build, generate, or make a dashboard, data page, or monitoring view. " +
+				"Supports: runtime data sources (status, usage, memories, workflows, etc.), read-only skill calls " +
+				"(finance quotes, weather, web search results), read-only SQL against the Atlas database, and fully " +
+				"custom HTML/CSS/JS widgets rendered in a sandboxed iframe for rich visualisations like charts, " +
+				"styled layouts, or anything requiring bespoke markup. " +
+				"Always prefer dashboard.create over writing an HTML file to disk — dashboards are live, " +
+				"reloadable, and visible in the Atlas web UI. Returns the saved dashboard id and web URL on success.",
 			Properties: map[string]skills.ToolParam{
 				"name": {
 					Description: "Short, human-friendly name for the dashboard (e.g. 'Token Spend This Month').",
