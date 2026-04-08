@@ -110,6 +110,13 @@ export interface RuntimeConfig {
   voiceTTSAutoPlay?: boolean
   voiceSessionIdleSec?: number
   voiceKokoroPort?: number
+
+  // Mind-thoughts — opt-in feature suite. thoughtsEnabled is the master
+  // switch; when false the entire subsystem is dormant. napsEnabled is
+  // the sub-flag that additionally turns on autonomous nap curation.
+  // Both default to false on a fresh install.
+  thoughtsEnabled?: boolean
+  napsEnabled?: boolean
 }
 
 export interface RuntimeConfigUpdateResponse {
@@ -157,6 +164,12 @@ export interface ApprovalToolCall {
 export interface Approval {
   id: string
   status: 'pending' | 'approved' | 'denied' | string
+  /**
+   * Where this approval came from. Omitted for agent-initiated approvals
+   * (the default). Set to "thought" when the mind-thoughts dispatcher
+   * routed a thought-sourced action through the approvals flow.
+   */
+  source?: 'thought' | string
   conversationID?: string
   createdAt: string
   resolvedAt?: string
@@ -645,6 +658,7 @@ export type DashboardWidgetKind =
   | 'bar_chart'
   | 'markdown'
   | 'list'
+  | 'news'
   | 'custom_html'
 
 export interface DashboardDataSource {

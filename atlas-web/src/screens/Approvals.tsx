@@ -183,6 +183,14 @@ function ApprovalRow({ approval: a, selected, acting, onSelect, onApprove, onDen
           <div class="approval-row-title-row">
             <span class="approval-title">{actionSummary(a)}</span>
             {lifecycleBadge(a)}
+            {a.source === 'thought' && (
+              <span
+                class="badge badge-violet approval-source-thought"
+                title="This approval came from a thought Atlas had during a nap"
+              >
+                from a thought
+              </span>
+            )}
           </div>
           <div class="approval-tool-label">{toolLabel(a.toolCall.toolName)}</div>
           <div class="approval-timestamp">

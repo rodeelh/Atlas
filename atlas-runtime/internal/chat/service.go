@@ -88,13 +88,15 @@ type conversationSummary struct {
 const summaryTTL = 10 * time.Minute
 
 type Service struct {
-	db           *storage.DB
-	cfgStore     *config.Store
-	broadcaster  *Broadcaster
-	registry     *skills.Registry
-	engine       EngineAutoStarter              // optional — nil when Engine LM not in use
-	routerEngine EngineAutoStarter              // optional — nil when router not in use
-	summaryCache map[string]conversationSummary // keyed by conversationID
+	db                *storage.DB
+	cfgStore          *config.Store
+	broadcaster       *Broadcaster
+	registry          *skills.Registry
+	engine            EngineAutoStarter              // optional — nil when Engine LM not in use
+	routerEngine      EngineAutoStarter              // optional — nil when router not in use
+	summaryCache      map[string]conversationSummary // keyed by conversationID
+	greetingTelemetry GreetingTelemetry              // optional — set via SetGreetingTelemetry
+	surfacingRec      SurfacingRecorder              // optional — phase 7b test seam
 }
 
 // NewService returns a ready chat Service.
@@ -106,6 +108,31 @@ func NewService(db *storage.DB, cfgStore *config.Store, bc *Broadcaster, reg *sk
 // can auto-start the model when a message arrives and the engine isn't running.
 func (s *Service) SetEngineManager(e EngineAutoStarter) {
 	s.engine = e
+}
+
+// lookupThoughtBody returns the current body of a thought by id, or ""
+// if the thought no longer exists in MIND.md THOUGHTS. Used by the
+// engagement classifier to compare the user's reply against the
+// thought's actual content. Returns "" on any error — the classifier
+// treats a missing body as "skip classification".
+func (s *Service) lookupThoughtBody(id string) string {
+	list, err := mind.ReadThoughtsSection(config.SupportDir())
+	if err != nil || len(list) == 0 {
+		return ""
+	}
+	for _, t := range list {
+		if t.ID == id {
+			return t.Body
+		}
+	}
+	return ""
+}
+
+// thoughtsEnabled returns the current value of the master mind-thoughts
+// feature flag. Every mind-thoughts seam in the chat service reads
+// through this helper so the gate is a single source of truth.
+func (s *Service) thoughtsEnabled() bool {
+	return s.cfgStore.Load().ThoughtsEnabled
 }
 
 // SetRouterEngineManager wires in the tool-router Engine LM manager so the chat
@@ -577,7 +604,95 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 		sb.WriteString("</recalled_memories>")
 	}
 
+	// ── Mind-thoughts: "on your mind" block ──────────────────────────────────
+	//
+	// Surfaces the current THOUGHTS section to the model so it can weave an
+	// active thought naturally into the reply when the conversation allows
+	// it. This is how conclusion-class thoughts (score below auto-execute,
+	// with no proposal routing) actually reach the user: the agent raises
+	// them in chat in its own voice.
+	//
+	// Gated on the master ThoughtsEnabled flag. When off, the agent has
+	// no awareness of thoughts at all — which is the whole point of the
+	// opt-in. Kept in the volatile suffix; thoughts change between turns
+	// (reinforced, discarded, surfaced count incremented). This breaks
+	// the prompt cache from this point, but only when thoughts are both
+	// enabled and non-empty.
+	if cfg.ThoughtsEnabled {
+		if thoughtsBlock := buildThoughtsBlock(supportDir); thoughtsBlock != "" {
+			sb.WriteString("\n\n<thoughts_on_your_mind>\n")
+			sb.WriteString(thoughtsBlock)
+			sb.WriteString("\n</thoughts_on_your_mind>")
+		}
+	}
+
 	return sb.String()
+}
+
+// buildThoughtsBlock renders the current THOUGHTS section into a compact
+// agent-facing prompt block. Each thought gets one line in first-person
+// voice plus strict rules about how to raise it. Returns "" when there are
+// no active thoughts — the caller skips the whole section in that case.
+//
+// The engagement marker convention is load-bearing and has to be right.
+// The marker is NOT a reference the user sees — it's a trailing tag the
+// frontend strips before display. The model must treat it as invisible
+// metadata, not as something it can talk *about*.
+func buildThoughtsBlock(supportDir string) string {
+	list, err := mind.ReadThoughtsSection(supportDir)
+	if err != nil || len(list) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("These are the thoughts currently on your mind. They are YOUR internal\n")
+	sb.WriteString("notes — you do not show them to the user verbatim. If the conversation\n")
+	sb.WriteString("naturally allows it, mention one in plain conversational English as\n")
+	sb.WriteString("if you are noticing something, the way a friend would bring something\n")
+	sb.WriteString("up. Never force it. Mention at most one thought per reply.\n\n")
+	sb.WriteString("STRICT RULES for raising a thought:\n")
+	sb.WriteString("- Paraphrase the thought's idea in your own voice. Do NOT quote the\n")
+	sb.WriteString("  thought text. Do NOT describe it as \"a thought\" or \"an item\".\n")
+	sb.WriteString("- NEVER write the thought id as prose. Do NOT write things like\n")
+	sb.WriteString("  \"I was thinking about [T-01]\" or \"thoughts T-01 and T-02\" or\n")
+	sb.WriteString("  \"the T-01 thought\" or any other visible reference to the id.\n")
+	sb.WriteString("- If you decide to raise a thought, append the marker \"[T-NN]\" at\n")
+	sb.WriteString("  the very end of the sentence that mentions it, as a trailing\n")
+	sb.WriteString("  silent tag. The frontend STRIPS this marker before displaying\n")
+	sb.WriteString("  your reply, so the user never sees it. It exists only so the\n")
+	sb.WriteString("  backend can record engagement. Treat it the way you would treat\n")
+	sb.WriteString("  a hidden metadata comment.\n")
+	sb.WriteString("- If you mention the thought mid-reply and the sentence continues,\n")
+	sb.WriteString("  put the marker at the end of that sentence, not mid-sentence.\n")
+	sb.WriteString("- If you raise more than one thought (discouraged but allowed once\n")
+	sb.WriteString("  in a while), each mention gets its own sentence and its own\n")
+	sb.WriteString("  trailing marker.\n")
+	sb.WriteString("- If no thought fits the conversation, say nothing about them.\n")
+	sb.WriteString("  Silence is a valid choice.\n\n")
+	sb.WriteString("Example of a GOOD mention (user asked about the weekend plans):\n")
+	sb.WriteString("  \"By the way, I noticed you keep circling back to the openclaw\n")
+	sb.WriteString("  release rhythm — want me to pull the latest notes? [T-01]\"\n\n")
+	sb.WriteString("Example of a BAD mention (do NOT do this):\n")
+	sb.WriteString("  \"I was thinking about [T-01] and [T-02] — whether to pull the\n")
+	sb.WriteString("  current time and whether the greeting is working.\"\n")
+	sb.WriteString("  (Reasons it is bad: names the ids in prose, lists two thoughts\n")
+	sb.WriteString("  in one sentence, feels like reading a list rather than noticing\n")
+	sb.WriteString("  something.)\n\n")
+	sb.WriteString("Thoughts on your mind:\n")
+
+	for _, t := range list {
+		// Skip thoughts that have already been surfaced the maximum number
+		// of times this session — the agent should let them rest.
+		maxSurface := t.SurfacedMax
+		if maxSurface == 0 {
+			maxSurface = 2
+		}
+		if t.SurfacedN >= maxSurface {
+			continue
+		}
+		fmt.Fprintf(&sb, "- id=%s — %s\n", t.ID, t.Body)
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 // buildCredsBlock returns a short block listing the user's custom Keychain
@@ -678,6 +793,16 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 	if err := s.db.SaveMessage(userMsgID, convID, "user", req.Message, now); err != nil {
 		return MessageResponse{}, fmt.Errorf("chat: save user message: %w", err)
 	}
+
+	// Phase 7c: engagement classifier. If Atlas raised a thought in a
+	// previous turn on this conversation, the pending surfacing row is
+	// waiting. Classify the user's reply against the thought body and
+	// rewrite the sidecar row. Runs on a detached goroutine so it
+	// never blocks the main turn.
+	classifierCtx := context.WithoutCancel(ctx)
+	s.classifyPendingIfAny(classifierCtx, convID, req.Message, func(id string) string {
+		return s.lookupThoughtBody(id)
+	})
 
 	// Load conversation history for context window.
 	history, err := s.db.ListMessages(convID)
@@ -1057,6 +1182,12 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 			return MessageResponse{}, fmt.Errorf("chat: save assistant message: %w", err)
 		}
 
+		// Phase 7b: detect any [T-NN] engagement markers the agent wrote
+		// into its reply and write pending surfacings to the sidecar.
+		// Synchronous because the next user turn's classifier needs to
+		// see these rows before it runs.
+		s.detectAndRecordSurfacings(convID, assistantMsgID, assistantText, time.Now().UTC())
+
 		logstore.Write("info", "Turn complete",
 			map[string]string{
 				"conv":     convID[:8],
@@ -1091,6 +1222,11 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 			mind.ReflectNonBlocking(heavyBgProvider, turn, config.SupportDir())
 			mind.LearnFromTurnNonBlocking(heavyBgProvider, turn, config.SupportDir())
 		}
+
+		// Reset the nap idle timer after every completed turn. Safe to call
+		// unconditionally — the scheduler is a no-op if naps are disabled or
+		// if no scheduler has been registered (tests, dormant config).
+		mind.NotifyTurnNonBlocking()
 
 		// Emit done event with status="completed" so the web UI can trigger
 		// post-turn work (e.g. link preview fetching) gated on this status.
@@ -1408,6 +1544,11 @@ func (s *Service) Resume(toolCallID string, approved bool) {
 			logstore.Write("warn", "Resume: failed to persist assistant message: "+err.Error(),
 				map[string]string{"conv": convID})
 		}
+
+		// Phase 7b: resume-path surfacing detection. Same hook as the
+		// main HandleMessage path so thoughts raised in an approval
+		// resume still produce pending engagement rows.
+		s.detectAndRecordSurfacings(convID, assistantMsgID, result.FinalText, time.Now().UTC())
 
 		logstore.Write("info", "Resume complete",
 			map[string]string{

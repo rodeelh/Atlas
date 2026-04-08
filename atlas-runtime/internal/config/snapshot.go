@@ -96,6 +96,62 @@ type RuntimeConfigSnapshot struct {
 	// internal/voice/kokoro.go (KokoroVoiceDefault); only the port survives
 	// in config so multiple instances can use different ports if ever needed.
 	VoiceKokoroPort int `json:"voiceKokoroPort"`
+
+	// ── Mind thoughts / nap scheduler ─────────────────────────────────────
+	//
+	// Tunables for the mind-thoughts subsystem. All thresholds are exposed
+	// here so they can be rebalanced from the web config screen during the
+	// few-day review without rebuilding the binary.
+	//
+	// ThoughtsEnabled is the MASTER feature flag — a single switch that
+	// gates the entire mind-thoughts subsystem: presence line, sidebar
+	// dot, greeting flow, surfacing detection, classifier, system prompt
+	// THOUGHTS injection, dispatcher, approval routing, and the nap
+	// scheduler. When false, Atlas behaves as if the feature does not
+	// exist. Ships false by default — users who don't want their agent
+	// having inner life shouldn't have to explain themselves.
+	ThoughtsEnabled bool `json:"thoughtsEnabled"`
+
+	// NapsEnabled is a SUB-FLAG of ThoughtsEnabled. When both are true,
+	// the scheduler fires naps on idle/floor triggers. When NapsEnabled
+	// is false but ThoughtsEnabled is true, thoughts can still exist
+	// (seeded manually, added through the dream cycle) but no automatic
+	// curation happens. Ships false so the scheduler is plumbed but
+	// dormant until explicitly opted in. A manual POST /mind/nap works
+	// regardless of this flag, as long as ThoughtsEnabled is true.
+	NapsEnabled bool `json:"napsEnabled"`
+
+	// NapIdleMinutes is how many minutes of chat idleness trigger a nap.
+	// 60 default — naps fire after an hour of conversational silence, not
+	// mid-coffee-break.
+	NapIdleMinutes int `json:"napIdleMinutes"`
+
+	// NapFloorHours is the maximum time between naps regardless of idleness.
+	// 6 default — ensures naps fire even on quiet days.
+	NapFloorHours int `json:"napFloorHours"`
+
+	// NapMaxOpsPerCycle caps how many thought ops a single nap may apply.
+	// 3 default — more is suspicious per the spec.
+	NapMaxOpsPerCycle int `json:"napMaxOpsPerCycle"`
+
+	// Thought scoring thresholds. See internal/mind/thoughts/score.go for
+	// how these are used and why their defaults are what they are. Changing
+	// the auto-execute threshold below the max non-read class score breaks
+	// the structural safety ceiling.
+	ThoughtAutoExecuteThreshold int `json:"thoughtAutoExecuteThreshold"` // default 95
+	ThoughtProposeThreshold     int `json:"thoughtProposeThreshold"`     // default 80
+
+	// Engagement-driven discard thresholds.
+	ThoughtDiscardOnNegatives int `json:"thoughtDiscardOnNegatives"` // default 2
+	ThoughtDiscardOnIgnores   int `json:"thoughtDiscardOnIgnores"`   // default 3
+
+	// Auto-execute rate limits. Hard caps on how often the dispatcher is
+	// allowed to run a skill without user approval. The structural safety
+	// ceiling (read-class only) is the primary defense; these are belt-and-
+	// braces to prevent runaway behavior if a nap produces many eligible
+	// thoughts in quick succession.
+	ThoughtMaxAutoExecPerNap int `json:"thoughtMaxAutoExecPerNap"` // default 1
+	ThoughtMaxAutoExecPerDay int `json:"thoughtMaxAutoExecPerDay"` // default 3
 }
 
 // EffectiveContextWindow returns the model's context window in tokens for the
@@ -220,6 +276,22 @@ func Defaults() RuntimeConfigSnapshot {
 		VoiceTTSAutoPlay:                false,
 		VoiceSessionIdleSec:             300,
 		VoiceKokoroPort:                 11989,
+
+		// Mind thoughts / nap scheduler — defaults match the spec.
+		// The whole subsystem ships disabled. Users flip ThoughtsEnabled
+		// first to see the feature at all; NapsEnabled is the second
+		// toggle that turns on autonomous curation.
+		ThoughtsEnabled:             false,
+		NapsEnabled:                 false,
+		NapIdleMinutes:              60,
+		NapFloorHours:               6,
+		NapMaxOpsPerCycle:           3,
+		ThoughtAutoExecuteThreshold: 95,
+		ThoughtProposeThreshold:     80,
+		ThoughtDiscardOnNegatives:   2,
+		ThoughtDiscardOnIgnores:     3,
+		ThoughtMaxAutoExecPerNap:    1,
+		ThoughtMaxAutoExecPerDay:    3,
 	}
 }
 

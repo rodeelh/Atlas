@@ -1,6 +1,6 @@
 # Atlas Architecture
 
-**Last updated: 2026-04-07** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md) · Internal modules: [`docs/internal-modules.md`](internal-modules.md) · Agent boundary: [`docs/agent-boundary.md`](agent-boundary.md) · Migration verification: [`docs/migration-verification.md`](migration-verification.md) · Manual smoke: [`docs/manual-smoke-checklist.md`](manual-smoke-checklist.md)
+**Last updated: 2026-04-08** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md) · Internal modules: [`docs/internal-modules.md`](internal-modules.md) · Agent boundary: [`docs/agent-boundary.md`](agent-boundary.md) · Migration verification: [`docs/migration-verification.md`](migration-verification.md) · Manual smoke: [`docs/manual-smoke-checklist.md`](manual-smoke-checklist.md)
 
 Atlas is a local AI operator. A Go binary runs as a launchd daemon (`Atlas`), serves a web UI, and connects to any supported AI provider. A Bubbletea TUI (`atlas`) provides a terminal interface. No Swift required.
 
@@ -36,7 +36,10 @@ Atlas/
 │       ├── chat/
 │       │   ├── service.go              # HandleMessage, RegenerateMind, ResolveProvider, Resume
 │       │   ├── broadcaster.go          # SSE fan-out to connected clients
-│       │   └── keychain.go             # resolveProvider — config + Keychain → ProviderConfig
+│       │   ├── keychain.go             # resolveProvider — config + Keychain → ProviderConfig
+│       │   ├── thought_surfacing.go    # [T-NN] marker detection → pending surfacing records
+│       │   ├── classifier.go           # Post-turn engagement classifier (like/neutral/dislike)
+│       │   └── greeting.go             # HandleGreeting — drain pending-greetings queue → model call → SSE
 │       ├── comms/
 │       │   ├── service.go              # Platform lifecycle, channel management
 │       │   ├── keychain.go             # Comms credential reads
@@ -75,7 +78,9 @@ Atlas/
 │       │   ├── skills/                 # Private module — skills routes + fs roots
 │       │   ├── engine/                 # Private module — engine control routes
 │       │   ├── usage/                  # Private module — usage reporting routes
-│       │   └── apivalidation/          # Private module — API validation history routes
+│       │   ├── apivalidation/          # Private module — API validation history routes
+│       │   ├── mind/                   # Private module — mind-thoughts HTTP surface (/mind/*)
+│       │   └── dashboards/             # Private module — dashboard CRUD + widget data resolution
 │       ├── platform/
 │       │   ├── host.go                 # Private module host + route mounts
 │       │   ├── module.go               # Internal module contract
@@ -98,8 +103,22 @@ Atlas/
 │       │   ├── reflection.go           # Two-tier MIND.md pipeline (Today's Read + deep reflect)
 │       │   ├── skills.go               # SKILLS.md learned-routine detection + selective injection
 │       │   ├── seed.go                 # First-run seeding of MIND.md and SKILLS.md
-│       │   ├── types.go                # TurnRecord — input to reflection and skills learning
-│       │   └── util.go                 # atomicWrite, truncate helpers, content validators
+│       │   ├── types.go                # TurnRecord, SkillLine — reflection + nap inputs
+│       │   ├── util.go                 # atomicWrite, truncate helpers, content validators
+│       │   ├── nap.go                  # RunNap — nap execution, NapDeps, NapResult
+│       │   ├── nap_prompt.go           # buildThoughtsBlock — prompt engineering for nap calls
+│       │   ├── nap_scheduler.go        # Scheduler — idle + floor triggers, NotifyTurnNonBlocking
+│       │   ├── dispatcher.go           # Dispatcher — auto-execute gate, propose-to-approval flow
+│       │   ├── thoughts_section.go     # ReadThoughtsSection / UpdateThoughtsSection MIND.md I/O
+│       │   ├── config_sync.go          # applyConfigToThoughtsImpl — bridge config → thoughts pkg vars
+│       │   ├── lock.go                 # nap-lock.json advisory file lock (cross-process)
+│       │   ├── thoughts/               # Thought data model, Apply engine, engagement sidecar
+│       │   │   ├── thought.go          # Thought struct, ActionClass, score formula
+│       │   │   ├── apply.go            # Apply — OpAdd/OpReinforce/OpDiscard batch apply
+│       │   │   └── engagement.go       # engagement sidecar R/W (thought-engagement.jsonl)
+│       │   └── telemetry/              # Mind telemetry emitter + Aggregate stats
+│       │       ├── emitter.go          # Emitter.Emit → storage.SaveMindTelemetry
+│       │       └── aggregate.go        # Aggregate — counts by kind for dashboard widgets
 │       ├── runtime/
 │       │   └── service.go              # RuntimeStatus (port, started_at, version)
 │       ├── server/
@@ -500,6 +519,11 @@ Stage 2 — LLM extraction (skipped if explicit "remember" command found in Stag
 
 `internal/mind` runs non-blocking after every agent turn via `ReflectNonBlocking`. Serialized via `reflectMu` (TryLock — drops rather than queues if another run is in progress).
 
+Also fires concurrently after every turn (when `ThoughtsEnabled`):
+- `mind.NotifyTurnNonBlocking()` — resets the idle timer on the nap scheduler
+- `chat.detectAndRecordSurfacings()` — scans assistant reply for `[T-NN]` markers
+- `chat.classifyPendingIfAny()` — classifies the most recent pending surfacing via one-shot LLM call
+
 ```
 End of turn
     │
@@ -561,6 +585,84 @@ Phase 5 — MIND.md refresh (AI)
 
 Phases 2–5 require an AI provider. Phases 1 (prune) always runs even if no provider is configured.
 
+### 9.5 Mind-Thoughts (Proactive Loop)
+
+Opt-in proactivity system gated on `ThoughtsEnabled` (master) and `NapsEnabled` (sub-flag for autonomous scheduling). Toggle lives on the Mind screen in the web UI.
+
+**THOUGHTS section** lives inside MIND.md under `## THOUGHTS`. Each thought has: `id`, `body`, `confidence` (0–100), `value` (0–100), `class` (ActionClass), `score = confidence × value × safety_multiplier[class] / 100`, `provenance`, optional `ProposedAction`.
+
+**Score ceiling by class:**
+| Class | Safety multiplier | Max achievable score |
+|-------|------------------|---------------------|
+| `read` | 1.00 | 100 |
+| `local_write` | 0.97 | 97 |
+| `destructive_local` | 0.90 | 90 |
+| `external_side_effect` | 0.95 | 95 |
+| `send_publish_delete` | 0.85 | 85 |
+
+Only `read`-class thoughts can reach the `AutoExecuteThreshold` (95). All other classes are mathematically capped below it and go through the approval flow instead.
+
+**Nap cycle** (`internal/mind/nap.go`):
+
+```
+RunNap (triggered by scheduler idle/floor or POST /mind/nap)
+    │
+    ▼
+Acquire nap-lock.json (advisory, cross-process, 2-min timeout)
+    │
+    ▼
+Read THOUGHTS section → build prompt (nap_prompt.go)
+    │
+    ▼
+One-shot LLM call → JSON ops: add/reinforce/discard
+    │
+    ▼
+thoughts.Apply — validate + write ops → updated THOUGHTS section
+    │
+    ▼
+Dispatcher.Dispatch — for each surviving thought:
+    score ≥ 95 + read class  → auto-execute skill → EnqueueGreeting
+    score ≥ 80 (non-read)    → create Approval record
+    │
+    ▼
+Emit nap_completed telemetry → release lock
+```
+
+**Nap scheduler** (`internal/mind/nap_scheduler.go`):
+- **Idle trigger** — `NapIdleMinutes` (default 60) after last chat turn. Reset by `NotifyTurnNonBlocking()`.
+- **Floor trigger** — every `NapFloorHours` (default 6) regardless of activity.
+- Deduplication window: 2 min. Concurrent runs serialized via `runningMu.TryLock()`.
+
+**Engagement lifecycle:**
+1. Agent reply contains `[T-NN]` → `detectAndRecordSurfacings` writes `pending` engagement record
+2. User's next turn → `classifyPendingIfAny` runs one-shot LLM classifier → `like | neutral | dislike`
+3. Nap cycle reads engagement signal → reinforces or discards thought accordingly
+4. Stale pending surfacings (> 24h) → nap marks them `ignored`
+
+**Decay rules** (nap curation):
+- 2 `dislike` signals → thought discarded
+- 3 `ignore` signals → thought discarded
+- Confidence drift: each nap reduces non-reinforced thought confidence by −5
+
+**Live greeting** (`internal/chat/greeting.go`):
+- Auto-executed thoughts enqueue a `GreetingEntry` (thought body + skill result)
+- On next chat open: `POST /chat/greeting` drains queue → one-shot model call → saved as assistant message → SSE
+
+**HTTP surface** (`internal/modules/mind/module.go`):
+```
+POST /mind/nap              — manual nap trigger (sync, returns NapResult)
+POST /mind/dispatch         — run dispatcher on current thoughts without nap
+GET  /mind/thoughts         — read THOUGHTS section as JSON array
+POST /mind/thoughts/seed    — inject a hand-crafted thought (dev/test)
+DELETE /mind/thoughts/{id}  — surgical thought removal (dev/test)
+GET  /mind/telemetry        — raw telemetry rows (filterable)
+GET  /mind/telemetry/summary — counts by kind (feeds dashboard widgets)
+```
+
+All endpoints return `409 Conflict` when `ThoughtsEnabled: false`.
+
+**Telemetry kinds:** `nap_completed`, `nap_skipped`, `thought_added`, `thought_discarded`, `thought_reinforced`, `auto_execute_attempted`, `auto_execute_succeeded`, `auto_execute_failed`, `approval_proposed`, `engagement_recorded`, `engagement_classified`, `greeting_delivered`, `greeting_skipped`
+
 ---
 
 ## 10. Data Storage
@@ -576,6 +678,7 @@ Phases 2–5 require an AI provider. Phases 1 (prune) always runs even if no pro
 | `deferred_executions` | Pending approval tool calls |
 | `web_sessions` | HMAC session tokens |
 | `browser_sessions` | Per-host browser cookie snapshots (7-day expiry); `session_name` column for multi-account |
+| `mind_telemetry` | Mind-thoughts event log — nap outcomes, auto-executes, engagement signals, greetings |
 
 **JSON files** — `~/Library/Application Support/ProjectAtlas/`
 
@@ -596,6 +699,10 @@ Phases 2–5 require an AI provider. Phases 1 (prune) always runs even if no pro
 | `action-policies.json` | Per-action approval policies |
 | `fs-roots.json` | Approved filesystem roots |
 | `api-validation-history.json` | API validation audit log (max 100) |
+| `nap-state.json` | Last nap timestamp — idle/floor scheduler catch-up after restart |
+| `nap-lock.json` | Advisory cross-process nap lock (auto-released after 2 min) |
+| `pending-greetings.json` | Queued auto-executed thought results awaiting greeting delivery |
+| `thought-engagement.jsonl` | Per-thought engagement records (pending → like/neutral/dislike/ignored) |
 
 **Keychain** — `com.projectatlas.credentials` / account `bundle` → JSON blob with all API keys.
 **Vault** — `com.projectatlas.vault` / account `credentials` → JSON array of VaultEntry.

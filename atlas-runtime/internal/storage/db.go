@@ -304,6 +304,34 @@ func (db *DB) migrate() error {
 			ON token_usage(conversation_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_token_usage_provider_model
 			ON token_usage(provider, model)`,
+
+		// mind_telemetry — event log for the mind-thoughts subsystem.
+		// Every interesting event (nap start/complete/fail, thought
+		// add/update/reinforce/discard/merge, surfacing, engagement,
+		// auto-execute, approval proposal, greeting delivery, sidebar
+		// interaction) is one row. Payload is a JSON blob with
+		// kind-specific fields. Indexed by (kind, ts) and by thought_id
+		// so we can reconstruct the full lifecycle of a thought from
+		// the telemetry table even after Atlas has forgotten it.
+		//
+		// "Atlas's thoughts are fleeting" — the system itself has no
+		// access to its own graveyard. But designers need the graveyard
+		// for tuning, so the telemetry table preserves the full history.
+		// Two separate views of history, intentional.
+		`CREATE TABLE IF NOT EXISTS mind_telemetry (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts         TEXT    NOT NULL,
+			kind       TEXT    NOT NULL,
+			thought_id TEXT,
+			conv_id    TEXT,
+			payload    TEXT    NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_mind_telemetry_kind_ts
+			ON mind_telemetry(kind, ts DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_mind_telemetry_ts
+			ON mind_telemetry(ts DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_mind_telemetry_thought
+			ON mind_telemetry(thought_id) WHERE thought_id IS NOT NULL`,
 	}
 
 	// Idempotent migrations for memories columns added after initial creation.
@@ -883,6 +911,17 @@ func (db *DB) UpdateDeferredStatus(toolCallID, status, updatedAt string) error {
 	_, err := db.conn.Exec(
 		`UPDATE deferred_executions SET status = ?, updated_at = ? WHERE tool_call_id = ?`,
 		status, updatedAt, toolCallID,
+	)
+	return err
+}
+
+// SetDeferredLastError stores a last_error string on an existing row without
+// changing status. Used by the mind-thoughts approval resolver when a
+// thought-sourced skill execution fails after the user approved it.
+func (db *DB) SetDeferredLastError(toolCallID, errText, updatedAt string) error {
+	_, err := db.conn.Exec(
+		`UPDATE deferred_executions SET last_error = ?, updated_at = ? WHERE tool_call_id = ?`,
+		errText, updatedAt, toolCallID,
 	)
 	return err
 }

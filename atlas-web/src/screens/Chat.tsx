@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from 'preact/hooks'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks'
 import type { JSX } from 'preact/jsx-runtime'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js/lib/common'
 import { api, MessageAttachment, LinkPreview, ConversationSummary, ConversationDetail, CloudModelHealth } from '../api/client'
+import { pickPresencePhrase } from '../presence_phrases'
 import { toast } from '../toast'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
@@ -228,11 +229,35 @@ function extractURLs(text: string): string[] {
  * - Sanitizes with DOMPurify before injection
  * - Appends LinkPreviewCards for any URLs that have resolved previews
  */
+// stripThoughtTags removes the canonical "[T-NN]" engagement marker from
+// displayed text. The marker is load-bearing for the engagement classifier
+// (tells the backend which thought the agent surfaced) but must never be
+// shown to the user.
+//
+// Scope is intentionally narrow: only the bracketed marker is stripped.
+// Reconstructing grammar after an id has been written mid-sentence is a
+// job for the prompt, not a regex — broad post-hoc cleanup does more
+// damage than it prevents. The backend prompt teaches the model to put
+// the marker at the *end* of the sentence and never name the id in prose.
+// The raw msg.content keeps the marker intact for telemetry; only the
+// rendered view runs through this helper.
+function stripThoughtTags(content: string): string {
+  return content
+    // The canonical marker, with any leading whitespace so we don't leave
+    // an orphaned space behind when it sits at the end of a sentence.
+    .replace(/\s*\[T-\d+\]/g, '')
+    // Collapse any double spaces the strip left behind.
+    .replace(/ {2,}/g, ' ')
+    // Collapse " ." / " ," that can appear after removing a trailing tag.
+    .replace(/\s+([,.;:?!])/g, '$1')
+    .trim()
+}
+
 function renderMessageContent(
   content: string,
   linkPreviews: Record<string, LinkPreview> | undefined
 ): JSX.Element {
-  const normalized = content.replace(/<br\s*\/?>/gi, '\n')
+  const normalized = stripThoughtTags(content).replace(/<br\s*\/?>/gi, '\n')
   const rawHtml = marked.parse(normalized) as string
   const safeHtml = DOMPurify.sanitize(rawHtml, {
     ADD_ATTR: ['target', 'rel', 'class', 'type', 'title', 'aria-label', 'aria-hidden',
@@ -533,6 +558,47 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     onScroll()
     return () => el.removeEventListener('scroll', onScroll)
   }, [updateScrollBottomVisibility])
+
+  // Mind-thoughts presence state — tracks how many active thoughts Atlas
+  // has on its mind so we can render the subdued "Atlas was thinking…"
+  // line at the end of the chat thread. Refreshed on chat-open and after
+  // the greeting fires (which might produce new thoughts via a nap).
+  const [thoughtCount, setThoughtCount] = useState(0)
+
+  // presencePhrase picks one line from the phrase library, seeded by
+  // (day-of-year, thoughtCount). Stable within a session — reloading
+  // the same day with the same count shows the same line — drifts
+  // across days and when the count changes. See presence_phrases.ts.
+  const presencePhrase = useMemo(
+    () => pickPresencePhrase(thoughtCount, Date.now()),
+    [thoughtCount],
+  )
+
+  // Mind-thoughts greeting (phase 5/6). On every chat-open, check whether
+  // the pending-greetings queue has anything waiting. If so, fire the
+  // greeting endpoint — it drains the queue, runs a one-shot agent turn,
+  // persists the reply as an assistant message on the active conversation,
+  // and streams it via SSE so the normal message handler picks it up.
+  // The sidebar dot clears automatically on the next 5-second poll tick.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const pending = await api.pendingGreetings()
+        if (!cancelled && pending.count > 0) {
+          await api.triggerGreeting(conversationID.current)
+          // The streamed greeting arrives via the existing SSE connection.
+        }
+        // Always refresh the thought count — even if no greeting fired
+        // there may be active thoughts we should surface as a presence line.
+        const thoughts = await api.mindThoughts().catch(() => ({ count: 0 }))
+        if (!cancelled) setThoughtCount(thoughts.count ?? 0)
+      } catch {
+        /* daemon may not be running; silent fail is fine */
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
 
   // Scroll to bottom on mount (page load or tab switch back)
   useEffect(() => {
@@ -1572,22 +1638,42 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
       <div ref={messagesRef} class="chat-messages" onClick={handleCodeCopy as any}>
         <div class="chat-thread">
           {messages.length === 0 && (
-            <div class="empty-state">
-              <svg class="empty-icon" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M30 5.5A2.5 2.5 0 0027.5 3h-19A2.5 2.5 0 006 5.5v16A2.5 2.5 0 008.5 24H15l5 6 5-6h2.5A2.5 2.5 0 0030 21.5v-16z" />
-              </svg>
-              <h3>Start a conversation</h3>
-              <p>Type a message below to chat with {agentName}</p>
-              <div class="empty-prompts">
-                <button
-                  key={promptIndex}
-                  class="empty-prompt-chip"
-                  onClick={() => { setInput(PROMPTS[promptIndex % PROMPTS.length]); setTimeout(() => textareaRef.current?.focus(), 0) }}
-                >
-                  {PROMPTS[promptIndex % PROMPTS.length]}
-                </button>
+            thoughtCount > 0 ? (
+              // Empty state, presence mood — Atlas has active thoughts on its
+              // mind. Intentionally minimal: icon + one italic line, nothing
+              // else. A different mood from the call-to-action empty state,
+              // composed as one thought rather than a chip substitution.
+              <div class="empty-state empty-state-presence">
+                <svg class="empty-icon" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M30 5.5A2.5 2.5 0 0027.5 3h-19A2.5 2.5 0 006 5.5v16A2.5 2.5 0 008.5 24H15l5 6 5-6h2.5A2.5 2.5 0 0030 21.5v-16z" />
+                </svg>
+                <p class="empty-state-presence-line" aria-live="polite">
+                  {presencePhrase}
+                  <span class="empty-state-presence-dots" aria-hidden="true">
+                    <span>.</span><span>.</span><span>.</span>
+                  </span>
+                </p>
               </div>
-            </div>
+            ) : (
+              // Empty state, call-to-action mood — fresh chat, no thoughts
+              // waiting. Icon + heading + subtitle + one suggestion chip.
+              <div class="empty-state">
+                <svg class="empty-icon" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M30 5.5A2.5 2.5 0 0027.5 3h-19A2.5 2.5 0 006 5.5v16A2.5 2.5 0 008.5 24H15l5 6 5-6h2.5A2.5 2.5 0 0030 21.5v-16z" />
+                </svg>
+                <h3>Start a conversation</h3>
+                <p>Type a message below to chat with {agentName}</p>
+                <div class="empty-prompts">
+                  <button
+                    key={promptIndex}
+                    class="empty-prompt-chip"
+                    onClick={() => { setInput(PROMPTS[promptIndex % PROMPTS.length]); setTimeout(() => textareaRef.current?.focus(), 0) }}
+                  >
+                    {PROMPTS[promptIndex % PROMPTS.length]}
+                  </button>
+                </div>
+              </div>
+            )
           )}
 
           {messages.map((msg, i) => {
@@ -1676,6 +1762,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
               <span class="chat-presence-text">{presenceText}</span>
             </div>
           )}
+
 
           {approvalBanner && (
             <div class="chat-approval-banner">

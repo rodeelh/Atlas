@@ -16,6 +16,11 @@ type ApprovalStore interface {
 	ListAllApprovals(limit int) ([]storage.DeferredExecRow, error)
 	FetchDeferredByToolCallID(toolCallID string) (*storage.DeferredExecRow, error)
 	UpdateDeferredStatus(toolCallID, status, updatedAt string) error
+	// SaveApproval inserts a new deferred_executions row. Used by the
+	// mind-thoughts subsystem to create thought-sourced approvals.
+	SaveApproval(row storage.DeferredExecRow) error
+	// SetApprovalError stores a last_error string on an existing row.
+	SetApprovalError(toolCallID, errText, updatedAt string) error
 }
 
 type AutomationStore interface {
@@ -85,6 +90,14 @@ func (s approvalStore) FetchDeferredByToolCallID(toolCallID string) (*storage.De
 
 func (s approvalStore) UpdateDeferredStatus(toolCallID, status, updatedAt string) error {
 	return s.db.UpdateDeferredStatus(toolCallID, status, updatedAt)
+}
+
+func (s approvalStore) SaveApproval(row storage.DeferredExecRow) error {
+	return s.db.SaveDeferredExecution(row)
+}
+
+func (s approvalStore) SetApprovalError(toolCallID, errText, updatedAt string) error {
+	return s.db.SetDeferredLastError(toolCallID, errText, updatedAt)
 }
 
 type automationStore struct {

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'preact/hooks'
-import { api } from '../api/client'
+import { api, type RuntimeConfig } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
 
@@ -35,6 +35,13 @@ const SECTION_ORDER: Record<string, number> = {
   "What I've Learned":          99,  'Active Theories':           99,
 }
 
+// Sections intentionally hidden from the Mind screen. THOUGHTS is an internal
+// curation surface driven by the nap cycle — Atlas tends it between turns and
+// surfaces thoughts naturally through chat (or through approvals / unprompted
+// messages once phases 4-6 land). Showing it here would break the "thoughts
+// are fleeting" framing and turn a private scratchpad into a public list.
+const HIDDEN_SECTIONS = new Set<string>(['THOUGHTS'])
+
 function parseMindSections(content: string): MindSection[] {
   const sections: MindSection[] = []
   const parts = content.split(/\n(?=## )/)
@@ -43,6 +50,7 @@ function parseMindSections(content: string): MindSection[] {
     const first = lines[0]
     if (first.startsWith('# ') || !first.startsWith('## ')) continue
     const title = first.slice(3).trim()
+    if (HIDDEN_SECTIONS.has(title)) continue
     const body = lines.slice(1).join('\n').trim()
     let special: string | null = null
     if (title === 'Current Frame')     special = 'current-frame'
@@ -218,6 +226,52 @@ function DiaryCard({ diary }: { diary: DiaryDay[] }) {
   )
 }
 
+// ── Thoughts settings card ────────────────────────────────────────────────────
+
+function MindToggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label class="toggle">
+      <input type="checkbox" checked={checked} onChange={(e) => onChange((e.target as HTMLInputElement).checked)} />
+      <span class="toggle-track" />
+    </label>
+  )
+}
+
+function ThoughtsSettingsCard({ config, onUpdate }: {
+  config: RuntimeConfig
+  onUpdate: (patch: Partial<RuntimeConfig>) => void
+}) {
+  return (
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Thoughts</span>
+      </div>
+
+      <div class="row" style={{ padding: '12px 20px', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ flex: 1, paddingRight: '24px' }}>
+          <div style={{ fontSize: '13.5px', color: 'var(--text)', fontWeight: 500 }}>Enable mind thoughts</div>
+          <div style={{ fontSize: '12.5px', color: 'var(--text-2)', marginTop: '3px', lineHeight: 1.5 }}>
+            Atlas maintains an internal list of active thoughts — observations, hypotheses, and follow-ups — that inform how it responds.
+          </div>
+        </div>
+        <MindToggle checked={!!config.thoughtsEnabled} onChange={(v) => onUpdate({ thoughtsEnabled: v })} />
+      </div>
+
+      {config.thoughtsEnabled && (
+        <div class="row" style={{ padding: '12px 20px', justifyContent: 'space-between', alignItems: 'flex-start', borderTop: '1px solid var(--border)' }}>
+          <div style={{ flex: 1, paddingRight: '24px' }}>
+            <div style={{ fontSize: '13.5px', color: 'var(--text)', fontWeight: 500 }}>Autonomous naps</div>
+            <div style={{ fontSize: '12.5px', color: 'var(--text-2)', marginTop: '3px', lineHeight: 1.5 }}>
+              After an idle period, Atlas quietly reviews its thoughts, prunes stale ones, and may act on high-confidence read-only insights without prompting.
+            </div>
+          </div>
+          <MindToggle checked={!!config.napsEnabled} onChange={(v) => onUpdate({ napsEnabled: v })} />
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main screen ───────────────────────────────────────────────────────────────
 
 export function Mind() {
@@ -230,17 +284,32 @@ export function Mind() {
   const [dreaming, setDreaming] = useState(false)
   const [dreamMsg, setDreamMsg] = useState<string | null>(null)
   const [diary, setDiary]       = useState<DiaryDay[]>([])
+  const [cfg, setCfg]           = useState<RuntimeConfig | null>(null)
 
   async function load() {
     setError(null)
     try {
-      const [mindData, diaryData] = await Promise.all([api.mind(), api.diary()])
+      const [mindData, diaryData, configData] = await Promise.all([api.mind(), api.diary(), api.config()])
       setContent(mindData.content)
       setDiary(parseDiary(diaryData.content))
+      setCfg(configData)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load MIND.md.')
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function updateThoughtsCfg(patch: Partial<RuntimeConfig>) {
+    if (!cfg) return
+    const next = { ...cfg, ...patch }
+    setCfg(next)
+    try {
+      const result = await api.updateConfig(next)
+      setCfg(result.config)
+    } catch (e: unknown) {
+      setCfg(cfg) // revert
+      setError(e instanceof Error ? e.message : 'Failed to save settings.')
     }
   }
 
@@ -336,6 +405,16 @@ export function Mind() {
             <p class="skill-group-sub">Daily reflections written after each dream cycle</p>
           </div>
           <DiaryCard diary={diary} />
+        </>
+      )}
+
+      {!loading && !editing && cfg && (
+        <>
+          <div class="skill-group-header">
+            <span>Settings</span>
+            <p class="skill-group-sub">Control how Atlas's inner loop behaves</p>
+          </div>
+          <ThoughtsSettingsCard config={cfg} onUpdate={updateThoughtsCfg} />
         </>
       )}
     </div>

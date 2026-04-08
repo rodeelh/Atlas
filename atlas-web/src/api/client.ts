@@ -237,6 +237,18 @@ export const api = {
   // approve/deny take the toolCall.id (toolCallID), not the approval.id
   approve: (toolCallID: string) => post<Approval>(`/approvals/${toolCallID}/approve`, {}),
   deny: (toolCallID: string) => post<Approval>(`/approvals/${toolCallID}/deny`, {}),
+
+  // Mind-thoughts greeting flow (phase 5/6). pendingGreetings returns the
+  // count for the sidebar dot; triggerGreeting drains the queue into a
+  // live assistant message on the current conversation.
+  pendingGreetings: () => get<{ count: number }>('/chat/pending-greetings'),
+  triggerGreeting: (conversationID?: string) =>
+    post<{ delivered: boolean; conversationID?: string; messageID?: string; content?: string; thoughtIDs?: string[]; skipped?: string }>(
+      '/chat/greeting',
+      conversationID ? { conversationID } : {},
+    ),
+  mindThoughts: () =>
+    get<{ count: number; thoughts: unknown[] | null }>('/mind/thoughts'),
   skills: () => get<SkillRecord[]>('/skills'),
   enableSkill: (id: string) => post<SkillRecord>(`/skills/${encodeURIComponent(id)}/enable`, {}),
   disableSkill: (id: string) => post<SkillRecord>(`/skills/${encodeURIComponent(id)}/disable`, {}),

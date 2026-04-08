@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -26,6 +27,8 @@ import (
 	"atlas-runtime-go/internal/location"
 	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/mind"
+	mindtelemetry "atlas-runtime-go/internal/mind/telemetry"
+	"atlas-runtime-go/internal/features"
 	apivalidationmodule "atlas-runtime-go/internal/modules/apivalidation"
 	approvalsmodule "atlas-runtime-go/internal/modules/approvals"
 	automationsmodule "atlas-runtime-go/internal/modules/automations"
@@ -33,6 +36,7 @@ import (
 	dashboardsmodule "atlas-runtime-go/internal/modules/dashboards"
 	enginemodule "atlas-runtime-go/internal/modules/engine"
 	forgemodule "atlas-runtime-go/internal/modules/forge"
+	mindmodule "atlas-runtime-go/internal/modules/mind"
 	skillsmodule "atlas-runtime-go/internal/modules/skills"
 	usagemodule "atlas-runtime-go/internal/modules/usage"
 	voicemodule "atlas-runtime-go/internal/modules/voice"
@@ -92,6 +96,18 @@ func main() {
 		log.Fatalf("Atlas: open database: %v", err)
 	}
 	defer db.Close()
+
+	// Mind telemetry emitter — non-blocking sink for every event in the
+	// mind-thoughts subsystem (naps, thought lifecycle, auto-execute,
+	// approvals, greetings, sidebar). Writes are buffered and drained by a
+	// background goroutine; Emit is safe to call from anywhere without
+	// holding up the caller on disk I/O.
+	mindTelemetry := mindtelemetry.New(db)
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = mindTelemetry.Stop(stopCtx)
+	}()
 
 	// Backfill any existing token_usage rows that have $0 cost due to a missing
 	// pricing entry (e.g. preview/experimental model variants added after the row
@@ -218,6 +234,32 @@ func main() {
 	if err := moduleRegistry.Register(usageModule); err != nil {
 		log.Fatalf("Atlas: register usage module: %v", err)
 	}
+	mindModule := mindmodule.New(config.SupportDir(), db, cfgStore, mindTelemetry)
+	mindModule.SetProviderResolver(func() (agent.ProviderConfig, error) {
+		return chat.ResolveHeavyBackgroundProvider(cfgStore.Load())
+	})
+	mindModule.SetSkillsLister(func() []mind.SkillLine {
+		records := features.ListSkills(config.SupportDir())
+		out := make([]mind.SkillLine, 0, len(records))
+		for _, rec := range records {
+			if rec.Manifest.LifecycleState == "uninstalled" {
+				continue
+			}
+			// One entry per skill id (not per action) to keep the nap
+			// prompt concise. The description is the skill-level one.
+			out = append(out, mind.SkillLine{
+				ID:          rec.Manifest.ID,
+				Description: rec.Manifest.Description,
+			})
+		}
+		return out
+	})
+	if err := moduleRegistry.Register(mindModule); err != nil {
+		log.Fatalf("Atlas: register mind module: %v", err)
+	}
+	// mind module needs the dispatcher for the manual POST /mind/nap path.
+	// Dispatcher is built a few lines below the scheduler — so we set it
+	// after both exist via a small deferred wiring hook.
 	voiceModule := voicemodule.New(voiceMgr, cfgStore)
 	if err := moduleRegistry.Register(voiceModule); err != nil {
 		log.Fatalf("Atlas: register voice module: %v", err)
@@ -259,6 +301,64 @@ func main() {
 			return chat.ResolveHeavyBackgroundProvider(cfgStore.Load())
 		})
 	defer dreamStop()
+
+	// Mind dispatcher — the action gate for the thoughts subsystem. Wires
+	// the skills registry into the dispatcher via a narrow adapter so the
+	// mind package doesn't import internal/skills directly. Phase 5 wires
+	// the greeting queuer so acted-on thoughts flow into the live chat
+	// greeting instead of just piling up in pending-greetings.json.
+	napDispatcher := mind.NewDispatcher(
+		config.SupportDir(),
+		newMindSkillExecutor(skillsRegistry),
+		approvalsModule, // ApprovalProposer — phase 6 wires the thought-sourced approval path
+		chat.NewChatGreetingQueuer(config.SupportDir()),
+		mindTelemetry,
+	)
+	// Phase 6: when a thought-sourced approval is approved by the user, the
+	// approvals module calls this resolver to run the skill and enqueue the
+	// result to the greeting queue, same as the auto-execute path.
+	approvalsModule.SetThoughtResolver(func(thoughtID, skillID string, args json.RawMessage) (string, error) {
+		execCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		res, err := skillsRegistry.Execute(execCtx, skillID, args)
+		if err != nil {
+			return "", err
+		}
+		resultText := res.FormatForModel()
+		_ = chat.NewChatGreetingQueuer(config.SupportDir()).EnqueueGreeting(mind.GreetingEntry{
+			ThoughtID:  thoughtID,
+			SkillID:    skillID,
+			Result:     resultText,
+			ExecutedAt: time.Now().UTC(),
+		})
+		mindTelemetry.Emit("approval_resolved", thoughtID, "", map[string]any{
+			"skill":      skillID,
+			"result_len": len(resultText),
+		})
+		return resultText, nil
+	})
+	// Phase 5: wire the greeting telemetry sink into chat.Service so the
+	// HandleGreeting path emits greeting_delivered / greeting_skipped rows.
+	chatSvc.SetGreetingTelemetry(mindTelemetry)
+
+	// Nap scheduler — idle + floor triggers for the mind-thoughts subsystem.
+	// Ships dormant (cfg.NapsEnabled=false by default). Flip NapsEnabled in
+	// the runtime config to turn it on without a restart.
+	napScheduler := mind.NewScheduler(
+		config.SupportDir(), db, cfgStore, mindTelemetry,
+		func() (agent.ProviderConfig, error) {
+			return chat.ResolveHeavyBackgroundProvider(cfgStore.Load())
+		},
+		mind.BuildSkillsLister(config.SupportDir()),
+	)
+	napScheduler.SetDispatcher(napDispatcher)
+	mindModule.SetDispatcher(napDispatcher)
+	napScheduler.Start(context.Background())
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		napScheduler.Stop(stopCtx)
+	}()
 
 	// ── Web UI directory ──────────────────────────────────────────────────────
 	webDir := *webDirFlag

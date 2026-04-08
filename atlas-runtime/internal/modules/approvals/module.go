@@ -40,6 +40,7 @@ type approvalToolCall struct {
 type approvalJSON struct {
 	ID                      string           `json:"id"`
 	Status                  string           `json:"status"`
+	Source                  string           `json:"source,omitempty"` // "agent" (default, omitted) or "thought"
 	ConversationID          *string          `json:"conversationID,omitempty"`
 	DeferredExecutionID     *string          `json:"deferredExecutionID,omitempty"`
 	DeferredExecutionStatus *string          `json:"deferredExecutionStatus,omitempty"`
@@ -52,6 +53,7 @@ type Module struct {
 	supportDir string
 
 	mu         sync.Mutex
+	thoughtMu  sync.Mutex // guards the thought-sourced resolver callback
 	store      platform.ApprovalStore
 	memories   platform.MemoryStore
 	agent      platform.AgentRuntime
@@ -178,7 +180,15 @@ func (m *Module) resolve(toolCallID, newStatus string) (approvalJSON, error) {
 	if m.bus != nil {
 		_ = m.bus.Publish(context.Background(), resolvedEventName, resolvedEvent{ToolCallID: toolCallID, Status: newStatus})
 	}
-	if m.agent != nil {
+	// Thought-sourced approvals don't have a paused agent loop to resume.
+	// When approved, we run the wired ThoughtResolver which executes the
+	// skill and enqueues the result to the greeting queue. Denied is a
+	// no-op — the thought stays in MIND.md and the next nap decides.
+	if row.SourceType == "thought" {
+		if newStatus == "approved" {
+			go m.resolveThoughtSourced(row)
+		}
+	} else if m.agent != nil {
 		go m.agent.Resume(toolCallID, newStatus == "approved")
 	}
 
@@ -290,9 +300,17 @@ func rowToApproval(r storage.DeferredExecRow) approvalJSON {
 	deferredStatus := r.Status
 	approvalStatus := deferredStatusToApprovalStatus(r.Status)
 
+	// SourceType "thought" surfaces to the UI as a "from a thought" badge.
+	// The agent-initiated default ("agent") is omitted from the JSON.
+	source := ""
+	if r.SourceType == "thought" {
+		source = "thought"
+	}
+
 	return approvalJSON{
 		ID:                      r.ApprovalID,
 		Status:                  approvalStatus,
+		Source:                  source,
 		ConversationID:          r.ConversationID,
 		DeferredExecutionID:     &r.DeferredID,
 		DeferredExecutionStatus: &deferredStatus,

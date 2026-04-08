@@ -287,6 +287,7 @@ export function App() {
   const [screen, setScreen]               = useState<Screen>(getInitialScreen)
   const [pendingApprovals, setPendingApprovals] = useState(0)
   const [pendingProposals, setPendingProposals] = useState(0)
+  const [pendingGreetings, setPendingGreetings] = useState(0)
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null)
   const [collapsed, setCollapsed]         = useState<boolean>(() =>
@@ -355,8 +356,8 @@ export function App() {
   useEffect(() => {
     const poll = async () => {
       try {
-        const [approvals, status, proposals] = await Promise.allSettled([
-          api.approvals(), api.status(), api.forgeProposals()
+        const [approvals, status, proposals, greetings] = await Promise.allSettled([
+          api.approvals(), api.status(), api.forgeProposals(), api.pendingGreetings(),
         ])
         if (approvals.status === 'fulfilled') {
           setPendingApprovals(approvals.value.filter(a => a.status === 'pending').length)
@@ -366,6 +367,9 @@ export function App() {
         }
         if (proposals.status === 'fulfilled') {
           setPendingProposals(proposals.value.filter(p => p.status === 'pending').length)
+        }
+        if (greetings.status === 'fulfilled') {
+          setPendingGreetings(greetings.value.count)
         }
       } catch {
         // daemon may not be running
@@ -521,11 +525,14 @@ export function App() {
               class={`nav-item${screen === 'chat' ? ' active' : ''}`}
               onClick={(e) => { e.preventDefault(); navigate('chat') }}
               href="#chat"
-              data-tooltip="Chat"
+              data-tooltip={pendingGreetings > 0 ? 'Atlas has something to tell you' : 'Chat'}
               aria-label="Chat"
             >
               <span class="nav-icon">{Icon.chat}</span>
               {!collapsed && 'Chat'}
+              {pendingGreetings > 0 && (
+                <span class="nav-badge-dot nav-badge-dot--thought" aria-hidden="true" />
+              )}
             </a>
           </div>
 

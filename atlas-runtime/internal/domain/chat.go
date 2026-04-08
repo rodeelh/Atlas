@@ -76,6 +76,13 @@ func (d *ChatDomain) Register(r chi.Router) {
 
 	// DIARY.md — read-only; written exclusively by the dream cycle.
 	r.Get("/diary", d.getDiary)
+
+	// Mind-thoughts greeting flow (phase 5). The web client calls
+	// POST /chat/greeting on chat-open to drain any queued acted-on
+	// thoughts into a live greeting message. GET /chat/pending-greetings
+	// returns the queue count for the sidebar dot in phase 6.
+	r.Post("/chat/greeting", d.postChatGreeting)
+	r.Get("/chat/pending-greetings", d.getPendingGreetings)
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
@@ -594,4 +601,37 @@ func (d *ChatDomain) getMemoryTags(w http.ResponseWriter, r *http.Request) {
 func (d *ChatDomain) getDiary(w http.ResponseWriter, r *http.Request) {
 	content := features.ReadDiary(config.SupportDir())
 	writeJSON(w, http.StatusOK, map[string]string{"content": content})
+}
+
+// ── Mind-thoughts greeting (phase 5) ──────────────────────────────────────────
+
+// postChatGreeting drains any queued acted-on-thought results into a live
+// greeting assistant message, persists it to the active conversation, and
+// streams it via SSE. Returns a GreetingResponse describing what happened.
+// If the queue is empty, returns Delivered: false with Skipped: "queue_empty".
+func (d *ChatDomain) postChatGreeting(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ConversationID string `json:"conversationID"`
+	}
+	// Optional body — empty is fine.
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	resp, err := d.chatSvc.HandleGreeting(r.Context(), req.ConversationID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// getPendingGreetings returns the count of queued greeting entries. Used
+// by the sidebar dot to know whether to show the "Atlas has something to
+// tell you" indicator.
+func (d *ChatDomain) getPendingGreetings(w http.ResponseWriter, r *http.Request) {
+	count, err := d.chatSvc.PendingGreetingsCount()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, chat.PendingGreetingsCount{Count: count})
 }
