@@ -7,12 +7,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"atlas-runtime-go/internal/agent"
@@ -23,12 +26,12 @@ import (
 	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/domain"
 	"atlas-runtime-go/internal/engine"
+	"atlas-runtime-go/internal/features"
 	"atlas-runtime-go/internal/forge"
 	"atlas-runtime-go/internal/location"
 	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/mind"
 	mindtelemetry "atlas-runtime-go/internal/mind/telemetry"
-	"atlas-runtime-go/internal/features"
 	apivalidationmodule "atlas-runtime-go/internal/modules/apivalidation"
 	approvalsmodule "atlas-runtime-go/internal/modules/approvals"
 	automationsmodule "atlas-runtime-go/internal/modules/automations"
@@ -51,6 +54,9 @@ import (
 )
 
 func main() {
+	rootCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
 	portFlag := flag.Int("port", 0, "Override the HTTP port (default: value from config.json)")
 	webDirFlag := flag.String("web-dir", "", "Path to the built atlas-web/dist directory")
 	flag.Parse()
@@ -171,9 +177,20 @@ func main() {
 	engineMgr.SetMlock(cfg.AtlasEngineMlock)   // pin model in RAM (configurable via UI)
 	routerMgr.SetMlock(cfg.AtlasEngineMlock)
 
+	// MLX-LM subsystem — Apple Silicon only. Two MLXManager instances mirror the
+	// llama.cpp pair: primary (port 11990) + MLX-exclusive router (port 11991).
+	// Both are always constructed; Start() returns early with a descriptive error
+	// when called on a non-Apple-Silicon machine.
+	mlxMgr := engine.NewMLXManager(config.MLXVenvDir(), config.MLXModelsDir())
+	mlxRouterMgr := engine.NewMLXManager(config.MLXVenvDir(), config.MLXModelsDir())
+	mlxMgr.SetIdleTimeout(60 * time.Minute)
+	mlxRouterMgr.SetIdleTimeout(12 * time.Hour)
+
 	chatSvc := chat.NewService(db, cfgStore, bc, skillsRegistry)
 	chatSvc.SetEngineManager(engineMgr)
 	chatSvc.SetRouterEngineManager(routerMgr)
+	chatSvc.SetMLXEngineManager(mlxMgr)
+	chatSvc.SetMLXRouterEngineManager(mlxRouterMgr)
 	commsSvc := comms.New(cfgStore, db)
 	forgeSvc := forge.NewService(config.SupportDir())
 	platformHost := platform.NewHost(
@@ -226,7 +243,7 @@ func main() {
 	if err := moduleRegistry.Register(apiValidationModule); err != nil {
 		log.Fatalf("Atlas: register api validation module: %v", err)
 	}
-	engineModule := enginemodule.New(engineMgr, routerMgr, cfgStore)
+	engineModule := enginemodule.New(engineMgr, routerMgr, cfgStore).WithMLX(mlxMgr, mlxRouterMgr)
 	if err := moduleRegistry.Register(engineModule); err != nil {
 		log.Fatalf("Atlas: register engine module: %v", err)
 	}
@@ -268,7 +285,7 @@ func main() {
 		return approvalsModule.Resolve(toolCallID, approved)
 	})
 	communicationsModule.SetChatHandler(newBridgeChatHandler(chatSvc))
-	if err := moduleRegistry.StartAll(context.Background()); err != nil {
+	if err := moduleRegistry.StartAll(rootCtx); err != nil {
 		log.Fatalf("Atlas: start module registry: %v", err)
 	}
 	defer func() {
@@ -353,7 +370,7 @@ func main() {
 	)
 	napScheduler.SetDispatcher(napDispatcher)
 	mindModule.SetDispatcher(napDispatcher)
-	napScheduler.Start(context.Background())
+	napScheduler.Start(rootCtx)
 	defer func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -375,6 +392,7 @@ func main() {
 	authDomain := domain.NewAuthDomain(authSvc, cfgStore, webDir, port)
 	authDomain.EnsureRemoteKey() // Generate initial key if Keychain has none.
 	controlDomain := domain.NewControlDomain(cfgStore, runtimeSvc, db, engineMgr)
+	controlDomain.SetMLXManager(mlxMgr)
 	chatDomain := domain.NewChatDomain(chatSvc, bc, db)
 	var approvalsDomain *domain.ApprovalsDomain
 	var commsDomain *domain.CommunicationsDomain
@@ -397,12 +415,21 @@ func main() {
 		approvalsDomain,
 		commsDomain,
 		authSvc,
+		runtimeSvc,
 		remoteEnabled,
 		tailscaleEnabled,
 		platformHost,
 	)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+	}
 
 	runtimeSvc.MarkStarted()
 	logstore.Write("info", fmt.Sprintf("Runtime started on port %d", port),
@@ -412,8 +439,27 @@ func main() {
 	log.Printf("Atlas: database at %s", dbPath)
 	log.Printf("Atlas: all domains native — no Swift backend required")
 
-	if err := http.ListenAndServe(addr, handler); err != nil {
-		log.Fatalf("Atlas: server error: %v", err)
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- srv.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			runtimeSvc.RecordError("server error: " + err.Error())
+			log.Fatalf("Atlas: server error: %v", err)
+		}
+	case <-rootCtx.Done():
+		log.Printf("Atlas: shutdown requested")
+	}
+
+	runtimeSvc.MarkStopped()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		runtimeSvc.RecordError("shutdown error: " + err.Error())
+		log.Printf("Atlas: server shutdown: %v", err)
 	}
 }
 

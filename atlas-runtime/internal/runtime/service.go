@@ -61,6 +61,13 @@ func (s *Service) MarkStarted() {
 	s.mu.Unlock()
 }
 
+// MarkStopped transitions the service to StateStopped.
+func (s *Service) MarkStopped() {
+	s.mu.Lock()
+	s.state = StateStopped
+	s.mu.Unlock()
+}
+
 // RecordMessage records the timestamp of the most recent message.
 func (s *Service) RecordMessage() {
 	now := time.Now()
@@ -72,6 +79,7 @@ func (s *Service) RecordMessage() {
 // RecordError records an error string for surfacing in the status response.
 func (s *Service) RecordError(msg string) {
 	s.mu.Lock()
+	s.state = StateDegraded
 	s.lastError = msg
 	s.mu.Unlock()
 }

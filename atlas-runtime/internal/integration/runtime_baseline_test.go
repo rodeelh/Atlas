@@ -131,6 +131,7 @@ func newRuntimeHarness(t *testing.T) *runtimeHarness {
 		nil,
 		nil,
 		authSvc,
+		runtimeSvc,
 		func() bool { return false },
 		func() bool { return false },
 		host,

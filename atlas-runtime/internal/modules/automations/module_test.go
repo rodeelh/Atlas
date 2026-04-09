@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,34 +25,54 @@ import (
 )
 
 type stubAgentRuntime struct {
+	mu       sync.Mutex
 	response chat.MessageResponse
 	err      error
 	lastReq  chat.MessageRequest
 }
 
 func (s *stubAgentRuntime) HandleMessage(_ context.Context, req chat.MessageRequest) (chat.MessageResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.lastReq = req
 	return s.response, s.err
 }
 
 func (s *stubAgentRuntime) Resume(string, bool) {}
 
+func (s *stubAgentRuntime) LastRequest() chat.MessageRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastReq
+}
+
 type stubConfig struct{}
 
 func (stubConfig) Load() config.RuntimeConfigSnapshot { return config.Defaults() }
 
 type stubDelivery struct {
+	mu     sync.Mutex
 	called bool
 	dest   comms.AutomationDestination
 	text   string
 	err    error
+	ctxErr error
 }
 
-func (s *stubDelivery) SendAutomationResult(_ context.Context, dest comms.AutomationDestination, text string) error {
+func (s *stubDelivery) SendAutomationResult(ctx context.Context, dest comms.AutomationDestination, text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.called = true
 	s.dest = dest
 	s.text = text
+	s.ctxErr = ctx.Err()
 	return s.err
+}
+
+func (s *stubDelivery) Snapshot() (bool, comms.AutomationDestination, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.called, s.dest, s.text, s.ctxErr
 }
 
 func seedCommSession(t *testing.T, db *storage.DB, platformName, channelID string) {
@@ -128,10 +149,12 @@ func TestModule_RunAutomationCreatesRunAndRoutesPrompt(t *testing.T) {
 			t.Fatalf("ListGremlinRuns: %v", err)
 		}
 		if len(runs) > 0 && runs[0].Status == "completed" {
-			if !strings.Contains(stub.lastReq.Message, "Summarize today") {
-				t.Fatalf("unexpected prompt: %+v", stub.lastReq)
+			lastReq := stub.LastRequest()
+			if !strings.Contains(lastReq.Message, "Summarize today") {
+				t.Fatalf("unexpected prompt: %+v", lastReq)
 			}
-			if delivery.called {
+			called, _, _, _ := delivery.Snapshot()
+			if called {
 				t.Fatalf("did not expect delivery without destination")
 			}
 			return
@@ -202,15 +225,20 @@ func TestModule_RunAutomationDeliversToDestination(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if delivery.called {
-			if delivery.dest.Platform != "telegram" || delivery.dest.ChannelID != "123" {
-				t.Fatalf("unexpected delivery destination: %+v", delivery.dest)
+		called, dest, text, ctxErr := delivery.Snapshot()
+		if called {
+			if dest.Platform != "telegram" || dest.ChannelID != "123" {
+				t.Fatalf("unexpected delivery destination: %+v", dest)
 			}
-			if !strings.Contains(stub.lastReq.Message, "Do not mention delivery limitations") {
-				t.Fatalf("expected delivery guardrail prompt, got: %q", stub.lastReq.Message)
+			lastReq := stub.LastRequest()
+			if !strings.Contains(lastReq.Message, "Do not mention delivery limitations") {
+				t.Fatalf("expected delivery guardrail prompt, got: %q", lastReq.Message)
 			}
-			if delivery.text != "Automation output" {
-				t.Fatalf("unexpected delivery text: %q", delivery.text)
+			if text != "Automation output" {
+				t.Fatalf("unexpected delivery text: %q", text)
+			}
+			if ctxErr != nil {
+				t.Fatalf("expected delivery context to remain active, got %v", ctxErr)
 			}
 			return
 		}

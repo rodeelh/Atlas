@@ -474,7 +474,7 @@ func (m *Module) executeAutomationRun(ctx context.Context, item features.Gremlin
 	if status == "completed" && strings.TrimSpace(output) != "" {
 		if m.hasDeliveryDestination(item) {
 			deliveryStatus = "completed"
-			if err := m.deliverAutomationOutput(item, output); err != nil {
+			if err := m.deliverAutomationOutput(ctx, item, output); err != nil {
 				deliveryStatus = "failed"
 				errText := err.Error()
 				deliveryError = &errText
@@ -531,7 +531,7 @@ func (m *Module) prepareAutomationPrompt(item features.GremlinItem, runID, convI
 	return prepared.Prompt, workflowRunID, prepared.StartedAt, nil
 }
 
-func (m *Module) deliverAutomationOutput(item features.GremlinItem, output string) error {
+func (m *Module) deliverAutomationOutput(ctx context.Context, item features.GremlinItem, output string) error {
 	if m.delivery == nil {
 		return nil
 	}
@@ -542,7 +542,7 @@ func (m *Module) deliverAutomationOutput(item features.GremlinItem, output strin
 	if err := m.validateDestination(dest); err != nil {
 		return err
 	}
-	err := m.delivery.SendAutomationResult(context.Background(), comms.AutomationDestination{
+	err := m.delivery.SendAutomationResult(ctx, comms.AutomationDestination{
 		Platform:  dest.Platform,
 		ChannelID: dest.ChannelID,
 		ThreadID:  strVal(dest.ThreadID),

@@ -11,6 +11,7 @@ import (
 	"atlas-runtime-go/internal/auth"
 	"atlas-runtime-go/internal/domain"
 	"atlas-runtime-go/internal/platform"
+	"atlas-runtime-go/internal/runtime"
 )
 
 // BuildRouter constructs the chi router with CORS, auth middleware, and all
@@ -23,6 +24,7 @@ func BuildRouter(
 	approvalsDomain *domain.ApprovalsDomain,
 	commsDomain *domain.CommunicationsDomain,
 	authSvc *auth.Service,
+	runtimeSvc *runtime.Service,
 	remoteEnabled func() bool,
 	tailscaleEnabled func() bool,
 	host *platform.RuntimeHost,
@@ -30,6 +32,7 @@ func BuildRouter(
 	r := chi.NewRouter()
 
 	// Request logger (query strings redacted to avoid leaking auth tokens).
+	r.Use(runtimeStatusMiddleware(runtimeSvc))
 	r.Use(requestLogger)
 	r.Use(chimw.Recoverer)
 
