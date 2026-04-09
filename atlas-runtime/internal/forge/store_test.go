@@ -6,7 +6,7 @@ package forge
 //   - SaveProposal: new proposal appended; same ID replaces (idempotent)
 //   - ListProposals: returns empty slice (not nil) when file absent
 //   - GetProposal: returns nil for unknown ID
-//   - UpdateProposalStatus: updates in-place; unknown ID returns nil
+//   - UpdateProposalStatus: updates in-place; unknown ID returns nil; write failures surface
 //   - SaveInstalled / ListInstalled / DeleteInstalled: full lifecycle
 //   - Concurrent writes: race detector must pass
 //   - writeJSON atomic rename: partial write never leaves corrupt state
@@ -102,7 +102,10 @@ func TestUpdateProposalStatus_Updates(t *testing.T) {
 	p := ForgeProposal{ID: "p1", Status: "pending"}
 	SaveProposal(supportDir, p) //nolint:errcheck
 
-	updated := UpdateProposalStatus(supportDir, "p1", "installed")
+	updated, err := UpdateProposalStatus(supportDir, "p1", "installed")
+	if err != nil {
+		t.Fatalf("UpdateProposalStatus: %v", err)
+	}
 	if updated == nil {
 		t.Fatal("UpdateProposalStatus should return updated proposal")
 	}
@@ -119,9 +122,38 @@ func TestUpdateProposalStatus_Updates(t *testing.T) {
 
 func TestUpdateProposalStatus_UnknownID_ReturnsNil(t *testing.T) {
 	supportDir := t.TempDir()
-	result := UpdateProposalStatus(supportDir, "ghost-id", "installed")
+	result, err := UpdateProposalStatus(supportDir, "ghost-id", "installed")
+	if err != nil {
+		t.Fatalf("UpdateProposalStatus returned unexpected error: %v", err)
+	}
 	if result != nil {
 		t.Errorf("UpdateProposalStatus with unknown ID should return nil, got %+v", result)
+	}
+}
+
+func TestUpdateProposalStatus_WriteFailureReturnsError(t *testing.T) {
+	supportDir := t.TempDir()
+	p := ForgeProposal{ID: "p1", Status: "pending"}
+	if err := SaveProposal(supportDir, p); err != nil {
+		t.Fatalf("SaveProposal: %v", err)
+	}
+
+	if err := os.Chmod(supportDir, 0o500); err != nil {
+		t.Fatalf("Chmod supportDir: %v", err)
+	}
+	defer os.Chmod(supportDir, 0o700)
+
+	updated, err := UpdateProposalStatus(supportDir, "p1", "installed")
+	if err == nil {
+		t.Fatal("expected write failure error, got nil")
+	}
+	if updated != nil {
+		t.Fatalf("expected nil proposal on write failure, got %+v", updated)
+	}
+
+	reloaded := GetProposal(supportDir, "p1")
+	if reloaded == nil || reloaded.Status != "pending" {
+		t.Fatalf("proposal status should remain pending after failed write, got %+v", reloaded)
 	}
 }
 

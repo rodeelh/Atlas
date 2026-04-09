@@ -58,8 +58,8 @@ func SaveProposal(supportDir string, p ForgeProposal) error {
 }
 
 // UpdateProposalStatus sets the status field on a proposal and persists.
-// Returns the updated proposal or nil if not found.
-func UpdateProposalStatus(supportDir, id, status string) *ForgeProposal {
+// Returns the updated proposal, or nil if not found.
+func UpdateProposalStatus(supportDir, id, status string) (*ForgeProposal, error) {
 	storeMu.Lock()
 	defer storeMu.Unlock()
 
@@ -75,10 +75,12 @@ func UpdateProposalStatus(supportDir, id, status string) *ForgeProposal {
 		}
 	}
 	if found == nil {
-		return nil
+		return nil, nil
 	}
-	writeJSON(supportDir, proposalsFile, proposals) //nolint:errcheck
-	return found
+	if err := writeJSON(supportDir, proposalsFile, proposals); err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
 // ListInstalled returns all installed forge skill records.

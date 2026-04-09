@@ -146,114 +146,29 @@ func (s *Service) research(ctx context.Context, id string, req ProposeRequest, p
 	return parseProposalResponse(id, req, raw)
 }
 
-// parseProposalResponse attempts to decode the AI JSON output into a ForgeProposal.
-// Falls back to a minimal proposal if JSON parsing fails.
-func parseProposalResponse(id string, req ProposeRequest, raw string) (ForgeProposal, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	skillID := slugify(req.Name)
-
-	// Try to parse the AI's structured response.
-	var aiResp struct {
-		Name            string   `json:"name"`
-		Description     string   `json:"description"`
-		Summary         string   `json:"summary"`
-		Rationale       string   `json:"rationale"`
-		RequiredSecrets []string `json:"requiredSecrets"`
-		Domains         []string `json:"domains"`
-		ActionNames     []string `json:"actionNames"`
-		RiskLevel       string   `json:"riskLevel"`
-	}
-
-	specMap := map[string]any{}
-	plansSlice := []any{}
-
-	if err := json.Unmarshal([]byte(raw), &aiResp); err == nil {
-		// Build specJSON from the AI response.
-		specMap = map[string]any{
-			"name":        aiResp.Name,
-			"description": aiResp.Description,
-			"apiURL":      req.APIURL,
-			"domains":     aiResp.Domains,
-			"authType":    "none",
-		}
-		// Build plansJSON as a simple array of action plans.
-		for _, action := range aiResp.ActionNames {
-			plansSlice = append(plansSlice, map[string]any{
-				"actionID":    slugify(req.Name) + "." + slugify(action),
-				"name":        action,
-				"description": action + " action for " + req.Name,
-				"method":      "GET",
-			})
-		}
-	} else {
-		// Fallback: create a minimal proposal from the request.
-		aiResp.Name = req.Name
-		aiResp.Description = req.Description
-		aiResp.Summary = "AI-proposed skill for " + req.Name
-		aiResp.RequiredSecrets = []string{}
-		aiResp.Domains = []string{}
-		aiResp.ActionNames = []string{slugify(req.Name) + ".query"}
-		aiResp.RiskLevel = "low"
-		specMap = map[string]any{"name": req.Name, "description": req.Description, "apiURL": req.APIURL}
-	}
-
-	if len(aiResp.RequiredSecrets) == 0 {
-		aiResp.RequiredSecrets = []string{}
-	}
-	if len(aiResp.Domains) == 0 {
-		aiResp.Domains = []string{}
-	}
-	if len(aiResp.ActionNames) == 0 {
-		aiResp.ActionNames = []string{}
-	}
-	if aiResp.RiskLevel == "" {
-		aiResp.RiskLevel = "low"
-	}
-	if aiResp.Name == "" {
-		aiResp.Name = req.Name
-	}
-	if aiResp.Description == "" {
-		aiResp.Description = req.Description
-	}
-	if aiResp.Summary == "" {
-		aiResp.Summary = aiResp.Description
-	}
-
-	specBytes, _ := json.Marshal(specMap)
-	plansBytes, _ := json.Marshal(plansSlice)
-
-	return ForgeProposal{
-		ID:              id,
-		SkillID:         skillID,
-		Name:            aiResp.Name,
-		Description:     aiResp.Description,
-		Summary:         aiResp.Summary,
-		Rationale:       aiResp.Rationale,
-		RequiredSecrets: aiResp.RequiredSecrets,
-		Domains:         aiResp.Domains,
-		ActionNames:     aiResp.ActionNames,
-		RiskLevel:       aiResp.RiskLevel,
-		Status:          "pending",
-		SpecJSON:        string(specBytes),
-		PlansJSON:       string(plansBytes),
-		CreatedAt:       now,
-		UpdatedAt:       now,
-	}, nil
-}
-
 // BuildInstalledRecord converts a ForgeProposal into a SkillRecord-shaped map
-// suitable for the GET /forge/installed response and forge-installed.json.
-func BuildInstalledRecord(p ForgeProposal) map[string]any {
+// suitable for forge-installed.json. The web UI should prefer the live registry
+// view, but this snapshot remains useful for install/uninstall bookkeeping.
+func BuildInstalledRecord(p ForgeProposal, lifecycleState string) map[string]any {
+	var spec ForgeSkillSpec
+	if err := json.Unmarshal([]byte(p.SpecJSON), &spec); err != nil {
+		spec = ForgeSkillSpec{}
+	}
+
+	isEnabled := lifecycleState == "enabled"
 	actions := []map[string]any{}
-	for _, name := range p.ActionNames {
-		actionID := p.SkillID + "." + slugify(name)
+	for _, action := range spec.Actions {
+		permissionLevel := action.PermissionLevel
+		if permissionLevel == "" {
+			permissionLevel = "read"
+		}
 		actions = append(actions, map[string]any{
-			"id":              actionID,
-			"name":            name,
-			"description":     name + " action for " + p.Name,
-			"permissionLevel": "read",
+			"id":              p.SkillID + "." + slugify(action.ID),
+			"name":            action.Name,
+			"description":     action.Description,
+			"permissionLevel": permissionLevel,
 			"approvalPolicy":  "auto_approve",
-			"isEnabled":       true,
+			"isEnabled":       isEnabled,
 		})
 	}
 	requiredSecrets := p.RequiredSecrets
@@ -267,13 +182,13 @@ func BuildInstalledRecord(p ForgeProposal) map[string]any {
 			"name":            p.Name,
 			"version":         "1.0",
 			"description":     p.Description,
-			"lifecycleState":  "enabled",
+			"lifecycleState":  lifecycleState,
 			"riskLevel":       p.RiskLevel,
 			"isUserVisible":   true,
-			"category":        "forge",
+			"category":        spec.Category,
 			"source":          "forge",
 			"capabilities":    []string{},
-			"tags":            []string{"forge"},
+			"tags":            spec.Tags,
 			"requiredSecrets": requiredSecrets,
 		},
 		"actions":         actions,
@@ -300,7 +215,34 @@ Return a JSON object with these exact fields:
   "requiredSecrets": ["list of API key names needed, e.g. 'myAPIKey' — empty array if no key required"],
   "domains": ["list of hostnames this skill contacts, e.g. 'api.example.com'"],
   "actionNames": ["list of 2-4 action names, e.g. 'Query Data', 'Get Details'"],
-  "riskLevel": "low | medium | high"
+  "riskLevel": "low | medium | high",
+  "spec": {
+    "id": "lowercase-hyphenated skill id",
+    "name": "display name",
+    "description": "one sentence description",
+    "category": "system | utility | creative | communication | automation | research | developer | productivity",
+    "riskLevel": "low | medium | high",
+    "tags": ["short", "searchable", "labels"],
+    "actions": [
+      {
+        "id": "lowercase-hyphenated action id",
+        "name": "human-readable action name",
+        "description": "one sentence description",
+        "permissionLevel": "read | draft | execute"
+      }
+    ]
+  },
+  "plans": [
+    {
+      "actionID": "must exactly match spec.actions[].id",
+      "type": "http",
+      "httpRequest": {
+        "method": "GET | POST | PUT | PATCH | DELETE",
+        "url": "absolute HTTPS endpoint URL",
+        "authType": "none | apiKeyHeader | apiKeyQuery | bearerTokenStatic | basicAuth | oauth2ClientCredentials"
+      }
+    }
+  ]
 }`)
 	return sb.String()
 }

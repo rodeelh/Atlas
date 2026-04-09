@@ -133,7 +133,14 @@ func (m *Module) propose(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Module) listInstalled(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, forgesvc.ListInstalled(m.supportDir))
+	allSkills := features.ListSkills(m.supportDir)
+	forgeSkills := make([]features.SkillRecord, 0, len(allSkills))
+	for _, skill := range allSkills {
+		if skill.Manifest.Source == "forge" {
+			forgeSkills = append(forgeSkills, skill)
+		}
+	}
+	writeJSON(w, http.StatusOK, forgeSkills)
 }
 
 func (m *Module) install(w http.ResponseWriter, r *http.Request) {
@@ -145,39 +152,58 @@ func (m *Module) installEnable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Module) installProposal(w http.ResponseWriter, id string, enable bool) {
-	status := "installed"
-	if enable {
-		status = "enabled"
-	}
-
-	proposal := forgesvc.UpdateProposalStatus(m.supportDir, id, status)
+	proposal := forgesvc.GetProposal(m.supportDir, id)
 	if proposal == nil {
 		writeError(w, http.StatusNotFound, "proposal not found: "+id)
 		return
 	}
 
-	record := forgesvc.BuildInstalledRecord(*proposal)
+	if err := forgesvc.GenerateAndInstallCustomSkill(m.supportDir, *proposal); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate installed skill: "+err.Error())
+		return
+	}
+	if m.skillsReg != nil {
+		m.skillsReg.ReloadCustomSkill(m.supportDir, proposal.SkillID)
+	}
+
+	status := "installed"
+	if enable {
+		status = "enabled"
+	}
+
+	record := forgesvc.BuildInstalledRecord(*proposal, status)
 	if err := forgesvc.SaveInstalled(m.supportDir, record); err != nil {
+		_ = forgesvc.RemoveCustomSkillDir(m.supportDir, proposal.SkillID)
 		writeError(w, http.StatusInternalServerError, "failed to save installed skill: "+err.Error())
 		return
 	}
 
-	if err := forgesvc.GenerateAndInstallCustomSkill(m.supportDir, *proposal); err != nil {
-		logstore.Write("warn", "forge/install: codegen failed for "+proposal.SkillID+": "+err.Error(), nil)
-	} else if m.skillsReg != nil {
-		m.skillsReg.ReloadCustomSkill(m.supportDir, proposal.SkillID)
+	updatedProposal, err := forgesvc.UpdateProposalStatus(m.supportDir, id, status)
+	if err != nil {
+		_, _ = forgesvc.DeleteInstalled(m.supportDir, proposal.SkillID)
+		_ = forgesvc.RemoveCustomSkillDir(m.supportDir, proposal.SkillID)
+		writeError(w, http.StatusInternalServerError, "failed to update proposal status: "+err.Error())
+		return
+	}
+	if updatedProposal == nil {
+		_, _ = forgesvc.DeleteInstalled(m.supportDir, proposal.SkillID)
+		_ = forgesvc.RemoveCustomSkillDir(m.supportDir, proposal.SkillID)
+		writeError(w, http.StatusNotFound, "proposal not found: "+id)
+		return
 	}
 
-	if enable {
-		features.SetForgeSkillState(m.supportDir, proposal.SkillID, "enabled")
-	}
+	features.SetForgeSkillState(m.supportDir, proposal.SkillID, status)
 
-	writeJSON(w, http.StatusOK, proposal)
+	writeJSON(w, http.StatusOK, updatedProposal)
 }
 
 func (m *Module) reject(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	proposal := forgesvc.UpdateProposalStatus(m.supportDir, id, "rejected")
+	proposal, err := forgesvc.UpdateProposalStatus(m.supportDir, id, "rejected")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update proposal status: "+err.Error())
+		return
+	}
 	if proposal == nil {
 		writeError(w, http.StatusNotFound, "proposal not found: "+id)
 		return
