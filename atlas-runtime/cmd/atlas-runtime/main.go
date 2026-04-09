@@ -6,11 +6,13 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -422,26 +424,54 @@ func main() {
 	)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
-	srv := &http.Server{
+	tlsAssets, err := server.EnsureTLSAssets()
+	if err != nil {
+		log.Fatalf("Atlas: prepare tls assets: %v", err)
+	}
+	baseListener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("Atlas: listen: %v", err)
+	}
+	protocolMux := server.NewProtocolMux(baseListener)
+	defer protocolMux.Close()
+
+	httpSrv := &http.Server{
+		Addr:              addr,
+		Handler:           server.UpgradeRemotePlainHTTP(handler),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+	}
+	httpsSrv := &http.Server{
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      5 * time.Minute,
 		IdleTimeout:       2 * time.Minute,
+		TLSConfig: &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{tlsAssets.Cert},
+		},
 	}
 
 	runtimeSvc.MarkStarted()
 	logstore.Write("info", fmt.Sprintf("Runtime started on port %d", port),
 		map[string]string{"provider": cfg.ActiveAIProvider})
-	log.Printf("Atlas: listening on http://%s", addr)
+	log.Printf("Atlas: listening on http://%s (localhost/plaintext)", addr)
+	log.Printf("Atlas: listening on https://%s (remote LAN)", addr)
+	log.Printf("Atlas: tls certificate at %s", tlsAssets.CertPath)
 	log.Printf("Atlas: config at %s", config.ConfigPath())
 	log.Printf("Atlas: database at %s", dbPath)
 	log.Printf("Atlas: all domains native — no Swift backend required")
 
-	serverErr := make(chan error, 1)
+	serverErr := make(chan error, 2)
 	go func() {
-		serverErr <- srv.ListenAndServe()
+		serverErr <- httpSrv.Serve(protocolMux.HTTPListener())
+	}()
+	go func() {
+		serverErr <- httpsSrv.Serve(tls.NewListener(protocolMux.TLSListener(), httpsSrv.TLSConfig))
 	}()
 
 	select {
@@ -457,9 +487,14 @@ func main() {
 	runtimeSvc.MarkStopped()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	protocolMux.Close()
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		runtimeSvc.RecordError("shutdown error: " + err.Error())
 		log.Printf("Atlas: server shutdown: %v", err)
+	}
+	if err := httpsSrv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		runtimeSvc.RecordError("shutdown error: " + err.Error())
+		log.Printf("Atlas: tls server shutdown: %v", err)
 	}
 }
 

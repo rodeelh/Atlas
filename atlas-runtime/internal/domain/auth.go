@@ -31,6 +31,7 @@ import (
 //	GET      /auth/ping            — diagnostic HTML ping
 //	GET      /auth/remote-gate     — remote login page HTML
 //	GET      /auth/https-required  — explains HTTPS requirement for remote LAN
+//	GET      /auth/tailscale-disabled — explains that Tailscale access is disabled
 //	POST     /auth/remote          — API key auth → session cookie → /web
 //
 // Auth-required (registered inside RequireSession group):
@@ -88,6 +89,7 @@ func (d *AuthDomain) RegisterPublic(r chi.Router) {
 	r.Get("/auth/ping", d.ping)
 	r.Get("/auth/remote-gate", d.remoteGate)
 	r.Get("/auth/https-required", d.httpsRequired)
+	r.Get("/auth/tailscale-disabled", d.tailscaleDisabled)
 	// /auth/remote is rate-limited
 	r.Post("/auth/remote", d.limiter.Middleware(http.HandlerFunc(d.remoteAuth)).ServeHTTP)
 }
@@ -113,7 +115,11 @@ func (d *AuthDomain) rootRedirect(w http.ResponseWriter, r *http.Request) {
 	// Localhost always goes straight to /web.
 	if isRemoteRequest(r) {
 		cfg := d.cfgStore.Load()
-		if cfg.TailscaleEnabled && auth.IsTailscaleAddr(r.RemoteAddr) {
+		if auth.IsTailscaleAddr(r.RemoteAddr) {
+			if !cfg.TailscaleEnabled {
+				http.Redirect(w, r, "/auth/tailscale-disabled", http.StatusFound)
+				return
+			}
 			http.Redirect(w, r, "/web", http.StatusFound)
 			return
 		}
@@ -164,7 +170,11 @@ func (d *AuthDomain) serveWeb(w http.ResponseWriter, r *http.Request) {
 	// and do not carry sensitive data.
 	if isSPAShell && isRemoteRequest(r) {
 		cfg := d.cfgStore.Load()
-		if cfg.TailscaleEnabled && auth.IsTailscaleAddr(r.RemoteAddr) {
+		if auth.IsTailscaleAddr(r.RemoteAddr) {
+			if !cfg.TailscaleEnabled {
+				http.Redirect(w, r, "/auth/tailscale-disabled", http.StatusFound)
+				return
+			}
 			// Tailscale — serve SPA directly.
 		} else {
 			if !auth.IsSecureRequest(r) {
@@ -237,7 +247,13 @@ func (d *AuthDomain) remoteGate(w http.ResponseWriter, r *http.Request) {
 func (d *AuthDomain) httpsRequired(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusUpgradeRequired)
-	fmt.Fprint(w, httpsRequiredHTML())
+	fmt.Fprint(w, auth.HTTPSRequiredHTML())
+}
+
+func (d *AuthDomain) tailscaleDisabled(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	fmt.Fprint(w, auth.TailscaleDisabledHTML())
 }
 
 func (d *AuthDomain) remoteAuth(w http.ResponseWriter, r *http.Request) {
@@ -298,8 +314,9 @@ func (d *AuthDomain) remoteStatus(w http.ResponseWriter, r *http.Request) {
 		port = cfg.RuntimePort
 	}
 	lanIP := detectLANIP()
+	httpsReady := builtInHTTPSReady()
 	var accessURL string
-	if lanIP != "" && port > 0 {
+	if httpsReady && lanIP != "" && port > 0 {
 		// LAN access requires HTTPS for non-Tailscale remote requests.
 		accessURL = fmt.Sprintf("https://%s:%d", lanIP, port)
 	}
@@ -318,6 +335,7 @@ func (d *AuthDomain) remoteStatus(w http.ResponseWriter, r *http.Request) {
 		"remoteAccessEnabled": cfg.RemoteAccessEnabled,
 		"port":                port,
 		"lanIP":               lanIP,
+		"httpsReady":          httpsReady,
 		"accessURL":           accessURL,
 		"tailscaleEnabled":    cfg.TailscaleEnabled,
 		"tailscaleIP":         tailscaleIP,
@@ -326,30 +344,18 @@ func (d *AuthDomain) remoteStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func builtInHTTPSReady() bool {
+	if _, err := os.Stat(config.TLSCertPath()); err != nil {
+		return false
+	}
+	if _, err := os.Stat(config.TLSKeyPath()); err != nil {
+		return false
+	}
+	return true
+}
+
 func httpsRequiredHTML() string {
-	return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Atlas — HTTPS Required</title>
-<style>
-body{font-family:-apple-system,system-ui,sans-serif;background:#111;color:#f5f5f5;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:20px}
-.card{max-width:520px;background:#1a1a1a;border:1px solid #333;border-radius:12px;padding:24px;line-height:1.5}
-h1{margin:0 0 8px;font-size:20px}
-p{margin:0 0 10px;color:#cfcfcf}
-code{background:#0f0f0f;border:1px solid #333;padding:2px 6px;border-radius:6px}
-</style>
-</head>
-<body>
-<div class="card">
-  <h1>HTTPS Required For Remote LAN Access</h1>
-  <p>Atlas now blocks remote LAN authentication over plain HTTP to protect access keys and sessions from interception.</p>
-  <p>Use a local HTTPS reverse proxy (for example Caddy or Nginx) in front of Atlas and forward to <code>http://127.0.0.1:1984</code>.</p>
-  <p>Tailscale access remains available without this requirement because transport encryption is provided by Tailscale.</p>
-</div>
-</body>
-</html>`
+	return auth.HTTPSRequiredHTML()
 }
 
 func (d *AuthDomain) csrfToken(w http.ResponseWriter, r *http.Request) {
@@ -553,33 +559,21 @@ func remoteGateHTML() string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>Atlas — Remote Access</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#0a0a0a;--surface:#111111;--surface-2:#181818;
-  --border:rgba(255,255,255,0.07);--border-2:rgba(255,255,255,0.13);
-  --text:#f0f0f0;--text-2:#888888;
-  --accent:#4D86C8;--accent-hover:#3a73b5;
-  --input-bg:#0a0a0a;--shadow:0 12px 30px rgba(0,0,0,0.32);
-}
-@media(prefers-color-scheme:light){
-  :root{
-    --bg:#eceae6;--surface:#f7f5f1;--surface-2:#ffffff;
-    --border:rgba(32,24,16,0.12);--border-2:rgba(32,24,16,0.2);
-    --text:#171411;--text-2:#5f5850;
-    --input-bg:rgba(255,255,255,0.56);--shadow:0 18px 44px rgba(0,0,0,0.12);
-  }
+  --bg:#111111;
+  --surface:#1a1a1a;
+  --border:#333333;
+  --text:#f5f5f5;
+  --text-2:#cfcfcf;
+  --accent:#f5f5f5;
+  --input-bg:#0f0f0f;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden}
 body{
-  font-family:'Inter',-apple-system,'Helvetica Neue',system-ui,sans-serif;
-  background:
-    radial-gradient(circle at top, rgba(134,169,118,0.12), transparent 34%),
-    radial-gradient(circle at bottom right, rgba(101,135,191,0.10), transparent 30%),
-    linear-gradient(180deg, color-mix(in srgb, var(--bg) 94%, white 6%), var(--bg));
+  font-family:-apple-system,system-ui,sans-serif;
+  background:var(--bg);
   color:var(--text);
   display:flex;align-items:center;justify-content:center;
   min-height:100vh;
@@ -589,62 +583,64 @@ body{
   touch-action:manipulation;
 }
 .card{
-  background:
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--surface) 72%, white 28%),
-      color-mix(in srgb, var(--surface-2) 64%, transparent));
-  border:1px solid color-mix(in srgb, var(--border) 88%, rgba(255,255,255,0.18));
-  border-radius:16px;padding:40px 36px;max-width:400px;width:100%;
-  box-shadow:var(--shadow);text-align:center;
-  backdrop-filter:blur(24px) saturate(1.55);
-  -webkit-backdrop-filter:blur(24px) saturate(1.55);
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:24px;
+  max-width:520px;
+  width:100%;
+  line-height:1.5;
+  text-align:left;
 }
-h1{font-size:1.25rem;font-weight:600;letter-spacing:-0.01em;margin-bottom:6px;color:var(--text)}
-.subtitle{font-size:.875rem;color:var(--text-2);margin-bottom:28px;line-height:1.5}
+h1{margin:0 0 8px;font-size:20px;color:var(--text)}
+.subtitle{font-size:16px;color:var(--text-2);margin-bottom:18px;line-height:1.5}
 .field{margin-bottom:12px;text-align:left}
-label{display:block;font-size:.8rem;font-weight:500;color:var(--text-2);margin-bottom:6px;letter-spacing:0.02em}
+label{display:block;font-size:13px;font-weight:500;color:var(--text-2);margin-bottom:6px}
 input[type=password]{
-  width:100%;padding:11px 14px;
+  width:100%;
+  padding:11px 14px;
   background:var(--input-bg);color:var(--text);
-  border:1px solid var(--border-2);border-radius:8px;
-  font-family:inherit;font-size:.925rem;outline:none;
-  transition:border-color .15s,background .15s,box-shadow .15s;
-  backdrop-filter:blur(18px) saturate(1.35);
-  -webkit-backdrop-filter:blur(18px) saturate(1.35);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);
+  border:1px solid var(--border);
+  border-radius:8px;
+  font-family:inherit;
+  font-size:15px;
+  outline:none;
 }
-input[type=password]::placeholder{color:var(--text-2);opacity:.6}
+input[type=password]::placeholder{color:var(--text-2);opacity:.75}
 input[type=password]:focus{
   border-color:var(--accent);
-  background:color-mix(in srgb, var(--input-bg) 84%, white 16%);
-  box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow:0 0 0 2px rgba(245,245,245,0.12);
 }
 button{
-  width:100%;padding:11px 14px;margin-top:4px;
-  background:color-mix(in srgb, var(--surface-2) 62%, transparent);color:var(--text);
-  border:1px solid color-mix(in srgb, var(--border-2) 88%, rgba(255,255,255,0.14));border-radius:10px;
-  font-family:inherit;font-size:.925rem;font-weight:500;
-  cursor:pointer;transition:background .15s,opacity .15s,border-color .15s,transform .15s,color .15s;
-  backdrop-filter:blur(18px) saturate(1.4);
-  -webkit-backdrop-filter:blur(18px) saturate(1.4);
-  box-shadow:0 8px 22px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.14);
+  width:100%;
+  padding:11px 14px;
+  margin-top:4px;
+  background:var(--surface);
+  color:var(--text);
+  border:1px solid var(--border);
+  border-radius:10px;
+  font-family:inherit;
+  font-size:15px;
+  font-weight:500;
+  cursor:pointer;
+  transition:background .15s,opacity .15s,border-color .15s;
 }
 button:hover:not(:disabled){
-  background:color-mix(in srgb, var(--accent) 14%, var(--surface-2));
-  border-color:color-mix(in srgb, var(--accent) 28%, var(--border-2));
-  color:var(--text);
-  transform:translateY(-1px);
+  background:#202020;
+  border-color:#4a4a4a;
 }
 button:disabled{opacity:.55;cursor:not-allowed}
 .err{
-  display:none;margin-top:14px;padding:10px 14px;
-  background:color-mix(in srgb, rgba(255,59,48,.08) 72%, var(--surface-2));border:1px solid rgba(255,59,48,.2);
-  border-radius:8px;color:#ff3b30;font-size:.825rem;line-height:1.45;text-align:left;
-  backdrop-filter:blur(14px) saturate(1.2);
-  -webkit-backdrop-filter:blur(14px) saturate(1.2);
-}
-@media(prefers-color-scheme:light){
-  .err{background:rgba(255,59,48,.06);border-color:rgba(255,59,48,.15);color:#c0392b}
+  display:none;
+  margin-top:14px;
+  padding:10px 14px;
+  background:#1f1212;
+  border:1px solid rgba(255,59,48,.2);
+  border-radius:8px;
+  color:#ff8f87;
+  font-size:13px;
+  line-height:1.45;
+  text-align:left;
 }
 @media (max-width: 640px){
   html,body{
@@ -664,33 +660,28 @@ button:disabled{opacity:.55;cursor:not-allowed}
   }
   .card{
     width:100%;
-    max-width:400px;
-    min-height:auto;
-    border-radius:16px;
-    padding:32px 24px 28px;
+    max-width:520px;
+    border-radius:12px;
+    padding:24px;
   }
   h1{
-    font-size:1.3rem;
-    margin-bottom:8px;
+    font-size:20px;
   }
   .subtitle{
-    font-size:.9rem;
-    margin-bottom:24px;
-  }
-  label{
-    font-size:.84rem;
+    font-size:16px;
+    margin-bottom:18px;
   }
   input[type=password],button{
-    min-height:50px;
-    font-size:1rem;
+    min-height:48px;
+    font-size:15px;
   }
 }
 </style>
 </head>
 <body>
 <div class="card">
-  <h1>Atlas</h1>
-  <p class="subtitle">Enter your remote access key to connect<br>to this runtime.</p>
+  <h1>Authorize Remote Access</h1>
+  <p class="subtitle">Enter your remote access key to connect to this Atlas runtime.</p>
   <form id="f" onsubmit="event.preventDefault();login()">
     <div class="field">
       <label for="k">Access Key</label>

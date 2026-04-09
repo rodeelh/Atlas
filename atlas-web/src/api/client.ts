@@ -9,6 +9,9 @@ import type {
   EngineDownloadStatus,
   EngineModelInfo,
   EngineStatus,
+  MLXStatus,
+  MLXModelInfo,
+  MLXDownloadStatus,
   FsRoot,
   AutomationSummary,
   CommunicationChannel,
@@ -26,6 +29,7 @@ import type {
   LogEntry,
   MemoryItem,
   MemoryParams,
+  ChatStreamEvent,
   MessageAttachment,
   MessageResponse,
   ModelSelectorInfo,
@@ -60,6 +64,9 @@ export type {
   DashboardWidgetKind,
   EngineModelInfo,
   EngineStatus,
+  MLXStatus,
+  MLXModelInfo,
+  MLXDownloadStatus,
   Approval,
   FsRoot,
   AutomationSummary,
@@ -82,6 +89,7 @@ export type {
   LogEntry,
   MemoryItem,
   MemoryParams,
+  ChatStreamEvent,
   MessageAttachment,
   MessageResponse,
   ModelSelectorInfo,
@@ -377,7 +385,7 @@ export const api = {
   setPreferences: (p: { temperatureUnit?: string; currency?: string; unitSystem?: string }) => put<{ temperatureUnit: string; currency: string; unitSystem: string }>('/preferences', p),
 
   // Remote access
-  remoteAccessStatus: () => get<{ remoteAccessEnabled: boolean; port: number; lanIP: string | null; accessURL: string | null; tailscaleEnabled: boolean; tailscaleIP: string | null; tailscaleURL: string | null; tailscaleConnected: boolean }>('/auth/remote-status'),
+  remoteAccessStatus: () => get<{ remoteAccessEnabled: boolean; port: number; lanIP: string | null; httpsReady: boolean; accessURL: string | null; tailscaleEnabled: boolean; tailscaleIP: string | null; tailscaleURL: string | null; tailscaleConnected: boolean }>('/auth/remote-status'),
   remoteAccessKey: () => get<{ key: string }>('/auth/remote-key'),
   revokeRemoteSessions: () => del<{ revoked: boolean }>('/auth/remote-sessions', {}),
 
@@ -402,6 +410,23 @@ export const api = {
   engineRouterStatus: () => get<EngineStatus>('/engine/router/status'),
   engineRouterStart: (model?: string) => post<EngineStatus>('/engine/router/start', { model }),
   engineRouterStop: () => post<EngineStatus>('/engine/router/stop', {}),
+
+  // MLX-LM (Apple Silicon only)
+  mlxStatus: () => get<MLXStatus>('/engine/mlx/status'),
+  mlxModels: () => get<MLXModelInfo[]>('/engine/mlx/models'),
+  mlxStart: (model: string, port?: number, ctxSize?: number) =>
+    post<MLXStatus>('/engine/mlx/start', { model, port, ctxSize }),
+  mlxStop: () => post<MLXStatus>('/engine/mlx/stop', {}),
+  mlxDeleteModel: (name: string) =>
+    request<MLXModelInfo[]>(`/engine/mlx/models/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  mlxDownloadStatus: () => get<MLXDownloadStatus>('/engine/mlx/models/download/status'),
+  mlxDismissDownload: () => request<void>('/engine/mlx/models/download', { method: 'DELETE' }),
+  // SSE POST — components use fetch() directly; these return the base URL for construction.
+  mlxDownloadBaseURL: () => BASE(),
+  mlxInstallBaseURL: () => BASE(),
+  mlxRouterStatus: () => get<MLXStatus>('/engine/mlx/router/status'),
+  mlxRouterStart: (model?: string) => post<MLXStatus>('/engine/mlx/router/start', { model }),
+  mlxRouterStop: () => post<MLXStatus>('/engine/mlx/router/stop', {}),
 
   // Usage & cost tracking
   usageSummary: (params?: { since?: string; until?: string; days?: number }) => {

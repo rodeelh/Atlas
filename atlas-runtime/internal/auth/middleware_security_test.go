@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -33,7 +34,7 @@ func TestRequireSession_DoesNotTrustHostHeaderForLocalBypass(t *testing.T) {
 
 func TestIsSecureRequest_TrustsForwardedProtoOnlyFromLoopback(t *testing.T) {
 	remote := httptest.NewRequest(http.MethodGet, "http://atlas.local", nil)
-	remote.RemoteAddr = "192.168.1.50:4444"
+	remote.RemoteAddr = "203.0.113.10:4444"
 	remote.Header.Set("X-Forwarded-Proto", "https")
 	if IsSecureRequest(remote) {
 		t.Fatal("unexpected secure trust from non-loopback X-Forwarded-Proto")
@@ -44,6 +45,20 @@ func TestIsSecureRequest_TrustsForwardedProtoOnlyFromLoopback(t *testing.T) {
 	localProxy.Header.Set("X-Forwarded-Proto", "https")
 	if !IsSecureRequest(localProxy) {
 		t.Fatal("expected loopback proxy X-Forwarded-Proto=https to be trusted")
+	}
+}
+
+func TestIsSecureRequest_TrustsForwardedProtoFromHostInterfaceIP(t *testing.T) {
+	hostIP := firstNonLoopbackIPv4()
+	if hostIP == "" {
+		t.Skip("no active non-loopback IPv4 interface found")
+	}
+
+	proxied := httptest.NewRequest(http.MethodGet, "http://atlas.local", nil)
+	proxied.RemoteAddr = net.JoinHostPort(hostIP, "4444")
+	proxied.Header.Set("X-Forwarded-Proto", "https")
+	if !IsSecureRequest(proxied) {
+		t.Fatalf("expected host interface proxy %s to be trusted", hostIP)
 	}
 }
 
@@ -65,6 +80,20 @@ func TestClientIPAndLocality_TrustBoundary(t *testing.T) {
 	}
 	if got := ClientIP(proxied); got != "192.168.1.77" {
 		t.Fatalf("unexpected proxied client ip: %q", got)
+	}
+}
+
+func TestClientIP_TrustsForwardedForFromHostInterfaceIP(t *testing.T) {
+	hostIP := firstNonLoopbackIPv4()
+	if hostIP == "" {
+		t.Skip("no active non-loopback IPv4 interface found")
+	}
+
+	proxied := httptest.NewRequest(http.MethodGet, "http://atlas.local", nil)
+	proxied.RemoteAddr = net.JoinHostPort(hostIP, "9000")
+	proxied.Header.Set("X-Forwarded-For", "10.0.0.99, 192.168.1.77")
+	if got := ClientIP(proxied); got != "192.168.1.77" {
+		t.Fatalf("unexpected proxied client ip from host interface peer: %q", got)
 	}
 }
 
@@ -92,4 +121,36 @@ func TestIsTailscaleRequest_UsesPeerIPNotForwarded(t *testing.T) {
 	if !isTailscaleRequest(directTS) {
 		t.Fatal("expected direct tailscale peer to be trusted")
 	}
+}
+
+func firstNonLoopbackIPv4() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsLoopback() {
+				continue
+			}
+			if ip4 := ip.To4(); ip4 != nil {
+				return ip4.String()
+			}
+		}
+	}
+	return ""
 }

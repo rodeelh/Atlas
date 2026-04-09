@@ -49,3 +49,36 @@ func ModelsDir() string {
 func VoiceModelsDir() string {
 	return filepath.Join(SupportDir(), "voice-models")
 }
+
+// TLSDir returns the directory where Atlas stores its built-in HTTPS assets
+// (certificate and private key) for LAN access.
+func TLSDir() string {
+	return filepath.Join(SupportDir(), "tls")
+}
+
+// TLSCertPath returns the PEM-encoded certificate path for the built-in HTTPS
+// listener.
+func TLSCertPath() string {
+	return filepath.Join(TLSDir(), "atlas-cert.pem")
+}
+
+// TLSKeyPath returns the PEM-encoded private key path for the built-in HTTPS
+// listener.
+func TLSKeyPath() string {
+	return filepath.Join(TLSDir(), "atlas-key.pem")
+}
+
+// MLXModelsDir returns the directory where MLX-LM model directories are stored.
+// Each model is a subdirectory (e.g. "Llama-3.2-3B-Instruct-4bit/") containing
+// safetensors shards and a config.json — unlike llama.cpp which uses single .gguf files.
+// Lives under SupportDir() so models are preserved across uninstalls.
+func MLXModelsDir() string {
+	return filepath.Join(SupportDir(), "mlx-models")
+}
+
+// MLXVenvDir returns the path to the Python virtual environment Atlas manages
+// for the mlx-lm package. Owned entirely by Atlas; never shared with user envs.
+func MLXVenvDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".atlas-mlx")
+}

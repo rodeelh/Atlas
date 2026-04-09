@@ -319,6 +319,7 @@ function RemoteAccessSection({
 }) {
   const [status, setStatus] = useState<{
     lanIP: string | null
+    httpsReady: boolean
     accessURL: string | null
     tailscaleIP: string | null
     tailscaleURL: string | null
@@ -395,7 +396,7 @@ function RemoteAccessSection({
       </SettingsRow>
       {enabled && (
         <SettingsRow label="Local address" sublabel="Open this URL on any device on your network">
-          {status?.accessURL ? (
+          {status?.httpsReady && status?.accessURL ? (
             <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', width: '240px', maxWidth: '100%' }}>
               <code style={{ ...codeStyle, userSelect: 'all', paddingRight: '28px', maxWidth: '100%' }}>{status.accessURL}</code>
               <button
@@ -408,6 +409,10 @@ function RemoteAccessSection({
                 {localCopied ? <CheckIcon /> : <CopyIcon />}
               </button>
             </div>
+          ) : status && !status.httpsReady ? (
+            <span style={{ fontSize: '12px', color: 'var(--text-3)', maxWidth: '240px', display: 'inline-block', lineHeight: 1.5 }}>
+              HTTPS is not configured yet, so Atlas is hiding the LAN address until secure access is ready.
+            </span>
           ) : <span style={{ fontSize: '12px', color: 'var(--text-3)' }}>Detecting…</span>}
         </SettingsRow>
       )}

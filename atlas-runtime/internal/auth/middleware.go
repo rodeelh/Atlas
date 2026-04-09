@@ -135,63 +135,7 @@ func LanGate(remoteEnabled func() bool, tailscaleEnabled func() bool) func(http.
 }
 
 func lanDisabledHTML() string {
-	return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Atlas — Remote Access Disabled</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-:root{
-  --bg:#0a0a0a;--surface:#111111;--surface-2:#181818;
-  --border:rgba(255,255,255,0.07);--border-2:rgba(255,255,255,0.13);
-  --text:#f0f0f0;--text-2:#888888;--shadow:0 12px 30px rgba(0,0,0,0.32);
-}
-@media(prefers-color-scheme:light){
-  :root{
-    --bg:#eceae6;--surface:#f7f5f1;--surface-2:#ffffff;
-    --border:rgba(32,24,16,0.12);--border-2:rgba(32,24,16,0.2);
-    --text:#171411;--text-2:#5f5850;--shadow:0 12px 30px rgba(0,0,0,0.10);
-  }
-}
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%}
-body{
-  font-family:'Inter',-apple-system,'Helvetica Neue',system-ui,sans-serif;
-  background:var(--bg);color:var(--text);
-  display:flex;align-items:center;justify-content:center;
-  min-height:100vh;padding:20px;
-}
-.card{
-  background:var(--surface);border:1px solid var(--border);
-  border-radius:16px;padding:40px 36px;max-width:380px;width:100%;
-  box-shadow:var(--shadow);text-align:center;
-}
-h1{font-size:1.125rem;font-weight:600;letter-spacing:-0.01em;margin-bottom:6px;color:var(--text)}
-.subtitle{font-size:.875rem;color:var(--text-2);margin-bottom:24px;line-height:1.6}
-.notice{
-  background:var(--surface-2);border:1px solid var(--border);
-  border-radius:10px;padding:16px;text-align:left;
-}
-.notice p{font-size:.825rem;color:var(--text-2);line-height:1.6}
-.notice strong{color:var(--text);font-weight:500}
-</style>
-</head>
-<body>
-<div class="card">
-  <h1>Remote Access Disabled</h1>
-  <p class="subtitle">This Atlas runtime is not currently<br>accepting remote connections.</p>
-  <div class="notice">
-    <p>To enable access, open <strong>Atlas</strong> on the host Mac and go to
-    <strong>Settings &rarr; Remote Access</strong>, then turn on
-    <strong>LAN Access</strong>.</p>
-  </div>
-</div>
-</body>
-</html>`
+	return LanDisabledHTML()
 }
 
 // isLocalhostOrigin returns true if origin is http://localhost:* or http://127.0.0.1:*.
