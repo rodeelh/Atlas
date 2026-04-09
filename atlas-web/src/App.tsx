@@ -15,7 +15,7 @@ import { Dashboards } from './screens/Dashboards'
 import { APIKeys } from './screens/APIKeys'
 import { Theme } from './screens/Theme'
 import { Docs } from './screens/Docs'
-import { AtlasEngine } from './screens/AtlasEngine'
+import { LocalLM } from './screens/LocalLM'
 import { Usage } from './screens/Usage'
 import { Onboarding } from './screens/Onboarding'
 import { Toaster } from './components/Toaster'
@@ -38,14 +38,14 @@ type Screen =
   | 'ai-providers'
   | 'api-keys'
   | 'theme'
-  | 'atlas-engine'
+  | 'local-lm'
   | 'usage'
   | 'docs'
 
 const VALID_SCREENS: Screen[] = [
   'chat', 'onboarding', 'communications', 'approvals', 'skills', 'forge', 'mind',
   'automations', 'workflows', 'dashboards', 'activity', 'settings', 'ai-providers', 'api-keys', 'theme',
-  'atlas-engine', 'usage',
+  'local-lm', 'usage',
   'docs',
 ]
 
@@ -56,10 +56,57 @@ function getInitialScreen(): Screen {
 
 /* ── SVG Icons ─────────────────────────────────────────── */
 
+/* ── Notification chime ────────────────────────────────────────────────── */
+function playNotifyChime() {
+  try {
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+    const ctx = new AudioCtx()
+
+    const play = () => {
+      const master = ctx.createGain()
+      master.gain.value = 0.18
+      master.connect(ctx.destination)
+      // Two ascending sine tones: A5 → C6, bright and clean, 140ms apart
+      const notes = [{ freq: 880, t: 0 }, { freq: 1047, t: 0.14 }]
+      notes.forEach(({ freq, t }) => {
+        const osc  = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.type = 'sine'
+        osc.frequency.value = freq
+        osc.connect(gain)
+        gain.connect(master)
+        const at = ctx.currentTime + t
+        gain.gain.setValueAtTime(0, at)
+        gain.gain.linearRampToValueAtTime(1, at + 0.012)
+        gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.32)
+        osc.start(at)
+        osc.stop(at + 0.35)
+      })
+      setTimeout(() => ctx.close().catch(() => {}), 900)
+    }
+
+    // Resume the context if the browser suspended it (no recent user gesture)
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(play).catch(() => {})
+    } else {
+      play()
+    }
+  } catch { /* audio blocked or unavailable */ }
+}
+
 const Icon = {
   chat: (
     <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
       <path d="M14 2.5A1.5 1.5 0 0012.5 1h-9A1.5 1.5 0 002 2.5v7A1.5 1.5 0 003.5 11H7l3 3v-3h2.5A1.5 1.5 0 0014 9.5v-7z" />
+    </svg>
+  ),
+  // Speech bubble with three filled dots — "message waiting"
+  chatActive: (
+    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 2.5A1.5 1.5 0 0012.5 1h-9A1.5 1.5 0 002 2.5v7A1.5 1.5 0 003.5 11H7l3 3v-3h2.5A1.5 1.5 0 0014 9.5v-7z" />
+      <circle cx="5.5" cy="5.75" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="8"   cy="5.75" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="10.5" cy="5.75" r="0.9" fill="currentColor" stroke="none" />
     </svg>
   ),
   onboarding: (
@@ -161,6 +208,13 @@ const Icon = {
       <circle cx="8" cy="8.5" r="1.5" />
     </svg>
   ),
+  atlasMLX: (
+    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="8,1.5 14.5,5 14.5,11 8,14.5 1.5,11 1.5,5" />
+      <circle cx="8" cy="8" r="2" />
+      <path d="M8 3.5V6M8 10v2.5M12.2 5.5l-2 1.2M5.8 9.3l-2 1.2M12.2 10.5l-2-1.2M5.8 6.7l-2-1.2" />
+    </svg>
+  ),
   usage: (
     <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
       <rect x="1.5" y="9" width="3" height="5.5" rx="0.75" />
@@ -231,7 +285,7 @@ const SCREEN_LABELS: Partial<Record<Screen, string>> = {
   'ai-providers': 'AI Providers',
   'api-keys': 'Credentials',
   theme: 'Appearance',
-  'atlas-engine': 'Engine LM',
+  'local-lm': 'Local LM',
   usage: 'Usage',
   docs: 'Docs',
 }
@@ -263,7 +317,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: 'skills',        icon: Icon.skills,        label: 'Skills' },
       { id: 'forge',         icon: Icon.forge,         label: 'Forge' },
       { id: 'mind',          icon: Icon.mind,          label: 'Mind' },
-      { id: 'atlas-engine',  icon: Icon.atlasEngine,   label: 'Engine LM' },
+      { id: 'local-lm',      icon: Icon.atlasEngine,   label: 'Local LM' },
     ],
   },
   {
@@ -288,6 +342,7 @@ export function App() {
   const [pendingApprovals, setPendingApprovals] = useState(0)
   const [pendingProposals, setPendingProposals] = useState(0)
   const [pendingGreetings, setPendingGreetings] = useState(0)
+  const [unreadChatReplies, setUnreadChatReplies] = useState(0)
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null)
   const [collapsed, setCollapsed]         = useState<boolean>(() =>
@@ -346,6 +401,22 @@ export function App() {
 
   const activeTheme = themeConfig.mode
 
+  // Chime when a chat notification first arrives (0 → >0 transition).
+  // A 1-second grace period prevents chiming on initial page load.
+  const chimeReadyRef   = useRef(false)
+  const prevNotifyRef   = useRef(false)
+  useEffect(() => {
+    const t = setTimeout(() => { chimeReadyRef.current = true }, 1000)
+    return () => clearTimeout(t)
+  }, [])
+  useEffect(() => {
+    const hasNotify = (pendingGreetings > 0 || unreadChatReplies > 0) && screen !== 'chat'
+    if (hasNotify && !prevNotifyRef.current && chimeReadyRef.current) {
+      playNotifyChime()
+    }
+    prevNotifyRef.current = hasNotify
+  }, [pendingGreetings, unreadChatReplies, screen])
+
   // Poll approval count + status for sidebar badge
   useEffect(() => {
     api.onboardingStatus()
@@ -388,6 +459,10 @@ export function App() {
   }, [themeConfig])
 
   const navigate = (s: Screen) => {
+    if (s === 'chat') {
+      setUnreadChatReplies(0)
+      setPendingGreetings(0) // optimistic — refills on next poll if greeting not yet delivered
+    }
     setScreen(s)
     window.location.hash = s
     // Auto-expand the group containing this screen
@@ -520,25 +595,26 @@ export function App() {
         <nav class="sidebar-nav">
 
           {/* ── Chat ───────────────────────────────────────── */}
-          <div class="nav-group">
-            <a
-              class={`nav-item${screen === 'chat' ? ' active' : ''}`}
-              onClick={(e) => { e.preventDefault(); navigate('chat') }}
-              href="#chat"
-              data-tooltip={pendingGreetings > 0 ? 'Atlas has something to tell you' : 'Chat'}
-              aria-label="Chat"
-            >
-              <span class="nav-icon">{Icon.chat}</span>
-              {!collapsed && 'Chat'}
-              {pendingGreetings > 0 && (
-                <span class="nav-badge-dot nav-badge-dot--thought" aria-hidden="true" />
-              )}
-            </a>
-          </div>
+          {(() => {
+            const hasChatNotify = (pendingGreetings > 0 || unreadChatReplies > 0) && screen !== 'chat'
+            return (
+              <div class="nav-group">
+                <a
+                  class={`nav-item${screen === 'chat' ? ' active' : ''}${hasChatNotify ? ' nav-item--notified' : ''}`}
+                  onClick={(e) => { e.preventDefault(); navigate('chat') }}
+                  href="#chat"
+                  data-tooltip={pendingGreetings > 0 ? 'Atlas has something to tell you' : hasChatNotify ? 'New reply waiting' : 'Chat'}
+                  aria-label="Chat"
+                >
+                  <span class="nav-icon">{hasChatNotify ? Icon.chatActive : Icon.chat}</span>
+                  {!collapsed && 'Chat'}
+                </a>
+              </div>
+            )
+          })()}
 
           {NAV_GROUPS.map((group) => {
             const isGroupActive = group.items.some(i => i.id === screen)
-            const groupBadge    = group.id === 'operator' ? pendingApprovals + pendingProposals : 0
             return (
             <div class="nav-group" key={group.label}>
               {!collapsed && (
@@ -547,20 +623,20 @@ export function App() {
                   onClick={() => toggleGroup(group.id)}
                   aria-expanded={expandedGroups[group.id]}
                 >
-                  <span>
-                    {group.label}
-                    {!expandedGroups[group.id] && groupBadge > 0 && (
-                      <span class="nav-badge" style={{ marginLeft: '6px' }}>{groupBadge}</span>
-                    )}
-                  </span>
+                  <span>{group.label}</span>
                   <span class={`nav-group-caret${expandedGroups[group.id] ? ' expanded' : ''}`}>⌃</span>
                 </button>
               )}
               {collapsed && <div class="nav-group-sep" />}
-              {(collapsed || expandedGroups[group.id]) && group.items.map(item => (
+              {(collapsed || expandedGroups[group.id]) && group.items.map(item => {
+                const isNotified = (
+                  (item.id === 'approvals' && pendingApprovals > 0) ||
+                  (item.id === 'forge'     && pendingProposals > 0)
+                ) && screen !== item.id
+                return (
                 <div class="nav-item-stack" key={item.id}>
                   <a
-                    class={`nav-item${screen === item.id ? ' active' : ''}`}
+                    class={`nav-item${screen === item.id ? ' active' : ''}${isNotified ? ' nav-item--notified' : ''}`}
                     onClick={(e) => { e.preventDefault(); navigate(item.id) }}
                     href={`#${item.id}`}
                     data-tooltip={item.label}
@@ -568,20 +644,10 @@ export function App() {
                   >
                     <span class="nav-icon">{item.icon}</span>
                     {!collapsed && item.label}
-                    {item.id === 'approvals' && pendingApprovals > 0 && (
-                      collapsed
-                        ? <span class="nav-badge-dot" />
-                        : <span class="nav-badge">{pendingApprovals}</span>
-                    )}
-                    {item.id === 'forge' && pendingProposals > 0 && (
-                      collapsed
-                        ? <span class="nav-badge-dot" />
-                        : <span class="nav-badge">{pendingProposals}</span>
-                    )}
                   </a>
-
                 </div>
-              ))}
+                )
+              })}
             </div>
           )})}
 
@@ -668,16 +734,6 @@ export function App() {
               >
                 <span class={dotClass} />
               </div>
-              {(pendingApprovals + pendingProposals) > 0 && (
-                <div
-                  class="collapsed-utility-pill"
-                  title={`${pendingApprovals + pendingProposals} pending items`}
-                  data-tooltip={`${pendingApprovals + pendingProposals} pending items`}
-                  aria-label={`${pendingApprovals + pendingProposals} pending items`}
-                >
-                  <span>{pendingApprovals + pendingProposals}</span>
-                </div>
-              )}
             </div>
           ) : (
             <div class="runtime-status">
@@ -700,7 +756,10 @@ export function App() {
       <main>
         {/* Chat is always mounted so its EventSource survives navigation */}
         <div style={{ display: screen === 'chat' ? 'contents' : 'none' }}>
-          <Chat />
+          <Chat
+            isActive={screen === 'chat'}
+            onUnreadReply={() => setUnreadChatReplies(n => n + 1)}
+          />
         </div>
         {screen === 'communications' && <Communications />}
         {screen === 'onboarding'  && <Onboarding onCompleted={() => navigate('chat')} />}
@@ -716,7 +775,7 @@ export function App() {
         {screen === 'ai-providers' && <AIProviders />}
         {screen === 'api-keys'    && <APIKeys />}
         {screen === 'theme'       && <Theme activePreset={themeConfig.preset} onPresetChange={setActivePreset} activeTheme={activeTheme} onThemeChange={setActiveTheme} activeAccent={themeConfig.accent} onAccentChange={setActiveAccent} activeDensity={themeConfig.density} onDensityChange={setActiveDensity} activeChatFontSize={themeConfig.chatFontSize} onChatFontSizeChange={setChatFontSize} activeChatRadius={themeConfig.chatRadius} onChatRadiusChange={setChatRadius} activeChatFont={themeConfig.chatFont} onChatFontChange={setChatFont} activeChatAvatarStyle={themeConfig.chatAvatarStyle} onChatAvatarStyleChange={setChatAvatarStyle} />}
-        {screen === 'atlas-engine' && <AtlasEngine />}
+        {screen === 'local-lm'    && <LocalLM />}
         {screen === 'usage'       && <Usage />}
         {screen === 'docs'        && <Docs />}
       </main>

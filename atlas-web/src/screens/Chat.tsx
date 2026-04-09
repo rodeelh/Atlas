@@ -51,7 +51,7 @@ interface Message {
   linkPreviews?: Record<string, LinkPreview>
 }
 
-type ChatProvider = 'openai' | 'anthropic' | 'gemini' | 'openrouter' | 'lm_studio' | 'ollama' | 'atlas_engine'
+type ChatProvider = 'openai' | 'anthropic' | 'gemini' | 'openrouter' | 'lm_studio' | 'ollama' | 'atlas_engine' | 'atlas_mlx'
 const CLOUD_CHAT_PROVIDERS: ChatProvider[] = ['openai', 'anthropic', 'gemini', 'openrouter']
 
 const PROVIDER_LABELS: Record<ChatProvider, string> = {
@@ -61,8 +61,13 @@ const PROVIDER_LABELS: Record<ChatProvider, string> = {
   openrouter:   'OpenRouter',
   lm_studio:    'LM Studio',
   ollama:       'Ollama',
-  atlas_engine: 'Engine LM',
+  atlas_engine: 'Local LM',
+  atlas_mlx:    'Local LM',
 }
+
+// LOCAL_LM_PROVIDERS — when either local Atlas engine is active, the
+// composer shows a single "Local LM" option and this set is used for checks.
+const LOCAL_LM_PROVIDERS = new Set<ChatProvider>(['atlas_engine', 'atlas_mlx'])
 
 const STORAGE_ID_KEY  = 'atlasConversationID'
 const STORAGE_MSG_KEY = 'atlasChatMessages'
@@ -75,6 +80,7 @@ function selectedModelForProvider(config: {
   selectedLMStudioModel?: string
   selectedOllamaModel?: string
   selectedAtlasEngineModel?: string
+  selectedAtlasMLXModel?: string
 }, provider: string): string | null {
   switch (provider) {
     case 'openai':
@@ -91,6 +97,8 @@ function selectedModelForProvider(config: {
       return config.selectedOllamaModel?.trim() || null
     case 'atlas_engine':
       return config.selectedAtlasEngineModel?.trim() || null
+    case 'atlas_mlx':
+      return config.selectedAtlasMLXModel?.trim() || null
     default:
       return null
   }
@@ -417,7 +425,11 @@ const TypingDots = ({ working }: { working?: boolean }) => (
 
 // ── Chat component ─────────────────────────────────────────────────────────────
 
-export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } = {}) {
+export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
+  onNavigateHistory?: () => void
+  isActive?: boolean
+  onUnreadReply?: () => void
+} = {}) {
   const [messages, setMessages]               = useState<Message[]>(loadMessages)
   const [input, setInput]                     = useState('')
   const [sending, setSending]                 = useState(false)
@@ -433,6 +445,9 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
   })
   const [speakingMsgId, setSpeakingMsgId]     = useState<string | null>(null)
   const [activeProvider, setActiveProvider]   = useState<ChatProvider>('openai')
+  // Tracks which local engine is configured (atlas_engine or atlas_mlx) so the
+  // "Local LM" dropdown option can resolve to the right backend.
+  const [selectedLocalEngine, setSelectedLocalEngine] = useState<ChatProvider>('atlas_engine')
   const [modelByProvider, setModelByProvider] = useState<Record<ChatProvider, string>>({
     openai:    '',
     anthropic: '',
@@ -441,6 +456,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     lm_studio:    '',
     ollama:       '',
     atlas_engine: '',
+    atlas_mlx:    '',
   })
   const [cloudModelHealth, setCloudModelHealth] = useState<CloudModelHealth | null>(null)
   const [checkingCloudModelHealth, setCheckingCloudModelHealth] = useState(false)
@@ -523,6 +539,24 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
   const streamingMsgIdRef      = useRef<string | null>(null)
   const streamingAbortsRef     = useRef<Array<() => void>>([])
 
+  // Unread-reply tracking for the sidebar notification dot.
+  // isActiveRef — always current, used in stale-closure contexts (SSE handler).
+  // onUnreadReplyRef — always-current prop ref so async SSE closures never go stale.
+  // lastSeenMsgIdRef — ID of the last message visible when user left chat.
+  // prevIsActiveRef — detects false→true / true→false transitions.
+  const isActiveRef        = useRef(isActive)
+  isActiveRef.current      = isActive
+  const onUnreadReplyRef   = useRef(onUnreadReply)
+  onUnreadReplyRef.current = onUnreadReply
+  const lastSeenMsgIdRef  = useRef<string | null>(null)
+  const prevIsActiveRef   = useRef(isActive)
+  // Always-current snapshot of messages for use inside effects with [] deps.
+  const messagesLiveRef   = useRef(messages)
+  messagesLiveRef.current = messages
+  // When set, the next messages re-render will scroll to this message ID
+  // instead of scrolling to the bottom. Used for unread-reply scroll.
+  const scrollToUnreadRef = useRef<string | null>(null)
+
   const updateScrollBottomVisibility = useCallback(() => {
     const el = messagesRef.current
     if (!el) return
@@ -546,7 +580,22 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
 
   useEffect(() => {
     saveMessages(messages)
-    scrollToBottom(!isInitialMount.current)
+    // If a scroll-to-unread target was set (navigation return with new messages),
+    // scroll to it instead of the bottom so the user lands on the first new message.
+    if (scrollToUnreadRef.current) {
+      const targetId = scrollToUnreadRef.current
+      scrollToUnreadRef.current = null
+      requestAnimationFrame(() => {
+        const el = messagesRef.current?.querySelector(`[data-msg-id="${targetId}"]`)
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        } else {
+          scrollToBottom(true)
+        }
+      })
+    } else {
+      scrollToBottom(!isInitialMount.current)
+    }
     isInitialMount.current = false
   }, [messages])
 
@@ -599,6 +648,114 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     })()
     return () => { cancelled = true }
   }, [])
+
+  // On mount, sync messages from the server. If the agent completed a turn
+  // while the page was refreshed (client was disconnected from SSE), the
+  // response is in SQLite but not in localStorage. Fetching here ensures the
+  // user sees the completed reply when they return.
+  useEffect(() => {
+    let cancelled = false
+    const convID = conversationID.current
+    if (!convID) return
+    ;(async () => {
+      try {
+        const detail = await api.conversationDetail(convID)
+        if (cancelled) return
+        const serverMsgs = detail.messages
+          .filter((m: { role: string }) => m.role === 'user' || m.role === 'assistant')
+        // Only update if the server has more messages than what's cached locally.
+        // This avoids clobbering an active in-progress turn or a fresh session.
+        setMessages(prev => {
+          if (serverMsgs.length > prev.filter(m => !m.isTyping).length) {
+            return serverMsgs.map((m: { id: string; role: string; content: string }) => ({
+              id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
+            }))
+          }
+          return prev
+        })
+      } catch {
+        // Server unreachable — localStorage is the fallback
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  // Track isActive transitions:
+  //   true→false: record the last seen message ID so we know what's "unread"
+  //   false→true: re-sync from server (catch any missed SSE events), then
+  //               scroll to the first unread message if there is one.
+  useEffect(() => {
+    const wasActive = prevIsActiveRef.current
+    prevIsActiveRef.current = isActive
+
+    if (wasActive && !isActive) {
+      // User left chat — snapshot the last visible message as "seen"
+      const visible = messagesLiveRef.current.filter(m => !m.isTyping)
+      if (visible.length > 0) {
+        lastSeenMsgIdRef.current = visible[visible.length - 1].id
+      }
+      return
+    }
+
+    if (!wasActive && isActive) {
+      // User returned to chat.
+      // 1. Fire any queued acted-on-thoughts greeting first so it's persisted.
+      // 2. Re-sync from server (picks up greeting + any missed SSE replies).
+      // 3. Compute the first unread message and set scrollToUnreadRef so the
+      //    messages effect scrolls to it after the next render.
+      const convID = conversationID.current
+      const seenId = lastSeenMsgIdRef.current
+      lastSeenMsgIdRef.current = null
+      if (!convID) return
+
+      ;(async () => {
+        // Step 1: deliver any pending proactive greeting
+        try {
+          const pending = await api.pendingGreetings()
+          if (pending.count > 0) {
+            await api.triggerGreeting(convID)
+          }
+        } catch { /* greeting unavailable — continue to sync */ }
+
+        // Step 2: re-sync messages from server
+        try {
+          const detail = await api.conversationDetail(convID)
+          const serverMsgs = detail.messages
+            .filter((m: { role: string }) => m.role === 'user' || m.role === 'assistant')
+
+          // Compute scroll target from the fresh server list before state update
+          if (seenId) {
+            const seenIdx = serverMsgs.findIndex((m: { id: string }) => m.id === seenId)
+            if (seenIdx >= 0 && seenIdx < serverMsgs.length - 1) {
+              scrollToUnreadRef.current = serverMsgs[seenIdx + 1].id
+            }
+          }
+
+          setMessages(prev => {
+            if (serverMsgs.length > prev.filter(m => !m.isTyping).length) {
+              return serverMsgs.map((m: { id: string; role: string; content: string }) => ({
+                id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
+              }))
+            }
+            // No new messages from server — if scroll target is set (SSE delivered
+            // the reply while we were away), nudge render so the effect fires.
+            return scrollToUnreadRef.current ? [...prev] : prev
+          })
+        } catch {
+          // Server unreachable — fall back to scrolling within in-memory state
+          if (seenId) {
+            const msgs = messagesLiveRef.current.filter(m => !m.isTyping)
+            const seenIdx = msgs.findIndex(m => m.id === seenId)
+            if (seenIdx >= 0 && seenIdx < msgs.length - 1) {
+              scrollToUnreadRef.current = msgs[seenIdx + 1].id
+              setMessages(prev => [...prev]) // nudge render
+            }
+          }
+        }
+      })()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive])
 
   // Scroll to bottom on mount (page load or tab switch back)
   useEffect(() => {
@@ -666,6 +823,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
       if (s.personaName) setAgentName(s.personaName)
       if (s.userName) setUserName(s.userName)
       if (s.activeAIProvider) setActiveProvider(s.activeAIProvider as ChatProvider)
+      if (s.selectedLocalEngine) setSelectedLocalEngine(s.selectedLocalEngine as ChatProvider)
       setModelByProvider({
         openai:    s.selectedOpenAIPrimaryModel?.trim() || '',
         anthropic: s.selectedAnthropicModel?.trim() || '',
@@ -674,6 +832,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
         lm_studio:    s.selectedLMStudioModel?.trim() || '',
         ollama:       s.selectedOllamaModel?.trim() || '',
         atlas_engine: s.selectedAtlasEngineModel?.trim() || '',
+        atlas_mlx:    s.selectedAtlasMLXModel?.trim() || '',
       })
       const provider = (s.activeAIProvider || 'openai') as ChatProvider
       await resolveModelLabel(provider, selectedModelForProvider(s, provider))
@@ -782,7 +941,9 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
     }
   }
 
-  const handleProviderChange = async (provider: ChatProvider) => {
+  const handleProviderChange = async (rawProvider: string) => {
+    // "local_lm" is the virtual dropdown value — resolve to the configured local engine.
+    const provider = (rawProvider === 'local_lm' ? selectedLocalEngine : rawProvider) as ChatProvider
     const previousProvider = activeProvider
     setActiveProvider(provider)
     await resolveModelLabel(provider, modelByProvider[provider])
@@ -1393,6 +1554,11 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
                   }
                 }
               }
+              // Signal sidebar notification for any completed turn while away —
+              // use ref to avoid stale closure from the async send() call.
+              if (data.status === 'completed' && !isActiveRef.current) {
+                onUnreadReplyRef.current?.()
+              }
               setApprovalBanner(false); setSending(false); es.close()
             }
             break
@@ -1692,6 +1858,7 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
               )}
             <div
               key={msg.id}
+              data-msg-id={msg.id}
               class={`chat-message-group ${msg.role}${msg.isTyping ? ' typing' : ''}${revealedCopyId === msg.id ? ' meta-visible' : ''}`}
             >
               <div class="chat-message-row">
@@ -1878,17 +2045,21 @@ export function Chat({ onNavigateHistory }: { onNavigateHistory?: () => void } =
               <div class="chat-provider-wrap">
                 <select
                   class="chat-provider-select"
-                  value={activeProvider}
-                  onChange={(e) => handleProviderChange((e.target as HTMLSelectElement).value as ChatProvider)}
+                  value={LOCAL_LM_PROVIDERS.has(activeProvider) ? 'local_lm' : activeProvider}
+                  onChange={(e) => handleProviderChange((e.target as HTMLSelectElement).value)}
                   aria-label="Model provider"
                 >
-                  <option value="openai">OpenAI</option>
-                  <option value="anthropic">Anthropic</option>
-                  <option value="gemini">Gemini</option>
-                  <option value="openrouter">OpenRouter</option>
-                  <option value="lm_studio">LM Studio</option>
-                  <option value="ollama">Ollama</option>
-                  <option value="atlas_engine">Engine LM</option>
+                  <optgroup label="Cloud">
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="gemini">Gemini</option>
+                    <option value="openrouter">OpenRouter</option>
+                  </optgroup>
+                  <optgroup label="Local">
+                    <option value="local_lm">Local LM</option>
+                    <option value="lm_studio">LM Studio</option>
+                    <option value="ollama">Ollama</option>
+                  </optgroup>
                 </select>
                 <span class="chat-provider-label" aria-hidden="true">
                   {PROVIDER_LABELS[activeProvider]} ▾

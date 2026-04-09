@@ -39,12 +39,13 @@ const (
 	ProviderLMStudio    ProviderType = "lm_studio"
 	ProviderOllama      ProviderType = "ollama"
 	ProviderAtlasEngine ProviderType = "atlas_engine"
+	ProviderAtlasMLX    ProviderType = "atlas_mlx" // MLX-LM subsystem — Apple Silicon only
 )
 
 // isLocalProvider returns true for providers backed by a local inference server
 // that may return 503 while loading a model.
 func isLocalProvider(t ProviderType) bool {
-	return t == ProviderAtlasEngine || t == ProviderLMStudio || t == ProviderOllama
+	return t == ProviderAtlasEngine || t == ProviderAtlasMLX || t == ProviderLMStudio || t == ProviderOllama
 }
 
 // ProviderConfig carries everything the agent loop needs to call an AI backend.
@@ -158,8 +159,8 @@ func streamWithToolDetection(
 	switch p.Type {
 	case ProviderAnthropic:
 		return streamAnthropicWithToolDetection(ctx, p, messages, tools, convID, bc)
-	case ProviderAtlasEngine, ProviderLMStudio, ProviderOllama:
-		// These providers do not support stream:true + tools. Use non-streaming
+	case ProviderAtlasEngine, ProviderAtlasMLX, ProviderLMStudio, ProviderOllama:
+		// These providers do not reliably support stream:true + tools. Use non-streaming
 		// and emit the full response text as one token event.
 		return nonStreamingAsStream(ctx, p, messages, tools, convID, bc)
 	default: // openai, gemini
@@ -326,6 +327,17 @@ func oaiCompatBaseURL(p ProviderConfig) string {
 			base += "/v1"
 		}
 		return base
+	case ProviderAtlasMLX:
+		// MLX-LM runs a managed mlx_lm.server process on an internal port.
+		// Also exposes an OpenAI-compatible /v1 endpoint on port 11990 by default.
+		base := strings.TrimRight(p.BaseURL, "/")
+		if base == "" {
+			base = "http://localhost:11990"
+		}
+		if !strings.HasSuffix(base, "/v1") {
+			base += "/v1"
+		}
+		return base
 	default: // openai
 		return "https://api.openai.com/v1"
 	}
@@ -353,6 +365,9 @@ func callOpenAICompatNonStreaming(
 	// Local providers (llama-server, Ollama) use Jinja chat templates that
 	// enforce strict user/assistant alternation. Coalesce adjacent same-role
 	// messages and strip tool-role messages that these backends don't support.
+	// atlas_mlx (mlx_lm.server) is a proper OpenAI-compatible server that
+	// accepts tool-call + tool-result messages natively — skip coalescing so
+	// the model receives tool results and can generate a follow-up response.
 	if p.Type == ProviderAtlasEngine || p.Type == ProviderLMStudio || p.Type == ProviderOllama {
 		messages = coalesceForLocalProvider(messages)
 	}

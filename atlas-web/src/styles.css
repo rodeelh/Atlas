@@ -2549,6 +2549,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   align-items: center;
   gap: 7px;
   padding: 2px 0 2px 42px;
+  margin-top: -18px;
   font-size: 12px;
   color: var(--theme-text-muted);
   opacity: 0;
@@ -4543,6 +4544,48 @@ input[type=number] { -moz-appearance: textfield; }
               inset 0 -1px 0 color-mix(in srgb, white 3%, transparent);
 }
 
+/* ── Segmented control (e.g. Local LM Llama/MLX toggle) ──────────────────── */
+.segmented-ctrl {
+  display: inline-flex;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--border-2) 50%, transparent);
+  overflow: hidden;
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+}
+.segmented-ctrl__btn {
+  padding: 5px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  position: relative;
+}
+.segmented-ctrl__btn + .segmented-ctrl__btn::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 20%; bottom: 20%;
+  width: 1px;
+  background: color-mix(in srgb, var(--border-2) 50%, transparent);
+}
+.segmented-ctrl__btn:hover {
+  background: color-mix(in srgb, var(--hover) 60%, transparent);
+  color: var(--text);
+}
+.segmented-ctrl__btn.active {
+  background: color-mix(in srgb, var(--accent) 18%, var(--active-bg) 60%);
+  color: var(--text);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
+}
+.segmented-ctrl__btn.active + .segmented-ctrl__btn::before,
+.segmented-ctrl__btn + .segmented-ctrl__btn.active::before {
+  opacity: 0; /* hide divider when adjacent to active segment */
+}
+
 .memory-toolbar-card {
   padding: 16px 18px 18px;
   display: flex;
@@ -6025,28 +6068,18 @@ select.field-input {
   transform: translateY(-50%) translateX(0);
 }
 
-/* Approvals badge in collapsed mode */
-.nav-badge-dot {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 1.5px solid var(--surface);
+/* ── Nav notification — icon-swap state ────────────────────────────────────
+   White icon + gentle pulse. No background, no bar — just the glyph
+   changes so it reads as "new content here" without competing with the
+   active accent state. */
+.nav-item--notified .nav-icon {
+  opacity: 1;
+  color: #ffffff;
+  animation: notify-icon-pulse 2.2s ease-in-out infinite;
 }
-
-/* Mind-thoughts greeting dot — same shape, different hue, gentle pulse.
-   Signals "Atlas has something to tell you" without the content itself.
-   Rendered on the Chat nav item when pendingGreetings > 0. */
-.nav-badge-dot--thought {
-  background: var(--accent-warm, #e0a060);
-  animation: mind-thought-pulse 2.4s ease-in-out infinite;
-}
-@keyframes mind-thought-pulse {
-  0%, 100% { opacity: 0.75; transform: scale(1); }
-  50%      { opacity: 1;    transform: scale(1.15); }
+@keyframes notify-icon-pulse {
+  0%, 100% { opacity: 0.72; transform: scale(1);    }
+  50%       { opacity: 1;    transform: scale(1.14); }
 }
 
 /* Mind-thoughts presence empty state — a distinct "mood" from the normal
@@ -7429,9 +7462,14 @@ select.field-input {
     -webkit-overflow-scrolling: touch;
   }
 
-  /* Chat: tighter padding */
+  /* Chat: full-width on mobile — thread fills screen, composer pill
+     gets breathing room from its own 32px horizontal padding */
+  :root {
+    --chat-content-max: 100%;
+  }
+
   .chat-thread {
-    padding: 16px 14px calc(126px + env(safe-area-inset-bottom, 0px));
+    padding: 16px 16px calc(126px + env(safe-area-inset-bottom, 0px));
   }
 
   .chat-message-group.user {

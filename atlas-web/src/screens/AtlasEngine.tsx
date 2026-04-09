@@ -114,7 +114,7 @@ const KV_CACHE_QUANT_OPTIONS = [
   { value: 'iq4_nl', label: 'iq4_nl', detail: '4-bit nonlinear' },
 ] as const
 
-export function AtlasEngine() {
+export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boolean } = {}) {
   const [status, setStatus]   = useState<EngineStatus | null>(null)
   const [models, setModels]   = useState<EngineModelInfo[]>([])
   const [error, setError]     = useState<string | null>(null)
@@ -484,7 +484,7 @@ export function AtlasEngine() {
   if (loading) {
     return (
       <div class="screen">
-        <PageHeader title="Engine LM" subtitle="Built-in local inference — no external tools required." />
+        {!hidePageHeader && <PageHeader title="Llama" subtitle="Built-in local inference — no external tools required." />}
         <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
           <span class="spinner" />
         </div>
@@ -494,7 +494,7 @@ export function AtlasEngine() {
 
   return (
     <div class="screen">
-      <PageHeader title="Engine LM" subtitle="Built-in local inference — no external tools required." />
+      {!hidePageHeader && <PageHeader title="Llama" subtitle="Built-in local inference — no external tools required." />}
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
 
@@ -551,12 +551,16 @@ export function AtlasEngine() {
         {/* TPS line graph */}
         <div class="card" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <div class="card-header">
-            <span class="card-title">Decode TPS — Live</span>
-            {tpsHistory.length > 0 && (
-              <span class="stat-note" style={{ marginBottom: 0 }}>
-                peak {Math.max(...tpsHistory).toFixed(1)} · avg {(tpsHistory.reduce((a, b) => a + b, 0) / tpsHistory.length).toFixed(1)}
-              </span>
-            )}
+            <span class="card-title">Decode TPS</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {tpsHistory.length > 0 && (
+                <span class="stat-note" style={{ marginBottom: 0 }}>
+                  peak {Math.max(...tpsHistory).toFixed(1)} · avg {(tpsHistory.reduce((a, b) => a + b, 0) / tpsHistory.length).toFixed(1)}
+                </span>
+              )}
+              {isRunning && isLoading && <span class="badge badge-yellow" style={{ fontSize: 11 }}>Loading</span>}
+              {isRunning && !isLoading && <span class="badge badge-green" style={{ fontSize: 11 }}>Live</span>}
+            </div>
           </div>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: '12px 20px 16px' }}>
             {(() => {
@@ -694,7 +698,7 @@ export function AtlasEngine() {
               No models downloaded yet — use the section below to get started.
             </div>
           ) : (
-            models.map(m => {
+            [...models].sort((a, b) => a.sizeBytes - b.sizeBytes).map(m => {
               const isActive = isRunning && status?.loadedModel === m.name
               const { display, quant } = parseModelInfo(m.name)
               return (
@@ -791,7 +795,7 @@ export function AtlasEngine() {
                 disabled={routerModelSaving}
               >
                 <option value="">Off</option>
-                {models.map(m => {
+                {[...models].sort((a, b) => a.sizeBytes - b.sizeBytes).map(m => {
                   const { display, quant } = parseModelInfo(m.name)
                   return (
                     <option key={m.name} value={m.name}>
@@ -805,9 +809,9 @@ export function AtlasEngine() {
         </div>
       </div>
 
-      {/* ── Engine info card ───────────────────────────────────────────────── */}
+      {/* ── Configuration card ─────────────────────────────────────────────── */}
       <div>
-        <div class="section-label">Engine</div>
+        <div class="section-label">Configuration</div>
         <div class="card">
 
           {/* Context window size */}
@@ -932,7 +936,7 @@ export function AtlasEngine() {
             <div class="settings-label-col">
               <div class="settings-label">Server Port</div>
               <div class="settings-sublabel">
-                Port Engine LM listens on (managed by Atlas). Restart daemon after changing.
+                Port Llama listens on (managed by Atlas). Restart daemon after changing.
               </div>
             </div>
             <div class="settings-field">
@@ -951,7 +955,12 @@ export function AtlasEngine() {
           {/* llama-server version + update — merged row */}
           <div class={`settings-row engine-inline-control-row${isMobile ? ' settings-row-mobile' : ''}`} style={{ borderBottom: 'none' }}>
             <div class="settings-label-col">
-              <div class="settings-label">llama-server</div>
+              <div class="settings-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                llama-server
+                {binaryReady && !isUpToDate && (
+                  <span class="badge badge-yellow" style={{ fontSize: 11, padding: '1px 6px' }}>Update</span>
+                )}
+              </div>
               <div class="settings-sublabel">
                 {binaryReady
                   ? isUpToDate

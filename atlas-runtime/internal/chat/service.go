@@ -66,12 +66,22 @@ type MessageItem struct {
 
 // Service handles chat message processing: stores messages, calls the AI
 // provider, emits SSE events, and returns the final MessageResponse.
-// EngineAutoStarter is satisfied by engine.Manager. Defined here as a minimal
-// interface to avoid a direct import of the engine package into chat.
+// InferenceRecorder is optionally satisfied by EngineAutoStarter implementations
+// that can track per-turn performance stats. Type-asserted at call sites so the
+// interface stays minimal for engines that don't support it.
+type InferenceRecorder interface {
+	RecordInference(promptTokens, completionTokens int, elapsed time.Duration)
+}
+
+// EngineAutoStarter is satisfied by engine.Manager and engine.MLXManager.
+// Defined here as a minimal interface to avoid a direct import of the engine
+// package into chat. Stop() is included to support mutual exclusion between
+// the llama.cpp and MLX-LM subsystems — starting one requires stopping the other.
 type EngineAutoStarter interface {
 	IsRunning() bool
 	LoadedModel() string
 	Start(modelName string, port int, ctxSize int, kvCacheQuant string, draftModel string) error
+	Stop() error
 	WaitUntilReady(port int, timeout time.Duration) error
 	RecordActivity()
 }
@@ -92,8 +102,10 @@ type Service struct {
 	cfgStore          *config.Store
 	broadcaster       *Broadcaster
 	registry          *skills.Registry
-	engine            EngineAutoStarter              // optional — nil when Engine LM not in use
-	routerEngine      EngineAutoStarter              // optional — nil when router not in use
+	engine            EngineAutoStarter              // optional — llama.cpp primary (atlas_engine)
+	routerEngine      EngineAutoStarter              // optional — llama.cpp router (atlas_engine)
+	mlxEngine         EngineAutoStarter              // optional — MLX-LM primary (atlas_mlx)
+	mlxRouterEngine   EngineAutoStarter              // optional — MLX-LM router (atlas_mlx, Apple Silicon only)
 	summaryCache      map[string]conversationSummary // keyed by conversationID
 	greetingTelemetry GreetingTelemetry              // optional — set via SetGreetingTelemetry
 	surfacingRec      SurfacingRecorder              // optional — phase 7b test seam
@@ -139,6 +151,21 @@ func (s *Service) thoughtsEnabled() bool {
 // service can auto-start the router when tool selection mode is "llm".
 func (s *Service) SetRouterEngineManager(e EngineAutoStarter) {
 	s.routerEngine = e
+}
+
+// SetMLXEngineManager wires in the MLX-LM primary engine manager.
+// The chat service uses it to auto-start the model on first message when
+// atlas_mlx is the active provider, and to enforce mutual exclusion with
+// the llama.cpp subsystem.
+func (s *Service) SetMLXEngineManager(e EngineAutoStarter) {
+	s.mlxEngine = e
+}
+
+// SetMLXRouterEngineManager wires in the MLX-LM router manager.
+// The router is MLX-exclusive — it is only used when atlas_mlx is the
+// active provider and tool selection mode is "llm".
+func (s *Service) SetMLXRouterEngineManager(e EngineAutoStarter) {
+	s.mlxRouterEngine = e
 }
 
 // broadcasterEmitter adapts *Broadcaster to agent.Emitter.
@@ -837,10 +864,17 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		return resp, nil
 	}
 
-	// Auto-start Engine LM if the provider is atlas_engine and the model isn't loaded.
-	// This covers the common restart-without-reload scenario: Atlas starts cold and the
-	// user sends a message before manually loading the model in the Engine LM tab.
+	// Auto-start Engine LM (llama.cpp) if atlas_engine is active and not running.
+	// Mutual exclusion: stop the MLX engine first if it happens to be running.
+	// This covers the common restart-without-reload scenario.
 	if provider.Type == agent.ProviderAtlasEngine && s.engine != nil && !s.engine.IsRunning() {
+		if s.mlxEngine != nil && s.mlxEngine.IsRunning() {
+			logstore.Write("info", "Mutual exclusion: stopping MLX engine before starting llama.cpp", nil)
+			_ = s.mlxEngine.Stop()
+			if s.mlxRouterEngine != nil {
+				_ = s.mlxRouterEngine.Stop()
+			}
+		}
 		model := filepath.Base(cfg.SelectedAtlasEngineModel)
 		if model == "" || model == "." {
 			model = filepath.Base(cfg.SelectedAtlasEngineModelFast)
@@ -863,6 +897,37 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		}
 	}
 
+	// Auto-start MLX-LM if atlas_mlx is active and not running.
+	// Mutual exclusion: stop the llama.cpp engine (and its router) first.
+	if provider.Type == agent.ProviderAtlasMLX && s.mlxEngine != nil && !s.mlxEngine.IsRunning() {
+		if s.engine != nil && s.engine.IsRunning() {
+			logstore.Write("info", "Mutual exclusion: stopping llama.cpp engine before starting MLX-LM", nil)
+			_ = s.engine.Stop()
+			if s.routerEngine != nil {
+				_ = s.routerEngine.Stop()
+			}
+		}
+		model := filepath.Base(cfg.SelectedAtlasMLXModel)
+		if model == "" || model == "." {
+			logstore.Write("warn", "MLX Engine: no model configured — auto-start skipped. Select a model in Engine → MLX Engine settings.", nil)
+		} else {
+			port := cfg.AtlasMLXPort
+			if port == 0 {
+				port = 11990
+			}
+			ctxSize := cfg.AtlasMLXCtxSize
+			if ctxSize <= 0 {
+				ctxSize = 4096
+			}
+			logstore.Write("info", "MLX Engine not running — auto-starting model", map[string]string{"model": model})
+			if err := s.mlxEngine.Start(model, port, ctxSize, "", ""); err != nil {
+				logstore.Write("warn", "MLX Engine auto-start failed", map[string]string{"error": err.Error()})
+			} else if err := s.mlxEngine.WaitUntilReady(port, 120*time.Second); err != nil {
+				logstore.Write("warn", "MLX Engine ready-wait timed out", map[string]string{"error": err.Error()})
+			}
+		}
+	}
+
 	// Resolve heavy background provider for quality-sensitive background tasks
 	// (memory extraction, MIND reflection, SKILLS learning). Defaults to the
 	// cloud fast model; routes to Engine LM router only when AtlasEngineRouterForAll
@@ -875,7 +940,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 	// Local providers (LM Studio, Ollama, Engine LM) do not support image attachments.
 	// Return a degradation message immediately without calling the model.
 	// PDFs-only messages pass through since hasImageAttachments ignores PDFs.
-	if (provider.Type == agent.ProviderLMStudio || provider.Type == agent.ProviderOllama || provider.Type == agent.ProviderAtlasEngine) && hasImageAttachments(req.Attachments) {
+	if (provider.Type == agent.ProviderLMStudio || provider.Type == agent.ProviderOllama || provider.Type == agent.ProviderAtlasEngine || provider.Type == agent.ProviderAtlasMLX) && hasImageAttachments(req.Attachments) {
 		const degradeMsg = "Vision is not available with local models. " +
 			"Switch to OpenAI, Anthropic, or Gemini to analyse images."
 		replyAt := time.Now().UTC().Format(time.RFC3339Nano)
@@ -1047,28 +1112,56 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		logstore.Write("debug", "Tool selection: smart mode — 1 meta-tool injected",
 			map[string]string{"mode": "lazy"})
 	case "llm":
-		// Auto-start the router model if it isn't running yet.
-		if s.routerEngine != nil && !s.routerEngine.IsRunning() {
-			routerModel := filepath.Base(cfg.AtlasEngineRouterModel)
-			if routerModel != "" && routerModel != "." {
-				port := cfg.AtlasEngineRouterPort
-				if port == 0 {
-					port = 11986
+		// Auto-start the appropriate router based on the active provider.
+		// MLX-LM: use the MLX-exclusive router (atlas_mlx).
+		// llama.cpp: use the llama.cpp router (atlas_engine).
+		switch agent.ProviderType(cfg.ActiveAIProvider) {
+		case agent.ProviderAtlasMLX:
+			if s.mlxRouterEngine != nil && !s.mlxRouterEngine.IsRunning() {
+				routerModel := filepath.Base(cfg.AtlasMLXRouterModel)
+				if routerModel != "" && routerModel != "." {
+					port := cfg.AtlasMLXRouterPort
+					if port == 0 {
+						port = 11991
+					}
+					ctxSize := cfg.AtlasMLXCtxSize
+					if ctxSize <= 0 {
+						ctxSize = 4096
+					}
+					logstore.Write("info", "MLX tool router not running — auto-starting", map[string]string{"model": routerModel})
+					if err := s.mlxRouterEngine.Start(routerModel, port, ctxSize, "", ""); err != nil {
+						logstore.Write("warn", "MLX router auto-start failed", map[string]string{"error": err.Error()})
+					} else {
+						_ = s.mlxRouterEngine.WaitUntilReady(port, 90*time.Second)
+					}
 				}
-				ctxSize := cfg.AtlasEngineCtxSize
-				if ctxSize <= 0 {
-					ctxSize = 8192
-				}
-				logstore.Write("info", "Tool router not running — auto-starting", map[string]string{"model": routerModel})
-				if err := s.routerEngine.Start(routerModel, port, ctxSize, cfg.AtlasEngineKVCacheQuant, ""); err != nil {
-					logstore.Write("warn", "Router auto-start failed", map[string]string{"error": err.Error()})
-				} else {
-					_ = s.routerEngine.WaitUntilReady(port, 90*time.Second)
+			}
+		default:
+			if s.routerEngine != nil && !s.routerEngine.IsRunning() {
+				routerModel := filepath.Base(cfg.AtlasEngineRouterModel)
+				if routerModel != "" && routerModel != "." {
+					port := cfg.AtlasEngineRouterPort
+					if port == 0 {
+						port = 11986
+					}
+					ctxSize := cfg.AtlasEngineCtxSize
+					if ctxSize <= 0 {
+						ctxSize = 8192
+					}
+					logstore.Write("info", "Tool router not running — auto-starting", map[string]string{"model": routerModel})
+					if err := s.routerEngine.Start(routerModel, port, ctxSize, cfg.AtlasEngineKVCacheQuant, ""); err != nil {
+						logstore.Write("warn", "Router auto-start failed", map[string]string{"error": err.Error()})
+					} else {
+						_ = s.routerEngine.WaitUntilReady(port, 90*time.Second)
+					}
 				}
 			}
 		}
 		selectedTools = selectToolsWithLLM(ctx, cfg, turn, req.Message, s.registry)
-		if s.routerEngine != nil {
+		// Record activity on whichever router is in use.
+		if cfg.ActiveAIProvider == string(agent.ProviderAtlasMLX) && s.mlxRouterEngine != nil {
+			s.mlxRouterEngine.RecordActivity()
+		} else if s.routerEngine != nil {
 			s.routerEngine.RecordActivity()
 		}
 	case "heuristic":
@@ -1096,19 +1189,44 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 	if toolCount == 0 {
 		toolCount = s.registry.ToolCount()
 	}
+	// Use the base name for local path models (atlas_mlx uses full path as model ID).
+	logModel := provider.Model
+	if provider.Type == agent.ProviderAtlasMLX {
+		logModel = filepath.Base(provider.Model)
+	}
 	logstore.Write("info",
-		fmt.Sprintf("Turn started: %s via %s (%d tools, mode=%s)", provider.Model, provider.Type, toolCount, toolMode),
+		fmt.Sprintf("Turn started: %s via %s (%d tools, mode=%s)", logModel, provider.Type, toolCount, toolMode),
 		map[string]string{"conv": convID[:8], "mode": toolMode})
 
+	// Run the agent loop on a context that is NOT tied to the HTTP request.
+	// This ensures an in-flight AI call is not interrupted when the client
+	// disconnects (e.g. page refresh) before the response arrives. The
+	// broadcaster delivers the response to the reconnected client.
+	agentCtx := context.WithoutCancel(ctx)
 	turnStart := time.Now()
-	result := agentLoop.Run(ctx, loopCfg, oaiMessages, convID)
+	result := agentLoop.Run(agentCtx, loopCfg, oaiMessages, convID)
 
 	// Record token usage for this turn.
 	s.recordTokenUsage(convID, provider, result.TotalUsage)
 
-	// Reset idle timers after each turn so the model isn't ejected during active use.
-	if provider.Type == agent.ProviderAtlasEngine && s.engine != nil {
-		s.engine.RecordActivity()
+	// Reset idle timers after each turn so the active model isn't ejected mid-session.
+	switch provider.Type {
+	case agent.ProviderAtlasEngine:
+		if s.engine != nil {
+			s.engine.RecordActivity()
+		}
+	case agent.ProviderAtlasMLX:
+		if s.mlxEngine != nil {
+			s.mlxEngine.RecordActivity()
+			// Record per-turn inference stats if the engine supports it.
+			if rec, ok := s.mlxEngine.(InferenceRecorder); ok {
+				rec.RecordInference(
+					result.TotalUsage.InputTokens,
+					result.TotalUsage.OutputTokens,
+					time.Since(turnStart),
+				)
+			}
+		}
 	}
 
 	var resp MessageResponse
