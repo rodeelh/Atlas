@@ -310,6 +310,13 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		totalUsage.OutputTokens += sr.Usage.OutputTokens
 		AddSessionTokens(sr.Usage.InputTokens, sr.Usage.OutputTokens)
 
+		// Mark the end of this assistant model turn before any tool execution starts.
+		l.BC.Emit(convID, EmitEvent{
+			Type:   "assistant_done",
+			Role:   "assistant",
+			ConvID: convID,
+		})
+
 		// Text response — streaming already delivered the tokens.
 		if len(sr.ToolCalls) == 0 {
 			return RunResult{
@@ -433,6 +440,15 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		// a requirement of the OpenAI tool-result protocol.
 		results := make([]*toolExecResult, len(canRun))
 
+		for _, tc := range canRun {
+			l.BC.Emit(convID, EmitEvent{
+				Type:       "tool_started",
+				ToolName:   tc.Function.Name,
+				ToolCallID: tc.ID,
+				ConvID:     convID,
+			})
+		}
+
 		// Pass 1 — run all stateless tools concurrently.
 		var wg sync.WaitGroup
 		for i, tc := range canRun {
@@ -541,7 +557,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 // toolResultMaxChars is the maximum character length for a single tool result
 // before head+tail truncation is applied. Keeps individual results from
 // exhausting the context window on large page reads or API dumps.
-const toolResultMaxChars = 40_000
+const toolResultMaxChars = 12_000
 
 // capContent truncates a tool result string that exceeds toolResultMaxChars.
 // Head + tail strategy preserves the opening structure and the trailing
@@ -826,7 +842,7 @@ func (l *Loop) resolveToolUpgrade(cfg LoopConfig, tc OAIToolCall, currentStage i
 	var args requestToolsArgs
 	_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
 	if len(args.Categories) > 0 {
-		tools := l.Skills.ToolDefsForGroups(args.Categories)
+		tools := l.Skills.ToolDefsForGroupsForMessage(args.Categories, cfg.UserMessage)
 		return tools, 2, fmt.Sprintf("Tool capabilities are now expanded for categories: %s. Proceed using the appropriate tools. If these are still insufficient, call request_tools again with broad=true.", strings.Join(args.Categories, ", "))
 	}
 	if args.Broad || currentStage >= 1 {

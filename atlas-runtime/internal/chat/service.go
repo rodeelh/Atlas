@@ -96,6 +96,8 @@ type conversationSummary struct {
 
 // summaryTTL is how long a cached conversation summary stays valid.
 const summaryTTL = 10 * time.Minute
+const compactHistoryChars = 1200
+const compactHistoryMessages = 4
 
 type Service struct {
 	db                *storage.DB
@@ -144,6 +146,9 @@ func (s *Service) lookupThoughtBody(id string) string {
 // feature flag. Every mind-thoughts seam in the chat service reads
 // through this helper so the gate is a single source of truth.
 func (s *Service) thoughtsEnabled() bool {
+	if s == nil || s.cfgStore == nil {
+		return true
+	}
 	return s.cfgStore.Load().ThoughtsEnabled
 }
 
@@ -191,6 +196,19 @@ func (be *broadcasterEmitter) Emit(convID string, e agent.EmitEvent) {
 
 func (be *broadcasterEmitter) Finish(convID string) {
 	be.bc.Finish(convID)
+}
+
+func appendRequestToolsMeta(tools []map[string]any) []map[string]any {
+	for _, tool := range tools {
+		fn, _ := tool["function"].(map[string]any)
+		if name, _ := fn["name"].(string); name == "request_tools" {
+			return tools
+		}
+	}
+	out := make([]map[string]any, 0, len(tools)+1)
+	out = append(out, tools...)
+	out = append(out, agent.RequestToolsDef())
+	return out
 }
 
 // buildUserContent converts the message text and any attachments into the
@@ -320,22 +338,26 @@ func openRouterModelSupportsImage(apiKey, model string) (supported bool, known b
 // mindAlwaysSections lists MIND.md section headers that are always injected.
 // Operational sections that directly affect Atlas's behaviour every turn.
 var mindAlwaysSections = map[string]bool{
-	"## Identity":      true, // static — voice, values, operating principles
-	"## Current Frame": true, // synthesised primer — active context + calibration + commitments
-	"## You":           true, // entity profile — who the user is
-	"## How You Work":  true, // behavioral calibration — how to respond
-	"## Commitments":   true, // explicit user directives — always injected, no exceptions
-	"## Today's Read":  true, // current turn state
+	"## Who I Am":                     true,
+	"## What Matters Right Now":       true,
+	"## Working Style":                true,
+	"## My Understanding of the User": true,
+	"## Today's Read":                 true,
 }
 
 // mindContextualKeywords maps contextual section headers to trigger phrases.
 // A contextual section is only injected when the user message matches at least
 // one of its keywords. This keeps MIND.md lean for routine operational turns.
 var mindContextualKeywords = map[string][]string{
-	// What's Active: inject when the turn is about current work, projects, or time-sensitive context.
+	"## Patterns I've Noticed":  {"pattern", "habit", "tend", "prefer", "usually", "typically"},
+	"## Active Theories":        {"theory", "guess", "hypothesis", "why", "seems", "testing"},
+	"## Our Story":              {"earlier", "previous", "before", "relationship", "history", "remember"},
+	"## What I'm Curious About": {"brainstorm", "explore", "curious", "wonder", "idea"},
+	"## THOUGHTS":               {"greeting", "conversation", "casual", "check in"},
+
+	// Back-compat with older MIND structures.
 	"## What's Active": {"project", "working on", "current", "active", "sprint", "today", "this week",
 		"deadline", "building", "shipping", "launch", "status", "progress"},
-	// What I've Learned: inject when the turn touches patterns, preferences, or behavioral signals.
 	"## What I've Learned": {"pattern", "habit", "tend", "always", "prefer", "notice", "learned",
 		"usually", "typically", "remember", "you know"},
 }
@@ -392,8 +414,7 @@ func selectiveMindContent(content, userMessage string) string {
 					}
 				}
 			} else {
-				// Unknown section — include by default so new sections aren't silently dropped.
-				included = true
+				included = false
 			}
 		} else if currentHeader != "" {
 			currentBody = append(currentBody, lines[i])
@@ -432,23 +453,31 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 
 	// Load optional blocks.
 	skillsBlock := mind.SkillsContext(userMessage, supportDir)
-	diary := features.DiaryContext(supportDir, 3)
+	diary := ""
+	if shouldInjectDiary(userMessage) {
+		diary = features.DiaryContext(supportDir, 2)
+	}
 
 	// Load tool_learning notes — institutional knowledge about which skills Atlas
 	// should avoid or approach differently. Injected before skill schemas so the
 	// model sees learned lessons before deciding which tool to call.
 	var toolNotesBlock string
-	if toolNotes, err := db.ListMemories(6, "tool_learning"); err == nil && len(toolNotes) > 0 {
-		var nb strings.Builder
-		for _, n := range toolNotes {
-			nb.WriteString(fmt.Sprintf("- %s: %s\n", n.Title, n.Content))
+	if shouldInjectToolNotes(userMessage) {
+		if toolNotes, err := db.ListMemories(4, "tool_learning"); err == nil && len(toolNotes) > 0 {
+			var nb strings.Builder
+			for _, n := range toolNotes {
+				nb.WriteString(fmt.Sprintf("- %s: %s\n", n.Title, n.Content))
+			}
+			toolNotesBlock = strings.TrimRight(nb.String(), "\n")
 		}
-		toolNotesBlock = strings.TrimRight(nb.String(), "\n")
 	}
 
 	var mems []storage.MemoryRow
 	limit := cfg.MaxRetrievedMemoriesPerTurn
-	if limit > 0 {
+	if shouldInjectMemories(userMessage) && limit > 0 {
+		if limit > 2 {
+			limit = 2
+		}
 		mems, _ = db.RelevantMemories(userMessage, limit)
 	}
 
@@ -543,7 +572,8 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	// they change per-turn and bust the cache at the point they diverge, but
 	// everything before that point is reused for free.
 	//
-	// Stable   (~1500 tokens, identical between turns):
+	// Stable prefix first for cache reuse. Volatile blocks are gated more
+	// aggressively now to lower the token floor on factual/tool-driven turns.
 	//   1. atlas_identity  — MIND.md selective sections + persona/user name
 	//   2. user_credentials — Keychain secrets (rarely changes)
 	//   3. user_context    — location, timezone, prefs (changes on location update)
@@ -645,7 +675,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	// (reinforced, discarded, surfaced count incremented). This breaks
 	// the prompt cache from this point, but only when thoughts are both
 	// enabled and non-empty.
-	if cfg.ThoughtsEnabled {
+	if cfg.ThoughtsEnabled && shouldInjectThoughts(userMessage) {
 		if thoughtsBlock := buildThoughtsBlock(supportDir); thoughtsBlock != "" {
 			sb.WriteString("\n\n<thoughts_on_your_mind>\n")
 			sb.WriteString(thoughtsBlock)
@@ -654,6 +684,60 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	}
 
 	return sb.String()
+}
+
+func shouldInjectMemories(userMessage string) bool {
+	lower := strings.ToLower(userMessage)
+	personalMarkers := []string{
+		"remember", "preference", "prefer", "my ", "for me", "my schedule", "my calendar",
+		"my notes", "my inbox", "our", "previous", "earlier", "like before",
+		"update my", "change my", "existing automation",
+	}
+	for _, marker := range personalMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	objectiveMarkers := []string{
+		"weather", "forecast", "time", "date", "ceo", "price", "stock", "search", "web",
+		"read /", "read the file", "count", "verify from the web",
+	}
+	for _, marker := range objectiveMarkers {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+	return false
+}
+
+func shouldInjectDiary(userMessage string) bool {
+	lower := strings.ToLower(userMessage)
+	for _, marker := range []string{"diary", "journal", "reflect", "recap", "today", "this week", "plan"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldInjectToolNotes(userMessage string) bool {
+	lower := strings.ToLower(userMessage)
+	for _, marker := range []string{"tool", "broken", "failing", "doesn't work", "not working", "error", "debug", "fix", "automation", "dashboard"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldInjectThoughts(userMessage string) bool {
+	lower := strings.ToLower(userMessage)
+	for _, marker := range []string{"hi", "hello", "hey", "how are you", "what's up", "check in", "chat", "talk"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // buildThoughtsBlock renders the current THOUGHTS section into a compact
@@ -730,18 +814,16 @@ func buildCredsBlock() string {
 	if err != nil || len(bundle.CustomSecrets) == 0 {
 		return ""
 	}
-	var sb strings.Builder
-	sb.WriteString("The following custom API keys are stored in the user's Keychain.\n")
-	sb.WriteString("When a skill needs one of these, pass the exact key name shown below:\n")
+	keys := make([]string, 0, len(bundle.CustomSecrets))
 	for keyName := range bundle.CustomSecrets {
 		label := bundle.CustomSecretLabels[keyName]
 		if label != "" {
-			sb.WriteString(fmt.Sprintf("  - %s (%s)\n", keyName, label))
+			keys = append(keys, fmt.Sprintf("%s (%s)", keyName, label))
 		} else {
-			sb.WriteString(fmt.Sprintf("  - %s\n", keyName))
+			keys = append(keys, keyName)
 		}
 	}
-	return strings.TrimRight(sb.String(), "\n")
+	return "Custom API keys in Keychain: " + strings.Join(keys, ", ") + ". Use the exact key name when a tool asks for one."
 }
 
 // buildTrimmedHistoryNote generates the compact context note prepended when
@@ -755,6 +837,7 @@ func (s *Service) buildTrimmedHistoryNote(convID string, trimCount int, trimmed 
 	}
 
 	var excerpts []string
+	var topics []string
 	for _, m := range trimmed {
 		if m.Role == "user" && m.ID != currentMsgID {
 			exc := strings.Join(strings.Fields(m.Content), " ")
@@ -762,6 +845,14 @@ func (s *Service) buildTrimmedHistoryNote(convID string, trimCount int, trimmed 
 				exc = string([]rune(exc)[:80]) + "…"
 			}
 			excerpts = append(excerpts, exc)
+			for _, token := range tokenizeTrimmedHistory(m.Content) {
+				if len(topics) >= 4 {
+					break
+				}
+				if !containsString(topics, token) {
+					topics = append(topics, token)
+				}
+			}
 		}
 	}
 	if len(excerpts) > 3 {
@@ -770,8 +861,11 @@ func (s *Service) buildTrimmedHistoryNote(convID string, trimCount int, trimmed 
 	if len(excerpts) == 0 {
 		return ""
 	}
-	note := fmt.Sprintf("[%d earlier messages omitted. Recent topics: %s]",
-		trimCount, strings.Join(excerpts, " / "))
+	note := fmt.Sprintf("[%d earlier msgs omitted.", trimCount)
+	if len(topics) > 0 {
+		note += " Topics: " + strings.Join(topics, ", ") + "."
+	}
+	note += " Recent asks: " + strings.Join(excerpts, " / ") + "]"
 
 	// Cache for reuse on subsequent turns in the same conversation.
 	// Evict stale entries to prevent unbounded growth.
@@ -787,6 +881,61 @@ func (s *Service) buildTrimmedHistoryNote(convID string, trimCount int, trimmed 
 		createdAt: now,
 	}
 	return note
+}
+
+func tokenizeTrimmedHistory(content string) []string {
+	raw := strings.Fields(strings.ToLower(content))
+	out := make([]string, 0, 4)
+	for _, token := range raw {
+		token = strings.Trim(token, ".,!?;:'\"()[]{}")
+		if len(token) < 4 {
+			continue
+		}
+		switch token {
+		case "that", "this", "with", "from", "have", "about", "into", "your", "please":
+			continue
+		}
+		out = append(out, token)
+		if len(out) >= 6 {
+			break
+		}
+	}
+	return out
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldCompactHistory(userMessage string) bool {
+	tokens := strings.Fields(strings.ToLower(userMessage))
+	referential := map[string]bool{
+		"that": true, "those": true, "they": true, "them": true, "same": true, "again": true, "instead": true,
+		"continue": true, "earlier": true, "previous": true, "above": true, "change": true, "update": true, "fix": true,
+		"also": true, "another": true,
+	}
+	for _, token := range tokens {
+		token = strings.Trim(token, ".,!?;:'\"()[]{}")
+		if referential[token] {
+			return false
+		}
+	}
+	phrases := []string{
+		"continue", "earlier", "previous", "above", "change", "update", "fix",
+		"more like", "make it",
+	}
+	lower := strings.ToLower(userMessage)
+	for _, marker := range phrases {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+	return true
 }
 
 // HandleMessage processes a message request end-to-end:
@@ -946,8 +1095,9 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		replyAt := time.Now().UTC().Format(time.RFC3339Nano)
 		assistantMsgID := newUUID()
 		_ = s.db.SaveMessage(assistantMsgID, convID, "assistant", degradeMsg, replyAt)
-		s.broadcaster.Emit(convID, SSEEvent{Type: "token", Role: "assistant", ConversationID: convID})
-		s.broadcaster.Emit(convID, SSEEvent{Type: "token", Content: degradeMsg, Role: "assistant", ConversationID: convID})
+		s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_started", Role: "assistant", ConversationID: convID})
+		s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_delta", Content: degradeMsg, Role: "assistant", ConversationID: convID})
+		s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_done", Role: "assistant", ConversationID: convID})
 		s.broadcaster.Emit(convID, SSEEvent{Type: "done", Status: "completed", ConversationID: convID})
 		s.broadcaster.Finish(convID)
 		allMessages := make([]MessageItem, 0, len(history)+1)
@@ -1050,10 +1200,33 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		}
 	}
 
+	replayStart := start
+	if shouldCompactHistory(req.Message) {
+		replayStart = max(replayStart, len(history)-compactHistoryMessages)
+		historyChars := 0
+		for i := len(history) - 1; i >= replayStart; i-- {
+			if history[i].ID == userMsgID {
+				continue
+			}
+			historyChars += len(history[i].Content)
+			if historyChars > compactHistoryChars {
+				replayStart = i + 1
+				break
+			}
+		}
+		if replayStart > start {
+			note := s.buildTrimmedHistoryNote(convID, replayStart, history[:replayStart], userMsgID)
+			if note != "" {
+				oaiMessages = append(oaiMessages, agent.OAIMessage{Role: "user", Content: note})
+				oaiMessages = append(oaiMessages, agent.OAIMessage{Role: "assistant", Content: "Understood."})
+			}
+		}
+	}
+
 	// Replay history, skipping the current user message — it is appended below
 	// with attachment content parts so raw base64 is never stored in SQLite.
 	var historyChars int
-	for _, m := range history[start:] {
+	for _, m := range history[replayStart:] {
 		if m.ID == userMsgID {
 			continue
 		}
@@ -1087,12 +1260,12 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 
 	// Select tools based on the configured tool-selection mode.
 	//
-	//   "lazy"      — Smart staged router. Starts with request_tools, then the
-	//                 loop returns a short local list; a second request can
-	//                 expand to categories or the broad/full list.
+	//   "lazy"      — Smart compact router. Preselects a small capability-based
+	//                 tool set before the main turn, while still keeping
+	//                 request_tools available as an escape hatch.
 	//   "heuristic" — always-on baseline (core + management + custom) plus
 	//                 keyword-triggered groups (~26–57 tools). Default.
-	//   "llm"       — Phase 3 Tool Router (see TODO.md); falls back to heuristic.
+	//   "llm"       — compact AI router without the request_tools escape hatch.
 	//   "off"       — inject all tools. Explicit opt-in only; never a default.
 	//
 	// Legacy migration: if ToolSelectionMode is absent from config.json, default
@@ -1104,12 +1277,11 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 	var selectedTools []map[string]any
 	switch toolMode {
 	case "lazy":
-		// Smart staged router: the main model starts with request_tools only.
-		// If it asks for tools, the agent loop returns the local short list.
-		// If that short list is insufficient, the model can call request_tools
-		// again with broad=true or categories to expand the surface.
-		selectedTools = []map[string]any{agent.RequestToolsDef()}
-		logstore.Write("debug", "Tool selection: smart mode — 1 meta-tool injected",
+		// Smart compact router: route on capability groups before the main turn,
+		// but keep request_tools available so the model can self-correct when the
+		// first-pass selection is too narrow.
+		selectedTools = appendRequestToolsMeta(selectToolsWithLLM(ctx, cfg, turn, req.Message, s.registry))
+		logstore.Write("debug", "Tool selection: smart mode — compact router + request_tools",
 			map[string]string{"mode": "lazy"})
 	case "llm":
 		// Auto-start the appropriate router based on the active provider.

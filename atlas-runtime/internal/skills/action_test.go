@@ -120,11 +120,15 @@ func TestFormatForModel(t *testing.T) {
 	if err := json.Unmarshal([]byte(s), &out); err != nil {
 		t.Fatalf("FormatForModel returned invalid JSON: %v\n%s", err, s)
 	}
-	if out["success"] != true {
-		t.Errorf("success field wrong: %v", out["success"])
+	if out["ok"] != true {
+		t.Errorf("ok field wrong: %v", out["ok"])
 	}
 	if out["summary"] != "Created note: Meeting notes" {
 		t.Errorf("summary field wrong: %v", out["summary"])
+	}
+	data, _ := out["data"].(map[string]any)
+	if data["title"] != "Meeting notes" {
+		t.Errorf("data.title wrong: %v", data["title"])
 	}
 }
 
@@ -138,6 +142,32 @@ func TestFormatForModelDryRun(t *testing.T) {
 	}
 	if out["dry_run"] != true {
 		t.Errorf("dry_run field should be true: %v", out["dry_run"])
+	}
+}
+
+func TestFormatForModelCompactsArtifacts(t *testing.T) {
+	r := OKResult(
+		"This is a long summary that should still be preserved but kept compact for the model-facing payload so follow-up turns do not waste tokens on verbose tool output.",
+		map[string]any{
+			"alpha": strings.Repeat("x", 300),
+			"beta":  "short",
+			"gamma": true,
+			"delta": []any{"first", strings.Repeat("y", 120)},
+			"extra": "should be omitted after the artifact cap",
+		},
+	)
+	s := r.FormatForModel()
+
+	var out map[string]any
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	data, _ := out["data"].(map[string]any)
+	if len(data) > 4 {
+		t.Fatalf("expected at most 4 compact artifacts, got %d", len(data))
+	}
+	if got, _ := data["alpha"].(string); len([]rune(got)) > 170 {
+		t.Fatalf("expected truncated alpha artifact, got len=%d", len([]rune(got)))
 	}
 }
 

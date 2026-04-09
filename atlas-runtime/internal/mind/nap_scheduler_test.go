@@ -23,6 +23,7 @@ func stubSchedulerDeps(t *testing.T) (*Scheduler, *config.Store, string) {
 	// predictably.
 	cfgPath := filepath.Join(dir, "config.json")
 	cfg := config.Defaults()
+	cfg.ThoughtsEnabled = true
 	cfg.NapsEnabled = false
 	cfg.NapIdleMinutes = 1 // 1-minute idle trigger for tests that actually fire
 	cfg.NapFloorHours = 1
@@ -203,4 +204,3 @@ func defaultSchedulerSnapshot() *Scheduler {
 	defer defaultSchedulerMu.RUnlock()
 	return defaultScheduler
 }
-

@@ -39,6 +39,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -116,11 +117,133 @@ type ToolResult struct {
 // FormatForModel serialises ToolResult to a JSON string suitable for returning
 // to the AI model as a tool result. Falls back to Summary on marshalling error.
 func (r ToolResult) FormatForModel() string {
-	b, err := json.Marshal(r)
+	payload := map[string]any{
+		"ok":      r.Success,
+		"summary": compactToolSummary(r.Summary),
+	}
+	if artifacts := compactToolArtifacts(r.Artifacts); len(artifacts) > 0 {
+		payload["data"] = artifacts
+	}
+	if warnings := compactToolList(r.Warnings, 2, 140); len(warnings) > 0 {
+		payload["warnings"] = warnings
+	}
+	if next := compactToolList(r.NextActions, 2, 140); len(next) > 0 {
+		payload["next"] = next
+	}
+	if r.DryRun {
+		payload["dry_run"] = true
+	}
+
+	b, err := json.Marshal(payload)
 	if err != nil {
 		return r.Summary
 	}
 	return string(b)
+}
+
+func compactToolSummary(summary string) string {
+	summary = strings.Join(strings.Fields(summary), " ")
+	if len([]rune(summary)) > 220 {
+		return string([]rune(summary)[:220]) + "…"
+	}
+	return summary
+}
+
+func compactToolList(items []string, maxItems, maxRunes int) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, min(len(items), maxItems))
+	for _, item := range items {
+		item = strings.Join(strings.Fields(item), " ")
+		if item == "" {
+			continue
+		}
+		runes := []rune(item)
+		if len(runes) > maxRunes {
+			item = string(runes[:maxRunes]) + "…"
+		}
+		out = append(out, item)
+		if len(out) >= maxItems {
+			break
+		}
+	}
+	return out
+}
+
+func compactToolArtifacts(artifacts map[string]any) map[string]any {
+	if len(artifacts) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(artifacts))
+	for key := range artifacts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	out := make(map[string]any)
+	for _, key := range keys {
+		if value, ok := compactArtifactValue(artifacts[key]); ok {
+			out[key] = value
+		}
+		if len(out) >= 4 {
+			break
+		}
+	}
+	return out
+}
+
+func compactArtifactValue(value any) (any, bool) {
+	switch v := value.(type) {
+	case string:
+		v = strings.Join(strings.Fields(v), " ")
+		if v == "" {
+			return nil, false
+		}
+		runes := []rune(v)
+		if len(runes) > 160 {
+			v = string(runes[:160]) + "…"
+		}
+		return v, true
+	case bool, float64, float32, int, int32, int64, uint, uint32, uint64:
+		return v, true
+	case []string:
+		items := compactToolList(v, 3, 80)
+		if len(items) == 0 {
+			return nil, false
+		}
+		return items, true
+	case []any:
+		items := make([]string, 0, min(len(v), 3))
+		for _, item := range v {
+			text := strings.TrimSpace(fmt.Sprint(item))
+			if text == "" {
+				continue
+			}
+			runes := []rune(text)
+			if len(runes) > 80 {
+				text = string(runes[:80]) + "…"
+			}
+			items = append(items, text)
+			if len(items) >= 3 {
+				break
+			}
+		}
+		if len(items) == 0 {
+			return nil, false
+		}
+		return items, true
+	default:
+		text := strings.TrimSpace(fmt.Sprint(v))
+		if text == "" || text == "<nil>" {
+			return nil, false
+		}
+		runes := []rune(text)
+		if len(runes) > 120 {
+			text = string(runes[:120]) + "…"
+		}
+		return text, true
+	}
 }
 
 // OKResult constructs a successful ToolResult. Pass nil for artifacts if none.

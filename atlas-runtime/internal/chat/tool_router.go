@@ -13,7 +13,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"atlas-runtime-go/internal/agent"
 	"atlas-runtime-go/internal/config"
@@ -23,10 +26,99 @@ import (
 
 var callAINonStreamingFn = agent.CallAINonStreamingExported
 
+const toolRouterCacheTTL = 45 * time.Second
+
+type toolRouterCacheEntry struct {
+	groups    []string
+	expiresAt time.Time
+}
+
+var toolRouterCache = struct {
+	mu    sync.Mutex
+	items map[string]toolRouterCacheEntry
+}{
+	items: make(map[string]toolRouterCacheEntry),
+}
+
+func routerCacheKey(p agent.ProviderConfig, message string) string {
+	normalized := strings.Join(strings.Fields(strings.ToLower(message)), " ")
+	return fmt.Sprintf("%s|%s|%s", p.Type, p.Model, normalized)
+}
+
+func readToolRouterCache(key string) ([]string, bool) {
+	toolRouterCache.mu.Lock()
+	defer toolRouterCache.mu.Unlock()
+	entry, ok := toolRouterCache.items[key]
+	if !ok || time.Now().After(entry.expiresAt) {
+		if ok {
+			delete(toolRouterCache.items, key)
+		}
+		return nil, false
+	}
+	return append([]string(nil), entry.groups...), true
+}
+
+func writeToolRouterCache(key string, groups []string) {
+	toolRouterCache.mu.Lock()
+	defer toolRouterCache.mu.Unlock()
+	toolRouterCache.items[key] = toolRouterCacheEntry{
+		groups:    append([]string(nil), groups...),
+		expiresAt: time.Now().Add(toolRouterCacheTTL),
+	}
+}
+
+func buildToolRouterPrompt(manifest []skills.ToolCapabilityGroupManifest, message string) string {
+	var sb strings.Builder
+	sb.WriteString("Select the smallest capability-group set Atlas should expose for the user's first agent turn.\n")
+	sb.WriteString("Return ONLY a JSON array of group names from the list below, for example [\"weather\",\"automation\"].\n")
+	sb.WriteString("If no extra tools are needed, return []. Never return \"core\"; time/date helpers are always available.\n")
+	sb.WriteString("Prefer the smallest sufficient set. Use multiple groups only when the request clearly spans them.\n\n")
+	sb.WriteString("Available capability groups:\n")
+	for _, group := range manifest {
+		fmt.Fprintf(&sb, "- %s (%d tools): %s Examples: %s\n",
+			group.Name, group.ToolCount, group.Description, strings.Join(group.ExampleTools, ", "))
+	}
+	sb.WriteString("\nUser message: ")
+	sb.WriteString(message)
+	return sb.String()
+}
+
+func parseToolRouterGroups(content string, manifest []skills.ToolCapabilityGroupManifest) ([]string, error) {
+	start := strings.Index(content, "[")
+	end := strings.LastIndex(content, "]")
+	if start < 0 || end <= start {
+		return nil, fmt.Errorf("no JSON array in response %q", content)
+	}
+
+	var names []string
+	if err := json.Unmarshal([]byte(content[start:end+1]), &names); err != nil {
+		return nil, err
+	}
+
+	valid := make(map[string]bool, len(manifest))
+	for _, group := range manifest {
+		valid[group.Name] = true
+	}
+
+	deduped := make([]string, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name == "" || name == "core" || !valid[name] || seen[name] {
+			continue
+		}
+		seen[name] = true
+		deduped = append(deduped, name)
+	}
+	sort.Strings(deduped)
+	return deduped, nil
+}
+
 // selectToolsWithLLM is the Phase 3 entry point. It resolves the background
 // provider (Engine LM router → cloud fast model fallback), sends the user
-// message with a tool-selection prompt, and returns the filtered tool subset.
-// Falls back to heuristic on any failure so the main agent turn is never blocked.
+// message plus a compact capability-group manifest, and returns the filtered
+// tool subset. Falls back to heuristic on any failure so the main agent turn
+// is never blocked.
 func selectToolsWithLLM(
 	ctx context.Context,
 	cfg config.RuntimeConfigSnapshot,
@@ -44,32 +136,16 @@ func selectToolsWithLLM(
 		turn.markRouterFallback("router_unhealthy")
 	}
 
-	allTools := registry.ToolDefinitions()
-
-	// Build compact tool list for the prompt.
-	// Descriptions are truncated to 80 chars to keep the prompt within the
-	// router model's context window (tool list alone can exceed 3K tokens).
-	var sb strings.Builder
-	byName := make(map[string]map[string]any, len(allTools))
-	for _, t := range allTools {
-		fn, _ := t["function"].(map[string]any)
-		name, _ := fn["name"].(string)
-		desc, _ := fn["description"].(string)
-		if name == "" {
-			continue
-		}
-		byName[name] = t
-		if len(desc) > 80 {
-			desc = desc[:80] + "…"
-		}
-		fmt.Fprintf(&sb, "- %s: %s\n", name, desc)
+	cacheKey := routerCacheKey(bgProvider, message)
+	if groups, ok := readToolRouterCache(cacheKey); ok {
+		logstore.Write("debug",
+			fmt.Sprintf("Tool router: cache hit for %q → %v", message, groups),
+			map[string]string{"mode": "llm"})
+		return registry.ToolDefsForGroupsForMessage(groups, message)
 	}
 
-	prompt := "Select the tools needed to handle the user message below. " +
-		"Return ONLY a JSON array of tool names (e.g. [\"weather.get\",\"calendar.list\"]). " +
-		"If no tools are needed return [].\n\n" +
-		"Available tools:\n" + sb.String() +
-		"\nUser message: " + message
+	manifest := registry.ToolCapabilityManifest()
+	prompt := buildToolRouterPrompt(manifest, message)
 
 	messages := []agent.OAIMessage{
 		{Role: "user", Content: prompt},
@@ -96,48 +172,20 @@ func selectToolsWithLLM(
 	}
 	content = strings.TrimSpace(content)
 
-	// Extract JSON array — model may wrap it in prose.
-	start := strings.Index(content, "[")
-	end := strings.LastIndex(content, "]")
-	if start < 0 || end <= start {
-		logstore.Write("warn",
-			fmt.Sprintf("Tool router: no JSON array in response %q, using heuristic", content), nil)
-		return registry.SelectiveToolDefs(message)
-	}
-
-	var names []string
-	if err := json.Unmarshal([]byte(content[start:end+1]), &names); err != nil {
+	groups, err := parseToolRouterGroups(content, manifest)
+	if err != nil {
 		logstore.Write("warn",
 			fmt.Sprintf("Tool router: parse failed (%v), using heuristic", err), nil)
 		return registry.SelectiveToolDefs(message)
 	}
 
-	// Empty array → router determined no tools are needed for this message.
-	// Return the heuristic baseline (core + management + custom) so the model
-	// still has self-awareness and management tools, but not the full set.
-	if len(names) == 0 {
-		logstore.Write("info", "Tool router: no tools selected — using heuristic baseline", nil)
-		return registry.SelectiveToolDefs(message)
-	}
-
-	nameSet := make(map[string]bool, len(names))
-	for _, n := range names {
-		nameSet[n] = true
-	}
-
-	var out []map[string]any
-	for _, t := range allTools {
-		fn, _ := t["function"].(map[string]any)
-		name, _ := fn["name"].(string)
-		if nameSet[name] {
-			out = append(out, t)
-		}
-	}
+	writeToolRouterCache(cacheKey, groups)
+	out := registry.ToolDefsForGroupsForMessage(groups, message)
 
 	logstore.Write("info",
-		fmt.Sprintf("Tool router: selected %d / %d tools via %s/%s",
-			len(out), len(allTools), bgProvider.Type, bgProvider.Model),
-		map[string]string{"mode": "llm"})
+		fmt.Sprintf("Tool router: selected groups=%v → %d tools via %s/%s",
+			groups, len(out), bgProvider.Type, bgProvider.Model),
+		map[string]string{"mode": "llm", "groups": strings.Join(groups, ",")})
 
 	return out
 }

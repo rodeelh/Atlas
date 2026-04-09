@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -151,6 +152,16 @@ type Registry struct {
 	policyCacheAt time.Time
 }
 
+// ToolCapabilityGroupManifest is the compact routing metadata exposed to the
+// tool router. It describes a capability group instead of every individual tool,
+// which keeps the router prompt small while preserving a reliable upgrade path.
+type ToolCapabilityGroupManifest struct {
+	Name         string
+	Description  string
+	ExampleTools []string
+	ToolCount    int
+}
+
 const policyCacheTTL = 5 * time.Second
 
 // NewRegistry creates a Registry with all built-in skills registered.
@@ -234,6 +245,14 @@ func (r *Registry) ToolDefinitions() []map[string]any {
 // ToolDefsForGroups returns tools whose capability group is in groups. Unknown
 // group names are ignored. Core tools are always included as context helpers.
 func (r *Registry) ToolDefsForGroups(groups []string) []map[string]any {
+	return r.ToolDefsForGroupsForMessage(groups, "")
+}
+
+// ToolDefsForGroupsForMessage returns tools for the selected capability groups,
+// then applies a cheap local narrowing pass for the specific user message.
+// Narrowing only activates when it can keep a high-confidence subset; otherwise
+// the full group is preserved to avoid hurting recall.
+func (r *Registry) ToolDefsForGroupsForMessage(groups []string, userMessage string) []map[string]any {
 	wanted := map[string]bool{"core": true}
 	for _, group := range groups {
 		group = strings.ToLower(strings.TrimSpace(group))
@@ -241,11 +260,115 @@ func (r *Registry) ToolDefsForGroups(groups []string) []map[string]any {
 			wanted[group] = true
 		}
 	}
-	out := make([]map[string]any, 0, len(r.entries))
+	selected := make(map[string][]SkillEntry)
 	for _, e := range r.entries {
-		if wanted[toolCapabilityGroup(e.Def.Name)] {
+		group := toolCapabilityGroup(e.Def.Name)
+		if wanted[group] {
+			selected[group] = append(selected[group], e)
+		}
+	}
+
+	out := make([]map[string]any, 0, len(r.entries))
+	for _, group := range append([]string{"core"}, groups...) {
+		group = strings.ToLower(strings.TrimSpace(group))
+		entries := selected[group]
+		if len(entries) == 0 {
+			continue
+		}
+		for _, e := range r.narrowGroupEntries(group, entries, userMessage) {
 			out = append(out, e.Def.MarshalOpenAI())
 		}
+		delete(selected, group)
+	}
+	for _, entries := range selected {
+		for _, e := range entries {
+			out = append(out, e.Def.MarshalOpenAI())
+		}
+	}
+	return out
+}
+
+var capabilityGroupOrder = []string{
+	"meta", "weather", "web", "finance", "office", "media", "mac", "shell",
+	"files", "vault", "browser", "voice", "communication", "creative",
+	"workflow", "automation", "forge", "dashboards", "custom",
+}
+
+func capabilityGroupDescription(group string) string {
+	switch group {
+	case "meta":
+		return "Atlas runtime and self-status questions."
+	case "weather":
+		return "Current weather, forecasts, and local conditions."
+	case "web":
+		return "Search the web, read URLs, and summarize web content."
+	case "finance":
+		return "Market quotes, crypto prices, currency and exchange rates."
+	case "office":
+		return "Email, calendar, reminders, contacts, and notes."
+	case "media":
+		return "Music playback, Safari, and system/media info."
+	case "mac":
+		return "Open apps, Finder, clipboard, and local Mac actions."
+	case "shell":
+		return "Terminal commands and explicit script execution."
+	case "files":
+		return "Read, search, write, and manage files or folders."
+	case "vault":
+		return "Credentials, secrets, passwords, and 2FA/TOTP."
+	case "browser":
+		return "Interactive browser automation and web page control."
+	case "voice":
+		return "Speech, transcription, and voice playback controls."
+	case "communication":
+		return "Chat channels, delivery destinations, and communications setup."
+	case "creative":
+		return "Images and other creative-generation actions."
+	case "workflow":
+		return "Workflow runs, step status, and workflow orchestration."
+	case "automation":
+		return "Automations, recurring runs, and gremlin scheduling."
+	case "forge":
+		return "Forge proposals, skill creation, and skill installation."
+	case "dashboards":
+		return "Dashboard creation, templates, and widget resolution."
+	case "custom":
+		return "Installed custom skills outside the built-in capability groups."
+	default:
+		return "Miscellaneous Atlas capabilities."
+	}
+}
+
+// ToolCapabilityManifest returns a deterministic compact description of the
+// capability groups available for routing. "core" is intentionally excluded
+// because those tools are always-on and don't need routing.
+func (r *Registry) ToolCapabilityManifest() []ToolCapabilityGroupManifest {
+	groupTools := make(map[string][]string)
+	for _, e := range r.entries {
+		group := toolCapabilityGroup(e.Def.Name)
+		if group == "core" {
+			continue
+		}
+		groupTools[group] = append(groupTools[group], e.Def.Name)
+	}
+
+	out := make([]ToolCapabilityGroupManifest, 0, len(groupTools))
+	for _, group := range capabilityGroupOrder {
+		names := groupTools[group]
+		if len(names) == 0 {
+			continue
+		}
+		sort.Strings(names)
+		examples := append([]string(nil), names...)
+		if len(examples) > 3 {
+			examples = examples[:3]
+		}
+		out = append(out, ToolCapabilityGroupManifest{
+			Name:         group,
+			Description:  capabilityGroupDescription(group),
+			ExampleTools: examples,
+			ToolCount:    len(names),
+		})
 	}
 	return out
 }
@@ -388,20 +511,24 @@ func (r *Registry) SelectiveToolDefs(userMessage string) []map[string]any {
 	// longer used for per-skill matching.
 	_ = msgTokens
 
-	out := make([]map[string]any, 0, len(r.entries))
+	var groups []string
 	var customIncluded, customTotal int
 	for _, e := range r.entries {
 		group := toolCapabilityGroup(e.Def.Name)
 		if group == "custom" {
 			customTotal++
 		}
-		if triggered[group] {
-			out = append(out, e.Def.MarshalOpenAI())
-			if group == "custom" {
-				customIncluded++
-			}
+		if triggered[group] && group == "custom" {
+			customIncluded++
 		}
 	}
+	for group := range triggered {
+		if group != "core" {
+			groups = append(groups, group)
+		}
+	}
+	sort.Strings(groups)
+	out := r.ToolDefsForGroupsForMessage(groups, userMessage)
 
 	// Log which groups fired, their scores, and custom match rate.
 	activeGroups := make([]string, 0, len(triggered))
@@ -414,6 +541,111 @@ func (r *Registry) SelectiveToolDefs(userMessage string) []map[string]any {
 		map[string]string{"mode": "heuristic"})
 
 	return out
+}
+
+func (r *Registry) narrowGroupEntries(group string, entries []SkillEntry, userMessage string) []SkillEntry {
+	if group == "core" || strings.TrimSpace(userMessage) == "" {
+		return entries
+	}
+	capByGroup := map[string]int{
+		"weather": 4,
+		"web":     4,
+		"finance": 4,
+		"files":   4,
+		"office":  5,
+		"media":   4,
+		"mac":     4,
+	}
+	capLimit, ok := capByGroup[group]
+	if !ok || len(entries) <= capLimit {
+		return entries
+	}
+
+	msgTokens := tokenize(userMessage)
+	if len(msgTokens) == 0 {
+		return entries
+	}
+	msgSet := make(map[string]bool, len(msgTokens))
+	for _, token := range msgTokens {
+		msgSet[token] = true
+	}
+
+	type scored struct {
+		entry SkillEntry
+		score int
+	}
+	scoredEntries := make([]scored, 0, len(entries))
+	for _, entry := range entries {
+		score := scoreToolForMessage(entry.Def, msgSet)
+		scoredEntries = append(scoredEntries, scored{entry: entry, score: score})
+	}
+	sort.SliceStable(scoredEntries, func(i, j int) bool {
+		if scoredEntries[i].score == scoredEntries[j].score {
+			return scoredEntries[i].entry.Def.Name < scoredEntries[j].entry.Def.Name
+		}
+		return scoredEntries[i].score > scoredEntries[j].score
+	})
+
+	positive := 0
+	for _, item := range scoredEntries {
+		if item.score > 0 {
+			positive++
+		}
+	}
+	if positive == 0 {
+		return entries
+	}
+
+	limit := capLimit
+	if positive < limit {
+		limit = positive
+	}
+	out := make([]SkillEntry, 0, limit)
+	for _, item := range scoredEntries[:limit] {
+		out = append(out, item.entry)
+	}
+	return out
+}
+
+func scoreToolForMessage(def ToolDef, msgSet map[string]bool) int {
+	score := 0
+	hasNow := msgSet["now"] || msgSet["current"] || msgSet["today"]
+	hasFuture := msgSet["tomorrow"] || msgSet["week"] || msgSet["forecast"]
+	nameTokens := tokenize(strings.ReplaceAll(def.Name, ".", " "))
+	for _, token := range nameTokens {
+		if msgSet[token] {
+			score += 3
+		}
+	}
+	if hasNow && strings.Contains(def.Name, "current") {
+		score += 4
+	}
+	if hasFuture && strings.Contains(def.Name, "forecast") {
+		score += 4
+	}
+	if hasFuture && strings.Contains(def.Name, "dayplan") {
+		score += 2
+	}
+	if hasNow && strings.Contains(def.Name, "brief") {
+		score += 2
+	}
+	descTokens := tokenize(def.Description)
+	for _, token := range descTokens {
+		if len(token) <= 2 || token == "atlas" || token == "user" || token == "data" {
+			continue
+		}
+		if msgSet[token] {
+			score++
+		}
+	}
+	for key := range def.Properties {
+		for _, token := range tokenize(key) {
+			if msgSet[token] {
+				score++
+			}
+		}
+	}
+	return score
 }
 
 // customSkillMatches returns true when at least one meaningful word token from

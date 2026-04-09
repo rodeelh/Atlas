@@ -3,6 +3,7 @@ package skills
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -37,6 +38,19 @@ func TestSelectiveToolDefsRecurringDeliveryIncludesAutomationAndCommunication(t 
 	}
 	if !hasToolName(tools, "communication__list_channels") {
 		t.Fatalf("expected communication.list_channels to be selected, got %v", toolNames(tools))
+	}
+}
+
+func TestToolDefsForGroupsForMessageNarrowsWeatherGroup(t *testing.T) {
+	registry := NewRegistry(t.TempDir(), nil, nil)
+	tools := registry.ToolDefsForGroupsForMessage([]string{"weather"}, "What will the weather be in Orlando tomorrow?")
+	names := toolNames(tools)
+	if len(names) >= 9 {
+		t.Fatalf("expected narrowed weather tool set, got %d tools: %v", len(names), names)
+	}
+	joined := strings.Join(names, ",")
+	if !strings.Contains(joined, "weather__forecast") {
+		t.Fatalf("expected forecast-style weather tool in narrowed set, got %v", names)
 	}
 }
 

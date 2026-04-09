@@ -156,8 +156,7 @@ Return the updated SKILLS.md with the new routine added:`,
 
 // SkillsContext returns the SKILLS.md content for system prompt injection.
 //
-//   - Always injects the non-routine sections (Orchestration Principles, Things
-//     That Don't Work, etc.) so general guidance is always present.
+//   - Always injects the small non-routine core (Orchestration Principles).
 //   - If a learned routine matches the user message, appends a focused ~150-token
 //     routine block so Atlas knows exactly what steps to follow.
 func SkillsContext(userMessage, supportDir string) string {
@@ -185,27 +184,25 @@ func SkillsContext(userMessage, supportDir string) string {
 	}
 }
 
-// baseSkillsContent returns SKILLS.md with the "## Learned Routines" section
-// stripped out, so only the general principles and other non-routine sections
-// are included in the base injection.
+// baseSkillsContent returns a compact slice of SKILLS.md. It keeps the
+// orchestration principles and omits the larger reference sections that are
+// either duplicated elsewhere (tool notes) or low-signal on most turns.
 func baseSkillsContent(content string) string {
 	lines := strings.Split(content, "\n")
 	var result []string
-	inRoutines := false
+	include := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "## Learned Routines" {
-			inRoutines = true
-			continue
+		if strings.HasPrefix(trimmed, "## ") {
+			include = trimmed == "## Orchestration Principles"
 		}
-		if inRoutines && strings.HasPrefix(trimmed, "## ") {
-			inRoutines = false
-		}
-		if !inRoutines {
+		if include || strings.HasPrefix(trimmed, "# Skill Memory") || strings.HasPrefix(trimmed, "_Last updated:") || trimmed == "---" {
 			result = append(result, line)
 		}
 	}
-	return strings.TrimSpace(strings.Join(result, "\n"))
+	text := strings.TrimSpace(strings.Join(result, "\n"))
+	text = strings.ReplaceAll(text, "\n\n---\n\n", "\n\n")
+	return strings.TrimSpace(text)
 }
 
 // selectiveBlock returns a ~150-token routine block if the user message matches
