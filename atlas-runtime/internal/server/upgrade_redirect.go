@@ -7,8 +7,9 @@ import (
 )
 
 // UpgradeRemotePlainHTTP redirects non-local, non-Tailscale LAN requests from
-// plain HTTP to the built-in HTTPS listener while preserving localhost and
-// Tailscale flows.
+// plain HTTP to the built-in HTTPS listener. Localhost and direct Tailscale
+// traffic remain plain HTTP because localhost is trusted and Tailnet transport
+// encryption is already provided by Tailscale itself.
 func UpgradeRemotePlainHTTP(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if auth.IsLocalRequest(r) {

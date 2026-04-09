@@ -327,7 +327,9 @@ func (d *AuthDomain) remoteStatus(w http.ResponseWriter, r *http.Request) {
 	tailscaleIP := detectTailscaleIP()
 	var tailscaleURL string
 	if tailscaleIP != "" && port > 0 && cfg.TailscaleEnabled {
-		// Tailscale users land directly on the app — no gate needed.
+		// Direct Tailscale traffic is already encrypted by the Tailnet, so we
+		// keep the advertised URL on plain HTTP unless the user explicitly fronts
+		// Atlas with a trusted Tailscale HTTPS endpoint such as tailscale serve.
 		tailscaleURL = fmt.Sprintf("http://%s:%d", tailscaleIP, port)
 	}
 
