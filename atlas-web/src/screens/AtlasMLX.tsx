@@ -4,6 +4,7 @@ import type { MLXInferenceStats, MLXSchedulerStats } from '../api/contracts'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { parseMLXModelInfo } from '../modelName'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 // ── Curated MLX-community starter models ─────────────────────────────────────
 // All repos are from https://github.com/ml-explore/mlx-lm and hosted under
@@ -63,6 +64,17 @@ type InstallState = {
   line: string
 }
 
+function capabilitySummary(model: MLXModelInfo): string {
+  const caps = model.capabilities
+  if (!caps) return 'Capabilities unknown'
+  const parts: string[] = []
+  parts.push(caps.hasToolCalling ? 'tools' : 'no tools')
+  parts.push(caps.hasThinking ? 'thinking' : 'no thinking')
+  parts.push(caps.hasChatTemplate ? 'chat template' : 'raw prompt')
+  if (caps.toolParserType) parts.push(caps.toolParserType)
+  return parts.join(' · ')
+}
+
 export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean } = {}) {
   const [status, setStatus]     = useState<MLXStatus | null>(null)
   const [models, setModels]     = useState<MLXModelInfo[]>([])
@@ -82,6 +94,9 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
   const [routerModel, setRouterModel]     = useState('')
   const [routerModelSaving, setRouterModelSaving] = useState(false)
   const [routerActing, setRouterActing]   = useState(false)
+  const [mlxRequestSaving, setMlxRequestSaving] = useState(false)
+  const [temperature, setTemperature] = useState(0)
+  const [repetitionPenalty, setRepetitionPenalty] = useState(0)
 
   // Download state
   const [dlRepo, setDlRepo]         = useState('')
@@ -92,6 +107,7 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
   // Install / upgrade state
   const [install, setInstall]       = useState<InstallState | null>(null)
   const installAbortRef = useRef<(() => void) | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
   // Per-turn TPS history for the performance graph
   const [tpsHistory, setTpsHistory] = useState<number[]>(_mlxTpsHistory)
@@ -131,6 +147,10 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
       if (cfg.atlasMLXPort && cfg.atlasMLXPort > 0) setServerPort(cfg.atlasMLXPort)
       if (cfg.atlasMLXCtxSize && cfg.atlasMLXCtxSize > 0) setCtxSize(cfg.atlasMLXCtxSize)
       if (cfg.atlasMLXRouterModel) setRouterModel(cfg.atlasMLXRouterModel)
+      setTemperature(cfg.atlasMLXTemperature ?? 0)
+      setRepetitionPenalty(cfg.atlasMLXRepetitionPenalty ?? 0)
+      // Reset removed settings to defaults so stale user values don't persist.
+      void api.updateConfig({ atlasMLXTopP: 1, atlasMLXMinP: 0, atlasMLXChatTemplateArgs: '' } as Partial<RuntimeConfig>)
     }).catch(() => {})
 
     // Restore any in-progress download that survived a page refresh.
@@ -189,6 +209,17 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
     }
   }
 
+  const updateMLXRequestConfig = async (patch: Partial<RuntimeConfig>) => {
+    setMlxRequestSaving(true)
+    try {
+      await api.updateConfig(patch)
+    } catch {
+      /* best-effort */
+    } finally {
+      setMlxRequestSaving(false)
+    }
+  }
+
   const handleStart = async (modelName: string) => {
     setActing(true); setError(null)
     try { setStatus(await api.mlxStart(modelName, undefined, ctxSize)) }
@@ -203,8 +234,14 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
     finally { setActing(false) }
   }
 
-  const handleDelete = async (name: string) => {
-    if (!confirm(`Delete ${name}?`)) return
+  const handleDelete = (name: string) => {
+    setPendingDelete(name)
+  }
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return
+    const name = pendingDelete
+    setPendingDelete(null)
     setError(null)
     try { setModels(await api.mlxDeleteModel(name)) }
     catch (e) { setError(e instanceof Error ? e.message : 'Failed to delete model.') }
@@ -437,6 +474,19 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
               <div class="stat-note">prompt tokens</div>
             </div>
             <div class="stat-cell">
+              <div class="stat-label">Prompt Cache</div>
+              <div class="stat-value">
+                {(status?.lastInference?.cachedPromptTokens ?? 0) > 0
+                  ? `${status!.lastInference!.cachedPromptTokens}`
+                  : '—'}
+              </div>
+              <div class="stat-note">
+                {(status?.lastInference?.cachedPromptRatio ?? 0) > 0
+                  ? `${((status!.lastInference!.cachedPromptRatio ?? 0) * 100).toFixed(0)}% cached`
+                  : 'cache hit tokens'}
+              </div>
+            </div>
+            <div class="stat-cell">
               <div class="stat-label">Generation Time</div>
               <div class="stat-value">
                 {(status?.lastInference?.generationSec ?? 0) > 0
@@ -620,6 +670,9 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
                         <span class="badge badge-blue" style={{ fontSize: 11, padding: '1px 6px' }}>port {status.port}</span>
                       )}
                     </div>
+                    <div class="settings-sublabel" style={{ marginTop: 4 }}>
+                      {capabilitySummary(m)}
+                    </div>
                     {isActive && status?.lastError && (
                       <div class="engine-model-error" style={{ fontSize: 11.5, color: 'var(--theme-text-danger, #e05252)', marginTop: 3 }}>
                         {status.lastError}
@@ -708,13 +761,12 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
         <div class="section-label">Configuration</div>
         <div class="card">
 
-          {/* Context window size */}
+          {/* Max output tokens */}
           <div class="settings-row">
             <div class="settings-label-col">
-              <div class="settings-label">Context size</div>
+              <div class="settings-label">Max output tokens</div>
               <div class="settings-sublabel">
-                Token limit per inference call passed to mlx_lm.server via --max-tokens.
-                Larger values use more memory. Restart the model after changing.
+                Maximum tokens the model generates per response (<code>--max-tokens</code>). Restart the model after changing.
               </div>
             </div>
             <div class="settings-field">
@@ -750,6 +802,58 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
                 value={serverPort}
                 onChange={(e) => handleServerPortChange(Number((e.target as HTMLInputElement).value))}
                 disabled={serverPortSaving}
+              />
+            </div>
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-label-col">
+              <div class="settings-label">Temperature</div>
+              <div class="settings-sublabel">
+                Sampling temperature for Atlas turns. 0 = deterministic (greedy). Higher values increase creativity.
+              </div>
+            </div>
+            <div class="settings-field">
+              <input
+                class="input input-sm"
+                type="number"
+                min={0}
+                max={2}
+                step="0.05"
+                value={temperature}
+                onChange={(e) => {
+                  const v = Number((e.target as HTMLInputElement).value)
+                  setTemperature(v)
+                  void updateMLXRequestConfig({ atlasMLXTemperature: v } as Partial<RuntimeConfig>)
+                }}
+                disabled={mlxRequestSaving}
+              />
+            </div>
+          </div>
+
+          <div class="settings-row" style={{ borderBottom: 'none' }}>
+            <div class="settings-label-col">
+              <div class="settings-label">Repetition Penalty</div>
+              <div class="settings-sublabel">
+                Reduces repeated phrases. 0 = off · 1.05–1.15 is a useful range for long responses. Must be &gt; 1.0 to have any effect.
+              </div>
+            </div>
+            <div class="settings-field">
+              <input
+                class="input input-sm"
+                type="number"
+                min={0}
+                max={2}
+                step="0.05"
+                value={repetitionPenalty}
+                onChange={(e) => {
+                  const v = Number((e.target as HTMLInputElement).value)
+                  // Clamp: 0 = disabled, otherwise must be > 1.0 to be meaningful.
+                  const clamped = v > 0 && v < 1 ? 1 : v
+                  setRepetitionPenalty(clamped)
+                  void updateMLXRequestConfig({ atlasMLXRepetitionPenalty: clamped } as Partial<RuntimeConfig>)
+                }}
+                disabled={mlxRequestSaving}
               />
             </div>
           </div>
@@ -927,6 +1031,16 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
         </div>
       </div>
 
+      {pendingDelete && (
+        <ConfirmDialog
+          title={`Delete ${pendingDelete}?`}
+          body="This model will be permanently removed from disk."
+          confirmLabel="Delete"
+          danger
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </div>
   )
 }

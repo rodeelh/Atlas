@@ -48,6 +48,7 @@ func (d *ChatDomain) SetDreamRunner(fn func()) { d.dreamRunner = fn }
 // Register mounts all chat routes on the given router.
 func (d *ChatDomain) Register(r chi.Router) {
 	r.Post("/message", d.postMessage)
+	r.Post("/message/cancel", d.postCancelMessage)
 	r.Get("/message/stream", d.streamMessage)
 	r.Get("/conversations", d.listConversations)
 	r.Get("/conversations/search", d.searchConversations)
@@ -103,6 +104,21 @@ func (d *ChatDomain) postMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (d *ChatDomain) postCancelMessage(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ConversationID string `json:"conversationId"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.ConversationID == "" {
+		writeError(w, http.StatusBadRequest, "Missing 'conversationId' field.")
+		return
+	}
+	d.chatSvc.CancelTurn(body.ConversationID)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (d *ChatDomain) streamMessage(w http.ResponseWriter, r *http.Request) {

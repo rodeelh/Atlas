@@ -13,7 +13,53 @@ import (
 
 	"atlas-runtime-go/internal/agent"
 	"atlas-runtime-go/internal/config"
+	"atlas-runtime-go/internal/engine"
 )
+
+func atlasMLXRequestOptions(cfg config.RuntimeConfigSnapshot) *agent.MLXRequestOptions {
+	opts := &agent.MLXRequestOptions{
+		Temperature:       cfg.AtlasMLXTemperature,
+		TopP:              cfg.AtlasMLXTopP,
+		MinP:              cfg.AtlasMLXMinP,
+		RepetitionPenalty: cfg.AtlasMLXRepetitionPenalty,
+	}
+	if opts.TopP == 0 {
+		opts.TopP = 1
+	}
+	// Build chat_template_kwargs: start with the thinking toggle, then merge any
+	// explicit user-configured kwargs (which take precedence over the toggle).
+	kwargs := make(map[string]any)
+	if cfg.AtlasMLXThinkingEnabled {
+		kwargs["enable_thinking"] = true
+	}
+	if raw := strings.TrimSpace(cfg.AtlasMLXChatTemplateArgs); raw != "" {
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+			for k, v := range parsed {
+				kwargs[k] = v // explicit user kwargs override the thinking toggle
+			}
+		}
+	}
+	if len(kwargs) > 0 {
+		opts.ChatTemplateKwargs = kwargs
+	}
+	return opts
+}
+
+func newAtlasMLXProviderConfig(cfg config.RuntimeConfigSnapshot, model string, baseURL string) agent.ProviderConfig {
+	opts := atlasMLXRequestOptions(cfg)
+	modelName := filepath.Base(model)
+	if modelName != "" && modelName != "." {
+		opts.Capabilities = engine.InspectMLXModelCapabilities(filepath.Join(config.MLXModelsDir(), modelName))
+	}
+	return agent.ProviderConfig{
+		Type:    agent.ProviderAtlasMLX,
+		APIKey:  "",
+		Model:   model,
+		BaseURL: baseURL,
+		MLX:     opts,
+	}
+}
 
 // execSecurity runs the macOS `security` CLI with the given arguments and
 // returns stdout. Used to read Keychain items without CGO.
@@ -164,6 +210,7 @@ func resolveBackgroundProvider(cfg config.RuntimeConfigSnapshot, turn *turnConte
 				APIKey:  "",
 				Model:   filepath.Join(config.MLXModelsDir(), routerModelName),
 				BaseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
+				MLX:     atlasMLXRequestOptions(cfg),
 			}, false, nil
 		}
 	case agent.ProviderAtlasEngine:
@@ -212,6 +259,7 @@ func resolveHeavyBackgroundProvider(cfg config.RuntimeConfigSnapshot) (agent.Pro
 					APIKey:  "",
 					Model:   filepath.Join(config.MLXModelsDir(), routerModelName),
 					BaseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
+					MLX:     atlasMLXRequestOptions(cfg),
 				}, nil
 			}
 		}
@@ -396,12 +444,7 @@ func resolveFastProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig
 		if port == 0 {
 			port = 11990
 		}
-		return agent.ProviderConfig{
-			Type:    agent.ProviderAtlasMLX,
-			APIKey:  "",
-			Model:   model,
-			BaseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
-		}, nil
+		return newAtlasMLXProviderConfig(cfg, model, fmt.Sprintf("http://127.0.0.1:%d", port)), nil
 
 	default: // openai
 		if bundle.OpenAIAPIKey == "" {
@@ -528,12 +571,7 @@ func resolveProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, er
 		if port == 0 {
 			port = 11990
 		}
-		return agent.ProviderConfig{
-			Type:    agent.ProviderAtlasMLX,
-			APIKey:  "",
-			Model:   model,
-			BaseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
-		}, nil
+		return newAtlasMLXProviderConfig(cfg, model, fmt.Sprintf("http://127.0.0.1:%d", port)), nil
 
 	case agent.ProviderOpenRouter:
 		if bundle.OpenRouterAPIKey == "" {

@@ -97,6 +97,12 @@ export interface RuntimeConfig {
   atlasMLXRouterPort: number
   atlasMLXRouterModel: string
   atlasMLXRouterForAll: boolean
+  atlasMLXTemperature: number
+  atlasMLXTopP: number
+  atlasMLXMinP: number
+  atlasMLXRepetitionPenalty: number
+  atlasMLXThinkingEnabled: boolean
+  atlasMLXChatTemplateArgs: string
   selectedLocalEngine: string   // "atlas_engine" | "atlas_mlx"
   enableSmartToolSelection: boolean
   toolSelectionMode: string
@@ -169,6 +175,7 @@ export interface ChatStreamEvent {
     | 'approval_required'
     | 'done'
     | 'error'
+    | 'cancelled'
     | 'token'
     | string
   content?: string
@@ -450,6 +457,8 @@ export interface EngineDownloadStatus {
 export interface MLXInferenceStats {
   decodeTPS: number
   promptTokens: number
+  cachedPromptTokens?: number
+  cachedPromptRatio?: number
   completionTokens: number
   generationSec: number
   firstTokenSec?: number
@@ -483,10 +492,19 @@ export interface MLXStatus {
   scheduler: MLXSchedulerStats
 }
 
+export interface MLXModelCapabilities {
+  hasChatTemplate: boolean
+  hasToolCalling: boolean
+  hasThinking: boolean
+  toolParserType?: string
+  chatTemplateType?: string
+}
+
 export interface MLXModelInfo {
   name: string       // directory name, e.g. "Llama-3.2-3B-Instruct-4bit"
   sizeBytes: number
   sizeHuman: string
+  capabilities?: MLXModelCapabilities
 }
 
 export interface MLXDownloadStatus {

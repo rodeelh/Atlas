@@ -202,3 +202,62 @@ func TestResolveHeavyBackgroundProvider_UsesSelectedSupportiveLocalEngine(t *tes
 		t.Fatalf("expected full MLX model path for router, got %q", p.Model)
 	}
 }
+
+func TestResolveProvider_AtlasMLXIncludesRequestOptions(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.ActiveAIProvider = "atlas_mlx"
+	cfg.SelectedAtlasMLXModel = "Qwen3-8B-Instruct-4bit"
+	cfg.AtlasMLXTemperature = 0.2
+	cfg.AtlasMLXTopP = 0.9
+	cfg.AtlasMLXMinP = 0.05
+	cfg.AtlasMLXRepetitionPenalty = 1.08
+	cfg.AtlasMLXChatTemplateArgs = `{"foo":"bar"}`
+
+	p, err := ResolveProvider(cfg)
+	if err != nil {
+		t.Fatalf("ResolveProvider: %v", err)
+	}
+	if p.Type != agent.ProviderAtlasMLX {
+		t.Fatalf("expected atlas_mlx, got %s", p.Type)
+	}
+	if p.MLX == nil {
+		t.Fatal("expected MLX request options")
+	}
+	if p.MLX.Temperature != 0.2 || p.MLX.TopP != 0.9 || p.MLX.MinP != 0.05 {
+		t.Fatalf("unexpected MLX sampling options: %+v", p.MLX)
+	}
+	if p.MLX.RepetitionPenalty != 1.08 {
+		t.Fatalf("unexpected MLX repetition options: %+v", p.MLX)
+	}
+	if got, _ := p.MLX.ChatTemplateKwargs["foo"].(string); got != "bar" {
+		t.Fatalf("expected parsed chat template kwargs, got %+v", p.MLX.ChatTemplateKwargs)
+	}
+}
+
+func TestAtlasMLXRequestOptions_ThinkingToggle(t *testing.T) {
+	cfg := config.Defaults()
+
+	// Thinking disabled (default) — no kwargs.
+	opts := atlasMLXRequestOptions(cfg)
+	if len(opts.ChatTemplateKwargs) != 0 {
+		t.Fatalf("expected no kwargs by default, got %+v", opts.ChatTemplateKwargs)
+	}
+
+	// Thinking enabled — enable_thinking=true injected.
+	cfg.AtlasMLXThinkingEnabled = true
+	opts = atlasMLXRequestOptions(cfg)
+	if opts.ChatTemplateKwargs["enable_thinking"] != true {
+		t.Fatalf("expected enable_thinking=true, got %+v", opts.ChatTemplateKwargs)
+	}
+
+	// Explicit ChatTemplateArgs override thinking toggle.
+	cfg.AtlasMLXThinkingEnabled = true
+	cfg.AtlasMLXChatTemplateArgs = `{"enable_thinking":false,"foo":"bar"}`
+	opts = atlasMLXRequestOptions(cfg)
+	if opts.ChatTemplateKwargs["enable_thinking"] != false {
+		t.Fatalf("explicit kwarg should override toggle: got %+v", opts.ChatTemplateKwargs)
+	}
+	if got, _ := opts.ChatTemplateKwargs["foo"].(string); got != "bar" {
+		t.Fatalf("expected foo=bar from explicit kwargs, got %+v", opts.ChatTemplateKwargs)
+	}
+}

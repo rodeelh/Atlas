@@ -319,24 +319,30 @@ func (m *MLXManager) RecordActivity() {
 // Decode TPS is computed as completionTokens / elapsed. This is a conservative
 // lower bound — it includes scheduling overhead — but it's the only timing
 // available without patching mlx_lm.server itself.
-func (m *MLXManager) RecordInference(promptTokens, completionTokens int, elapsed time.Duration, firstToken time.Duration, streamChunks int, streamChars int) {
+func (m *MLXManager) RecordInference(promptTokens, cachedPromptTokens, completionTokens int, elapsed time.Duration, firstToken time.Duration, streamChunks int, streamChars int) {
 	if elapsed <= 0 || completionTokens <= 0 {
 		return
 	}
 	tps := float64(completionTokens) / elapsed.Seconds()
+	cachedPromptRatio := 0.0
+	if promptTokens > 0 && cachedPromptTokens > 0 {
+		cachedPromptRatio = float64(cachedPromptTokens) / float64(promptTokens)
+	}
 	avgChunkChars := 0.0
 	if streamChunks > 0 && streamChars > 0 {
 		avgChunkChars = float64(streamChars) / float64(streamChunks)
 	}
 	stats := &MLXInferenceStats{
-		DecodeTPS:        tps,
-		PromptTokens:     promptTokens,
-		CompletionTokens: completionTokens,
-		GenerationSec:    elapsed.Seconds(),
-		FirstTokenSec:    firstToken.Seconds(),
-		StreamChunks:     streamChunks,
-		StreamChars:      streamChars,
-		AvgChunkChars:    avgChunkChars,
+		DecodeTPS:          tps,
+		PromptTokens:       promptTokens,
+		CachedPromptTokens: cachedPromptTokens,
+		CachedPromptRatio:  cachedPromptRatio,
+		CompletionTokens:   completionTokens,
+		GenerationSec:      elapsed.Seconds(),
+		FirstTokenSec:      firstToken.Seconds(),
+		StreamChunks:       streamChunks,
+		StreamChars:        streamChars,
+		AvgChunkChars:      avgChunkChars,
 	}
 	m.inferMu.Lock()
 	m.lastInference = stats
@@ -544,8 +550,8 @@ func (m *MLXManager) SchedulerSnapshot(port int) MLXSchedulerStats {
 //
 // modelName is the directory name under modelsDir (e.g. "Llama-3.2-3B-Instruct-4bit").
 // ctxSize maps to --max-tokens; defaults to 4096 if <= 0.
-// kvCacheQuant and draftModel are reserved for future use — they are
-// accepted to satisfy the same EngineAutoStarter interface as the llama.cpp Manager.
+// kvCacheQuant is accepted to satisfy the same EngineAutoStarter interface as the
+// llama.cpp Manager but is ignored — MLX-LM handles quantization at model load time.
 //
 // If a server is already running it is stopped first.
 func (m *MLXManager) Start(modelName string, port int, ctxSize int, _ string, _ string) error {
@@ -716,9 +722,10 @@ func (m *MLXManager) ListModels() ([]MLXModelInfo, error) {
 		}
 		sizeBytes := dirSizeBytes(filepath.Join(m.modelsDir, e.Name()))
 		models = append(models, MLXModelInfo{
-			Name:      e.Name(),
-			SizeBytes: sizeBytes,
-			SizeHuman: humanBytes(sizeBytes),
+			Name:         e.Name(),
+			SizeBytes:    sizeBytes,
+			SizeHuman:    humanBytes(sizeBytes),
+			Capabilities: InspectMLXModelCapabilities(filepath.Join(m.modelsDir, e.Name())),
 		})
 	}
 	return models, nil

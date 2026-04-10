@@ -3,6 +3,7 @@ import { JSX } from 'preact'
 import { api, AutomationSummary, CommunicationChannel, GremlinItem, GremlinRun, WorkflowDefinition } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { Portal } from '../components/Portal'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 // ── Icons ────────────────────────────────────────────────────────────────────
 
@@ -391,8 +392,9 @@ export function Automations() {
   const [error, setError]           = useState<string | null>(null)
   const [editTarget, setEditTarget] = useState<GremlinItem | 'new' | null>(null)
   const [runsTarget, setRunsTarget] = useState<GremlinItem | null>(null)
-  const [runningID, setRunningID]   = useState<string | null>(null)
-  const [togglingID, setTogglingID] = useState<string | null>(null)
+  const [runningID, setRunningID]     = useState<string | null>(null)
+  const [togglingID, setTogglingID]   = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<GremlinItem | null>(null)
 
   async function load() {
     setLoading(true)
@@ -441,8 +443,14 @@ export function Automations() {
     }
   }
 
-  async function handleDelete(item: GremlinItem) {
-    if (!confirm(`Delete "${item.name}"? This cannot be undone.`)) return
+  function handleDelete(item: GremlinItem) {
+    setPendingDelete(item)
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return
+    const item = pendingDelete
+    setPendingDelete(null)
     try {
       await api.deleteAutomation(item.id)
       setItems(prev => prev.filter(i => i.id !== item.id))
@@ -576,6 +584,16 @@ export function Automations() {
         <RunsPanel
           gremlin={runsTarget}
           onClose={() => setRunsTarget(null)}
+        />
+      )}
+      {pendingDelete && (
+        <ConfirmDialog
+          title={`Delete "${pendingDelete.name}"?`}
+          body="This automation will be permanently removed."
+          confirmLabel="Delete"
+          danger
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
         />
       )}
     </div>

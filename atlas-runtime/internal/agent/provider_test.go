@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -75,6 +76,181 @@ func TestCallOpenAICompatNonStreaming_AppliesExtraHeaders(t *testing.T) {
 	}
 }
 
+func TestCallOpenAICompatNonStreaming_AtlasMLXAppliesRequestOptions(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": "ok",
+					},
+					"finish_reason": "stop",
+				},
+			},
+			"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+
+	p := ProviderConfig{
+		Type:    ProviderAtlasMLX,
+		Model:   "/tmp/Qwen3-8B-Instruct-4bit",
+		BaseURL: srv.URL,
+		MLX: &MLXRequestOptions{
+			Temperature:       0.15,
+			TopP:              0.92,
+			MinP:              0.05,
+			RepetitionPenalty: 1.07,
+			Capabilities: &engine.MLXModelCapabilities{
+				HasThinking:    true,
+				HasToolCalling: true,
+				ToolParserType: "qwen3_coder",
+			},
+			ChatTemplateKwargs: map[string]any{
+				"foo": "bar",
+			},
+		},
+	}
+
+	tools := []map[string]any{
+		{"type": "function", "function": map[string]any{"name": "ping"}},
+	}
+
+	_, _, _, err := callOpenAICompatNonStreaming(context.Background(), p, []OAIMessage{{Role: "user", Content: "hello"}}, tools)
+	if err != nil {
+		t.Fatalf("callOpenAICompatNonStreaming: %v", err)
+	}
+
+	if gotBody["temperature"] != 0.15 {
+		t.Fatalf("temperature: got %#v", gotBody["temperature"])
+	}
+	if gotBody["top_p"] != 0.92 {
+		t.Fatalf("top_p: got %#v", gotBody["top_p"])
+	}
+	if gotBody["min_p"] != 0.05 {
+		t.Fatalf("min_p: got %#v", gotBody["min_p"])
+	}
+	if gotBody["repetition_penalty"] != 1.07 {
+		t.Fatalf("repetition_penalty: got %#v", gotBody["repetition_penalty"])
+	}
+	// No draft model set — num_draft_tokens must not appear in the request.
+	if _, present := gotBody["num_draft_tokens"]; present {
+		t.Fatalf("num_draft_tokens must not be sent when no draft model configured, got %#v", gotBody["num_draft_tokens"])
+	}
+	// Only user-configured kwargs are passed through — no auto-injection.
+	rawKwargs, ok := gotBody["chat_template_kwargs"].(map[string]any)
+	if !ok {
+		t.Fatalf("chat_template_kwargs missing or wrong type: %#v", gotBody["chat_template_kwargs"])
+	}
+	if rawKwargs["foo"] != "bar" {
+		t.Fatalf("expected user template arg foo=bar, got %#v", rawKwargs["foo"])
+	}
+	if _, present := rawKwargs["enable_thinking"]; present {
+		t.Fatalf("enable_thinking must not be auto-injected, got %#v", rawKwargs["enable_thinking"])
+	}
+}
+
+func TestCallOpenAICompatNonStreaming_AtlasMLXPassesThroughUserKwargs(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{
+					"message":       map[string]any{"role": "assistant", "content": "ok"},
+					"finish_reason": "stop",
+				},
+			},
+			"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+
+	// User has explicitly set enable_thinking=true — it passes through unchanged.
+	p := ProviderConfig{
+		Type:    ProviderAtlasMLX,
+		Model:   "/tmp/Qwen3-8B-Instruct-4bit",
+		BaseURL: srv.URL,
+		MLX: &MLXRequestOptions{
+			Capabilities: &engine.MLXModelCapabilities{
+				HasThinking:    true,
+				HasToolCalling: true,
+				ToolParserType: "qwen3_coder",
+			},
+			ChatTemplateKwargs: map[string]any{
+				"enable_thinking": true,
+			},
+		},
+	}
+	tools := []map[string]any{
+		{"type": "function", "function": map[string]any{"name": "ping"}},
+	}
+	_, _, _, err := callOpenAICompatNonStreaming(context.Background(), p, []OAIMessage{{Role: "user", Content: "hello"}}, tools)
+	if err != nil {
+		t.Fatalf("callOpenAICompatNonStreaming: %v", err)
+	}
+	rawKwargs, ok := gotBody["chat_template_kwargs"].(map[string]any)
+	if !ok {
+		t.Fatalf("chat_template_kwargs missing or wrong type: %#v", gotBody["chat_template_kwargs"])
+	}
+	if rawKwargs["enable_thinking"] != true {
+		t.Fatalf("expected user enable_thinking=true to pass through, got %#v", rawKwargs["enable_thinking"])
+	}
+}
+
+func TestCallOpenAICompatNonStreaming_AtlasMLXNoKwargsWhenNoneConfigured(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{
+					"message":       map[string]any{"role": "assistant", "content": "ok"},
+					"finish_reason": "stop",
+				},
+			},
+			"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+
+	// No user-configured ChatTemplateKwargs → no chat_template_kwargs in request.
+	p := ProviderConfig{
+		Type:    ProviderAtlasMLX,
+		Model:   "/tmp/Qwen3-8B-Instruct-4bit",
+		BaseURL: srv.URL,
+		MLX: &MLXRequestOptions{
+			Capabilities: &engine.MLXModelCapabilities{
+				HasThinking:    true,
+				HasToolCalling: true,
+				ToolParserType: "qwen3_coder",
+			},
+		},
+	}
+	tools := []map[string]any{
+		{"type": "function", "function": map[string]any{"name": "request_tools"}},
+	}
+	_, _, _, err := callOpenAICompatNonStreaming(context.Background(), p, []OAIMessage{{Role: "user", Content: "hello"}}, tools)
+	if err != nil {
+		t.Fatalf("callOpenAICompatNonStreaming: %v", err)
+	}
+	if gotBody["chat_template_kwargs"] != nil {
+		t.Fatalf("expected no chat_template_kwargs when none configured, got %#v", gotBody["chat_template_kwargs"])
+	}
+}
+
 func TestOAICompatBaseURL_OpenRouter(t *testing.T) {
 	got := oaiCompatBaseURL(ProviderConfig{Type: ProviderOpenRouter})
 	if got != "https://openrouter.ai/api/v1" {
@@ -143,6 +319,187 @@ func TestStreamWithToolDetection_AtlasMLXStreams(t *testing.T) {
 	}
 	if bc.events[2].Type != "assistant_delta" || bc.events[2].Content != "lo" {
 		t.Fatalf("third event: %+v", bc.events[2])
+	}
+}
+
+func TestStreamWithToolDetection_AtlasMLXFallsBackFromEmptyStream(t *testing.T) {
+	var requests int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		switch atomic.AddInt32(&requests, 1) {
+		case 1:
+			w.Header().Set("Content-Type", "text/event-stream")
+			flusher, ok := w.(http.Flusher)
+			if !ok {
+				t.Fatal("response writer is not a flusher")
+			}
+			writer := bufio.NewWriter(w)
+			lines := []string{
+				`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+				`data: {"usage":{"prompt_tokens":7,"completion_tokens":0}}`,
+				`data: [DONE]`,
+			}
+			for _, line := range lines {
+				_, _ = writer.WriteString(line + "\n\n")
+				_ = writer.Flush()
+				flusher.Flush()
+			}
+		case 2:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{
+					{
+						"message": map[string]any{
+							"role":    "assistant",
+							"content": "hello",
+						},
+						"finish_reason": "stop",
+					},
+				},
+				"usage": map[string]any{"prompt_tokens": 7, "completion_tokens": 1},
+			})
+		default:
+			t.Fatalf("unexpected request count: %d", requests)
+		}
+	}))
+	defer srv.Close()
+
+	var bc testEmitter
+	result, err := streamWithToolDetection(context.Background(), ProviderConfig{
+		Type:    ProviderAtlasMLX,
+		Model:   "/tmp/test-model",
+		BaseURL: srv.URL,
+	}, []OAIMessage{{Role: "user", Content: "hello"}}, nil, "conv-1", &bc)
+	if err != nil {
+		t.Fatalf("streamWithToolDetection: %v", err)
+	}
+	if got := atomic.LoadInt32(&requests); got != 2 {
+		t.Fatalf("request count: got %d, want 2", got)
+	}
+	if result.FinalText != "hello" {
+		t.Fatalf("final text: got %q, want hello", result.FinalText)
+	}
+	if result.Usage.InputTokens != 7 || result.Usage.OutputTokens != 1 {
+		t.Fatalf("unexpected usage: %+v", result.Usage)
+	}
+
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+	if len(bc.events) != 2 {
+		t.Fatalf("event count: got %d, want 2", len(bc.events))
+	}
+	if bc.events[0].Type != "assistant_started" {
+		t.Fatalf("first event: got %s, want assistant_started", bc.events[0].Type)
+	}
+	if bc.events[1].Type != "assistant_delta" || bc.events[1].Content != "hello" {
+		t.Fatalf("second event: %+v", bc.events[1])
+	}
+}
+
+func TestStreamWithToolDetection_AtlasMLXRetriesWithoutToolsAfterEmptyReplies(t *testing.T) {
+	var requests int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+
+		switch atomic.AddInt32(&requests, 1) {
+		case 1:
+			w.Header().Set("Content-Type", "text/event-stream")
+			flusher, ok := w.(http.Flusher)
+			if !ok {
+				t.Fatal("response writer is not a flusher")
+			}
+			writer := bufio.NewWriter(w)
+			lines := []string{
+				`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+				`data: {"usage":{"prompt_tokens":7,"completion_tokens":0}}`,
+				`data: [DONE]`,
+			}
+			for _, line := range lines {
+				_, _ = writer.WriteString(line + "\n\n")
+				_ = writer.Flush()
+				flusher.Flush()
+			}
+		case 2:
+			if _, ok := body["tools"]; !ok {
+				t.Fatal("expected tool-bearing retry on second request")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{
+					{
+						"message": map[string]any{
+							"role":    "assistant",
+							"content": "",
+						},
+						"finish_reason": "stop",
+					},
+				},
+				"usage": map[string]any{"prompt_tokens": 7, "completion_tokens": 0},
+			})
+		case 3:
+			if _, ok := body["tools"]; ok {
+				t.Fatal("expected final retry without tools")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{
+					{
+						"message": map[string]any{
+							"role":    "assistant",
+							"content": "hello",
+						},
+						"finish_reason": "stop",
+					},
+				},
+				"usage": map[string]any{"prompt_tokens": 5, "completion_tokens": 1},
+			})
+		default:
+			t.Fatalf("unexpected request count: %d", requests)
+		}
+	}))
+	defer srv.Close()
+
+	var bc testEmitter
+	result, err := streamWithToolDetection(context.Background(), ProviderConfig{
+		Type:    ProviderAtlasMLX,
+		Model:   "/tmp/test-model",
+		BaseURL: srv.URL,
+	}, []OAIMessage{{Role: "user", Content: "hello"}}, []map[string]any{
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name": "request_tools",
+			},
+		},
+	}, "conv-1", &bc)
+	if err != nil {
+		t.Fatalf("streamWithToolDetection: %v", err)
+	}
+	if got := atomic.LoadInt32(&requests); got != 3 {
+		t.Fatalf("request count: got %d, want 3", got)
+	}
+	if result.FinalText != "hello" {
+		t.Fatalf("final text: got %q, want hello", result.FinalText)
+	}
+
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+	if len(bc.events) != 2 {
+		t.Fatalf("event count: got %d, want 2", len(bc.events))
+	}
+	if bc.events[1].Type != "assistant_delta" || bc.events[1].Content != "hello" {
+		t.Fatalf("second event: %+v", bc.events[1])
 	}
 }
 
@@ -265,5 +622,80 @@ func TestCallOpenAICompatNonStreaming_AtlasMLXAllowsConfiguredBatchConcurrency(t
 	}
 	if got := atomic.LoadInt32(&maxActive); got < 2 {
 		t.Fatalf("max concurrent requests: got %d, want at least 2", got)
+	}
+}
+
+func TestCallOpenAICompatNonStreaming_AtlasMLXRetriesEOF(t *testing.T) {
+	var attempts int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("response writer is not a hijacker")
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Fatalf("hijack: %v", err)
+			}
+			_ = conn.Close()
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": "ok",
+					},
+					"finish_reason": "stop",
+				},
+			},
+			"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+
+	p := ProviderConfig{
+		Type:    ProviderAtlasMLX,
+		Model:   "/tmp/test-model",
+		BaseURL: srv.URL,
+	}
+
+	reply, _, _, err := callOpenAICompatNonStreaming(context.Background(), p, []OAIMessage{{Role: "user", Content: "hello"}}, nil)
+	if err != nil {
+		t.Fatalf("callOpenAICompatNonStreaming: %v", err)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 2 {
+		t.Fatalf("request attempts: got %d, want 2", got)
+	}
+	if content, ok := reply.Content.(string); !ok || content != "ok" {
+		t.Fatalf("reply content: got %#v, want ok", reply.Content)
+	}
+}
+
+func TestDoOpenAICompatRequest_AtlasMLXSetsConnectionClose(t *testing.T) {
+	var gotConnection string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotConnection = r.Header.Get("Connection")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	resp, err := doOpenAICompatRequest(context.Background(), ProviderConfig{
+		Type:    ProviderAtlasMLX,
+		Model:   "/tmp/test-model",
+		BaseURL: srv.URL,
+	}, srv.URL+"/v1/chat/completions", []byte(`{"model":"x","messages":[],"stream":false}`))
+	if err != nil {
+		t.Fatalf("doOpenAICompatRequest: %v", err)
+	}
+	resp.Body.Close()
+
+	if gotConnection != "close" {
+		t.Fatalf("Connection header: got %q, want close", gotConnection)
 	}
 }

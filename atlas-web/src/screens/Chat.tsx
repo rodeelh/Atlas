@@ -8,6 +8,7 @@ import { pickPresencePhrase } from '../presence_phrases'
 import { toast } from '../toast'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { formatProviderModelName } from '../modelName'
 import { voiceSpeechSupported, startVoiceSpeech, type VoiceSpeechSession } from '../lib/voiceSpeech'
 import { createVoicePlayer, warmupAudioContext, type VoicePlayer } from '../lib/voicePlayback'
@@ -339,6 +340,12 @@ const SendIcon = () => (
   </svg>
 )
 
+const StopIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor">
+    <rect x="2" y="2" width="10" height="10" rx="2" />
+  </svg>
+)
+
 const MicIcon = () => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
     <rect x="5.2" y="1.6" width="5.6" height="8.2" rx="2.8" />
@@ -397,6 +404,16 @@ const SpeakerMutedIcon = () => (
   </svg>
 )
 
+const ThinkingIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="8" cy="7" r="4.5" />
+    <path d="M5.8 11.5 5 14" />
+    <path d="M10.2 11.5 11 14" />
+    <path d="M6 14h4" />
+    <path d="M6.5 5.5c.5-.8 1.5-1 2.5-.5" />
+  </svg>
+)
+
 const ProviderIcon = () => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
     <line x1="2.5" y1="4.5" x2="13.5" y2="4.5" />
@@ -413,13 +430,8 @@ const AvatarGlyph = () => (
   </svg>
 )
 
-/**
- * Animated typing dots — the only loading indicator in chat.
- * `working` softens the animation while tools run in the background,
- * maintaining presence without demanding attention.
- */
-const TypingDots = ({ working }: { working?: boolean }) => (
-  <span class={`typing-dots${working ? ' working' : ''}`}>
+const TypingDots = () => (
+  <span class="typing-dots">
     <span /><span /><span />
   </span>
 )
@@ -461,6 +473,9 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
   })
   const [cloudModelHealth, setCloudModelHealth] = useState<CloudModelHealth | null>(null)
   const [checkingCloudModelHealth, setCheckingCloudModelHealth] = useState(false)
+  // MLX thinking toggle — only shown when the active MLX model supports thinking
+  const [mlxHasThinking, setMlxHasThinking]   = useState(false)
+  const [thinkingEnabled, setThinkingEnabled]  = useState(false)
   const [showScrollBottom, setShowScrollBottom] = useState(false)
 
   // History search state
@@ -469,6 +484,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
   const [historyQuery, setHistoryQuery]         = useState('')
   const [historySummaries, setHistorySummaries] = useState<ConversationSummary[]>([])
   const [historyLoading, setHistoryLoading]     = useState(false)
+  const [pendingClearHistory, setPendingClearHistory] = useState(false)
   const historySearchRef                        = useRef<HTMLInputElement>(null)
   const historyDebounceRef                      = useRef<ReturnType<typeof setTimeout> | null>(null)
   const historyContainerRef                     = useRef<HTMLDivElement>(null)
@@ -492,11 +508,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     return () => clearInterval(t)
   }, [messages.length])
 
-  // Presence state — replaces spinner + tool banner entirely
-  const [presenceText, setPresenceText]       = useState('Thinking…')
-  const [presenceVisible, setPresenceVisible] = useState(false)
-  const [presenceWorking, setPresenceWorking] = useState(false)
-  const presenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // activeMsgId: tracks which assistant bubble is the active one this turn.
   // Used to keep typing dots visible even after assistant_done fires (tool-only turns
@@ -728,7 +739,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
         try { voicePlayerRef.current.stop() } catch { /* ignore */ }
       }
       if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current)
-      if (presenceTimer.current) clearTimeout(presenceTimer.current)
     }
   }, [])
 
@@ -792,10 +802,25 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
         atlas_engine: s.selectedAtlasEngineModel?.trim() || '',
         atlas_mlx:    s.selectedAtlasMLXModel?.trim() || '',
       })
+      setThinkingEnabled(!!s.atlasMLXThinkingEnabled)
       const provider = (s.activeAIProvider || 'openai') as ChatProvider
       await resolveModelLabel(provider, selectedModelForProvider(s, provider))
     }).catch(() => {})
   }, [resolveModelLabel])
+
+  // Detect whether the currently-selected MLX model supports thinking.
+  // Re-runs when the provider or selected MLX model changes.
+  useEffect(() => {
+    const isMLX = activeProvider === 'atlas_mlx'
+      || (activeProvider === 'local_lm' as ChatProvider && selectedLocalEngine === 'atlas_mlx')
+    if (!isMLX) { setMlxHasThinking(false); return }
+    const modelName = modelByProvider['atlas_mlx']
+    if (!modelName) { setMlxHasThinking(false); return }
+    api.mlxModels().then((models) => {
+      const info = models.find(m => m.name === modelName)
+      setMlxHasThinking(!!info?.capabilities?.hasThinking)
+    }).catch(() => setMlxHasThinking(false))
+  }, [activeProvider, selectedLocalEngine, modelByProvider])
 
   useEffect(() => {
     if (!CLOUD_CHAT_PROVIDERS.includes(activeProvider)) {
@@ -882,8 +907,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     setApprovalBanner(false)
     setHistoryDropdownVisible(false)
     setAttachments([])
-    hideStatus(0)
-    setPresenceWorking(false)
     activeMsgId.current = null
     setHistoryOpen(false)
     setHistoryQuery('')
@@ -1234,34 +1257,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     }
   }, [input, speechAvailable, speechListening, stopSpeechInput, syncSpeechInput])
 
-  // ── Presence helpers ─────────────────────────────────────────────────────────
-
-  /**
-   * Cross-fade between status phrases.
-   * Fades out current text (180ms), swaps it, fades new text in.
-   */
-  const fadeStatus = (text: string) => {
-    if (presenceTimer.current) clearTimeout(presenceTimer.current)
-    setPresenceVisible(false)
-    presenceTimer.current = setTimeout(() => {
-      setPresenceText(text)
-      setPresenceVisible(true)
-      presenceTimer.current = null
-    }, 180)
-  }
-
-  /** Schedule a fade-out of the status line after `delay` ms (0 = immediate). */
-  const hideStatus = (delay = 0) => {
-    if (presenceTimer.current) clearTimeout(presenceTimer.current)
-    if (delay > 0) {
-      presenceTimer.current = setTimeout(() => {
-        setPresenceVisible(false)
-        presenceTimer.current = null
-      }, delay)
-    } else {
-      setPresenceVisible(false)
-    }
-  }
 
   // ── Link preview fetching ──────────────────────────────────────────────────────
 
@@ -1315,6 +1310,12 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     setAttachments(prev => prev.filter((_, i) => i !== index))
   }
 
+  // ── Stop ───────────────────────────────────────────────────────────────────────
+
+  const stopTurn = () => {
+    api.cancelTurn(conversationID.current).catch(() => { /* ignore */ })
+  }
+
   // ── Send ───────────────────────────────────────────────────────────────────────
 
   const send = async () => {
@@ -1336,12 +1337,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     setError(null)
     setApprovalBanner(false)
     setSending(true)
-
-    // Presence: surface immediately so there is never a blank state
-    if (presenceTimer.current) clearTimeout(presenceTimer.current)
-    setPresenceText('Thinking…')
-    setPresenceVisible(true)
-    setPresenceWorking(false)
 
     const userContent = pendingAttachments.length > 0
       ? `${text}${text ? '\n' : ''}📎 ${pendingAttachments.map(a => a.filename).join(', ')}`
@@ -1392,13 +1387,8 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
           case 'assistant_delta': {
             const delta = data.content ?? ''
 
-            // Resume behavior: when text starts flowing, keep last status visible
-            // briefly (~380ms) then fade it out — creates a natural "I finished
-            // that, now I'm answering" continuity.
             if (!hasReceivedText) {
               hasReceivedText = true
-              setPresenceWorking(false)
-              hideStatus(380)
             }
 
             if (awaitingResume) {
@@ -1429,45 +1419,24 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
 
           // ── Tool activity ──────────────────────────────────────────────────────
           case 'tool_started':
-          case 'tool_call': {
-            const label = humanizeToolName(data.toolName ?? '')
-            setPresenceWorking(true)
-            fadeStatus(label)
+          case 'tool_call':
             break
-          }
 
           case 'tool_finished':
-            setPresenceWorking(false)
-            // Linger the current status phrase for ~400ms so the user can read it,
-            // then cross-fade back to "Thinking…" if text hasn't started yet.
-            if (presenceTimer.current) clearTimeout(presenceTimer.current)
-            presenceTimer.current = setTimeout(() => {
-              if (!hasReceivedText) {
-                setPresenceText('Thinking…')
-                setPresenceVisible(true)
-              }
-              presenceTimer.current = null
-            }, 400)
             break
 
           case 'tool_failed':
-            setPresenceWorking(false)
-            hideStatus(200)
             break
 
           // ── Approval ──────────────────────────────────────────────────────────
           case 'approval_required':
             setApprovalBanner(true)
-            hideStatus(0)
-            setPresenceWorking(false)
             break
 
           // ── Legacy token (single-shot full-text delivery) ──────────────────────
           case 'token':
             if (!hasReceivedText) {
               hasReceivedText = true
-              setPresenceWorking(false)
-              hideStatus(380)
             }
             if (awaitingResume) {
               resumedContent += data.content ?? ''
@@ -1487,8 +1456,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
           // ── Conversation complete ──────────────────────────────────────────────
           case 'done':
             turnCompleted = true
-            hideStatus(0)
-            setPresenceWorking(false)
             activeMsgId.current = null
             if (data.status === 'waitingForApproval') {
               setMessages(prev => prev.map(m => m.id === assistantMsg.id ? { ...m, content: accumulatedContent || m.content, isTyping: false } : m))
@@ -1541,12 +1508,26 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
 
           case 'error':
             turnCompleted = true
-            hideStatus(0)
-            setPresenceWorking(false)
             activeMsgId.current = null
             setError(extractStreamError(data))
             const targetID = resumedMsgID ?? assistantMsg.id
             setMessages(prev => prev.map(m => m.id === targetID ? { ...m, content: resumedContent || accumulatedContent || 'Failed to get response.', isTyping: false } : m))
+            setSending(false); es.close()
+            break
+
+          case 'cancelled':
+            turnCompleted = true
+            activeMsgId.current = null
+            // Remove the empty typing bubble; keep any partial content that arrived.
+            setMessages(prev => {
+              const cancelTargetID = resumedMsgID ?? assistantMsg.id
+              const partial = resumedContent || accumulatedContent
+              return prev.map(m =>
+                m.id === cancelTargetID
+                  ? { ...m, content: partial || '', isTyping: false }
+                  : m
+              ).filter(m => !(m.id === cancelTargetID && !partial))
+            })
             setSending(false); es.close()
             break
         }
@@ -1555,8 +1536,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
 
     es.onerror = async () => {
       if (turnCompleted) return
-      hideStatus(0)
-      setPresenceWorking(false)
       activeMsgId.current = null
       setSending(false)
       es.close()
@@ -1571,8 +1550,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     try {
       await api.sendMessage(conversationID.current, text, pendingAttachments.length > 0 ? pendingAttachments : undefined)
     } catch (err) {
-      hideStatus(0)
-      setPresenceWorking(false)
       activeMsgId.current = null
       setError(err instanceof Error ? err.message : 'Failed to send message.')
       setMessages(prev => prev.map(m => m.id === assistantMsg.id ? { ...m, content: 'Failed to send message.', isTyping: false } : m))
@@ -1613,8 +1590,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     speechSessionRef.current?.stop()
     speechSessionRef.current = null
     setSpeechListening(false)
-    hideStatus(0)
-    setPresenceWorking(false)
     activeMsgId.current = null
   }
 
@@ -1754,13 +1729,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                       <div class="chat-history-footer">
                         <button
                           class="chat-history-clear-btn"
-                          onClick={async () => {
-                            if (!confirm('Clear all conversation history? This cannot be undone.')) return
-                            await api.clearAllConversations()
-                            setHistorySummaries([])
-                            setHistoryOpen(false)
-                            newConversation()
-                          }}
+                          onClick={() => setPendingClearHistory(true)}
                         >
                           Clear all history
                         </button>
@@ -1865,7 +1834,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                           ? renderMessageContent(msg.content, msg.linkPreviews)
                           : msg.content)
                       : (msg.isTyping || msg.id === activeMsgId.current)
-                          ? <TypingDots working={presenceWorking} />
+                          ? <TypingDots />
                           : null
                     }
                   </div>
@@ -1904,15 +1873,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
             )
           })}
 
-          {/* Presence line — replaces tool banner + spinner.
-              Fades status text in/out smoothly during all active states.
-              Never blank: typing dots in bubble + this line below. */}
-          {sending && (
-            <div class={`chat-presence-line${presenceVisible ? ' visible' : ''}`}>
-              <span class="presence-dot" />
-              <span class="chat-presence-text">{presenceText}</span>
-            </div>
-          )}
 
 
           {approvalBanner && (
@@ -1988,15 +1948,26 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
             >
               <MicIcon />
             </button>
-            <button
-              class="chat-send-btn"
-              onClick={send}
-              disabled={sending || speechListening || (!input.trim() && attachments.length === 0)}
-              title="Send message"
-              aria-label="Send message"
-            >
-              <SendIcon />
-            </button>
+            {sending ? (
+              <button
+                class="chat-send-btn chat-stop-btn"
+                onClick={stopTurn}
+                title="Stop generation"
+                aria-label="Stop generation"
+              >
+                <StopIcon />
+              </button>
+            ) : (
+              <button
+                class="chat-send-btn"
+                onClick={send}
+                disabled={speechListening || (!input.trim() && attachments.length === 0)}
+                title="Send message"
+                aria-label="Send message"
+              >
+                <SendIcon />
+              </button>
+            )}
           </div>
 
           {/* Bottom toolbar: tools left — provider right */}
@@ -2022,6 +1993,23 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
               >
                 {ttsEnabled ? <SpeakerIcon /> : <SpeakerMutedIcon />}
               </button>
+              {mlxHasThinking && (
+                <button
+                  class={`chat-tool-btn${thinkingEnabled ? ' active' : ''}`}
+                  onClick={() => {
+                    const next = !thinkingEnabled
+                    setThinkingEnabled(next)
+                    void api.updateConfig({ atlasMLXThinkingEnabled: next })
+                  }}
+                  disabled={sending}
+                  type="button"
+                  title={thinkingEnabled ? 'Thinking on — click to disable' : 'Enable thinking'}
+                  aria-label={thinkingEnabled ? 'Disable thinking' : 'Enable thinking'}
+                  aria-pressed={thinkingEnabled ? 'true' : 'false'}
+                >
+                  <ThinkingIcon />
+                </button>
+              )}
             </div>
 
             <div class="chat-toolbar-right">
@@ -2053,6 +2041,22 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
           </div>
         </div>
       </div>
+      {pendingClearHistory && (
+        <ConfirmDialog
+          title="Clear all history?"
+          body="Every conversation will be permanently deleted."
+          confirmLabel="Clear All"
+          danger
+          onConfirm={async () => {
+            setPendingClearHistory(false)
+            await api.clearAllConversations()
+            setHistorySummaries([])
+            setHistoryOpen(false)
+            newConversation()
+          }}
+          onCancel={() => setPendingClearHistory(false)}
+        />
+      )}
     </div>
   )
 }

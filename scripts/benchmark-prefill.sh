@@ -2,19 +2,18 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # benchmark-prefill.sh — MLX KV-cache prefill effectiveness test
 #
-# Both conditions start from the same baseline: model loaded and ready
-# (health endpoint 200 OK). This eliminates model-load noise.
+# Measures Time-To-First-Token (TTFT) directly on the MLX server.
+# Both conditions are symmetric: model fully loaded and idle before each run.
 #
-# COLD  — Model ready → test message immediately.
-#         Full system-prompt + user tokens prefilled from scratch.
+# COLD  — Model fresh → full system-prompt + user message in one request.
+#         All tokens must be prefilled from scratch.
 #
-# WARM  — Model ready → send one dummy request directly to the MLX server
-#         with just the system prompt, max_tokens=1 (warms KV cache).
-#         Wait for it to finish → send test message.
-#         Only user tokens need prefilling; system prompt tokens are cached.
+# WARM  — Model fresh → system-prompt-only warm-up (max_tokens=1, ~instant).
+#         Then same full request.
+#         System-prompt tokens are already in KV cache; only user tokens prefill.
 #
-# For the "system prompt" we use the actual Atlas MIND.md (fetched via /mind),
-# which is the stable prefix Atlas sends on every turn.
+# Both conditions hit the MLX server directly (/v1/chat/completions).
+# No Atlas SSE complexity. Clean, direct cache measurement.
 #
 # Usage:  ./scripts/benchmark-prefill.sh [N_RUNS]   (default: 3)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -22,7 +21,7 @@ set -euo pipefail
 
 ATLAS_URL="http://localhost:1984"
 N_RUNS="${1:-3}"
-TEST_MSG="Reply with exactly three words: yes no maybe"
+TEST_MSG="What is 2 plus 2?"
 
 CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 RED='\033[0;31m'; BOLD='\033[1m'; NC='\033[0m'
@@ -61,7 +60,8 @@ stop_mlx() {
     -H "Content-Type: application/json" -d '{}' >/dev/null 2>&1 || true
   local i=0
   while (( i < 40 )); do
-    local r; r=$(curl -sf "http://127.0.0.1:${MLX_PORT}/health" -o /dev/null -w "%{http_code}" 2>/dev/null || echo 000)
+    local r; r=$(curl -s -o /dev/null -w "%{http_code}" \
+      "http://127.0.0.1:${MLX_PORT}/health" 2>/dev/null || echo 000)
     [[ "$r" != "200" ]] && return 0
     sleep 0.5; (( i++ ))
   done
@@ -75,69 +75,59 @@ start_mlx_ready() {
     -d "{\"model\":\"$MLX_MODEL\",\"port\":$MLX_PORT}" >/dev/null 2>&1 || true
   local i=0
   while (( i < 180 )); do
-    local code; code=$(curl -sf -o /dev/null -w "%{http_code}" \
+    local code; code=$(curl -s -o /dev/null -w "%{http_code}" \
       "http://127.0.0.1:${MLX_PORT}/health" 2>/dev/null || echo 000)
     [[ "$code" == "200" ]] && { ok "Model ready (${i}s)"; return 0; }
     sleep 1; (( i++ ))
   done
-  warn "Model not ready after 180s"
+  err "Model not ready after 180s"
 }
 
-# ── warm cache directly via MLX server ────────────────────────────────────────
-# Sends system-prompt-only request with max_tokens=1 to the MLX server.
-# This bypasses Atlas entirely — clean, direct KV cache warm-up.
-warm_kv_cache() {
-  local mind_escaped
-  mind_escaped=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$MIND_CONTENT")
-  local payload="{\"model\":\"$MLX_MODEL\",\"messages\":[{\"role\":\"system\",\"content\":$mind_escaped}],\"max_tokens\":1,\"stream\":false}"
-  local start_w; start_w=$(python3 -c "import time; print(int(time.time()*1000))")
-  local code; code=$(curl -sf -o /dev/null -w "%{http_code}" \
-    -X POST "http://127.0.0.1:${MLX_PORT}/v1/chat/completions" \
-    -H "Content-Type: application/json" \
-    -d "$payload" 2>/dev/null || echo 000)
-  local end_w; end_w=$(python3 -c "import time; print(int(time.time()*1000))")
-  if [[ "$code" == "200" ]]; then
-    ok "KV cache warmed in $(( end_w - start_w )) ms (direct MLX request)"
-  else
-    warn "Warm request returned HTTP $code"
-  fi
-}
+# ── direct MLX TTFT measurement ───────────────────────────────────────────────
+# Sends full conversation (system + user) directly to MLX, returns first-token ms.
+# Note: mlx_lm.server doesn't expose first-token time in the API response,
+# so we measure wall-clock time for the complete non-streaming response.
+# For a short test message (few tokens output), this closely approximates TTFT.
+measure_ttft_direct() {
+  local extra_pre="$1"   # optional warm-up payload (empty = no warm-up)
+  local MLX_URL="http://127.0.0.1:${MLX_PORT}/v1/chat/completions"
 
-# ── TTFT measurement ──────────────────────────────────────────────────────────
-measure_ttft() {
-  local conv_id
-  conv_id=$(python3 -c "import uuid; print(str(uuid.uuid4()))")
-  local tmp; tmp=$(mktemp)
+  # Build escaping of content
+  local mind_j; mind_j=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$MIND_CONTENT")
+  local msg_j;  msg_j=$(python3 -c  "import json,sys; print(json.dumps(sys.argv[1]))" "$TEST_MSG")
 
-  # Open SSE stream first
-  curl -s -N "$ATLAS_URL/message/stream?conversationID=$conv_id" \
-    -H "Accept: text/event-stream" 2>/dev/null > "$tmp" &
-  local sse_pid=$!
-  sleep 0.15
-
-  # POST message and start clock
-  local start_ms; start_ms=$(python3 -c "import time; print(int(time.time()*1000))")
-  curl -s -X POST "$ATLAS_URL/message" \
-    -H "Content-Type: application/json" \
-    -d "{\"message\":$(python3 -c "import json; print(json.dumps('$TEST_MSG'))"),\"conversationId\":\"$conv_id\"}" \
-    >/dev/null 2>&1 &
-  local post_pid=$!
-
-  # Wait for first assistant_delta
-  local found=0 end_ms waited=0
-  while (( waited < 120000 )); do
-    if grep -q '"assistant_delta"' "$tmp" 2>/dev/null; then
-      end_ms=$(python3 -c "import time; print(int(time.time()*1000))")
-      found=1; break
+  # Optional pre-warm (system-prompt-only, max_tokens=1)
+  if [[ -n "$extra_pre" ]]; then
+    local warm_payload="{\"messages\":[{\"role\":\"system\",\"content\":$mind_j}],\"max_tokens\":1,\"stream\":false}"
+    local wt_start; wt_start=$(python3 -c "import time; print(int(time.time()*1000))")
+    local wcode; wcode=$(curl -s -o /dev/null -w "%{http_code}" \
+      -X POST "$MLX_URL" -H "Content-Type: application/json" \
+      -d "$warm_payload" 2>/dev/null)
+    local wt_end; wt_end=$(python3 -c "import time; print(int(time.time()*1000))")
+    if [[ "$wcode" == "200" ]]; then
+      ok "KV cache warmed in $(( wt_end - wt_start )) ms (HTTP $wcode)"
+    else
+      warn "Warm request returned HTTP $wcode"
     fi
-    sleep 0.05; (( waited += 50 ))
-  done
+  fi
 
-  kill "$post_pid" "$sse_pid" 2>/dev/null || true
-  wait "$post_pid" "$sse_pid" 2>/dev/null || true
-  rm -f "$tmp"
+  # Full-conversation request (non-streaming, max_tokens=8 — enough for short answer)
+  local full_payload="{\"messages\":[{\"role\":\"system\",\"content\":$mind_j},{\"role\":\"user\",\"content\":$msg_j}],\"max_tokens\":8,\"stream\":false}"
+  local t_start; t_start=$(python3 -c "import time; print(int(time.time()*1000))")
+  local resp; resp=$(curl -s -X POST "$MLX_URL" \
+    -H "Content-Type: application/json" \
+    -d "$full_payload" 2>/dev/null)
+  local t_end; t_end=$(python3 -c "import time; print(int(time.time()*1000))")
 
-  (( found == 1 )) && echo $(( end_ms - start_ms )) || echo -1
+  # Check success and extract cached_tokens for visibility
+  local ok_check; ok_check=$(echo "$resp" | python3 -c "import sys,json; r=json.load(sys.stdin); u=r.get('usage',{}); cached=u.get('prompt_tokens_details',{}).get('cached_tokens',0); total=u.get('prompt_tokens',0); print(f'cached={cached}/{total}')" 2>/dev/null || echo "error")
+  if [[ "$ok_check" == "error" ]]; then
+    warn "Bad response: $(echo "$resp" | head -c 80)"
+    echo -1
+    return
+  fi
+  echo "  [${ok_check} tokens cached]" >&2
+  echo $(( t_end - t_start ))
 }
 
 # ── stats ─────────────────────────────────────────────────────────────────────
@@ -158,13 +148,15 @@ PYEOF
 # ═════════════════════════════════════════════════════════════════════════════
 echo ""; hr
 echo -e "${BOLD}  MLX Prefill Benchmark — ${N_RUNS} runs × 2 conditions${NC}"
-echo -e "  Model: $MLX_MODEL"
-echo -e "  Both conditions: model fully loaded before test message"
+echo -e "  Model : $MLX_MODEL   Mind : ${MIND_LEN} chars"
+echo -e "  Both conditions: model fully loaded, idle, before each measurement"
 hr; echo ""
+echo -e "  NOTE: Measuring wall-clock time on MLX server directly (no Atlas SSE)."
+echo -e "  max_tokens=8 so response time ≈ prefill time (decode is negligible)."
+echo ""
 
 # ── Condition A: COLD ─────────────────────────────────────────────────────────
-echo -e "${BOLD}Condition A — Cold cache (no prefill)${NC}"
-echo    "  Load model → test message (system prompt prefilled in-request)"
+echo -e "${BOLD}Condition A — Cold cache (full prefill in-request)${NC}"
 echo ""
 
 COLD=()
@@ -172,7 +164,7 @@ for (( i=1; i<=N_RUNS; i++ )); do
   echo -n "  Run $i/$N_RUNS  "
   stop_mlx
   start_mlx_ready
-  ms=$(measure_ttft)
+  ms=$(measure_ttft_direct "")
   echo "→ ${ms} ms"
   COLD+=("$ms")
   stop_mlx; sleep 2
@@ -181,8 +173,7 @@ done
 echo ""; echo -e "${YELLOW}Cold results:${NC}"; print_stats "${COLD[@]}"
 
 # ── Condition B: WARM ─────────────────────────────────────────────────────────
-echo ""; echo -e "${BOLD}Condition B — Warm cache (explicit KV prefill)${NC}"
-echo    "  Load model → warm KV cache directly → test message (only user tokens prefilled)"
+echo ""; echo -e "${BOLD}Condition B — Warm cache (system prompt pre-cached)${NC}"
 echo ""
 
 WARM=()
@@ -190,8 +181,7 @@ for (( i=1; i<=N_RUNS; i++ )); do
   echo -n "  Run $i/$N_RUNS  "
   stop_mlx
   start_mlx_ready
-  warm_kv_cache          # directly warms the KV cache via MLX server
-  ms=$(measure_ttft)
+  ms=$(measure_ttft_direct "warm")   # triggers KV warm-up before measuring
   echo "→ ${ms} ms"
   WARM+=("$ms")
   stop_mlx; sleep 2
@@ -212,12 +202,13 @@ if not cold or not warm:
     print("  Not enough valid data."); sys.exit(0)
 cm=sum(cold)/len(cold); wm=sum(warm)/len(warm)
 d=cm-wm; p=d/cm*100 if cm else 0
-print(f"  Cold mean TTFT  : {cm:>7.0f} ms  (no prefill)")
-print(f"  Warm mean TTFT  : {wm:>7.0f} ms  (with prefill)")
-print(f"  Savings         : {d:>7.0f} ms  ({p:.1f}% faster)")
+print(f"  Cold mean  : {cm:>7.0f} ms  (no prefill — full {len(cold)}-token system prompt)")
+print(f"  Warm mean  : {wm:>7.0f} ms  (system prompt in KV cache)")
+print(f"  Savings    : {d:>7.0f} ms  ({p:.1f}% faster first response)")
 print()
-if p > 10:   print("  ✅  Prefill is clearly effective.")
-elif p > 0:  print("  ⚠️   Marginal gain — system prompt may be short or model is fast.")
-else:        print("  ❌  No improvement — model may not support prompt caching.")
+if p > 15:   print("  ✅  Prefill is clearly effective — significant TTFT reduction.")
+elif p > 5:  print("  ✅  Prefill is effective.")
+elif p > 0:  print("  ⚠️   Marginal gain — system prompt may be short or model is very fast.")
+else:        print("  ❌  No improvement detected.")
 PYEOF
 echo ""

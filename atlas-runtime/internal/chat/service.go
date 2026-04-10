@@ -3,11 +3,13 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"atlas-runtime-go/internal/agent"
@@ -70,7 +72,7 @@ type MessageItem struct {
 // that can track per-turn performance stats. Type-asserted at call sites so the
 // interface stays minimal for engines that don't support it.
 type InferenceRecorder interface {
-	RecordInference(promptTokens, completionTokens int, elapsed time.Duration, firstToken time.Duration, streamChunks int, streamChars int)
+	RecordInference(promptTokens, cachedPromptTokens, completionTokens int, elapsed time.Duration, firstToken time.Duration, streamChunks int, streamChars int)
 }
 
 // EngineAutoStarter is satisfied by engine.Manager and engine.MLXManager.
@@ -119,6 +121,7 @@ type Service struct {
 	summaryCache      map[string]conversationSummary // keyed by conversationID
 	greetingTelemetry GreetingTelemetry              // optional — set via SetGreetingTelemetry
 	surfacingRec      SurfacingRecorder              // optional — phase 7b test seam
+	turnCancels       sync.Map                       // convID → context.CancelFunc for in-flight turns
 }
 
 // NewService returns a ready chat Service.
@@ -158,6 +161,17 @@ func (s *Service) thoughtsEnabled() bool {
 		return true
 	}
 	return s.cfgStore.Load().ThoughtsEnabled
+}
+
+// CancelTurn cancels the in-flight agent turn for convID, if any.
+// The running agent context is cancelled; the turn exits and emits a
+// "cancelled" SSE event so the client can clean up.
+func (s *Service) CancelTurn(convID string) {
+	if v, ok := s.turnCancels.Load(convID); ok {
+		if cancel, ok := v.(context.CancelFunc); ok {
+			cancel()
+		}
+	}
 }
 
 // SetRouterEngineManager wires in the tool-router Engine LM manager so the chat
@@ -1485,7 +1499,14 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 	// This ensures an in-flight AI call is not interrupted when the client
 	// disconnects (e.g. page refresh) before the response arrives. The
 	// broadcaster delivers the response to the reconnected client.
-	agentCtx := context.WithoutCancel(ctx)
+	// A separate cancellable context allows the user to stop a turn mid-flight
+	// via POST /message/cancel without disrupting the HTTP lifecycle.
+	agentCtx, agentCancel := context.WithCancel(context.Background())
+	s.turnCancels.Store(convID, agentCancel)
+	defer func() {
+		agentCancel()
+		s.turnCancels.Delete(convID)
+	}()
 	turnStart := time.Now()
 	result := agentLoop.Run(agentCtx, loopCfg, oaiMessages, convID)
 
@@ -1505,6 +1526,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 			if rec, ok := s.mlxEngine.(InferenceRecorder); ok {
 				rec.RecordInference(
 					result.TotalUsage.InputTokens,
+					result.TotalUsage.CachedInputTokens,
 					result.TotalUsage.OutputTokens,
 					time.Since(turnStart),
 					result.FirstTokenAt,
@@ -1520,6 +1542,20 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 
 	switch result.Status {
 	case "error":
+		// If the error is a context cancellation triggered by the user (via
+		// POST /message/cancel), emit a clean "cancelled" event instead of an
+		// error so the client can show a neutral stopped state.
+		if result.Error != nil && errors.Is(result.Error, context.Canceled) {
+			logstore.Write("info", "Turn cancelled by user",
+				map[string]string{"conv": convID[:8]})
+			s.broadcaster.Emit(convID, SSEEvent{
+				Type:           "cancelled",
+				ConversationID: convID,
+			})
+			s.broadcaster.Finish(convID)
+			resp.Response.Status = "cancelled"
+			return resp, nil
+		}
 		errMsg := "Agent loop error"
 		if result.Error != nil {
 			errMsg = result.Error.Error()

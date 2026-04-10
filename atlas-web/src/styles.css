@@ -2150,11 +2150,6 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   27%            { transform: translateY(-4px); opacity: 0.75; }
 }
 
-/* Softened during background tool work — present but not demanding */
-.typing-dots.working span {
-  animation-duration: 2.8s;
-  opacity: 0.18;
-}
 
 /* ─── Banners ───────────────────────────────────────────── */
 
@@ -2541,49 +2536,6 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   }
 }
 
-/* ─── Presence line ──────────────────────────────────────── */
-/* Status text below the active assistant bubble.            */
-/* Fades in/out via opacity + translate transition.          */
-/* Left padding aligns it with the bubble edge               */
-/* (28px avatar + 10px gap = 38px).                          */
-
-.chat-presence-line {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 2px 0 2px 42px;
-  margin-top: -18px;
-  font-size: 12px;
-  color: var(--theme-text-muted);
-  opacity: 0;
-  transform: translateY(3px);
-  transition: opacity 220ms ease, transform 220ms ease;
-  pointer-events: none;
-  user-select: none;
-}
-
-.chat-presence-line.visible {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.chat-presence-text {
-  /* inherits font/color from parent */
-}
-
-.presence-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex-shrink: 0;
-  animation: presence-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes presence-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50%       { opacity: 0.4; transform: scale(0.75); }
-}
 
 /* ─── Code blocks — Atlas-themed ────────────────────────────
    Uses Atlas surface tokens so code blocks feel native to
@@ -3340,6 +3292,8 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   cursor: default;
 }
 
+/* Stop button — replaces send while the model is generating; inherits send button color */
+
 /* ─── Attachment chips ────────────────────────────────────── */
 
 .chat-attachment-chips {
@@ -3502,6 +3456,90 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 }
 
 .restart-overlay-actions .btn {
+  min-width: 96px;
+}
+
+/* ─── Confirm dialog ────────────────────────────────────── */
+
+.confirm-dialog-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  animation: confirm-dialog-in 180ms ease both;
+}
+
+@keyframes confirm-dialog-in {
+  from { opacity: 0 }
+  to   { opacity: 1 }
+}
+
+.confirm-dialog-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 36px 40px;
+  border-radius: 20px;
+  background: var(--theme-surface-card);
+  border: 1px solid var(--theme-border-subtle);
+  box-shadow: 0 20px 50px rgba(0,0,0,0.16);
+  max-width: 340px;
+  width: 100%;
+  text-align: center;
+  animation: confirm-dialog-card-in 220ms cubic-bezier(0.34,1.56,0.64,1) both;
+}
+
+@keyframes confirm-dialog-card-in {
+  from { opacity: 0; transform: scale(0.92) translateY(8px) }
+  to   { opacity: 1; transform: scale(1) translateY(0) }
+}
+
+.confirm-dialog-glyph {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent) 10%, var(--theme-surface-card));
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+
+.confirm-dialog-glyph-danger {
+  background: color-mix(in srgb, var(--control-danger-text) 10%, var(--theme-surface-card));
+  border-color: color-mix(in srgb, var(--control-danger-text) 22%, transparent);
+  color: var(--control-danger-text);
+}
+
+.confirm-dialog-title {
+  font-size: 17px;
+  font-weight: 650;
+  color: var(--theme-text-primary);
+  letter-spacing: -0.01em;
+}
+
+.confirm-dialog-body {
+  font-size: 13.5px;
+  color: var(--theme-text-secondary);
+  line-height: 1.5;
+  max-width: 260px;
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.confirm-dialog-actions .btn {
   min-width: 96px;
 }
 

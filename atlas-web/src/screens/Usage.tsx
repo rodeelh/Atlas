@@ -4,6 +4,7 @@ import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
 import type { TokenUsageSummary, TokenUsageEvent, DailyUsageSeries } from '../api/contracts'
 import { formatProviderModelName } from '../modelName'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 /* ── Formatters ──────────────────────────────────────────────────────────── */
 
@@ -227,8 +228,9 @@ export function Usage() {
   const [eventsOpen, setEventsOpen] = useState(false)
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState<string | null>(null)
-  const [clearing, setClearing]   = useState(false)
-  const [clearMsg, setClearMsg]   = useState<string | null>(null)
+  const [clearing, setClearing]     = useState(false)
+  const [clearMsg, setClearMsg]     = useState<string | null>(null)
+  const [pendingClear, setPendingClear] = useState(false)
   const [{ sortKey, sortDir }, setSortState] = useState(() => readPersistedUsageSort())
   const [isMobile, setIsMobile]   = useState(() => window.innerWidth <= 480)
 
@@ -281,8 +283,12 @@ export function Usage() {
     }
   }, [sortKey, sortDir])
 
-  const handleClear = async () => {
-    if (!confirm('Delete all token usage data older than 90 days? This cannot be undone.')) return
+  const handleClear = () => {
+    setPendingClear(true)
+  }
+
+  const confirmClear = async () => {
+    setPendingClear(false)
     setClearing(true)
     try {
       const before = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
@@ -753,6 +759,16 @@ export function Usage() {
         </div>
       </div>
 
+      {pendingClear && (
+        <ConfirmDialog
+          title="Clear old usage data?"
+          body="Usage records older than 90 days will be permanently deleted."
+          confirmLabel="Clear"
+          danger
+          onConfirm={confirmClear}
+          onCancel={() => setPendingClear(false)}
+        />
+      )}
     </div>
   )
 }

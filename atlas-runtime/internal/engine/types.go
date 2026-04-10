@@ -41,14 +41,16 @@ type DownloadProgress struct {
 // MLXInferenceStats holds per-turn performance metrics for the last completed
 // inference. Populated by MLXManager.RecordInference after each agent turn.
 type MLXInferenceStats struct {
-	DecodeTPS        float64 `json:"decodeTPS"`               // completion tokens / decode seconds
-	PromptTokens     int     `json:"promptTokens"`            // input tokens (from usage)
-	CompletionTokens int     `json:"completionTokens"`        // output tokens (from usage)
-	GenerationSec    float64 `json:"generationSec"`           // wall-clock seconds for the full turn
-	FirstTokenSec    float64 `json:"firstTokenSec,omitempty"` // time-to-first-token when streaming
-	StreamChunks     int     `json:"streamChunks,omitempty"`  // number of streamed assistant deltas
-	StreamChars      int     `json:"streamChars,omitempty"`   // total streamed text chars
-	AvgChunkChars    float64 `json:"avgChunkChars,omitempty"` // derived from stream chars / chunks
+	DecodeTPS          float64 `json:"decodeTPS"`                    // completion tokens / decode seconds
+	PromptTokens       int     `json:"promptTokens"`                 // input tokens (from usage)
+	CachedPromptTokens int     `json:"cachedPromptTokens,omitempty"` // prompt tokens served from mlx_lm prompt cache
+	CachedPromptRatio  float64 `json:"cachedPromptRatio,omitempty"`  // cachedPromptTokens / promptTokens
+	CompletionTokens   int     `json:"completionTokens"`             // output tokens (from usage)
+	GenerationSec      float64 `json:"generationSec"`                // wall-clock seconds for the full turn
+	FirstTokenSec      float64 `json:"firstTokenSec,omitempty"`      // time-to-first-token when streaming
+	StreamChunks       int     `json:"streamChunks,omitempty"`       // number of streamed assistant deltas
+	StreamChars        int     `json:"streamChars,omitempty"`        // total streamed text chars
+	AvgChunkChars      float64 `json:"avgChunkChars,omitempty"`      // derived from stream chars / chunks
 }
 
 // MLXStatus describes the current state of the MLX-LM process.
@@ -67,13 +69,22 @@ type MLXStatus struct {
 	Scheduler      MLXSchedulerStats  `json:"scheduler"`
 }
 
+type MLXModelCapabilities struct {
+	HasChatTemplate  bool   `json:"hasChatTemplate"`
+	HasToolCalling   bool   `json:"hasToolCalling"`
+	HasThinking      bool   `json:"hasThinking"`
+	ToolParserType   string `json:"toolParserType,omitempty"`
+	ChatTemplateType string `json:"chatTemplateType,omitempty"`
+}
+
 // MLXModelInfo describes one MLX model directory stored in mlx-models/.
 // Unlike llama.cpp where each model is a single .gguf file, MLX models
 // are directories containing safetensors shards + config.json.
 type MLXModelInfo struct {
-	Name      string `json:"name"`      // directory name, e.g. "Llama-3.2-3B-Instruct-4bit"
-	SizeBytes int64  `json:"sizeBytes"` // total bytes of all files in the directory
-	SizeHuman string `json:"sizeHuman"`
+	Name         string                `json:"name"`      // directory name, e.g. "Llama-3.2-3B-Instruct-4bit"
+	SizeBytes    int64                 `json:"sizeBytes"` // total bytes of all files in the directory
+	SizeHuman    string                `json:"sizeHuman"`
+	Capabilities *MLXModelCapabilities `json:"capabilities,omitempty"`
 }
 
 // MLXDownloadProgress tracks the state of an in-progress mlx_lm model download.

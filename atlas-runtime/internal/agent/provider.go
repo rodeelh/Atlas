@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -16,8 +19,18 @@ import (
 
 // TokenUsage holds the input and output token counts from a single AI call.
 type TokenUsage struct {
-	InputTokens  int
-	OutputTokens int
+	InputTokens       int
+	OutputTokens      int
+	CachedInputTokens int
+}
+
+type MLXRequestOptions struct {
+	Temperature        float64
+	TopP               float64
+	MinP               float64
+	RepetitionPenalty  float64
+	ChatTemplateKwargs map[string]any
+	Capabilities       *engine.MLXModelCapabilities
 }
 
 // streamResult is returned by streamWithToolDetection — the single streaming
@@ -67,6 +80,46 @@ type ProviderConfig struct {
 	Model        string
 	BaseURL      string            // used by local providers and OpenAI-compatible variants
 	ExtraHeaders map[string]string // optional provider-specific request headers
+	MLX          *MLXRequestOptions
+}
+
+func mergedMLXChatTemplateKwargs(p ProviderConfig) map[string]any {
+	if p.Type != ProviderAtlasMLX || p.MLX == nil || len(p.MLX.ChatTemplateKwargs) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(p.MLX.ChatTemplateKwargs))
+	for k, v := range p.MLX.ChatTemplateKwargs {
+		out[k] = v
+	}
+	return out
+}
+
+func applyMLXRequestOptions(reqBody map[string]any, p ProviderConfig, tools []map[string]any) {
+	if p.Type != ProviderAtlasMLX || p.MLX == nil {
+		return
+	}
+	// Only send temperature when explicitly non-zero. Sending temperature=0 in
+	// recent mlx-lm triggers a greedy-decoding path that crashes the Python
+	// process mid-stream when tools are present.
+	if p.MLX.Temperature > 0 {
+		reqBody["temperature"] = p.MLX.Temperature
+	}
+	// Only send top_p when it's a meaningful non-default value.
+	if p.MLX.TopP > 0 && p.MLX.TopP < 1 {
+		reqBody["top_p"] = p.MLX.TopP
+	}
+	// min_p and repetition_penalty are optional — only send when non-zero.
+	// Sending repetition_penalty=0 causes a validation error in recent mlx-lm
+	// (must be > 0 or absent).
+	if p.MLX.MinP > 0 {
+		reqBody["min_p"] = p.MLX.MinP
+	}
+	if p.MLX.RepetitionPenalty > 0 {
+		reqBody["repetition_penalty"] = p.MLX.RepetitionPenalty
+	}
+	if kwargs := mergedMLXChatTemplateKwargs(p); len(kwargs) > 0 {
+		reqBody["chat_template_kwargs"] = kwargs
+	}
 }
 
 // ── Non-streaming (Forge + RegenerateMind) ────────────────────────────────────
@@ -176,7 +229,62 @@ func streamWithToolDetection(
 		// and emit the full response text as one token event.
 		return nonStreamingAsStream(ctx, p, messages, tools, convID, bc)
 	default: // openai, gemini, atlas_mlx
-		return streamOpenAICompatWithToolDetection(ctx, p, messages, tools, convID, bc)
+		sr, err := streamOpenAICompatWithToolDetection(ctx, p, messages, tools, convID, bc)
+		if err != nil {
+			return streamResult{}, err
+		}
+		if p.Type == ProviderAtlasMLX {
+			log.Printf("mlx stream result: text_len=%d tool_calls=%d finish=%q tools_in=%d", len(sr.FinalText), len(sr.ToolCalls), sr.FinishReason, len(tools))
+		}
+		if p.Type == ProviderAtlasMLX && sr.FinalText == "" && len(sr.ToolCalls) == 0 {
+			start := time.Now()
+			msg, finishReason, usage, err := callOpenAICompatNonStreaming(ctx, p, messages, tools)
+			if err == nil {
+				text, _ := msg.Content.(string)
+				log.Printf("mlx retry with tools: text_len=%d tool_calls=%d finish=%q", len(text), len(msg.ToolCalls), finishReason)
+				if text != "" {
+					sr.FinalText = text
+					sr.ChunkCount++
+					sr.StreamChars = len(text)
+					if sr.FirstTokenAt <= 0 {
+						sr.FirstTokenAt = time.Since(start)
+					}
+					bc.Emit(convID, EmitEvent{Type: "assistant_delta", Content: text, Role: "assistant", ConvID: convID})
+				}
+				if len(msg.ToolCalls) > 0 {
+					sr.ToolCalls = msg.ToolCalls
+				}
+				sr.FinishReason = finishReason
+				sr.Usage = usage
+			} else {
+				log.Printf("mlx retry with tools failed: %v", err)
+			}
+			if sr.FinalText == "" && len(sr.ToolCalls) == 0 && len(tools) > 0 {
+				start = time.Now()
+				msg, finishReason, usage, err = callOpenAICompatNonStreaming(ctx, p, messages, nil)
+				if err == nil {
+					text, _ := msg.Content.(string)
+					log.Printf("mlx retry without tools: text_len=%d tool_calls=%d finish=%q", len(text), len(msg.ToolCalls), finishReason)
+					if text != "" {
+						sr.FinalText = text
+						sr.ChunkCount++
+						sr.StreamChars = len(text)
+						if sr.FirstTokenAt <= 0 {
+							sr.FirstTokenAt = time.Since(start)
+						}
+						bc.Emit(convID, EmitEvent{Type: "assistant_delta", Content: text, Role: "assistant", ConvID: convID})
+					}
+					if len(msg.ToolCalls) > 0 {
+						sr.ToolCalls = msg.ToolCalls
+					}
+					sr.FinishReason = finishReason
+					sr.Usage = usage
+				} else {
+					log.Printf("mlx retry without tools failed: %v", err)
+				}
+			}
+		}
+		return sr, nil
 	}
 }
 
@@ -370,6 +478,71 @@ func applyOpenAICompatHeaders(req *http.Request, p ProviderConfig) {
 	}
 }
 
+var atlasMLXHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:             http.ProxyFromEnvironment,
+		DisableKeepAlives: true,
+	},
+}
+
+func openAICompatHTTPClient(p ProviderConfig) *http.Client {
+	if p.Type == ProviderAtlasMLX {
+		return atlasMLXHTTPClient
+	}
+	return http.DefaultClient
+}
+
+func isTransientLocalRequestError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "server closed idle connection")
+}
+
+func doOpenAICompatRequest(ctx context.Context, p ProviderConfig, url string, body []byte) (*http.Response, error) {
+	client := openAICompatHTTPClient(p)
+	attempts := 1
+	if isLocalProvider(p.Type) {
+		attempts = 2
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		applyOpenAICompatHeaders(req, p)
+		if p.Type == ProviderAtlasMLX {
+			// mlx_lm.server speaks HTTP/1.0 and closes connections aggressively.
+			// Avoid pooled idle sockets and retry a fresh connection on EOF.
+			req.Close = true
+		}
+
+		resp, err := client.Do(req)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if !isTransientLocalRequestError(err) || attempt == attempts-1 {
+			return nil, err
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(150 * time.Millisecond):
+		}
+	}
+	return nil, lastErr
+}
+
 func callOpenAICompatNonStreaming(
 	ctx context.Context,
 	p ProviderConfig,
@@ -394,18 +567,13 @@ func callOpenAICompatNonStreaming(
 	if len(tools) > 0 {
 		reqBody["tools"] = tools
 	}
+	applyMLXRequestOptions(reqBody, p, tools)
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return OAIMessage{}, "", TokenUsage{}, err
 	}
-
 	url := oaiCompatBaseURL(p) + "/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return OAIMessage{}, "", TokenUsage{}, err
-	}
-	applyOpenAICompatHeaders(req, p)
 
 	releaseGate, _, _, err := acquireMLXRequestGate(ctx, p)
 	if err != nil {
@@ -413,7 +581,7 @@ func callOpenAICompatNonStreaming(
 	}
 	defer releaseGate()
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doOpenAICompatRequest(ctx, p, url, body)
 	if err != nil {
 		return OAIMessage{}, "", TokenUsage{}, fmt.Errorf("AI non-streaming request failed (%s): %w", p.Type, err)
 	}
@@ -427,9 +595,7 @@ func callOpenAICompatNonStreaming(
 				return OAIMessage{}, "", TokenUsage{}, ctx.Err()
 			case <-time.After(2 * time.Second):
 			}
-			retryReq, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-			applyOpenAICompatHeaders(retryReq, p)
-			resp, err = http.DefaultClient.Do(retryReq)
+			resp, err = doOpenAICompatRequest(ctx, p, url, body)
 			if err != nil {
 				return OAIMessage{}, "", TokenUsage{}, fmt.Errorf("AI non-streaming request failed (%s): %w", p.Type, err)
 			}
@@ -457,8 +623,11 @@ func callOpenAICompatNonStreaming(
 			FinishReason string          `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
+			PromptTokens        int `json:"prompt_tokens"`
+			CompletionTokens    int `json:"completion_tokens"`
+			PromptTokensDetails struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&completion); err != nil {
@@ -469,8 +638,9 @@ func callOpenAICompatNonStreaming(
 	}
 
 	usage := TokenUsage{
-		InputTokens:  completion.Usage.PromptTokens,
-		OutputTokens: completion.Usage.CompletionTokens,
+		InputTokens:       completion.Usage.PromptTokens,
+		OutputTokens:      completion.Usage.CompletionTokens,
+		CachedInputTokens: completion.Usage.PromptTokensDetails.CachedTokens,
 	}
 
 	choice := completion.Choices[0]
@@ -516,6 +686,7 @@ func streamOpenAICompatWithToolDetection(
 	if p.Type != ProviderLMStudio {
 		reqBody["stream_options"] = map[string]any{"include_usage": true}
 	}
+	applyMLXRequestOptions(reqBody, p, tools)
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
@@ -523,11 +694,6 @@ func streamOpenAICompatWithToolDetection(
 	}
 
 	url := oaiCompatBaseURL(p) + "/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return streamResult{}, err
-	}
-	applyOpenAICompatHeaders(req, p)
 
 	releaseGate, _, _, err := acquireMLXRequestGate(ctx, p)
 	if err != nil {
@@ -535,7 +701,7 @@ func streamOpenAICompatWithToolDetection(
 	}
 	defer releaseGate()
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doOpenAICompatRequest(ctx, p, url, body)
 	if err != nil {
 		return streamResult{}, fmt.Errorf("AI streaming request failed (%s): %w", p.Type, err)
 	}
@@ -549,9 +715,7 @@ func streamOpenAICompatWithToolDetection(
 				return streamResult{}, ctx.Err()
 			case <-time.After(2 * time.Second):
 			}
-			retryReq, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-			applyOpenAICompatHeaders(retryReq, p)
-			resp, err = http.DefaultClient.Do(retryReq)
+			resp, err = doOpenAICompatRequest(ctx, p, url, body)
 			if err != nil {
 				return streamResult{}, fmt.Errorf("AI streaming request failed (%s): %w", p.Type, err)
 			}
@@ -624,8 +788,11 @@ func streamOpenAICompatWithToolDetection(
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
 			Usage *struct {
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
+				PromptTokens        int `json:"prompt_tokens"`
+				CompletionTokens    int `json:"completion_tokens"`
+				PromptTokensDetails struct {
+					CachedTokens int `json:"cached_tokens"`
+				} `json:"prompt_tokens_details"`
 			} `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
@@ -636,6 +803,7 @@ func streamOpenAICompatWithToolDetection(
 		if chunk.Usage != nil {
 			usage.InputTokens = chunk.Usage.PromptTokens
 			usage.OutputTokens = chunk.Usage.CompletionTokens
+			usage.CachedInputTokens = chunk.Usage.PromptTokensDetails.CachedTokens
 		}
 		if len(chunk.Choices) == 0 {
 			continue

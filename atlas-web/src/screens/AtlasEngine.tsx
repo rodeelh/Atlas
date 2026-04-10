@@ -3,6 +3,7 @@ import { api, type EngineStatus, type EngineModelInfo, type RuntimeConfig } from
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { parseModelInfo } from '../modelName'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 // Pinned default — must match Atlas/Makefile LLAMA_VERSION
 const PINNED_VERSION = 'b8641'
@@ -153,6 +154,7 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
   const [update, setUpdate]         = useState<UpdateState | null>(null)
   const updateAbortRef = useRef<(() => void) | null>(null)
   const [latestVersion, setLatestVersion] = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
   const load = async () => {
     try {
@@ -339,8 +341,14 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
     finally { setActing(false) }
   }
 
-  const handleDelete = async (name: string) => {
-    if (!confirm(`Delete ${name}?`)) return
+  const handleDelete = (name: string) => {
+    setPendingDelete(name)
+  }
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return
+    const name = pendingDelete
+    setPendingDelete(null)
     setError(null)
     try { setModels(await api.engineDeleteModel(name)) }
     catch (e) { setError(e instanceof Error ? e.message : 'Failed to delete model.') }
@@ -1137,6 +1145,16 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
         </div>
       </div>
 
+      {pendingDelete && (
+        <ConfirmDialog
+          title={`Delete ${pendingDelete}?`}
+          body="This model file will be permanently removed from disk."
+          confirmLabel="Delete"
+          danger
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </div>
   )
 }

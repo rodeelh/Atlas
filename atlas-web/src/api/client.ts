@@ -241,6 +241,8 @@ export const api = {
       message,
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
     }),
+  cancelTurn: (conversationID: string) =>
+    post<void>('/message/cancel', { conversationId: conversationID }),
   streamMessage: (conversationID: string) =>
     new EventSource(`${BASE()}/message/stream?conversationID=${encodeURIComponent(conversationID)}`),
   approvals: () => get<Approval[]>('/approvals'),

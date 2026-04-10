@@ -4,6 +4,7 @@ import { api, WorkflowDefinition, WorkflowRun, WorkflowSummary } from '../api/cl
 import { PageHeader } from '../components/PageHeader'
 import { Portal } from '../components/Portal'
 import { buildWorkflowPayload, promptPreviewForWorkflow, trustSummaryForWorkflow } from './workflowScreenModel'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 const MoreIcon = () => (
   <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
@@ -295,8 +296,9 @@ export function Workflows() {
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState<WorkflowDefinition | 'new' | null>(null)
   const [runsTarget, setRunsTarget] = useState<WorkflowDefinition | null>(null)
-  const [runningID, setRunningID] = useState<string | null>(null)
-  const [togglingID, setTogglingID] = useState<string | null>(null)
+  const [runningID, setRunningID]     = useState<string | null>(null)
+  const [togglingID, setTogglingID]   = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<WorkflowDefinition | null>(null)
 
   async function load() {
     setLoading(true)
@@ -327,8 +329,14 @@ export function Workflows() {
     }
   }
 
-  async function handleDelete(workflow: WorkflowDefinition) {
-    if (!confirm(`Delete workflow "${workflow.name}"?`)) return
+  function handleDelete(workflow: WorkflowDefinition) {
+    setPendingDelete(workflow)
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return
+    const workflow = pendingDelete
+    setPendingDelete(null)
     await api.deleteWorkflow(workflow.id)
     setWorkflows(current => current.filter(item => item.id !== workflow.id))
   }
@@ -473,6 +481,16 @@ export function Workflows() {
       )}
 
       {runsTarget && <WorkflowRunsPanel workflow={runsTarget} onClose={() => setRunsTarget(null)} />}
+      {pendingDelete && (
+        <ConfirmDialog
+          title={`Delete "${pendingDelete.name}"?`}
+          body="This workflow will be permanently removed."
+          confirmLabel="Delete"
+          danger
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </div>
   )
 }

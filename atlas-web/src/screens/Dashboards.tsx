@@ -18,6 +18,7 @@ import {
 } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { WidgetRenderer } from './DashboardWidgets'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 const DashboardIcon = () => (
   <svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -248,6 +249,7 @@ function DashboardDetail(
   const [localWidgets, setLocalWidgets] = useState<DashboardWidget[]>([])
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState(false)
   const gridRef = useRef<HTMLDivElement>(null)
 
   // Drag and resize state — stored in refs to avoid triggering re-renders on
@@ -374,14 +376,19 @@ function DashboardDetail(
     }
   }
 
-  async function handleDelete() {
+  function handleDelete() {
     if (!def) return
-    if (!confirm(`Delete dashboard "${def.name}"?`)) return
+    setPendingDelete(true)
+  }
+
+  async function confirmDelete() {
+    if (!def) return
+    setPendingDelete(false)
     try {
       await api.deleteDashboard(def.id)
       onDelete(def.id)
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Failed to delete dashboard.')
+      setSaveError(e instanceof Error ? e.message : 'Failed to delete dashboard.')
     }
   }
 
@@ -419,6 +426,16 @@ function DashboardDetail(
             />
           ))}
         </div>
+      )}
+      {pendingDelete && def && (
+        <ConfirmDialog
+          title={`Delete "${def.name}"?`}
+          body="This dashboard will be permanently removed."
+          confirmLabel="Delete"
+          danger
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(false)}
+        />
       )}
     </div>
   )

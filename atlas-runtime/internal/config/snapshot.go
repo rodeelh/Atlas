@@ -65,13 +65,13 @@ type RuntimeConfigSnapshot struct {
 	SelectedAtlasEngineModelFast    string               `json:"selectedAtlasEngineModelFast"`
 	AtlasEngineContextWindowLimit   int                  `json:"atlasEngineContextWindowLimit"`
 	AtlasEngineMaxAgentIterations   int                  `json:"atlasEngineMaxAgentIterations"`
-	AtlasEngineCtxSize              int                  `json:"atlasEngineCtxSize"`       // llama-server --ctx-size (KV-cache token limit)
-	AtlasEngineKVCacheQuant         string               `json:"atlasEngineKVCacheQuant"`  // llama-server -ctk/-ctv quant level (for example: f32, f16, bf16, q8_0, q5_1, q5_0, q4_1, q4_0, iq4_nl)
-	AtlasEngineMlock                bool                 `json:"atlasEngineMlock"`         // llama-server --mlock — pin model in physical RAM
-	AtlasEngineRouterPort           int                  `json:"atlasEngineRouterPort"`    // port for the dedicated tool-router llama-server
-	AtlasEngineRouterModel          string               `json:"atlasEngineRouterModel"`   // GGUF filename for the tool router (e.g. gemma-4-2b-it-Q4_K_M.gguf)
-	AtlasEngineRouterForAll         bool                 `json:"atlasEngineRouterForAll"`  // use router for heavy background tasks too (memory, reflection, dream)
-	AtlasEngineDraftModel           string               `json:"atlasEngineDraftModel"`    // GGUF filename for speculative decoding draft model (same family as primary)
+	AtlasEngineCtxSize              int                  `json:"atlasEngineCtxSize"`      // llama-server --ctx-size (KV-cache token limit)
+	AtlasEngineKVCacheQuant         string               `json:"atlasEngineKVCacheQuant"` // llama-server -ctk/-ctv quant level (for example: f32, f16, bf16, q8_0, q5_1, q5_0, q4_1, q4_0, iq4_nl)
+	AtlasEngineMlock                bool                 `json:"atlasEngineMlock"`        // llama-server --mlock — pin model in physical RAM
+	AtlasEngineRouterPort           int                  `json:"atlasEngineRouterPort"`   // port for the dedicated tool-router llama-server
+	AtlasEngineRouterModel          string               `json:"atlasEngineRouterModel"`  // GGUF filename for the tool router (e.g. gemma-4-2b-it-Q4_K_M.gguf)
+	AtlasEngineRouterForAll         bool                 `json:"atlasEngineRouterForAll"` // use router for heavy background tasks too (memory, reflection, dream)
+	AtlasEngineDraftModel           string               `json:"atlasEngineDraftModel"`   // GGUF filename for speculative decoding draft model (same family as primary)
 
 	// ── MLX-LM subsystem (Apple Silicon only) ────────────────────────────────
 	//
@@ -83,12 +83,18 @@ type RuntimeConfigSnapshot struct {
 	// AtlasMLXPort is the primary inference port; AtlasMLXRouterPort is the
 	// dedicated router port (MLX-exclusive — replaces the llama.cpp router
 	// for MLX users). Atlas owns the Python venv at ~/.atlas-mlx.
-	AtlasMLXPort        int    `json:"atlasMLXPort"`        // default 11990
-	SelectedAtlasMLXModel  string `json:"selectedAtlasMLXModel"`  // directory name under mlx-models/
-	AtlasMLXCtxSize     int    `json:"atlasMLXCtxSize"`     // max-tokens for mlx_lm.server (default 4096)
-	AtlasMLXRouterPort  int    `json:"atlasMLXRouterPort"`  // default 11991 — MLX-exclusive router
-	AtlasMLXRouterModel string `json:"atlasMLXRouterModel"` // directory name for the MLX router model
-	AtlasMLXRouterForAll bool  `json:"atlasMLXRouterForAll"` // use MLX router for heavy background tasks too
+	AtlasMLXPort              int     `json:"atlasMLXPort"`              // default 11990
+	SelectedAtlasMLXModel     string  `json:"selectedAtlasMLXModel"`     // directory name under mlx-models/
+	AtlasMLXCtxSize           int     `json:"atlasMLXCtxSize"`           // --max-tokens for mlx_lm.server: max output tokens per response (default 4096)
+	AtlasMLXRouterPort        int     `json:"atlasMLXRouterPort"`        // default 11991 — MLX-exclusive router
+	AtlasMLXRouterModel       string  `json:"atlasMLXRouterModel"`       // directory name for the MLX router model
+	AtlasMLXRouterForAll      bool    `json:"atlasMLXRouterForAll"`      // use MLX router for heavy background tasks too
+	AtlasMLXTemperature       float64 `json:"atlasMLXTemperature"`       // default sampling temperature for mlx_lm.server requests
+	AtlasMLXTopP              float64 `json:"atlasMLXTopP"`              // default nucleus sampling parameter
+	AtlasMLXMinP              float64 `json:"atlasMLXMinP"`              // default min-p sampling parameter
+	AtlasMLXRepetitionPenalty float64 `json:"atlasMLXRepetitionPenalty"` // optional repetition penalty
+	AtlasMLXThinkingEnabled   bool    `json:"atlasMLXThinkingEnabled"`   // send enable_thinking=true in chat_template_kwargs for supported models
+	AtlasMLXChatTemplateArgs  string  `json:"atlasMLXChatTemplateArgs"`  // raw JSON object passed as chat_template_kwargs (overrides AtlasMLXThinkingEnabled)
 
 	// SelectedLocalEngine is the user-configured local backend.
 	// "atlas_engine" (llama.cpp) or "atlas_mlx" (MLX-LM).
@@ -96,15 +102,15 @@ type RuntimeConfigSnapshot struct {
 	// engine to activate. Defaults to "atlas_engine".
 	SelectedLocalEngine string `json:"selectedLocalEngine"`
 
-	EnableSmartToolSelection        bool                 `json:"enableSmartToolSelection"` // legacy — superseded by ToolSelectionMode
-	ToolSelectionMode               string               `json:"toolSelectionMode"`        // "off" | "lazy" | "heuristic" | "llm"
-	WebResearchUseJinaReader        bool                 `json:"webResearchUseJinaReader"`
-	EnableMultiAgentOrchestration   bool                 `json:"enableMultiAgentOrchestration"`
-	MaxParallelAgents               int                  `json:"maxParallelAgents"`
-	WorkerMaxIterations             int                  `json:"workerMaxIterations"`
-	RemoteAccessEnabled             bool                 `json:"remoteAccessEnabled"`
-	TailscaleEnabled                bool                 `json:"tailscaleEnabled"`
-	ModelContextWindow              int                  `json:"modelContextWindow"` // effective context window in tokens; 0 = auto-detect from provider
+	EnableSmartToolSelection      bool   `json:"enableSmartToolSelection"` // legacy — superseded by ToolSelectionMode
+	ToolSelectionMode             string `json:"toolSelectionMode"`        // "off" | "lazy" | "heuristic" | "llm"
+	WebResearchUseJinaReader      bool   `json:"webResearchUseJinaReader"`
+	EnableMultiAgentOrchestration bool   `json:"enableMultiAgentOrchestration"`
+	MaxParallelAgents             int    `json:"maxParallelAgents"`
+	WorkerMaxIterations           int    `json:"workerMaxIterations"`
+	RemoteAccessEnabled           bool   `json:"remoteAccessEnabled"`
+	TailscaleEnabled              bool   `json:"tailscaleEnabled"`
+	ModelContextWindow            int    `json:"modelContextWindow"` // effective context window in tokens; 0 = auto-detect from provider
 
 	// Voice — Whisper STT + Kokoro TTS.
 	VoiceSTTEnabled      bool   `json:"voiceSTTEnabled"`
@@ -294,6 +300,12 @@ func Defaults() RuntimeConfigSnapshot {
 		AtlasMLXRouterPort:              11991,
 		AtlasMLXRouterModel:             "",
 		AtlasMLXRouterForAll:            false,
+		AtlasMLXTemperature:             0,
+		AtlasMLXTopP:                    1,
+		AtlasMLXMinP:                    0,
+		AtlasMLXRepetitionPenalty:       0,
+		AtlasMLXThinkingEnabled:         false,
+		AtlasMLXChatTemplateArgs:        "",
 		EnableSmartToolSelection:        true,
 		ToolSelectionMode:               "lazy",
 		WebResearchUseJinaReader:        false,
