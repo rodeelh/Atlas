@@ -166,15 +166,13 @@
     {
       "id": "dashboards",
       "routes": [
-        { "method": "GET", "path": "/dashboards/proposals" },
-        { "method": "POST", "path": "/dashboards/proposals" },
-        { "method": "POST", "path": "/dashboards/install" },
-        { "method": "POST", "path": "/dashboards/reject" },
-        { "method": "GET", "path": "/dashboards/installed" },
-        { "method": "DELETE", "path": "/dashboards/installed" },
-        { "method": "POST", "path": "/dashboards/access" },
-        { "method": "POST", "path": "/dashboards/pin" },
-        { "method": "POST", "path": "/dashboards/widgets/execute" }
+        { "method": "GET", "path": "/dashboards" },
+        { "method": "POST", "path": "/dashboards" },
+        { "method": "GET", "path": "/dashboards/templates" },
+        { "method": "GET", "path": "/dashboards/{id}" },
+        { "method": "PUT", "path": "/dashboards/{id}" },
+        { "method": "DELETE", "path": "/dashboards/{id}" },
+        { "method": "POST", "path": "/dashboards/{id}/resolve" }
       ]
     },
     {

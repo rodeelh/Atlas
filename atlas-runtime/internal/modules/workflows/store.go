@@ -343,6 +343,12 @@ func runRecordFromRow(row storage.WorkflowRunRow) map[string]any {
 	} else if _, ok := record["stepRuns"]; !ok {
 		record["stepRuns"] = []map[string]any{}
 	}
+	if row.ApprovalJSON != nil && strings.TrimSpace(*row.ApprovalJSON) != "" {
+		var approval map[string]any
+		if json.Unmarshal([]byte(*row.ApprovalJSON), &approval) == nil && approval != nil {
+			record["approval"] = approval
+		}
+	}
 	return record
 }
 

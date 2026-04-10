@@ -5,8 +5,8 @@
         download-engine engine-update \
         download-whisper download-whisper-model \
         download-voice-venv download-kokoro download-kokoro-model download-voice \
-        tidy clean check \
-        test-fast test-standard verify-release scorecard
+        tidy clean check bump \
+        test-fast test-standard verify-release scorecard benchmark-chat
 
 RUNTIME_DIR  := atlas-runtime
 TUI_DIR      := atlas-tui
@@ -258,9 +258,9 @@ daemon-logs:
 
 check:
 	cd $(RUNTIME_DIR) && go fmt ./... && go vet ./...
-	cd $(RUNTIME_DIR) && go test ./...
-	cd $(TUI_DIR) && go fmt ./... && go vet ./...
-	cd $(TUI_DIR) && go test ./...
+
+benchmark-chat:
+	./scripts/benchmark-chat.sh
 
 # ── Tiered testing & release validation ─────────────────────────────────────
 # See docs/testing/README.md and scripts/verify-release.sh.
@@ -276,3 +276,9 @@ verify-release:
 
 scorecard: verify-release
 	@echo "→ docs/testing/atlas-test-scorecard.md"
+
+# ── Version bump ─────────────────────────────────────────────────────────────
+
+bump:
+	@cd $(WEB_DIR) && npm version patch --no-git-tag-version
+	@echo "→ Version bumped. Run 'make install' to deploy."

@@ -3,7 +3,7 @@ import { api, type APIKeyStatus, type CommunicationPlatformStatus, type Communic
 import { ErrorBanner } from '../components/ErrorBanner'
 
 type StepID = 'mind' | 'provider' | 'channel' | 'finish'
-type ProviderID = 'openai' | 'anthropic' | 'gemini' | 'lm_studio' | 'ollama' | 'atlas_engine'
+type ProviderID = 'openai' | 'anthropic' | 'gemini' | 'lm_studio' | 'ollama' | 'atlas_engine' | 'atlas_mlx'
 type PlatformID = CommunicationPlatformStatus['platform']
 
 const STEPS: Array<{ id: StepID; label: string; eyebrow: string; title: string; subtitle: string }> = [
@@ -43,7 +43,8 @@ const PROVIDERS: Array<{ id: ProviderID; label: string; hint: string; statusKey?
   { id: 'gemini', label: 'Gemini', hint: 'Google Gemini models with broad multimodal support.', statusKey: 'geminiKeySet' },
   { id: 'lm_studio', label: 'LM Studio', hint: 'Use a local model running on this machine.' },
   { id: 'ollama',        label: 'Ollama',         hint: 'Use any model pulled via Ollama on this machine.' },
-  { id: 'atlas_engine', label: 'Engine LM', hint: 'Atlas\'s built-in local inference engine — no external tools needed.' },
+  { id: 'atlas_engine', label: 'Llama', hint: 'Atlas\'s built-in llama.cpp local inference engine — no external tools needed.' },
+  { id: 'atlas_mlx', label: 'MLX', hint: 'Atlas\'s built-in Apple Silicon MLX local inference engine — optimized for on-device use.' },
 ]
 
 const CHANNEL_FIELDS: Record<PlatformID, Array<{ id: string; label: string; placeholder: string; inputType?: 'password' | 'text'; storage: 'apiKey' | 'config' }>> = {
@@ -120,7 +121,7 @@ function channelHint(platform: PlatformID) {
 function configuredProvider(providerID: ProviderID, keyStatus: APIKeyStatus | null) {
   const provider = PROVIDERS.find((candidate) => candidate.id === providerID)
   // Local providers don't need an API key — treat them as always configured.
-  if (!provider?.statusKey || !keyStatus) return providerID === 'lm_studio' || providerID === 'ollama' || providerID === 'atlas_engine'
+  if (!provider?.statusKey || !keyStatus) return providerID === 'lm_studio' || providerID === 'ollama' || providerID === 'atlas_engine' || providerID === 'atlas_mlx'
   return Boolean(keyStatus[provider.statusKey])
 }
 
@@ -211,7 +212,11 @@ export function Onboarding({ onCompleted }: { onCompleted: () => void }) {
   const continueFromProvider = async () => {
     if (!config) return
     const trimmedKey = providerKey.trim()
-    const needsKey = selectedProvider !== 'lm_studio' && selectedProvider !== 'ollama' && selectedProvider !== 'atlas_engine' && !configuredProvider(selectedProvider, keyStatus)
+    const isLocalProvider = selectedProvider === 'lm_studio'
+      || selectedProvider === 'ollama'
+      || selectedProvider === 'atlas_engine'
+      || selectedProvider === 'atlas_mlx'
+    const needsKey = !isLocalProvider && !configuredProvider(selectedProvider, keyStatus)
     if (needsKey && !trimmedKey) {
       setError(`Add a ${PROVIDERS.find((provider) => provider.id === selectedProvider)?.label ?? 'provider'} key to continue.`)
       return
@@ -227,9 +232,12 @@ export function Onboarding({ onCompleted }: { onCompleted: () => void }) {
       const nextConfig = {
         ...config,
         activeAIProvider: selectedProvider,
+        selectedLocalEngine: selectedProvider === 'atlas_engine' || selectedProvider === 'atlas_mlx'
+          ? selectedProvider
+          : config.selectedLocalEngine,
         lmStudioBaseURL: selectedProvider === 'lm_studio' ? lmStudioBaseURL.trim() || 'http://localhost:1234' : config.lmStudioBaseURL,
         ollamaBaseURL: selectedProvider === 'ollama' ? ollamaBaseURL.trim() || 'http://localhost:11434' : config.ollamaBaseURL,
-        // Engine LM port is configured in Settings after onboarding; no URL input needed here.
+        // Built-in local engine ports are configured in Settings after onboarding.
       }
       const { config: updatedConfig } = await api.updateConfig(nextConfig)
       setConfig(updatedConfig)
@@ -428,7 +436,7 @@ export function Onboarding({ onCompleted }: { onCompleted: () => void }) {
                 })}
               </div>
 
-              {selectedProvider !== 'lm_studio' && selectedProvider !== 'ollama' && selectedProvider !== 'atlas_engine' && (
+              {selectedProvider !== 'lm_studio' && selectedProvider !== 'ollama' && selectedProvider !== 'atlas_engine' && selectedProvider !== 'atlas_mlx' && (
                 <label class="onboarding-field">
                   <span>{PROVIDERS.find((provider) => provider.id === selectedProvider)?.label} API key</span>
                   <input
@@ -469,7 +477,13 @@ export function Onboarding({ onCompleted }: { onCompleted: () => void }) {
 
               {selectedProvider === 'atlas_engine' && (
                 <p class="onboarding-hint">
-                  Engine LM is built in — no server URL or API key needed. You can download and load models from Settings after setup.
+                  Llama is built in — no server URL or API key needed. You can download and load models from Settings after setup.
+                </p>
+              )}
+
+              {selectedProvider === 'atlas_mlx' && (
+                <p class="onboarding-hint">
+                  MLX is built in on Apple Silicon — no server URL or API key needed. You can download and load models from Settings after setup.
                 </p>
               )}
             </div>
@@ -535,7 +549,7 @@ export function Onboarding({ onCompleted }: { onCompleted: () => void }) {
                 <div class="onboarding-summary-card">
                   <div class="surface-eyebrow">Model</div>
                   <strong>{PROVIDERS.find((provider) => provider.id === selectedProvider)?.label ?? 'OpenAI'}</strong>
-                  <p>{configuredProvider(selectedProvider, keyStatus) || selectedProvider === 'lm_studio' || selectedProvider === 'ollama' || selectedProvider === 'atlas_engine' ? 'Atlas has a model path configured.' : 'You can still add the key later from Credentials.'}</p>
+                  <p>{configuredProvider(selectedProvider, keyStatus) || selectedProvider === 'lm_studio' || selectedProvider === 'ollama' || selectedProvider === 'atlas_engine' || selectedProvider === 'atlas_mlx' ? 'Atlas has a model path configured.' : 'You can still add the key later from Credentials.'}</p>
                 </div>
                 <div class="onboarding-summary-card">
                   <div class="surface-eyebrow">Channels</div>

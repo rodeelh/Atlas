@@ -5,7 +5,7 @@ package dashboards
 // We don't exercise the network path through agent.CallAINonStreamingExported
 // here — that would either need a real API key or a much heavier fake. The
 // failure modes that matter (malformed JSON, schema drift, allowlist bypass,
-// SQL smuggling, custom_html sneaking through) are all triggered through
+// SQL smuggling, custom_html rejection) are all triggered through
 // parseAndValidateDefinition with hand-crafted inputs.
 
 import (
@@ -152,17 +152,10 @@ func TestParseAndValidate_RejectsUnknownWidgetKind(t *testing.T) {
 	}
 }
 
-func TestParseAndValidate_AcceptsCustomHTMLWithBody(t *testing.T) {
-	// Stage 5: custom_html is allowed when html is set. The iframe sandbox +
-	// CSP block any harmful effect — so even an attempted <script>alert(1)</script>
-	// is contained inside the sandbox and cannot reach the parent page.
+func TestParseAndValidate_RejectsCustomHTMLWithBody(t *testing.T) {
 	resp := `{"name":"X","widgets":[{"id":"a","kind":"custom_html","html":"<div id=root></div>","js":"window.atlasRender=function(){};"}]}`
-	def, err := parseAndValidateDefinition(resp)
-	if err != nil {
-		t.Fatalf("expected custom_html with html field to be accepted, got %v", err)
-	}
-	if def.Widgets[0].HTML == "" {
-		t.Error("html field should be preserved on custom_html widgets")
+	if _, err := parseAndValidateDefinition(resp); err == nil {
+		t.Error("expected custom_html rejection for AI-generated dashboards")
 	}
 }
 
@@ -173,7 +166,7 @@ func TestParseAndValidate_RejectsCustomHTMLWithoutBody(t *testing.T) {
 	}
 }
 
-func TestParseAndValidate_CustomHTMLMayHaveSource(t *testing.T) {
+func TestParseAndValidate_RejectsCustomHTMLWithSource(t *testing.T) {
 	resp := `{
   "name":"X",
   "widgets":[{
@@ -181,8 +174,8 @@ func TestParseAndValidate_CustomHTMLMayHaveSource(t *testing.T) {
     "source":{"kind":"runtime","endpoint":"/status"}
   }]
 }`
-	if _, err := parseAndValidateDefinition(resp); err != nil {
-		t.Errorf("custom_html with runtime source should be accepted, got %v", err)
+	if _, err := parseAndValidateDefinition(resp); err == nil {
+		t.Error("expected custom_html with source to be rejected")
 	}
 }
 
@@ -352,4 +345,3 @@ func itoa(n int) string {
 	}
 	return string(b[i:])
 }
-

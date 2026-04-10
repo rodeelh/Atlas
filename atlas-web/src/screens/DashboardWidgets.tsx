@@ -313,9 +313,19 @@ export function NewsWidget({ widget, data }: { widget: DashboardWidget; data: un
 // ── table ─────────────────────────────────────────────────────────────────────
 
 export function TableWidget({ widget, data }: { widget: DashboardWidget; data: unknown }): JSX.Element {
-  const rows         = asArray(data)
+  const path         = (widget.options?.path as string) || ''
   const limit        = (widget.options?.limit as number)    || 100
   const explicitCols = widget.options?.columns as string[] | undefined
+  const raw          = path ? valueAtPath(data, path) : data
+  const rows         = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === 'object'
+      ? Object.entries(raw as Record<string, unknown>).map(([key, value]) => {
+          const keyCol = explicitCols?.[0] || 'key'
+          const valueCol = explicitCols?.[1] || 'value'
+          return { [keyCol]: key, [valueCol]: value }
+        })
+      : asArray(raw)
   const trimmed      = rows.slice(0, limit)
 
   if (trimmed.length === 0) {

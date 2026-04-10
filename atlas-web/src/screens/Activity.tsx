@@ -2,7 +2,7 @@ import { useState, useEffect } from 'preact/hooks'
 import { api, LogEntry, RuntimeStatus, RuntimeConfig, EngineStatus } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
-import { formatAtlasModelName } from '../modelName'
+import { formatAtlasModelName, formatProviderModelName } from '../modelName'
 import { toast } from '../toast'
 
 const LogCopyIcon = () => (
@@ -46,6 +46,10 @@ function formatRelative(iso: string): string {
   return `${Math.floor(diff / 86400000)}d ago`
 }
 
+function formatLogMessage(message: string): string {
+  return message.replace(/\s+/g, ' ').trim()
+}
+
 function levelClass(level: string): string {
   switch (level.toLowerCase()) {
     case 'debug':                return 'debug'
@@ -54,6 +58,30 @@ function levelClass(level: string): string {
     case 'error': case 'fault':  return 'error'
     default:                     return 'info'
   }
+}
+
+function formatLevelLabel(level: string): string {
+  switch (level.toLowerCase()) {
+    case 'debug': return 'Debug'
+    case 'warning':
+    case 'warn': return 'Warning'
+    case 'error': return 'Error'
+    case 'fault': return 'Fault'
+    default: return 'Info'
+  }
+}
+
+function formatMetadataKey(key: string): string {
+  const expanded = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .trim()
+  if (!expanded) return key
+  return expanded.charAt(0).toUpperCase() + expanded.slice(1)
+}
+
+function formatMetadataValue(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
 }
 
 function stateBadge(state: string) {
@@ -74,7 +102,8 @@ function formatProvider(p: string | null | undefined): string {
     case 'gemini':       return 'Gemini'
     case 'lm_studio':    return 'LM Studio'
     case 'ollama':       return 'Ollama'
-    case 'atlas_engine': return 'Atlas Engine'
+    case 'atlas_engine': return 'Local LM'
+    case 'atlas_mlx':    return 'Local LM'
     default:             return p ?? '—'
   }
 }
@@ -87,6 +116,7 @@ function activeModelName(cfg: RuntimeConfig | null): string {
     case 'lm_studio':    return cfg.selectedLMStudioModel?.trim()     || '—'
     case 'ollama':       return cfg.selectedOllamaModel?.trim()       || '—'
     case 'atlas_engine': return formatAtlasModelName(cfg.selectedAtlasEngineModel?.trim() || '') || '—'
+    case 'atlas_mlx':    return formatProviderModelName('atlas_mlx', cfg.selectedAtlasMLXModel?.trim() || '') || '—'
     default:             return cfg.selectedOpenAIPrimaryModel?.trim() || '—'
   }
 }
@@ -105,9 +135,15 @@ export function Activity() {
   const [logFilter, setLogFilter]     = useState<LogFilter>('all')
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [copiedLogId, setCopiedLogId] = useState<string | null>(null)
+  const [expandedLogIds, setExpandedLogIds] = useState<Set<string>>(new Set())
 
-  const copyLog = async (entry: LogEntry, metaStr: string) => {
-    const text = `[${formatTime(entry.timestamp)}] [${entry.level}] ${entry.message}${metaStr}`
+  const copyLog = async (entry: LogEntry) => {
+    const metadataLines = entry.metadata && Object.keys(entry.metadata).length > 0
+      ? '\n' + Object.entries(entry.metadata)
+        .map(([key, value]) => `${formatMetadataKey(key)}: ${formatMetadataValue(value)}`)
+        .join('\n')
+      : ''
+    const text = `[${formatTime(entry.timestamp)}] [${formatLevelLabel(entry.level).toUpperCase()}] ${formatLogMessage(entry.message)}${metadataLines}`
     try {
       await navigator.clipboard.writeText(text)
       setCopiedLogId(entry.id)
@@ -149,6 +185,15 @@ export function Activity() {
     if (logFilter === 'error') return lv === 'error' || lv === 'fault'
     return lv === logFilter
   })
+
+  const toggleDetails = (id: string) => {
+    setExpandedLogIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   if (loading) {
     return (
@@ -234,7 +279,7 @@ export function Activity() {
       {/* ── Logs ── */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <div class="section-label activity-log-header">
-          <span>Logs</span>
+          <span>Event Log</span>
           <div class="log-filter-tabs">
             {(['all', 'info', 'warn', 'error'] as LogFilter[]).map(f => (
               <button
@@ -242,36 +287,79 @@ export function Activity() {
                 class={`log-filter-tab${logFilter === f ? ' active' : ''}`}
                 onClick={() => setLogFilter(f)}
               >
-                {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
+                {f === 'all' ? 'All' : f === 'warn' ? 'Warnings' : f.charAt(0).toUpperCase() + f.slice(1)}
               </button>
             ))}
           </div>
           <span class="activity-live">
             <span class="activity-live-dot" />
-            live
+            Live
           </span>
         </div>
         <div class="card" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {filteredLogs.length === 0 ? (
             <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-3)', fontSize: '13px' }}>
-              {logFilter === 'all' ? 'Send a message to start seeing activity logs' : `No ${logFilter} entries`}
+              {logFilter === 'all' ? 'Send a message to start seeing activity here.' : `No ${logFilter === 'warn' ? 'warning' : logFilter} entries yet.`}
             </div>
           ) : (
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '8px 0' }}>
               {filteredLogs.map(entry => {
                 const isError = entry.level === 'error' || entry.level === 'fault'
-                const metaStr = entry.metadata && Object.keys(entry.metadata).length > 0
-                  ? '  ' + Object.entries(entry.metadata).map(([k, v]) => `${k}=${v}`).join('  ')
-                  : ''
+                const isExpanded = expandedLogIds.has(entry.id)
+                const metadataEntries = entry.metadata
+                  ? Object.entries(entry.metadata)
+                      .map(([key, value]) => ({
+                        key,
+                        label: formatMetadataKey(key),
+                        value: formatMetadataValue(value),
+                      }))
+                      .filter(item => item.value.length > 0)
+                  : []
                 return (
                   <div class={`log-entry${isError ? ' log-entry-error' : ''}`} key={entry.id}>
-                    <span class="log-time">{formatTime(entry.timestamp)}</span>
-                    <span class={`log-level-dot ${levelClass(entry.level)}`} title={entry.level} style={{ marginTop: '7px' }} />
-                    <span class="log-message" title={entry.message + metaStr}>{entry.message}</span>
+                    <div class="log-entry-body">
+                      <div class="log-entry-summary">
+                        <span class="log-time">{formatTime(entry.timestamp)}</span>
+                        <span class={`log-level-badge ${levelClass(entry.level)}`} title={entry.level}>
+                          {formatLevelLabel(entry.level)}
+                        </span>
+                        <span class="log-summary-separator" aria-hidden="true">-</span>
+                        <span class="log-message" title={formatLogMessage(entry.message)}>{formatLogMessage(entry.message)}</span>
+                      </div>
+                      {isExpanded && (
+                        <div class="log-details">
+                          <div class="log-details-row">
+                            <span class="log-details-label">Summary</span>
+                            <span class="log-details-value">{formatLogMessage(entry.message)}</span>
+                          </div>
+                          {metadataEntries.length > 0 && (
+                            <div class="log-details-row">
+                              <span class="log-details-label">Metadata</span>
+                              <div class="log-details-meta-list">
+                                {metadataEntries.map(item => (
+                                  <div class="log-details-meta-item" key={`${entry.id}-${item.key}`}>
+                                    <span class="log-details-meta-key">{item.label}</span>
+                                    <span class="log-details-meta-value">{item.value}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                     <button
-                      class={`log-copy-btn${copiedLogId === entry.id ? ' copied' : ''}`}
-                      onClick={() => copyLog(entry, metaStr)}
-                      title="Copy"
+                      class={`log-action-btn${isExpanded ? ' active' : ''}`}
+                      onClick={() => toggleDetails(entry.id)}
+                      title={isExpanded ? 'Hide details' : 'Show details'}
+                      aria-label={isExpanded ? 'Hide log entry details' : 'Show log entry details'}
+                    >
+                      {isExpanded ? 'Hide' : 'Details'}
+                    </button>
+                    <button
+                      class={`log-action-btn log-copy-btn${copiedLogId === entry.id ? ' copied' : ''}`}
+                      onClick={() => copyLog(entry)}
+                      title="Copy entry"
                       aria-label="Copy log entry"
                     >
                       {copiedLogId === entry.id ? <LogCheckIcon /> : <LogCopyIcon />}

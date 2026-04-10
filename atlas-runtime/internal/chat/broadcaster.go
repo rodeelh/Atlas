@@ -3,6 +3,7 @@ package chat
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	"atlas-runtime-go/internal/logstore"
@@ -33,67 +34,104 @@ func (e SSEEvent) Encoded() []byte {
 // Safe for concurrent use.
 type Broadcaster struct {
 	mu      sync.Mutex
-	streams map[string]chan SSEEvent
+	streams map[string]map[string]chan SSEEvent
+	nextID  uint64
 }
 
 // NewBroadcaster returns a ready Broadcaster.
 func NewBroadcaster() *Broadcaster {
-	return &Broadcaster{streams: make(map[string]chan SSEEvent)}
+	return &Broadcaster{streams: make(map[string]map[string]chan SSEEvent)}
 }
 
-// Register creates a buffered channel for conversationID and returns it.
+// Register creates a buffered channel for conversationID and returns a
+// subscription id plus the channel.
 // The caller must call Remove when the SSE connection closes.
-func (b *Broadcaster) Register(convID string) <-chan SSEEvent {
+func (b *Broadcaster) Register(convID string) (string, <-chan SSEEvent) {
 	ch := make(chan SSEEvent, 256)
 	b.mu.Lock()
-	b.streams[convID] = ch
+	b.nextID++
+	subID := fmt.Sprintf("sub-%d", b.nextID)
+	if b.streams[convID] == nil {
+		b.streams[convID] = make(map[string]chan SSEEvent)
+	}
+	b.streams[convID][subID] = ch
 	b.mu.Unlock()
-	return ch
+	return subID, ch
 }
 
-// Emit sends an event to the registered channel for convID.
-// It is a no-op if no listener is registered (e.g. client disconnected early).
+// Emit sends an event to all registered channels for convID.
+// It is a no-op if no listeners are registered (e.g. clients disconnected early).
 func (b *Broadcaster) Emit(convID string, event SSEEvent) {
 	b.mu.Lock()
-	ch, ok := b.streams[convID]
+	listeners := b.streams[convID]
+	type listener struct {
+		subID string
+		ch    chan SSEEvent
+	}
+	snapshot := make([]listener, 0, len(listeners))
+	for subID, ch := range listeners {
+		snapshot = append(snapshot, listener{subID: subID, ch: ch})
+	}
 	b.mu.Unlock()
-	if !ok {
+	if len(snapshot) == 0 {
 		return
 	}
-	select {
-	case ch <- event:
-	default:
-		// Channel full — drop rather than block. Log so the operator knows.
-		logstore.Write("warn", "SSE channel full — event dropped",
-			map[string]string{"conv": convID, "type": event.Type})
+
+	for _, listener := range snapshot {
+		select {
+		case listener.ch <- event:
+		default:
+			// Channel full — drop rather than block. Log so the operator knows.
+			logstore.Write("warn", "SSE channel full — event dropped",
+				map[string]string{"conv": convID, "type": event.Type, "subscriber": listener.subID})
+		}
 	}
 }
 
-// Finish closes the channel for convID and removes it from the registry.
+// Finish closes all channels for convID and removes them from the registry.
 func (b *Broadcaster) Finish(convID string) {
 	b.mu.Lock()
-	ch, ok := b.streams[convID]
-	if ok {
+	listeners, ok := b.streams[convID]
+	if len(listeners) > 0 {
 		delete(b.streams, convID)
 	}
 	b.mu.Unlock()
 	if ok {
-		close(ch)
+		for _, ch := range listeners {
+			close(ch)
+		}
 	}
 }
 
 // Remove removes the channel for convID without closing it.
 // Use this when the SSE handler exits before Finish is called.
-func (b *Broadcaster) Remove(convID string) {
+func (b *Broadcaster) Remove(convID, subID string) {
 	b.mu.Lock()
-	delete(b.streams, convID)
-	b.mu.Unlock()
+	defer b.mu.Unlock()
+	listeners := b.streams[convID]
+	if len(listeners) == 0 {
+		return
+	}
+	delete(listeners, subID)
+	if len(listeners) == 0 {
+		delete(b.streams, convID)
+	}
 }
 
-// ActiveCount returns the number of currently registered SSE listeners.
+// ActiveCount returns the total number of currently registered SSE listeners.
 func (b *Broadcaster) ActiveCount() int {
 	b.mu.Lock()
-	n := len(b.streams)
-	b.mu.Unlock()
+	defer b.mu.Unlock()
+	n := 0
+	for _, listeners := range b.streams {
+		n += len(listeners)
+	}
 	return n
+}
+
+// ConversationSubscriberCount returns the active listener count for a conversation.
+func (b *Broadcaster) ConversationSubscriberCount(convID string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.streams[convID])
 }

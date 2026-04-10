@@ -233,6 +233,51 @@ func compactArtifactValue(value any) (any, bool) {
 			return nil, false
 		}
 		return items, true
+	case map[string]any:
+		if len(v) == 0 {
+			return nil, false
+		}
+		keys := make([]string, 0, len(v))
+		for key := range v {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		out := make(map[string]any)
+		for _, key := range keys {
+			cv, ok := compactArtifactValue(v[key])
+			if !ok {
+				continue
+			}
+			out[key] = cv
+			if len(out) >= 4 {
+				break
+			}
+		}
+		if len(out) == 0 {
+			return nil, false
+		}
+		return out, true
+	case []map[string]any:
+		if len(v) == 0 {
+			return nil, false
+		}
+		out := make([]map[string]any, 0, min(len(v), 2))
+		for _, item := range v {
+			cv, ok := compactArtifactValue(item)
+			if !ok {
+				continue
+			}
+			if m, ok := cv.(map[string]any); ok {
+				out = append(out, m)
+			}
+			if len(out) >= 2 {
+				break
+			}
+		}
+		if len(out) == 0 {
+			return nil, false
+		}
+		return out, true
 	default:
 		text := strings.TrimSpace(fmt.Sprint(v))
 		if text == "" || text == "<nil>" {

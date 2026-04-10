@@ -1389,6 +1389,23 @@ func (db *DB) ListWorkflowRuns(workflowID string, limit int) ([]WorkflowRunRow, 
 	return out, rows.Err()
 }
 
+// GetWorkflowRun returns one workflow run by ID.
+func (db *DB) GetWorkflowRun(runID string) (*WorkflowRunRow, error) {
+	row := db.conn.QueryRow(
+		`SELECT run_id, workflow_id, workflow_name, status, outcome, input_values_json, step_runs_json,
+		        approval_json, assistant_summary, error_message, started_at, finished_at, conversation_id,
+		        trigger_source, duration_ms, artifacts_json, record_json
+		 FROM workflow_runs WHERE run_id = ?`, runID)
+	out, err := scanWorkflowRunRow(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &out, nil
+}
+
 // SaveWorkflowRun inserts one workflow run row.
 func (db *DB) SaveWorkflowRun(row WorkflowRunRow) error {
 	_, err := db.conn.Exec(
@@ -1396,7 +1413,24 @@ func (db *DB) SaveWorkflowRun(row WorkflowRunRow) error {
 		 (run_id, workflow_id, workflow_name, status, outcome, input_values_json, step_runs_json,
 		  approval_json, assistant_summary, error_message, started_at, finished_at, conversation_id,
 		  trigger_source, duration_ms, artifacts_json, record_json)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(run_id) DO UPDATE SET
+		  workflow_id=excluded.workflow_id,
+		  workflow_name=excluded.workflow_name,
+		  status=excluded.status,
+		  outcome=excluded.outcome,
+		  input_values_json=excluded.input_values_json,
+		  step_runs_json=excluded.step_runs_json,
+		  approval_json=excluded.approval_json,
+		  assistant_summary=excluded.assistant_summary,
+		  error_message=excluded.error_message,
+		  started_at=excluded.started_at,
+		  finished_at=excluded.finished_at,
+		  conversation_id=excluded.conversation_id,
+		  trigger_source=excluded.trigger_source,
+		  duration_ms=excluded.duration_ms,
+		  artifacts_json=excluded.artifacts_json,
+		  record_json=excluded.record_json`,
 		row.RunID, row.WorkflowID, row.WorkflowName, row.Status, row.Outcome,
 		row.InputValuesJSON, row.StepRunsJSON, row.ApprovalJSON, row.AssistantSummary,
 		row.ErrorMessage, row.StartedAt, row.FinishedAt, row.ConversationID,
@@ -2222,7 +2256,7 @@ func (db *DB) BackfillTokenUsageCosts() int {
 		SELECT id, provider, model, input_tokens, output_tokens
 		FROM token_usage
 		WHERE total_cost_usd = 0
-		  AND provider NOT IN ('lm_studio', 'ollama', 'atlas_engine')
+		  AND provider NOT IN ('lm_studio', 'ollama', 'atlas_engine', 'atlas_mlx')
 	`)
 	if err != nil {
 		return 0

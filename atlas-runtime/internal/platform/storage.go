@@ -47,6 +47,7 @@ type WorkflowStore interface {
 	SaveWorkflow(row storage.WorkflowRow) error
 	DeleteWorkflow(id string) (bool, error)
 	ListWorkflowRuns(workflowID string, limit int) ([]storage.WorkflowRunRow, error)
+	GetWorkflowRun(runID string) (*storage.WorkflowRunRow, error)
 	SaveWorkflowRun(row storage.WorkflowRunRow) error
 	CompleteWorkflowRun(runID, status string, outcome, assistantSummary, errorMessage, finishedAt *string, durationMs int64, artifactsJSON *string) error
 	UpdateWorkflowRunStepRuns(runID, stepRunsJSON string) error
@@ -178,6 +179,10 @@ func (s workflowStore) DeleteWorkflow(id string) (bool, error) {
 
 func (s workflowStore) ListWorkflowRuns(workflowID string, limit int) ([]storage.WorkflowRunRow, error) {
 	return s.db.ListWorkflowRuns(workflowID, limit)
+}
+
+func (s workflowStore) GetWorkflowRun(runID string) (*storage.WorkflowRunRow, error) {
+	return s.db.GetWorkflowRun(runID)
 }
 
 func (s workflowStore) SaveWorkflowRun(row storage.WorkflowRunRow) error {

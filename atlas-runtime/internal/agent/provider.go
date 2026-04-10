@@ -179,8 +179,8 @@ func nonStreamingAsStream(
 	convID string,
 	bc Emitter,
 ) (streamResult, error) {
-	// Emit an empty "assistant started" token first (matches streaming behaviour).
-	bc.Emit(convID, EmitEvent{Type: "token", Role: "assistant", ConvID: convID})
+	// Emit the explicit start event so the UI can open a bubble immediately.
+	bc.Emit(convID, EmitEvent{Type: "assistant_started", Role: "assistant", ConvID: convID})
 
 	msg, finishReason, usage, err := callOpenAICompatNonStreaming(ctx, p, messages, tools)
 	if err != nil {
@@ -193,7 +193,7 @@ func nonStreamingAsStream(
 		text = s
 	}
 	if text != "" {
-		bc.Emit(convID, EmitEvent{Type: "token", Content: text, Role: "assistant", ConvID: convID})
+		bc.Emit(convID, EmitEvent{Type: "assistant_delta", Content: text, Role: "assistant", ConvID: convID})
 	}
 
 	return streamResult{
@@ -542,7 +542,7 @@ func streamOpenAICompatWithToolDetection(
 		return streamResult{}, fmt.Errorf("AI streaming error %d (%s): %s", resp.StatusCode, p.Type, string(bodyBytes))
 	}
 
-	bc.Emit(convID, EmitEvent{Type: "token", Role: "assistant", ConvID: convID})
+	bc.Emit(convID, EmitEvent{Type: "assistant_started", Role: "assistant", ConvID: convID})
 
 	// toolAccum holds partially-streamed data for one tool call.
 	type toolAccum struct {
@@ -641,7 +641,7 @@ func streamOpenAICompatWithToolDetection(
 		// Emit text tokens in real time.
 		if token := choice.Delta.Content; token != "" {
 			fullText.WriteString(token)
-			bc.Emit(convID, EmitEvent{Type: "token", Content: token, Role: "assistant", ConvID: convID})
+			bc.Emit(convID, EmitEvent{Type: "assistant_delta", Content: token, Role: "assistant", ConvID: convID})
 		}
 	}
 
@@ -1050,7 +1050,7 @@ func streamAnthropicWithToolDetection(
 		return streamResult{}, fmt.Errorf("Anthropic streaming error %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	bc.Emit(convID, EmitEvent{Type: "token", Role: "assistant", ConvID: convID})
+	bc.Emit(convID, EmitEvent{Type: "assistant_started", Role: "assistant", ConvID: convID})
 
 	// toolAccum holds the accumulated state for one tool_use content block.
 	type toolAccum struct {
@@ -1125,7 +1125,7 @@ func streamAnthropicWithToolDetection(
 				if event.Delta.Text != "" {
 					fullText.WriteString(event.Delta.Text)
 					bc.Emit(convID, EmitEvent{
-						Type:    "token",
+						Type:    "assistant_delta",
 						Content: event.Delta.Text,
 						Role:    "assistant",
 						ConvID:  convID,

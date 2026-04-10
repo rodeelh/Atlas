@@ -245,3 +245,113 @@ func TestModule_RunWorkflowPropagatesTrustScopeToolPolicy(t *testing.T) {
 		t.Fatalf("unexpected allowed prefixes: %+v", stub.lastReq.ToolPolicy.AllowedToolPrefixes)
 	}
 }
+
+func TestModule_RunWorkflowStepByStepWaitsForApprovalAndAdvances(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := features.AppendWorkflowDefinition(dir, map[string]any{
+		"id":             "wf-approval",
+		"name":           "Approval Review",
+		"promptTemplate": "Review the source material",
+		"approvalMode":   "step_by_step",
+		"steps": []map[string]any{
+			{"id": "extract", "title": "Extract", "kind": "prompt", "prompt": "Extract the key facts."},
+			{"id": "summarize", "title": "Summarize", "kind": "prompt", "prompt": "Summarize the facts."},
+		},
+	}); err != nil {
+		t.Fatalf("AppendWorkflowDefinition: %v", err)
+	}
+
+	stub := &stubAgentRuntime{}
+	stub.response.Response.AssistantMessage = "step done"
+	host := platform.NewHost(stubConfig{}, platform.NewSQLiteStorage(db), stub, platform.NoopContextAssembler{}, platform.NewInProcessBus(8))
+	module := New(dir)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	record, err := module.runWorkflowSync(context.Background(), "wf-approval", nil, "test")
+	if err != nil {
+		t.Fatalf("runWorkflowSync: %v", err)
+	}
+	if record["status"] != "waiting_for_approval" {
+		t.Fatalf("expected waiting_for_approval, got %+v", record)
+	}
+	if len(stub.requests) != 0 {
+		t.Fatalf("expected no agent calls before approval, got %d", len(stub.requests))
+	}
+	if approval, _ := record["approval"].(map[string]any); approval["reason"] == nil {
+		t.Fatalf("expected approval payload, got %+v", record["approval"])
+	}
+
+	runID, _ := record["id"].(string)
+	updated, err := module.resumeWorkflowAfterApproval(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("resumeWorkflowAfterApproval: %v", err)
+	}
+	if updated["status"] != "waiting_for_approval" {
+		t.Fatalf("expected second checkpoint, got %+v", updated)
+	}
+	if len(stub.requests) != 1 || !strings.Contains(stub.requests[0].Message, "Workflow step 1 of 2: Extract") {
+		t.Fatalf("unexpected first-step requests: %+v", stub.requests)
+	}
+
+	finalRecord, err := module.resumeWorkflowAfterApproval(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("second resumeWorkflowAfterApproval: %v", err)
+	}
+	if finalRecord["status"] != "completed" {
+		t.Fatalf("expected completed run, got %+v", finalRecord)
+	}
+	if len(stub.requests) != 2 || !strings.Contains(stub.requests[1].Message, "Workflow step 2 of 2: Summarize") {
+		t.Fatalf("unexpected requests after second approval: %+v", stub.requests)
+	}
+}
+
+func TestModule_DenyWorkflowRunClosesPendingApproval(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := features.AppendWorkflowDefinition(dir, map[string]any{
+		"id":             "wf-deny",
+		"name":           "Deny Review",
+		"promptTemplate": "Review the source material",
+		"approvalMode":   "step_by_step",
+		"steps": []map[string]any{
+			{"id": "extract", "title": "Extract", "kind": "prompt", "prompt": "Extract the key facts."},
+		},
+	}); err != nil {
+		t.Fatalf("AppendWorkflowDefinition: %v", err)
+	}
+
+	host := platform.NewHost(stubConfig{}, platform.NewSQLiteStorage(db), &stubAgentRuntime{}, platform.NoopContextAssembler{}, platform.NewInProcessBus(8))
+	module := New(dir)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	record, err := module.runWorkflowSync(context.Background(), "wf-deny", nil, "test")
+	if err != nil {
+		t.Fatalf("runWorkflowSync: %v", err)
+	}
+	runID, _ := record["id"].(string)
+	denied, err := module.denyWorkflowRunRecord(runID)
+	if err != nil {
+		t.Fatalf("denyWorkflowRunRecord: %v", err)
+	}
+	if denied["status"] != "denied" {
+		t.Fatalf("expected denied status, got %+v", denied)
+	}
+	if denied["errorMessage"] != "Workflow run denied." {
+		t.Fatalf("unexpected deny message: %+v", denied)
+	}
+}

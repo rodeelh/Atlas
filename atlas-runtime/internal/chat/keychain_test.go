@@ -122,6 +122,35 @@ func TestResolveBackgroundProvider_EngineHealthyUsesDefaultPort(t *testing.T) {
 	}
 }
 
+func TestResolveBackgroundProvider_UsesSelectedSupportiveLocalEngine(t *testing.T) {
+	seenPort := 0
+	withResolverTestHooks(t, credentialBundle{OpenAIAPIKey: "openai"}, func(port int) bool {
+		seenPort = port
+		return true
+	})
+
+	cfg := config.Defaults()
+	cfg.ActiveAIProvider = "openai"
+	cfg.SelectedOpenAIFastModel = "gpt-4.1-mini"
+	cfg.SelectedLocalEngine = "atlas_mlx"
+	cfg.AtlasMLXRouterPort = 0
+	cfg.AtlasMLXRouterModel = "Qwen2.5-0.5B-Instruct-4bit"
+
+	p, err := ResolveBackgroundProvider(cfg)
+	if err != nil {
+		t.Fatalf("ResolveBackgroundProvider: %v", err)
+	}
+	if p.Type != agent.ProviderAtlasMLX {
+		t.Fatalf("expected atlas_mlx, got %s", p.Type)
+	}
+	if seenPort != 11991 {
+		t.Fatalf("expected default MLX router port 11991, got %d", seenPort)
+	}
+	if p.Model == "" || p.Model == "Qwen2.5-0.5B-Instruct-4bit" {
+		t.Fatalf("expected full MLX model path for router, got %q", p.Model)
+	}
+}
+
 func TestResolveBackgroundProvider_EngineUnhealthyFallsBack(t *testing.T) {
 	withResolverTestHooks(t, credentialBundle{OpenAIAPIKey: "openai"}, func(int) bool { return false })
 
@@ -148,5 +177,28 @@ func TestResolveHeavyBackgroundProvider_HonorsRouterForAll(t *testing.T) {
 	}
 	if p.Type != agent.ProviderAtlasEngine {
 		t.Fatalf("expected atlas_engine when router_for_all enabled, got %s", p.Type)
+	}
+}
+
+func TestResolveHeavyBackgroundProvider_UsesSelectedSupportiveLocalEngine(t *testing.T) {
+	withResolverTestHooks(t, credentialBundle{OpenAIAPIKey: "openai"}, func(int) bool { return true })
+
+	cfg := config.Defaults()
+	cfg.ActiveAIProvider = "openai"
+	cfg.SelectedOpenAIFastModel = "gpt-4.1-mini"
+	cfg.SelectedLocalEngine = "atlas_mlx"
+	cfg.AtlasMLXRouterForAll = true
+	cfg.SelectedAtlasMLXModel = "Llama-3.2-3B-Instruct-4bit"
+	cfg.AtlasMLXRouterModel = "Qwen2.5-0.5B-Instruct-4bit"
+
+	p, err := ResolveHeavyBackgroundProvider(cfg)
+	if err != nil {
+		t.Fatalf("ResolveHeavyBackgroundProvider: %v", err)
+	}
+	if p.Type != agent.ProviderAtlasMLX {
+		t.Fatalf("expected atlas_mlx, got %s", p.Type)
+	}
+	if p.Model == "" || p.Model == "Qwen2.5-0.5B-Instruct-4bit" {
+		t.Fatalf("expected full MLX model path for router, got %q", p.Model)
 	}
 }

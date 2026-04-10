@@ -132,38 +132,41 @@ func engineRouterReady(port int) bool {
 }
 
 // resolveBackgroundProvider returns the best provider for LIGHT background tasks
-// (tool routing, classification). Prefers the Engine LM router when ready —
-// free, local, private — regardless of the active primary provider.
-// Falls back to the cloud fast model via resolveFastProvider.
+// (tool routing, classification).
+//
+// Router selection:
+//   - atlas_mlx active or selected as the supportive local engine → prefer the
+//     MLX router (port AtlasMLXRouterPort / 11991).
+//   - atlas_engine active or selected as the supportive local engine → prefer
+//     the llama.cpp router (port AtlasEngineRouterPort / 11986).
+//   - Any other provider → fall through to cloud fast model.
+//
+// Falls back to ResolveFastProvider when the preferred router is unavailable.
 func resolveBackgroundProvider(cfg config.RuntimeConfigSnapshot, turn *turnContext) (agent.ProviderConfig, bool, error) {
 	if turn != nil && turn.routerFallbackSticky {
 		p, err := resolveFastProvider(cfg)
 		return p, true, err
 	}
 
-	port := cfg.AtlasEngineRouterPort
-	if port == 0 {
-		port = 11986
-	}
-	if engineRouterReadyFn(port) {
-		return agent.ProviderConfig{
-			Type:    agent.ProviderAtlasEngine,
-			APIKey:  "",
-			Model:   "router", // llama-server uses whatever model is loaded; name is advisory
-			BaseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
-		}, false, nil
-	}
-	p, err := resolveFastProvider(cfg)
-	return p, true, err
-}
-
-// resolveHeavyBackgroundProvider returns the best provider for HEAVY background
-// tasks (memory extraction, mind reflection, dream cycle). These tasks are
-// quality-sensitive, so the Engine LM router is only used when the user has
-// explicitly opted in via AtlasEngineRouterForAll. Otherwise falls back to the
-// cloud fast model which offers better output quality.
-func resolveHeavyBackgroundProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, error) {
-	if cfg.AtlasEngineRouterForAll {
+	switch supportiveLocalProviderType(cfg) {
+	case agent.ProviderAtlasMLX:
+		port := cfg.AtlasMLXRouterPort
+		if port == 0 {
+			port = 11991
+		}
+		if engineRouterReadyFn(port) {
+			routerModelName := filepath.Base(cfg.AtlasMLXRouterModel)
+			if routerModelName == "" || routerModelName == "." {
+				routerModelName = "router"
+			}
+			return agent.ProviderConfig{
+				Type:    agent.ProviderAtlasMLX,
+				APIKey:  "",
+				Model:   filepath.Join(config.MLXModelsDir(), routerModelName),
+				BaseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
+			}, false, nil
+		}
+	case agent.ProviderAtlasEngine:
 		port := cfg.AtlasEngineRouterPort
 		if port == 0 {
 			port = 11986
@@ -174,10 +177,79 @@ func resolveHeavyBackgroundProvider(cfg config.RuntimeConfigSnapshot) (agent.Pro
 				APIKey:  "",
 				Model:   "router",
 				BaseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
-			}, nil
+			}, false, nil
+		}
+	}
+	p, err := resolveFastProvider(cfg)
+	return p, true, err
+}
+
+// resolveHeavyBackgroundProvider returns the best provider for HEAVY background
+// tasks (memory extraction, mind reflection, dream cycle). These tasks are
+// quality-sensitive, so the local router is only used when the user has
+// explicitly opted in via the router-for-all toggle.
+//
+//   - atlas_mlx active OR selected as the supportive local engine, with
+//     AtlasMLXRouterForAll → MLX router when healthy.
+//   - atlas_engine active OR selected as the supportive local engine, with
+//     AtlasEngineRouterForAll → llama.cpp router when healthy.
+//   - Otherwise → cloud fast model (better quality for consolidation tasks).
+func resolveHeavyBackgroundProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, error) {
+	switch supportiveLocalProviderType(cfg) {
+	case agent.ProviderAtlasMLX:
+		if cfg.AtlasMLXRouterForAll {
+			port := cfg.AtlasMLXRouterPort
+			if port == 0 {
+				port = 11991
+			}
+			if engineRouterReadyFn(port) {
+				routerModelName := filepath.Base(cfg.AtlasMLXRouterModel)
+				if routerModelName == "" || routerModelName == "." {
+					routerModelName = "router"
+				}
+				return agent.ProviderConfig{
+					Type:    agent.ProviderAtlasMLX,
+					APIKey:  "",
+					Model:   filepath.Join(config.MLXModelsDir(), routerModelName),
+					BaseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
+				}, nil
+			}
+		}
+	case agent.ProviderAtlasEngine:
+		if cfg.AtlasEngineRouterForAll {
+			port := cfg.AtlasEngineRouterPort
+			if port == 0 {
+				port = 11986
+			}
+			if engineRouterReadyFn(port) {
+				return agent.ProviderConfig{
+					Type:    agent.ProviderAtlasEngine,
+					APIKey:  "",
+					Model:   "router",
+					BaseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
+				}, nil
+			}
 		}
 	}
 	return resolveFastProvider(cfg)
+}
+
+func supportiveLocalProviderType(cfg config.RuntimeConfigSnapshot) agent.ProviderType {
+	switch active := agent.ProviderType(cfg.ActiveAIProvider); active {
+	case agent.ProviderAtlasEngine, agent.ProviderAtlasMLX:
+		return active
+	}
+
+	local := agent.ProviderType(cfg.SelectedLocalEngine)
+	if local == "" {
+		local = agent.ProviderAtlasEngine
+	}
+	switch local {
+	case agent.ProviderAtlasEngine, agent.ProviderAtlasMLX:
+		return local
+	default:
+		return ""
+	}
 }
 
 // resolveFastProvider builds a ProviderConfig that targets the fast model for
@@ -310,6 +382,27 @@ func resolveFastProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig
 			BaseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
 		}, nil
 
+	case agent.ProviderAtlasMLX:
+		// MLX-LM: one port, one process. Fast and primary share the same BaseURL.
+		// mlx_lm.server 0.30+ matches requests by the full model path (the value
+		// returned in /v1/models). Sending only the directory name causes it to
+		// attempt a HuggingFace lookup and fail with a 401/404.
+		modelName := filepath.Base(cfg.SelectedAtlasMLXModel)
+		if modelName == "" || modelName == "." {
+			modelName = "mlx-model"
+		}
+		model := filepath.Join(config.MLXModelsDir(), modelName)
+		port := cfg.AtlasMLXPort
+		if port == 0 {
+			port = 11990
+		}
+		return agent.ProviderConfig{
+			Type:    agent.ProviderAtlasMLX,
+			APIKey:  "",
+			Model:   model,
+			BaseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
+		}, nil
+
 	default: // openai
 		if bundle.OpenAIAPIKey == "" {
 			return agent.ProviderConfig{}, fmt.Errorf("OpenAI API key not configured")
@@ -420,6 +513,26 @@ func resolveProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, er
 			APIKey:  "", // Engine LM is local — no API key
 			Model:   model,
 			BaseURL: baseURL,
+		}, nil
+
+	case agent.ProviderAtlasMLX:
+		// MLX-LM is local — no API key. mlx_lm.server 0.30+ matches the request
+		// model field against /v1/models IDs which use the full model path.
+		// Sending only the directory name causes a HuggingFace lookup and 401/404.
+		modelName := filepath.Base(cfg.SelectedAtlasMLXModel)
+		if modelName == "" || modelName == "." {
+			modelName = "mlx-model"
+		}
+		model := filepath.Join(config.MLXModelsDir(), modelName)
+		port := cfg.AtlasMLXPort
+		if port == 0 {
+			port = 11990
+		}
+		return agent.ProviderConfig{
+			Type:    agent.ProviderAtlasMLX,
+			APIKey:  "",
+			Model:   model,
+			BaseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
 		}, nil
 
 	case agent.ProviderOpenRouter:

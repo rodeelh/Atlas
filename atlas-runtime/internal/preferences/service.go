@@ -4,6 +4,11 @@
 package preferences
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"os/exec"
+	"strings"
 	"sync"
 
 	"atlas-runtime-go/internal/config"
@@ -15,11 +20,24 @@ type Prefs struct {
 	TemperatureUnit string // "celsius" | "fahrenheit"
 	Currency        string // ISO 4217 e.g. "USD", "EUR", "AED"
 	UnitSystem      string // "metric" | "imperial"
+	Initialized     bool
 }
 
 var (
 	mu      sync.RWMutex
 	current Prefs
+
+	execSecurity = func(args ...string) (string, error) {
+		cmd := exec.Command("security", args...)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		if err != nil {
+			return "", fmt.Errorf("security %v failed: %w — %s", args, err, strings.TrimSpace(stderr.String()))
+		}
+		return strings.TrimSpace(stdout.String()), nil
+	}
 )
 
 // Get returns the current preferences.
@@ -31,6 +49,9 @@ func Get() Prefs {
 
 // Set stores preferences in memory and persists them.
 func Set(p Prefs) {
+	if p.TemperatureUnit != "" || p.Currency != "" || p.UnitSystem != "" {
+		p.Initialized = true
+	}
 	mu.Lock()
 	current = p
 	mu.Unlock()
@@ -74,46 +95,59 @@ func LoadFromConfig() {
 		TemperatureUnit: cfg.UserTemperatureUnit,
 		Currency:        cfg.UserCurrency,
 		UnitSystem:      cfg.UserUnitSystem,
+		Initialized:     cfg.UserPreferencesInitialized,
+	}
+	if p.TemperatureUnit != "" || p.Currency != "" || p.UnitSystem != "" {
+		p.Initialized = true
+	}
+	if kp, ok := loadFromKeychain(); ok {
+		if p.TemperatureUnit == "" {
+			p.TemperatureUnit = kp.TemperatureUnit
+		}
+		if p.Currency == "" {
+			p.Currency = kp.Currency
+		}
+		if p.UnitSystem == "" {
+			p.UnitSystem = kp.UnitSystem
+		}
+		if kp.Initialized {
+			p.Initialized = true
+		}
 	}
 	mu.Lock()
 	current = p
 	mu.Unlock()
+	if p.Initialized {
+		persist(p)
+	}
 }
 
 // InferFromCountry sets preferences based on the country name if they are not
 // already configured (i.e. zero-value). Call this after IP detection.
 func InferFromCountry(country string) {
+	if strings.TrimSpace(country) == "" {
+		return
+	}
 	mu.Lock()
 	p := current
-	changed := false
-
-	if p.TemperatureUnit == "" {
-		p.TemperatureUnit = tempUnitForCountry(country)
-		changed = true
+	if p.Initialized {
+		mu.Unlock()
+		return
 	}
-	if p.UnitSystem == "" {
-		p.UnitSystem = unitSystemForCountry(country)
-		changed = true
-	}
-	if p.Currency == "" {
-		p.Currency = currencyForCountry(country)
-		changed = true
-	}
-
-	if changed {
-		current = p
-	}
+	p.TemperatureUnit = tempUnitForCountry(country)
+	p.UnitSystem = unitSystemForCountry(country)
+	p.Currency = currencyForCountry(country)
+	p.Initialized = true
+	current = p
 	mu.Unlock()
 
-	if changed {
-		persist(p)
-		logstore.Write("info", "Preferences inferred from country: "+country,
-			map[string]string{
-				"tempUnit":   p.TemperatureUnit,
-				"currency":   p.Currency,
-				"unitSystem": p.UnitSystem,
-			})
-	}
+	persist(p)
+	logstore.Write("info", "Preferences inferred from country: "+country,
+		map[string]string{
+			"tempUnit":   p.TemperatureUnit,
+			"currency":   p.Currency,
+			"unitSystem": p.UnitSystem,
+		})
 }
 
 // ── internals ─────────────────────────────────────────────────────────────────
@@ -123,7 +157,39 @@ func persist(p Prefs) {
 	cfg.UserTemperatureUnit = p.TemperatureUnit
 	cfg.UserCurrency = p.Currency
 	cfg.UserUnitSystem = p.UnitSystem
+	cfg.UserPreferencesInitialized = p.Initialized
 	_ = config.SaveGoConfig(cfg)
+	_ = saveToKeychain(p)
+}
+
+func loadFromKeychain() (Prefs, bool) {
+	out, err := execSecurity("find-generic-password", "-s", "com.projectatlas.preferences", "-a", "locale", "-w")
+	if err != nil {
+		return Prefs{}, false
+	}
+	var p Prefs
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &p); err != nil {
+		return Prefs{}, false
+	}
+	if p.TemperatureUnit == "" && p.Currency == "" && p.UnitSystem == "" && !p.Initialized {
+		return Prefs{}, false
+	}
+	if p.TemperatureUnit != "" || p.Currency != "" || p.UnitSystem != "" {
+		p.Initialized = true
+	}
+	return p, true
+}
+
+func saveToKeychain(p Prefs) error {
+	if p.TemperatureUnit == "" && p.Currency == "" && p.UnitSystem == "" && !p.Initialized {
+		return nil
+	}
+	data, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	_, err = execSecurity("add-generic-password", "-U", "-s", "com.projectatlas.preferences", "-a", "locale", "-w", string(data))
+	return err
 }
 
 // fahrenheitCountries is the small set of countries that use °F.

@@ -171,6 +171,31 @@ func TestFormatForModelCompactsArtifacts(t *testing.T) {
 	}
 }
 
+func TestFormatForModelKeepsNestedArtifactsStructured(t *testing.T) {
+	r := OKResult("Fetched source", map[string]any{
+		"source": map[string]any{
+			"url":        "https://openai.com",
+			"confidence": "high",
+			"status":     200,
+			"ignored":    strings.Repeat("x", 200),
+		},
+	})
+	s := r.FormatForModel()
+
+	var out map[string]any
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	data, _ := out["data"].(map[string]any)
+	source, _ := data["source"].(map[string]any)
+	if source["url"] != "https://openai.com" {
+		t.Fatalf("source.url = %v", source["url"])
+	}
+	if source["confidence"] != "high" {
+		t.Fatalf("source.confidence = %v", source["confidence"])
+	}
+}
+
 // ── Dry-run context ───────────────────────────────────────────────────────────
 
 func TestWithDryRun(t *testing.T) {

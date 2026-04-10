@@ -1,8 +1,11 @@
+import { createPortal } from 'preact/compat'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api, type RuntimeConfig } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
 import type { RuntimeConfigUpdateResponse } from '../api/client'
+
+type RestartPhase = 'confirm' | 'restarting' | 'done'
 
 export function Settings() {
   const [config, setConfig] = useState<RuntimeConfig | null>(null)
@@ -18,6 +21,11 @@ export function Settings() {
   const [locationSaving, setLocationSaving] = useState(false)
   const [locationError, setLocationError] = useState<string | null>(null)
   const [prefs, setPrefs] = useState<{ temperatureUnit: string; currency: string; unitSystem: string } | null>(null)
+  const [restartPhase, setRestartPhase] = useState<RestartPhase | null>(null)
+  const [restartStatus, setRestartStatus] = useState('Restarting Atlas…')
+
+  const canRestartLocally = typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
 
   useEffect(() => {
     const init = async () => {
@@ -61,6 +69,27 @@ export function Settings() {
       setError(err instanceof Error ? err.message : 'Failed to save config.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const restartAtlas = () => setRestartPhase('confirm')
+
+  const confirmRestart = async () => {
+    setRestartPhase('restarting')
+    setRestartStatus('Restarting Atlas…')
+    setError(null)
+    setSaved(false)
+    setRestartRequired(false)
+    try {
+      await api.restartAtlas()
+      setRestartStatus('Reconnecting…')
+      const recovered = await waitForAtlasRestart()
+      if (!recovered) throw new Error('Atlas did not come back online in time.')
+      setRestartPhase('done')
+      window.setTimeout(() => setRestartPhase(null), 2500)
+    } catch (err) {
+      setRestartPhase(null)
+      setError(err instanceof Error ? err.message : 'Failed to restart Atlas.')
     }
   }
 
@@ -108,6 +137,15 @@ export function Settings() {
         }
       />
 
+      {restartPhase && createPortal(
+        <RestartOverlay
+          phase={restartPhase}
+          status={restartStatus}
+          onConfirm={() => void confirmRestart()}
+          onCancel={() => setRestartPhase(null)}
+        />,
+        document.body
+      )}
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
       {saved && !isDirty && !restartRequired && <div class="banner banner-success">Changes saved.</div>}
       {restartRequired && (
@@ -213,10 +251,35 @@ export function Settings() {
               setError(err instanceof Error ? err.message : 'Failed to update Tailscale setting.')
             }
           }}
+          onRestart={restartAtlas}
+          restarting={restartPhase === 'restarting'}
+          canRestartLocally={canRestartLocally}
         />
       </SettingsGroup>
     </div>
   )
+}
+
+async function waitForAtlasRestart(): Promise<boolean> {
+  const startedAt = Date.now()
+  const deadline = startedAt + 60000
+  const minSuccessAfter = startedAt + 2500
+  let sawDisconnect = false
+
+  while (Date.now() < deadline) {
+    try {
+      await api.status()
+      const now = Date.now()
+      if (now >= minSuccessAfter && (sawDisconnect || now-startedAt >= 5000)) {
+        return true
+      }
+    } catch {
+      sawDisconnect = true
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 1000))
+  }
+
+  return false
 }
 
 function SettingsGroup({ title, children }: { title: string; children: preact.ComponentChild }) {
@@ -311,11 +374,17 @@ function RemoteAccessSection({
   tailscaleEnabled,
   onToggle,
   onTailscaleToggle,
+  onRestart,
+  restarting,
+  canRestartLocally,
 }: {
   enabled: boolean
   tailscaleEnabled: boolean
   onToggle: (v: boolean) => void
   onTailscaleToggle: (v: boolean) => void
+  onRestart: () => void
+  restarting: boolean
+  canRestartLocally: boolean
 }) {
   const [status, setStatus] = useState<{
     lanIP: string | null
@@ -473,6 +542,73 @@ function RemoteAccessSection({
           )}
         </SettingsRow>
       )}
+      <SettingsRow
+        label="Restart Atlas"
+        sublabel={canRestartLocally
+          ? 'Gracefully restart the Atlas daemon and reconnect this page automatically.'
+          : 'Restart is only available from a local Atlas session on this Mac.'}
+        mobileSplit
+      >
+        <button class="btn btn-sm" onClick={onRestart} disabled={restarting || !canRestartLocally}>
+          {restarting ? 'Restarting…' : 'Restart Atlas'}
+        </button>
+      </SettingsRow>
     </>
+  )
+}
+
+function RestartOverlay({
+  phase,
+  status,
+  onConfirm,
+  onCancel,
+}: {
+  phase: RestartPhase
+  status: string
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  return (
+    <div class="restart-overlay">
+      <div class="restart-overlay-card">
+        <div class={`restart-overlay-glyph${phase === 'restarting' ? ' restart-overlay-glyph-spin' : phase === 'done' ? ' restart-overlay-glyph-done' : ''}`}>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            {phase === 'done' ? (
+              <path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            ) : (
+              <>
+                <path d="M21 12a9 9 0 1 1-2.64-6.36" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                <path d="M21 3v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              </>
+            )}
+          </svg>
+        </div>
+
+        {phase === 'confirm' && (
+          <>
+            <div class="restart-overlay-title">Restart Atlas?</div>
+            <div class="restart-overlay-body">Active requests will be interrupted. Atlas will reconnect automatically.</div>
+            <div class="restart-overlay-actions">
+              <button class="btn" onClick={onCancel}>Cancel</button>
+              <button class="btn btn-primary" onClick={onConfirm}>Restart</button>
+            </div>
+          </>
+        )}
+
+        {phase === 'restarting' && (
+          <>
+            <div class="restart-overlay-title">{status}</div>
+            <div class="restart-overlay-body">This usually takes a few seconds.</div>
+          </>
+        )}
+
+        {phase === 'done' && (
+          <>
+            <div class="restart-overlay-title">Atlas is back</div>
+            <div class="restart-overlay-body">Everything is running normally.</div>
+          </>
+        )}
+      </div>
+    </div>
   )
 }

@@ -21,6 +21,7 @@ import { Onboarding } from './screens/Onboarding'
 import { Toaster } from './components/Toaster'
 import { HeaderChromeContext } from './components/PageHeader'
 import { api, RuntimeStatus } from './api/client'
+import { buildDocumentTitle } from './screens/chatStream'
 
 type Screen =
   | 'chat'
@@ -48,6 +49,9 @@ const VALID_SCREENS: Screen[] = [
   'local-lm', 'usage',
   'docs',
 ]
+
+const UNREAD_CHAT_REPLIES_KEY = 'atlasUnreadChatReplies'
+const BASE_DOCUMENT_TITLE = 'Atlas'
 
 function getInitialScreen(): Screen {
   const hash = window.location.hash.replace('#', '') as Screen
@@ -342,7 +346,13 @@ export function App() {
   const [pendingApprovals, setPendingApprovals] = useState(0)
   const [pendingProposals, setPendingProposals] = useState(0)
   const [pendingGreetings, setPendingGreetings] = useState(0)
-  const [unreadChatReplies, setUnreadChatReplies] = useState(0)
+  const [unreadChatReplies, setUnreadChatReplies] = useState<number>(() => {
+    try {
+      return Number(localStorage.getItem(UNREAD_CHAT_REPLIES_KEY) ?? '0') || 0
+    } catch {
+      return 0
+    }
+  })
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null)
   const [collapsed, setCollapsed]         = useState<boolean>(() =>
@@ -416,6 +426,22 @@ export function App() {
     }
     prevNotifyRef.current = hasNotify
   }, [pendingGreetings, unreadChatReplies, screen])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(UNREAD_CHAT_REPLIES_KEY, String(unreadChatReplies))
+    } catch {
+      /* ignore */
+    }
+  }, [unreadChatReplies])
+
+  useEffect(() => {
+    document.title = buildDocumentTitle(BASE_DOCUMENT_TITLE, {
+      pendingGreetings,
+      unreadReplies: unreadChatReplies,
+      pendingApprovals,
+    })
+  }, [pendingGreetings, unreadChatReplies, pendingApprovals])
 
   // Poll approval count + status for sidebar badge
   useEffect(() => {
@@ -737,7 +763,7 @@ export function App() {
             </div>
           ) : (
             <div class="runtime-status">
-              <span style={{ color: 'var(--theme-text-muted)', letterSpacing: '0.01em' }}>v0.2</span>
+              <span style={{ color: 'var(--theme-text-muted)', letterSpacing: '0.01em' }}>v{__APP_VERSION__}</span>
               <span style={{ color: 'var(--theme-text-muted)' }}>—</span>
               <span class={dotClass} />
               <span>{statusLabel}</span>

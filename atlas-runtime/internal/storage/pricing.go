@@ -229,7 +229,7 @@ func lookupPrice(model string) (ModelPrice, bool) {
 // Unknown cloud models return $0, known=false so the caller can log a warning.
 func ComputeCost(provider, model string, inputTokens, outputTokens int) (inputCost, outputCost float64, known bool) {
 	switch provider {
-	case "lm_studio", "ollama", "atlas_engine":
+	case "lm_studio", "ollama", "atlas_engine", "atlas_mlx":
 		return 0, 0, true
 	}
 	price, ok := lookupPrice(model)

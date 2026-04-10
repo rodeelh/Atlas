@@ -180,26 +180,53 @@ func (m *Module) runWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeWorkflowRunError(w, err)
 		return
 	}
+	if requiresStepByStepApproval(prepared.Definition, promptStepDefinitions(prepared.Definition)) {
+		record, err := m.pauseWorkflowForApproval(prepared, 0, workflowexec.InitialStepRuns(prepared.Definition), "")
+		if err != nil {
+			writeWorkflowRunError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, record)
+		return
+	}
 	go m.finishWorkflowRun(context.Background(), prepared)
 	writeJSON(w, http.StatusAccepted, prepared.Record)
 }
 
 func (m *Module) approveWorkflowRun(w http.ResponseWriter, r *http.Request) {
 	runID := chi.URLParam(r, "runID")
-	result, err := m.updateRunStatus(runID, "approved")
+	result, err := m.resumeWorkflowAfterApproval(context.Background(), runID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		writeError(w, http.StatusConflict, err.Error())
 		return
+	}
+	if m.bus != nil {
+		if status, _ := result["status"].(string); status == "completed" || status == "failed" {
+			_ = m.bus.Publish(context.Background(), completedEventName, map[string]string{
+				"id":             runID,
+				"workflowID":     stringValue(result, "workflowID"),
+				"conversationID": stringValue(result, "conversationID"),
+				"status":         status,
+			})
+		}
 	}
 	writeJSON(w, http.StatusOK, result)
 }
 
 func (m *Module) denyWorkflowRun(w http.ResponseWriter, r *http.Request) {
 	runID := chi.URLParam(r, "runID")
-	result, err := m.updateRunStatus(runID, "denied")
+	result, err := m.denyWorkflowRunRecord(runID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		writeError(w, http.StatusConflict, err.Error())
 		return
+	}
+	if m.bus != nil {
+		_ = m.bus.Publish(context.Background(), completedEventName, map[string]string{
+			"id":             runID,
+			"workflowID":     stringValue(result, "workflowID"),
+			"conversationID": stringValue(result, "conversationID"),
+			"status":         "denied",
+		})
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -250,6 +277,9 @@ func (m *Module) runWorkflowSync(ctx context.Context, id string, inputValues map
 	prepared, err := m.startWorkflowRun(id, inputValues, triggerSource)
 	if err != nil {
 		return nil, err
+	}
+	if requiresStepByStepApproval(prepared.Definition, promptStepDefinitions(prepared.Definition)) {
+		return m.pauseWorkflowForApproval(prepared, 0, workflowexec.InitialStepRuns(prepared.Definition), "")
 	}
 	record := m.finishWorkflowRun(ctx, prepared)
 	if status, _ := record["status"].(string); status == "failed" {

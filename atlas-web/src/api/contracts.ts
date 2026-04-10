@@ -91,6 +91,13 @@ export interface RuntimeConfig {
   atlasEngineRouterModel: string
   atlasEngineRouterForAll: boolean
   atlasEngineDraftModel: string
+  atlasMLXPort: number
+  selectedAtlasMLXModel: string
+  atlasMLXCtxSize: number
+  atlasMLXRouterPort: number
+  atlasMLXRouterModel: string
+  atlasMLXRouterForAll: boolean
+  selectedLocalEngine: string   // "atlas_engine" | "atlas_mlx"
   enableSmartToolSelection: boolean
   toolSelectionMode: string
   enableMultiAgentOrchestration: boolean
@@ -149,6 +156,31 @@ export interface MessageResponse {
     status: string
     errorMessage?: string
   }
+}
+
+export interface ChatStreamEvent {
+  type:
+    | 'assistant_started'
+    | 'assistant_delta'
+    | 'assistant_done'
+    | 'tool_started'
+    | 'tool_finished'
+    | 'tool_failed'
+    | 'approval_required'
+    | 'done'
+    | 'error'
+    | 'token'
+    | string
+  content?: string
+  role?: 'assistant' | 'user' | string
+  conversationID?: string
+  error?: string
+  message?: string
+  status?: string
+  toolName?: string
+  approvalID?: string
+  toolCallID?: string
+  arguments?: string
 }
 
 export interface ApprovalToolCall {
@@ -375,7 +407,7 @@ export interface ForgeResearchingItem {
   startedAt: string
 }
 
-// ── Engine LM ───────────────────────────────────────────────────────────
+// ── Engine LM (llama.cpp) ────────────────────────────────────────────────
 
 export interface EngineStatus {
   running: boolean
@@ -413,6 +445,44 @@ export interface EngineDownloadStatus {
   percent: number
 }
 
+// ── MLX-LM ───────────────────────────────────────────────────────────────────
+
+export interface MLXInferenceStats {
+  decodeTPS: number
+  promptTokens: number
+  completionTokens: number
+  generationSec: number
+}
+
+export interface MLXStatus {
+  running: boolean
+  loading?: boolean
+  loadedModel: string
+  port: number
+  venvReady: boolean
+  packageVersion?: string        // installed mlx-lm version
+  latestVersion?: string         // latest version on PyPI (source: https://pypi.org/project/mlx-lm/)
+  lastError?: string
+  isAppleSilicon: boolean
+  lastInference?: MLXInferenceStats  // stats from last completed turn
+}
+
+export interface MLXModelInfo {
+  name: string       // directory name, e.g. "Llama-3.2-3B-Instruct-4bit"
+  sizeBytes: number
+  sizeHuman: string
+}
+
+export interface MLXDownloadStatus {
+  active: boolean
+  repo: string       // HuggingFace repo ID — NOT a direct URL
+  modelName: string  // derived directory name (last segment of repo)
+  downloaded: number
+  total: number
+  percent: number
+  error?: string
+}
+
 // ── Model Selector ────────────────────────────────────────────────────────────
 
 export interface AIModelRecord {
@@ -426,6 +496,17 @@ export interface ModelSelectorInfo {
   fastModel?: string
   lastRefreshedAt?: string
   availableModels?: AIModelRecord[]
+  totalAvailable?: number
+  hasMore?: boolean
+  providerStatus?: ProviderStatusInfo
+}
+
+export interface ProviderStatusInfo {
+  state: string
+  label: string
+  tone: 'green' | 'yellow' | 'red' | 'neutral' | string
+  message: string
+  checkedAt: string
 }
 
 export interface OpenRouterModelHealth {

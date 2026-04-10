@@ -72,6 +72,30 @@ type RuntimeConfigSnapshot struct {
 	AtlasEngineRouterModel          string               `json:"atlasEngineRouterModel"`   // GGUF filename for the tool router (e.g. gemma-4-2b-it-Q4_K_M.gguf)
 	AtlasEngineRouterForAll         bool                 `json:"atlasEngineRouterForAll"`  // use router for heavy background tasks too (memory, reflection, dream)
 	AtlasEngineDraftModel           string               `json:"atlasEngineDraftModel"`    // GGUF filename for speculative decoding draft model (same family as primary)
+
+	// ── MLX-LM subsystem (Apple Silicon only) ────────────────────────────────
+	//
+	// MLX-LM is a Python-based local inference server that uses Apple's MLX
+	// framework. It is mutually exclusive with llama.cpp (atlas_engine): only
+	// one local engine runs at a time. Active provider switches between
+	// "atlas_engine" (llama.cpp) and "atlas_mlx" (MLX-LM).
+	//
+	// AtlasMLXPort is the primary inference port; AtlasMLXRouterPort is the
+	// dedicated router port (MLX-exclusive — replaces the llama.cpp router
+	// for MLX users). Atlas owns the Python venv at ~/.atlas-mlx.
+	AtlasMLXPort        int    `json:"atlasMLXPort"`        // default 11990
+	SelectedAtlasMLXModel  string `json:"selectedAtlasMLXModel"`  // directory name under mlx-models/
+	AtlasMLXCtxSize     int    `json:"atlasMLXCtxSize"`     // max-tokens for mlx_lm.server (default 4096)
+	AtlasMLXRouterPort  int    `json:"atlasMLXRouterPort"`  // default 11991 — MLX-exclusive router
+	AtlasMLXRouterModel string `json:"atlasMLXRouterModel"` // directory name for the MLX router model
+	AtlasMLXRouterForAll bool  `json:"atlasMLXRouterForAll"` // use MLX router for heavy background tasks too
+
+	// SelectedLocalEngine is the user-configured local backend.
+	// "atlas_engine" (llama.cpp) or "atlas_mlx" (MLX-LM).
+	// Used by the chat composer's "Local LM" option to determine which
+	// engine to activate. Defaults to "atlas_engine".
+	SelectedLocalEngine string `json:"selectedLocalEngine"`
+
 	EnableSmartToolSelection        bool                 `json:"enableSmartToolSelection"` // legacy — superseded by ToolSelectionMode
 	ToolSelectionMode               string               `json:"toolSelectionMode"`        // "off" | "lazy" | "heuristic" | "llm"
 	WebResearchUseJinaReader        bool                 `json:"webResearchUseJinaReader"`
@@ -172,6 +196,11 @@ func (c RuntimeConfigSnapshot) EffectiveContextWindow() int {
 			return c.AtlasEngineCtxSize
 		}
 		return 16384
+	case "atlas_mlx":
+		if c.AtlasMLXCtxSize > 0 {
+			return c.AtlasMLXCtxSize
+		}
+		return 4096
 	case "anthropic":
 		return 200000
 	case "gemini":
@@ -259,6 +288,12 @@ func Defaults() RuntimeConfigSnapshot {
 		AtlasEngineRouterModel:          "",
 		AtlasEngineRouterForAll:         false,
 		AtlasEngineDraftModel:           "",
+		AtlasMLXPort:                    11990,
+		SelectedAtlasMLXModel:           "",
+		AtlasMLXCtxSize:                 4096,
+		AtlasMLXRouterPort:              11991,
+		AtlasMLXRouterModel:             "",
+		AtlasMLXRouterForAll:            false,
 		EnableSmartToolSelection:        true,
 		ToolSelectionMode:               "lazy",
 		WebResearchUseJinaReader:        false,

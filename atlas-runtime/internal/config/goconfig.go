@@ -23,9 +23,10 @@ type GoRuntimeConfig struct {
 	BrowserShowWindow bool `json:"browserShowWindow"`
 
 	// Locale preferences — inferred from country or set manually.
-	UserTemperatureUnit string `json:"userTemperatureUnit"` // "celsius" | "fahrenheit"
-	UserCurrency        string `json:"userCurrency"`        // ISO 4217 e.g. "USD", "AED"
-	UserUnitSystem      string `json:"userUnitSystem"`      // "metric" | "imperial"
+	UserTemperatureUnit        string `json:"userTemperatureUnit"` // "celsius" | "fahrenheit"
+	UserCurrency               string `json:"userCurrency"`        // ISO 4217 e.g. "USD", "AED"
+	UserUnitSystem             string `json:"userUnitSystem"`      // "metric" | "imperial"
+	UserPreferencesInitialized bool   `json:"userPreferencesInitialized"`
 
 	// Location — resolved via IP geolocation at startup or set manually by the
 	// user.  Injected into the system prompt each turn so the model can infer

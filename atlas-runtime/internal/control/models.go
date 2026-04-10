@@ -20,6 +20,7 @@ import (
 type ModelsService struct {
 	cfgStore  *config.Store
 	engineMgr *engine.Manager
+	mlxMgr    *engine.MLXManager
 	now       func() time.Time
 	httpDo    func(*http.Request) (*http.Response, error)
 }
@@ -35,10 +36,30 @@ func NewModelsService(cfgStore *config.Store, mgr *engine.Manager) *ModelsServic
 	}
 }
 
+// SetMLXManager wires in the MLX engine manager so that Available("atlas_mlx")
+// can list downloaded models and show the correct Online/Offline badge.
+func (s *ModelsService) SetMLXManager(mlx *engine.MLXManager) {
+	s.mlxMgr = mlx
+}
+
 type ModelRecord struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"displayName"`
 	IsFast      bool   `json:"isFast"`
+}
+
+type providerStatus struct {
+	State     string `json:"state"`
+	Label     string `json:"label"`
+	Tone      string `json:"tone"`
+	Message   string `json:"message"`
+	CheckedAt string `json:"checkedAt"`
+}
+
+type localFetchResult struct {
+	models    []ModelRecord
+	message   string
+	reachable bool
 }
 
 func (s *ModelsService) Selected() map[string]any {
@@ -87,6 +108,7 @@ func (s *ModelsService) Available(provider string) map[string]any {
 			"fastModel":       fast,
 			"lastRefreshedAt": now,
 			"availableModels": fetchOpenAIModels(apiKey),
+			"providerStatus":  cloudProviderStatus(strings.TrimSpace(apiKey) != "", "OpenAI", now),
 		}
 	case "anthropic":
 		primary := cfg.SelectedAnthropicModel
@@ -103,6 +125,7 @@ func (s *ModelsService) Available(provider string) map[string]any {
 			"fastModel":       fast,
 			"lastRefreshedAt": now,
 			"availableModels": fetchAnthropicModels(apiKey),
+			"providerStatus":  cloudProviderStatus(strings.TrimSpace(apiKey) != "", "Anthropic", now),
 		}
 	case "gemini":
 		primary := cfg.SelectedGeminiModel
@@ -119,10 +142,11 @@ func (s *ModelsService) Available(provider string) map[string]any {
 			"fastModel":       fast,
 			"lastRefreshedAt": now,
 			"availableModels": fetchGeminiModels(apiKey),
+			"providerStatus":  cloudProviderStatus(strings.TrimSpace(apiKey) != "", "Gemini", now),
 		}
 	case "openrouter":
 		apiKey, _ := bundle["openRouterAPIKey"].(string)
-		models := s.openRouterModels(false, apiKey, cfg, 25)
+		models, total := s.openRouterModels(false, apiKey, cfg, 25)
 		primary := cfg.SelectedOpenRouterModel
 		if primary == "" {
 			// Default to OpenRouter's free router when no model is explicitly selected.
@@ -137,6 +161,9 @@ func (s *ModelsService) Available(provider string) map[string]any {
 			"fastModel":       fast,
 			"lastRefreshedAt": now,
 			"availableModels": models,
+			"totalAvailable":  total,
+			"hasMore":         total > len(models),
+			"providerStatus":  cloudProviderStatus(strings.TrimSpace(apiKey) != "", "OpenRouter", now),
 		}
 	case "lm_studio":
 		primary := cfg.SelectedLMStudioModel
@@ -152,11 +179,13 @@ func (s *ModelsService) Available(provider string) map[string]any {
 		if baseURL == "" {
 			baseURL = "http://localhost:1234"
 		}
+		result := s.fetchLMStudioModels(baseURL, apiKey)
 		return map[string]any{
 			"primaryModel":    primary,
 			"fastModel":       fast,
 			"lastRefreshedAt": now,
-			"availableModels": fetchLMStudioModels(baseURL, apiKey),
+			"availableModels": result.models,
+			"providerStatus":  localHTTPProviderStatus("LM Studio", result, now),
 		}
 	case "ollama":
 		primary := cfg.SelectedOllamaModel
@@ -172,11 +201,13 @@ func (s *ModelsService) Available(provider string) map[string]any {
 		if baseURL == "" {
 			baseURL = "http://localhost:11434"
 		}
+		result := s.fetchOllamaModels(baseURL, apiKey)
 		return map[string]any{
 			"primaryModel":    primary,
 			"fastModel":       fast,
 			"lastRefreshedAt": now,
-			"availableModels": fetchOllamaModels(baseURL, apiKey),
+			"availableModels": result.models,
+			"providerStatus":  localHTTPProviderStatus("Ollama", result, now),
 		}
 	case "atlas_engine":
 		primary := filepath.Base(cfg.SelectedAtlasEngineModel)
@@ -203,9 +234,44 @@ func (s *ModelsService) Available(provider string) map[string]any {
 			"fastModel":       fast,
 			"lastRefreshedAt": now,
 			"availableModels": models,
+			"providerStatus":  atlasEngineStatus(s.engineMgr, len(models), now),
 		}
+
+	case "atlas_mlx":
+		primary := filepath.Base(cfg.SelectedAtlasMLXModel)
+		if primary == "" || primary == "." {
+			primary = ""
+		}
+		var models []ModelRecord
+		if s.mlxMgr != nil {
+			if infos, err := s.mlxMgr.ListModels(); err == nil {
+				for _, m := range infos {
+					models = append(models, ModelRecord{ID: m.Name, DisplayName: m.Name, IsFast: false})
+				}
+			}
+		}
+		if models == nil {
+			models = []ModelRecord{}
+		}
+		return map[string]any{
+			"primaryModel":    primary,
+			"fastModel":       primary,
+			"lastRefreshedAt": now,
+			"availableModels": models,
+			"providerStatus":  atlasMLXStatus(s.mlxMgr, len(models), now),
+		}
+
 	default:
-		return map[string]any{"availableModels": []ModelRecord{}}
+		return map[string]any{
+			"availableModels": []ModelRecord{},
+			"providerStatus": providerStatus{
+				State:     "unknown",
+				Label:     "Unknown",
+				Tone:      "neutral",
+				Message:   "Atlas does not recognize this provider.",
+				CheckedAt: now,
+			},
+		}
 	}
 }
 
@@ -213,10 +279,14 @@ func (s *ModelsService) OpenRouterModels(refresh bool, limit int) map[string]any
 	cfg := s.cfgStore.Load()
 	bundle, _ := readRawBundle()
 	apiKey, _ := bundle["openRouterAPIKey"].(string)
-	models := s.openRouterModels(refresh, apiKey, cfg, limit)
+	now := s.now().UTC().Format(time.RFC3339)
+	models, total := s.openRouterModels(refresh, apiKey, cfg, limit)
 	return map[string]any{
-		"lastRefreshedAt": s.now().UTC().Format(time.RFC3339),
+		"lastRefreshedAt": now,
 		"availableModels": models,
+		"totalAvailable":  total,
+		"hasMore":         total > len(models),
+		"providerStatus":  cloudProviderStatus(strings.TrimSpace(apiKey) != "", "OpenRouter", now),
 	}
 }
 
@@ -553,7 +623,7 @@ func (s *ModelsService) CloudModelHealth(provider, model string) map[string]any 
 	}
 }
 
-func (s *ModelsService) openRouterModels(refresh bool, apiKey string, cfg config.RuntimeConfigSnapshot, limit int) []ModelRecord {
+func (s *ModelsService) openRouterModels(refresh bool, apiKey string, cfg config.RuntimeConfigSnapshot, limit int) ([]ModelRecord, int) {
 	if limit <= 0 {
 		limit = 25
 	}
@@ -564,10 +634,11 @@ func (s *ModelsService) openRouterModels(refresh bool, apiKey string, cfg config
 				for _, m := range cfg.OpenRouterModelCache.Models {
 					models = append(models, ModelRecord{ID: m.ID, DisplayName: m.DisplayName, IsFast: m.IsFast})
 				}
+				total := len(models)
 				if len(models) > limit {
-					return models[:limit]
+					return models[:limit], total
 				}
-				return models
+				return models, total
 			}
 		}
 	}
@@ -578,13 +649,14 @@ func (s *ModelsService) openRouterModels(refresh bool, apiKey string, cfg config
 		for _, m := range cfg.OpenRouterModelCache.Models {
 			out = append(out, ModelRecord{ID: m.ID, DisplayName: m.DisplayName, IsFast: m.IsFast})
 		}
+		total := len(out)
 		if len(out) > limit {
-			return out[:limit]
+			return out[:limit], total
 		}
-		return out
+		return out, total
 	}
 	if len(models) == 0 {
-		return []ModelRecord{}
+		return []ModelRecord{}, 0
 	}
 
 	cfg.OpenRouterModelCache = config.OpenRouterModelCache{
@@ -600,14 +672,161 @@ func (s *ModelsService) openRouterModels(refresh bool, apiKey string, cfg config
 	}
 	_ = s.cfgStore.Save(cfg)
 	if len(models) > limit {
-		return models[:limit]
+		return models[:limit], len(models)
 	}
-	return models
+	return models, len(models)
 }
 
 func (s *ModelsService) RefreshActive() map[string]any {
 	cfg := s.cfgStore.Load()
 	return s.Available(cfg.ActiveAIProvider)
+}
+
+func cloudProviderStatus(hasKey bool, providerName, now string) providerStatus {
+	if !hasKey {
+		return providerStatus{
+			State:     "needs_key",
+			Label:     "Needs API key",
+			Tone:      "red",
+			Message:   providerName + " needs an API key before Atlas can send requests.",
+			CheckedAt: now,
+		}
+	}
+	return providerStatus{
+		State:     "ready",
+		Label:     "Ready to test",
+		Tone:      "neutral",
+		Message:   providerName + " is configured. Use Test connection to verify model access.",
+		CheckedAt: now,
+	}
+}
+
+func localHTTPProviderStatus(providerName string, result localFetchResult, now string) providerStatus {
+	if !result.reachable {
+		return providerStatus{
+			State:     "unreachable",
+			Label:     "Unreachable",
+			Tone:      "red",
+			Message:   result.message,
+			CheckedAt: now,
+		}
+	}
+	if len(result.models) == 0 {
+		return providerStatus{
+			State:     "reachable_no_models",
+			Label:     "Reachable",
+			Tone:      "yellow",
+			Message:   providerName + " is responding, but Atlas did not find any models yet.",
+			CheckedAt: now,
+		}
+	}
+	return providerStatus{
+		State:     "connected",
+		Label:     "Connected",
+		Tone:      "green",
+		Message:   result.message,
+		CheckedAt: now,
+	}
+}
+
+func atlasEngineStatus(mgr *engine.Manager, modelCount int, now string) providerStatus {
+	if mgr == nil {
+		return providerStatus{
+			State:     "unknown",
+			Label:     "Unknown",
+			Tone:      "neutral",
+			Message:   "Atlas Engine manager is not available in this runtime.",
+			CheckedAt: now,
+		}
+	}
+	if mgr.IsRunning() {
+		loaded := mgr.LoadedModel()
+		if loaded == "" {
+			loaded = "a local model"
+		}
+		return providerStatus{
+			State:     "running",
+			Label:     "Running",
+			Tone:      "green",
+			Message:   "Atlas Engine is live with " + loaded + ".",
+			CheckedAt: now,
+		}
+	}
+	if lastErr := strings.TrimSpace(mgr.LastError()); lastErr != "" {
+		return providerStatus{
+			State:     "error",
+			Label:     "Needs attention",
+			Tone:      "red",
+			Message:   lastErr,
+			CheckedAt: now,
+		}
+	}
+	if modelCount == 0 {
+		return providerStatus{
+			State:     "needs_model",
+			Label:     "No models installed",
+			Tone:      "yellow",
+			Message:   "Download a GGUF model to start Atlas Engine.",
+			CheckedAt: now,
+		}
+	}
+	return providerStatus{
+		State:     "ready",
+		Label:     "Ready",
+		Tone:      "yellow",
+		Message:   "Atlas Engine is installed and ready to start when selected.",
+		CheckedAt: now,
+	}
+}
+
+func atlasMLXStatus(mgr *engine.MLXManager, modelCount int, now string) providerStatus {
+	if mgr == nil {
+		return providerStatus{
+			State:     "unknown",
+			Label:     "Unknown",
+			Tone:      "neutral",
+			Message:   "MLX manager is not available in this runtime.",
+			CheckedAt: now,
+		}
+	}
+	if mgr.IsRunning() {
+		loaded := mgr.LoadedModel()
+		if loaded == "" {
+			loaded = "a local model"
+		}
+		return providerStatus{
+			State:     "running",
+			Label:     "Running",
+			Tone:      "green",
+			Message:   "MLX server is live with " + loaded + ".",
+			CheckedAt: now,
+		}
+	}
+	if lastErr := strings.TrimSpace(mgr.LastError()); lastErr != "" {
+		return providerStatus{
+			State:     "error",
+			Label:     "Needs attention",
+			Tone:      "red",
+			Message:   lastErr,
+			CheckedAt: now,
+		}
+	}
+	if modelCount == 0 {
+		return providerStatus{
+			State:     "needs_model",
+			Label:     "No models installed",
+			Tone:      "yellow",
+			Message:   "Download an MLX model to start the local backend.",
+			CheckedAt: now,
+		}
+	}
+	return providerStatus{
+		State:     "ready",
+		Label:     "Ready",
+		Tone:      "yellow",
+		Message:   "MLX is ready to start when selected.",
+		CheckedAt: now,
+	}
 }
 
 func fetchOpenAIModels(apiKey string) []ModelRecord {
@@ -1122,21 +1341,25 @@ func geminiBaseFamily(id string) string {
 	return bare
 }
 
-func fetchLMStudioModels(baseURL, apiKey string) []ModelRecord {
+func (s *ModelsService) fetchLMStudioModels(baseURL, apiKey string) localFetchResult {
 	base := strings.TrimRight(baseURL, "/")
 	if !strings.HasSuffix(base, "/v1") {
 		base += "/v1"
 	}
 	req, err := http.NewRequest("GET", base+"/models", nil)
 	if err != nil {
-		return []ModelRecord{}
+		return localFetchResult{models: []ModelRecord{}, message: "Atlas could not build the LM Studio request.", reachable: false}
 	}
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		return []ModelRecord{}
+	resp, err := s.httpDo(req)
+	if err != nil {
+		return localFetchResult{models: []ModelRecord{}, message: "Atlas could not reach LM Studio at " + base + ".", reachable: false}
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return localFetchResult{models: []ModelRecord{}, message: fmt.Sprintf("LM Studio returned %d while Atlas was loading models.", resp.StatusCode), reachable: false}
 	}
 	defer resp.Body.Close()
 	var result struct {
@@ -1145,28 +1368,40 @@ func fetchLMStudioModels(baseURL, apiKey string) []ModelRecord {
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return []ModelRecord{}
+		return localFetchResult{models: []ModelRecord{}, message: "LM Studio returned an unreadable models response.", reachable: false}
 	}
 	var models []ModelRecord
 	for _, m := range result.Data {
 		models = append(models, ModelRecord{ID: m.ID, DisplayName: m.ID, IsFast: false})
 	}
-	return models
+	if models == nil {
+		models = []ModelRecord{}
+	}
+	message := fmt.Sprintf("Atlas found %d model", len(models))
+	if len(models) != 1 {
+		message += "s"
+	}
+	message += " in LM Studio."
+	return localFetchResult{models: models, message: message, reachable: true}
 }
 
-func fetchOllamaModels(baseURL, apiKey string) []ModelRecord {
+func (s *ModelsService) fetchOllamaModels(baseURL, apiKey string) localFetchResult {
 	base := strings.TrimRight(baseURL, "/")
 	base = strings.TrimSuffix(base, "/v1")
 	req, err := http.NewRequest("GET", base+"/api/tags", nil)
 	if err != nil {
-		return []ModelRecord{}
+		return localFetchResult{models: []ModelRecord{}, message: "Atlas could not build the Ollama request.", reachable: false}
 	}
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		return []ModelRecord{}
+	resp, err := s.httpDo(req)
+	if err != nil {
+		return localFetchResult{models: []ModelRecord{}, message: "Atlas could not reach Ollama at " + base + ".", reachable: false}
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return localFetchResult{models: []ModelRecord{}, message: fmt.Sprintf("Ollama returned %d while Atlas was loading models.", resp.StatusCode), reachable: false}
 	}
 	defer resp.Body.Close()
 	var result struct {
@@ -1175,11 +1410,19 @@ func fetchOllamaModels(baseURL, apiKey string) []ModelRecord {
 		} `json:"models"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return []ModelRecord{}
+		return localFetchResult{models: []ModelRecord{}, message: "Ollama returned an unreadable models response.", reachable: false}
 	}
 	var models []ModelRecord
 	for _, m := range result.Models {
 		models = append(models, ModelRecord{ID: m.Name, DisplayName: m.Name, IsFast: false})
 	}
-	return models
+	if models == nil {
+		models = []ModelRecord{}
+	}
+	message := fmt.Sprintf("Atlas found %d model", len(models))
+	if len(models) != 1 {
+		message += "s"
+	}
+	message += " in Ollama."
+	return localFetchResult{models: models, message: message, reachable: true}
 }

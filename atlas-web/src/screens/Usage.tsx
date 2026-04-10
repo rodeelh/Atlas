@@ -3,6 +3,7 @@ import { api } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
 import type { TokenUsageSummary, TokenUsageEvent, DailyUsageSeries } from '../api/contracts'
+import { formatProviderModelName } from '../modelName'
 
 /* ── Formatters ──────────────────────────────────────────────────────────── */
 
@@ -33,9 +34,11 @@ function providerLabel(provider: string): string {
     case 'openai':       return 'OpenAI'
     case 'anthropic':    return 'Anthropic'
     case 'gemini':       return 'Gemini'
+    case 'openrouter':   return 'OpenRouter'
     case 'lm_studio':    return 'LM Studio'
     case 'ollama':       return 'Ollama'
-    case 'atlas_engine': return 'Atlas Engine'
+    case 'atlas_engine': return 'Local LM'
+    case 'atlas_mlx':    return 'Local LM'
     default:             return provider
   }
 }
@@ -45,9 +48,22 @@ function providerBadgeClass(provider: string): string {
     case 'openai':       return 'badge badge-green'
     case 'anthropic':    return 'badge badge-yellow'
     case 'gemini':       return 'badge badge-blue'
+    case 'openrouter':   return 'badge badge-blue'
     case 'atlas_engine': return 'badge badge-blue'
+    case 'atlas_mlx':    return 'badge badge-blue'
     default:             return 'badge badge-gray'
   }
+}
+
+function formatUsageModelName(provider: string, model: string): string {
+  const formatted = formatProviderModelName(provider, model)
+  if (provider === 'atlas_engine') {
+    return formatted ? `Llama - ${formatted}` : 'Llama'
+  }
+  if (provider === 'atlas_mlx') {
+    return formatted ? `MLX - ${formatted}` : 'MLX'
+  }
+  return formatted || model
 }
 
 /* ── Daily cost bar chart ─────────────────────────────────────────────────── */
@@ -414,7 +430,10 @@ export function Usage() {
             let av: number | string, bv: number | string
             switch (sortKey) {
               case 'provider':      av = a.provider;      bv = b.provider;      break
-              case 'model':         av = a.model;         bv = b.model;         break
+              case 'model':
+                av = formatUsageModelName(a.provider, a.model)
+                bv = formatUsageModelName(b.provider, b.model)
+                break
               case 'turnCount':     av = a.turnCount;     bv = b.turnCount;     break
               case 'inputTokens':   av = a.inputTokens;   bv = b.inputTokens;   break
               case 'outputTokens':  av = a.outputTokens;  bv = b.outputTokens;  break
@@ -471,7 +490,7 @@ export function Usage() {
                             {providerLabel(m.provider)}
                           </span>
                           <span class="skill-name" style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 400, lineHeight: 1.55, wordBreak: 'break-word' }}>
-                            {m.model}
+                            {formatUsageModelName(m.provider, m.model)}
                           </span>
                         </div>
 
@@ -550,7 +569,7 @@ export function Usage() {
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <span class="skill-name" style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 400 }}>
-                          {m.model}
+                          {formatUsageModelName(m.provider, m.model)}
                         </span>
                       </div>
                       <div style={{ flex: '0 0 52px', textAlign: 'right' }}>
@@ -619,7 +638,7 @@ export function Usage() {
                           <span class="skill-meta">{fmtDate(e.recordedAt)}</span>
                         </div>
                         <span style={{ fontFamily: 'monospace', fontSize: '11px', color: 'var(--theme-text-secondary)', lineHeight: 1.5, wordBreak: 'break-word' }}>
-                          {e.model}
+                          {formatUsageModelName(e.provider, e.model)}
                         </span>
                         <span style={{ fontFamily: 'monospace', fontSize: '11px', color: 'var(--theme-text-muted)' }}>
                           conv {e.conversationId.slice(0, 8)}
@@ -689,7 +708,7 @@ export function Usage() {
                       </div>
                       <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
                         <span style={{ fontFamily: 'monospace', fontSize: '11px', color: 'var(--theme-text-secondary)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {e.model}
+                          {formatUsageModelName(e.provider, e.model)}
                         </span>
                       </div>
                       <div style={{ flex: '0 0 52px', textAlign: 'right' }}>

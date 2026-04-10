@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"atlas-runtime-go/internal/auth"
 	corecontrol "atlas-runtime-go/internal/control"
 	"atlas-runtime-go/internal/engine"
 
@@ -34,11 +35,18 @@ func NewControlDomain(cfgStore *config.Store, runtimeSvc *runtime.Service, db *s
 	}
 }
 
+// SetMLXManager wires the MLX engine manager into the models service so that
+// GET /models/available?provider=atlas_mlx returns the downloaded model list.
+func (d *ControlDomain) SetMLXManager(mlx *engine.MLXManager) {
+	d.models.SetMLXManager(mlx)
+}
+
 func (d *ControlDomain) Register(r chi.Router) {
 	r.Get("/status", d.getStatus)
 	r.Get("/logs", d.getLogs)
 	r.Get("/config", d.getConfig)
 	r.Put("/config", d.putConfig)
+	r.Post("/control/restart", d.postRestart)
 	r.Get("/onboarding", d.getOnboarding)
 	r.Put("/onboarding", d.putOnboarding)
 	r.Get("/models", d.getModels)
@@ -91,6 +99,25 @@ func (d *ControlDomain) putConfig(w http.ResponseWriter, r *http.Request) {
 		"config":          updated,
 		"restartRequired": restartRequired,
 	})
+}
+
+func (d *ControlDomain) postRestart(w http.ResponseWriter, r *http.Request) {
+	if !auth.IsLocalRequest(r) {
+		writeError(w, http.StatusForbidden, "Restart is only available from the local Atlas session.")
+		return
+	}
+	if err := d.system.ScheduleRestart(); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"accepted": true,
+		"message":  "Atlas is restarting.",
+	})
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func (d *ControlDomain) getOnboarding(w http.ResponseWriter, _ *http.Request) {

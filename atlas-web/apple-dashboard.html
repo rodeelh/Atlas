@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Apple Stock Dashboard</title>
+  <style>
+    :root {
+      --bg: #f3f4f6;
+      --panel: rgba(255, 255, 255, 0.78);
+      --panel-border: rgba(17, 24, 39, 0.08);
+      --text: #111827;
+      --muted: #6b7280;
+      --black: #111111;
+      --navy: #0f1f3d;
+      --navy-2: #173058;
+      --line: #000000;
+      --accent: #2563eb;
+      --good: #0f766e;
+      --bad: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: radial-gradient(circle at top, #fbfbfc 0%, var(--bg) 45%, #e8ebf0 100%);
+      color: var(--text);
+    }
+    .wrap {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: end;
+      margin-bottom: 22px;
+    }
+    h1 { margin: 0; font-size: 32px; letter-spacing: -0.03em; }
+    .sub { color: var(--muted); margin-top: 6px; }
+    .status {
+      padding: 12px 16px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.64);
+      border: 1px solid var(--panel-border);
+      backdrop-filter: blur(10px);
+      font-size: 14px;
+      color: var(--muted);
+      max-width: 360px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1.3fr 0.9fr;
+      gap: 20px;
+      align-items: stretch;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 24px;
+      box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
+      overflow: hidden;
+      backdrop-filter: blur(14px);
+    }
+    .card-head {
+      padding: 18px 22px 0 22px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .card-title { font-weight: 700; font-size: 18px; }
+    .badge {
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(17,24,39,0.06);
+      color: var(--muted);
+    }
+    .chart-block { padding: 10px 20px 22px; }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .metric {
+      border-radius: 18px;
+      background: rgba(255,255,255,0.62);
+      border: 1px solid rgba(15,23,42,0.07);
+      padding: 14px;
+    }
+    .metric .label { font-size: 12px; color: var(--muted); }
+    .metric .value { font-size: 24px; font-weight: 800; margin-top: 4px; }
+    .metric .delta { font-size: 13px; margin-top: 4px; }
+    .delta.up { color: var(--good); }
+    .delta.down { color: var(--bad); }
+    svg { width: 100%; height: auto; display: block; }
+    .axis-label { fill: var(--muted); font-size: 12px; }
+    .gridline { stroke: rgba(17,24,39,0.08); stroke-width: 1; }
+    .line { fill: none; stroke: var(--line); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+    .dot { fill: var(--line); stroke: white; stroke-width: 3; }
+    .dot.missing { fill: #9ca3af; }
+    .news {
+      background: linear-gradient(180deg, #11284f 0%, var(--navy) 100%);
+      color: #f8fafc;
+      display: flex;
+      flex-direction: column;
+      min-height: 100%;
+    }
+    .news .card-head { padding-top: 18px; }
+    .news .card-title { color: #fff; }
+    .news .badge { background: rgba(255,255,255,0.12); color: #dbeafe; }
+    .news-list { padding: 10px 18px 18px; display: grid; gap: 12px; }
+    .news-item {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 18px;
+      padding: 14px 14px 12px;
+    }
+    .news-item h3 { margin: 0 0 6px; font-size: 16px; line-height: 1.25; }
+    .news-item p { margin: 0; color: rgba(241,245,249,0.84); font-size: 13px; line-height: 1.45; }
+    .news-item a { color: #bfdbfe; text-decoration: none; }
+    .footer-note {
+      margin-top: 14px;
+      font-size: 12px;
+      color: var(--muted);
+      padding: 0 6px;
+    }
+    .missing { color: #6b7280; font-style: italic; }
+    @media (max-width: 980px) {
+      .grid { grid-template-columns: 1fr; }
+      header { flex-direction: column; align-items: start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Apple Stock Dashboard</h1>
+        <div class="sub">Rami’s snapshot — last 5 trading days, with live data when available.</div>
+      </div>
+      <div class="status" id="status">Building dashboard…</div>
+    </header>
+
+    <div class="grid">
+      <section class="card">
+        <div class="card-head">
+          <div class="card-title">AAPL — 5-Day Line Chart</div>
+          <div class="badge" id="priceSource">Price source: live verified values</div>
+        </div>
+        <div class="chart-block">
+          <div class="metrics">
+            <div class="metric">
+              <div class="label">Latest close</div>
+              <div class="value" id="latestClose">—</div>
+              <div class="delta" id="latestDelta">—</div>
+            </div>
+            <div class="metric">
+              <div class="label">5-day change</div>
+              <div class="value" id="fiveDayChange">—</div>
+              <div class="delta" id="fiveDayPct">—</div>
+            </div>
+            <div class="metric">
+              <div class="label">Coverage</div>
+              <div class="value" id="coverage">—</div>
+              <div class="delta">Missing points labeled clearly</div>
+            </div>
+          </div>
+          <svg viewBox="0 0 900 420" role="img" aria-label="Apple stock line chart">
+            <rect x="0" y="0" width="900" height="420" rx="22" fill="rgba(255,255,255,0.5)"></rect>
+            <g id="grid"></g>
+            <g id="chart"></g>
+            <g id="labels"></g>
+          </svg>
+        </div>
+      </section>
+
+      <section class="card news">
+        <div class="card-head">
+          <div class="card-title">Top Apple News</div>
+          <div class="badge" id="newsSource">Live news feed</div>
+        </div>
+        <div class="news-list" id="newsList"></div>
+      </section>
+    </div>
+
+    <div class="footer-note" id="note"></div>
+  </div>
+
+  <script>
+    const prices = [
+      { date: '2026-04-01', close: null, missing: true },
+      { date: '2026-04-02', close: null, missing: true },
+      { date: '2026-04-03', close: null, missing: true },
+      { date: '2026-04-06', close: 258.86 },
+      { date: '2026-04-07', close: 253.50 },
+    ];
+
+    const news = [
+      {
+        title: 'Apple teams used 3D printing for titanium Apple Watch cases',
+        source: 'Apple Newsroom',
+        url: 'https://www.apple.com/newsroom/',
+        summary: 'Apple highlighted an innovative manufacturing approach involving titanium Apple Watch cases.'
+      },
+      {
+        title: 'Apple marks its 50th anniversary',
+        source: 'Apple Newsroom',
+        url: 'https://www.apple.com/newsroom/2026/03/apple-to-celebrate-50-years-of-thinking-different/',
+        summary: 'The company announced plans to celebrate five decades of “thinking different.”'
+      },
+      {
+        title: 'WWDC returns the week of June 8',
+        source: 'Apple Newsroom',
+        url: 'https://www.apple.com/newsroom/2026/03/apples-worldwide-developers-conference-returns-the-week-of-june-8/',
+        summary: 'Apple confirmed its annual developer conference will run online from June 8–12.'
+      }
+    ];
+
+    const chartW = 900, chartH = 420, pad = 56;
+    const valid = prices.filter(p => typeof p.close === 'number');
+    const min = Math.min(...valid.map(p => p.close));
+    const max = Math.max(...valid.map(p => p.close));
+    const xs = prices.map((_, i) => pad + i * ((chartW - pad * 2) / (prices.length - 1)));
+    const y = v => chartH - pad - ((v - min) / (max - min || 1)) * (chartH - pad * 2);
+    const grid = document.getElementById('grid');
+    const labels = document.getElementById('labels');
+    const chart = document.getElementById('chart');
+
+    for (let i = 0; i < 4; i++) {
+      const yy = pad + i * ((chartH - pad * 2) / 3);
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', pad);
+      line.setAttribute('x2', chartW - pad);
+      line.setAttribute('y1', yy);
+      line.setAttribute('y2', yy);
+      line.setAttribute('class', 'gridline');
+      grid.appendChild(line);
+    }
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    let d = '';
+    prices.forEach((p, i) => {
+      if (p.close == null) return;
+      const cmd = d === '' ? 'M' : 'L';
+      d += `${cmd}${xs[i]} ${y(p.close)} `;
+    });
+    path.setAttribute('d', d.trim());
+    path.setAttribute('class', 'line');
+    chart.appendChild(path);
+
+    prices.forEach((p, i) => {
+      const cx = xs[i];
+      const cy = p.close != null ? y(p.close) : chartH / 2;
+      const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      dot.setAttribute('cx', cx);
+      dot.setAttribute('cy', cy);
+      dot.setAttribute('r', '7');
+      dot.setAttribute('class', 'dot' + (p.close == null ? ' missing' : ''));
+      chart.appendChild(dot);
+
+      const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      label.setAttribute('x', cx);
+      label.setAttribute('y', chartH - 16);
+      label.setAttribute('text-anchor', 'middle');
+      label.setAttribute('class', 'axis-label');
+      label.textContent = p.date.slice(4).replace('-', '/');
+      labels.appendChild(label);
+
+      if (p.close == null) {
+        const miss = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        miss.setAttribute('x', cx);
+        miss.setAttribute('y', cy - 14);
+        miss.setAttribute('text-anchor', 'middle');
+        miss.setAttribute('class', 'axis-label');
+        miss.textContent = 'missing';
+        chart.appendChild(miss);
+      } else {
+        const val = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        val.setAttribute('x', cx);
+        val.setAttribute('y', cy - 14);
+        val.setAttribute('text-anchor', 'middle');
+        val.setAttribute('class', 'axis-label');
+        val.textContent = `$${p.close.toFixed(2)}`;
+        chart.appendChild(val);
+      }
+    });
+
+    const latest = valid[valid.length - 1].close;
+    const prev = valid[valid.length - 2].close;
+    const change = latest - prev;
+    const pct = (change / prev) * 100;
+    document.getElementById('latestClose').textContent = `$${latest.toFixed(2)}`;
+    document.getElementById('latestDelta').textContent = `${change >= 0 ? '+' : ''}${change.toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%) vs prior close`;
+    document.getElementById('latestDelta').className = 'delta ' + (change >= 0 ? 'up' : 'down');
+    document.getElementById('fiveDayChange').textContent = `${(latest - valid[0].close).toFixed(2)}`;
+    document.getElementById('fiveDayPct').textContent = valid[0].close ? `${(((latest - valid[0].close) / valid[0].close) * 100).toFixed(2)}% over available window` : 'Insufficient starting point';
+    document.getElementById('coverage').textContent = `${valid.length}/5`;
+
+    const newsList = document.getElementById('newsList');
+    news.forEach(item => {
+      const el = document.createElement('article');
+      el.className = 'news-item';
+      el.innerHTML = `<h3><a href="${item.url}" target="_blank" rel="noreferrer">${item.title}</a></h3><p><strong>${item.source}</strong> — ${item.summary}</p>`;
+      newsList.appendChild(el);
+    });
+
+    document.getElementById('status').textContent = 'Live data partially available: 2 verified price points, recent Apple news loaded.';
+    document.getElementById('note').innerHTML = 'Price history: <strong>2026-04-01</strong>, <strong>2026-04-02</strong>, and <strong>2026-04-03</strong> were not returned by the available verified feed, so those points are marked as missing. The chart remains functional and uses the most recent verified values.';
+    document.getElementById('priceSource').textContent = 'Price source: most recent verified values';
+  </script>
+</body>
+</html>

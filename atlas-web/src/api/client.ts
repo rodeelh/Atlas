@@ -36,6 +36,7 @@ import type {
   CloudModelHealth,
   OpenRouterModelHealth,
   OnboardingStatus,
+  ProviderStatusInfo,
   RuntimeConfig,
   RuntimeConfigUpdateResponse,
   RuntimeStatus,
@@ -96,6 +97,7 @@ export type {
   CloudModelHealth,
   OpenRouterModelHealth,
   OnboardingStatus,
+  ProviderStatusInfo,
   RuntimeConfig,
   RuntimeConfigUpdateResponse,
   RuntimeStatus,
@@ -388,6 +390,7 @@ export const api = {
   remoteAccessStatus: () => get<{ remoteAccessEnabled: boolean; port: number; lanIP: string | null; httpsReady: boolean; accessURL: string | null; tailscaleEnabled: boolean; tailscaleIP: string | null; tailscaleURL: string | null; tailscaleConnected: boolean }>('/auth/remote-status'),
   remoteAccessKey: () => get<{ key: string }>('/auth/remote-key'),
   revokeRemoteSessions: () => del<{ revoked: boolean }>('/auth/remote-sessions', {}),
+  restartAtlas: () => post<{ accepted: boolean; message?: string }>('/control/restart', {}),
 
   // Engine LM
   engineStatus: () => get<EngineStatus>('/engine/status'),

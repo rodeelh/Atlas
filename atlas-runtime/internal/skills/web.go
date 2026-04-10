@@ -26,7 +26,7 @@ func (r *Registry) registerWeb() {
 			Required: []string{"url"},
 		},
 		PermLevel: "read",
-		Fn:        webFetchPage,
+		FnResult:  webFetchPage,
 	})
 
 	r.register(SkillEntry{
@@ -40,7 +40,7 @@ func (r *Registry) registerWeb() {
 			Required: []string{"query"},
 		},
 		PermLevel: "read",
-		Fn:        webResearch,
+		FnResult:  webResearch,
 	})
 
 	r.register(SkillEntry{
@@ -66,7 +66,7 @@ func (r *Registry) registerWeb() {
 			Required: []string{"url"},
 		},
 		PermLevel: "read",
-		Fn:        webCheckURL,
+		FnResult:  webCheckURL,
 	})
 
 	r.register(SkillEntry{
@@ -138,6 +138,58 @@ type braveResult struct {
 	Description string `json:"description"`
 }
 
+func webDomain(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimPrefix(u.Hostname(), "www."))
+}
+
+func webSourceKind(rawURL string) string {
+	host := webDomain(rawURL)
+	switch {
+	case host == "":
+		return "unknown"
+	case strings.Contains(host, "wikipedia.org"), strings.Contains(host, "reddit.com"), strings.Contains(host, "medium.com"), strings.Contains(host, "substack.com"):
+		return "secondary"
+	case strings.Contains(host, "google."), strings.Contains(host, "bing.com"), strings.Contains(host, "search.brave.com"):
+		return "aggregator"
+	default:
+		return "official_candidate"
+	}
+}
+
+func webConfidence(status int, rawURL, preview string) string {
+	if status >= 200 && status < 300 && webSourceKind(rawURL) == "official_candidate" && len(strings.TrimSpace(preview)) >= 120 {
+		return "high"
+	}
+	if status >= 200 && status < 400 {
+		return "medium"
+	}
+	return "low"
+}
+
+func compactPreview(text string, maxRunes int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	runes := []rune(text)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes]) + "…"
+	}
+	return text
+}
+
+func webSourceArtifact(rawURL, title, preview string, status int) map[string]any {
+	return map[string]any{
+		"url":         rawURL,
+		"domain":      webDomain(rawURL),
+		"title":       compactPreview(title, 80),
+		"source_type": webSourceKind(rawURL),
+		"confidence":  webConfidence(status, rawURL, preview),
+		"status":      status,
+	}
+}
+
 // braveSearch calls the Brave Search API.
 func braveSearch(ctx context.Context, apiKey, query string, count int, extraParams string) ([]braveResult, error) {
 	if count <= 0 {
@@ -191,48 +243,55 @@ func braveSearch(ctx context.Context, apiKey, query string, count int, extraPara
 
 // ── web.fetch_page ────────────────────────────────────────────────────────────
 
-func webFetchPage(ctx context.Context, args json.RawMessage) (string, error) {
+func webFetchPage(ctx context.Context, args json.RawMessage) (ToolResult, error) {
 	var p struct {
 		URL string `json:"url"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil || p.URL == "" {
-		return "", fmt.Errorf("url is required")
+		return ToolResult{}, fmt.Errorf("url is required")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", p.URL, nil)
 	if err != nil {
-		return "", fmt.Errorf("invalid URL: %w", err)
+		return ToolResult{}, fmt.Errorf("invalid URL: %w", err)
 	}
 	req.Header.Set("User-Agent", "Atlas/1.0 (compatible; Go HTTP client)")
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("fetch failed: %w", err)
+		return ToolResult{}, fmt.Errorf("fetch failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 200*1024)) // 200KB limit
 	if err != nil {
-		return "", fmt.Errorf("read failed: %w", err)
+		return ToolResult{}, fmt.Errorf("read failed: %w", err)
 	}
 
 	text := stripHTML(string(bodyBytes))
 	if len(text) > 3000 {
 		text = text[:3000] + "... [truncated]"
 	}
-	return text, nil
+	preview := compactPreview(text, 320)
+	return OKResult(
+		fmt.Sprintf("Fetched %s (HTTP %d, confidence %s).", p.URL, resp.StatusCode, webConfidence(resp.StatusCode, p.URL, preview)),
+		map[string]any{
+			"source":  webSourceArtifact(p.URL, "", preview, resp.StatusCode),
+			"preview": preview,
+		},
+	), nil
 }
 
 // ── web.research ──────────────────────────────────────────────────────────────
 
-func webResearch(ctx context.Context, args json.RawMessage) (string, error) {
+func webResearch(ctx context.Context, args json.RawMessage) (ToolResult, error) {
 	var p struct {
 		Query   string `json:"query"`
 		Sources int    `json:"sources"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil || p.Query == "" {
-		return "", fmt.Errorf("query is required")
+		return ToolResult{}, fmt.Errorf("query is required")
 	}
 	if p.Sources <= 0 {
 		p.Sources = 3
@@ -240,41 +299,68 @@ func webResearch(ctx context.Context, args json.RawMessage) (string, error) {
 
 	bundle, _ := creds.Read()
 	if bundle.BraveSearchAPIKey == "" {
-		return "Web research is unavailable: Brave Search API key not configured. Add your Brave API key in Atlas Settings → Skills → Web Research.", nil
+		return OKResult("Web research is unavailable: Brave Search API key not configured.", map[string]any{
+			"query":      p.Query,
+			"configured": false,
+		}), nil
 	}
 
 	results, err := braveSearch(ctx, bundle.BraveSearchAPIKey, p.Query, p.Sources, "")
 	if err != nil {
-		return "", err
+		return ToolResult{}, err
 	}
 
 	if len(results) == 0 {
-		return "No results found for: " + p.Query, nil
+		return OKResult("No results found for: "+p.Query, map[string]any{"query": p.Query, "sources": []map[string]any{}}), nil
 	}
 
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Research on \"%s\" (%d sources):\n\n", p.Query, len(results)))
+	sources := make([]map[string]any, 0, min(len(results), p.Sources))
+	keyPoints := make([]string, 0, min(len(results), p.Sources))
+	highConfidence := false
 
 	for i, r := range results {
 		if i >= p.Sources {
 			break
 		}
-		sb.WriteString(fmt.Sprintf("--- Source %d: %s ---\n%s\n\n", i+1, r.Title, r.URL))
-
-		// Fetch page content.
 		pageArgs, _ := json.Marshal(map[string]string{"url": r.URL})
-		content, err := webFetchPage(ctx, pageArgs)
+		pageResult, err := webFetchPage(ctx, pageArgs)
 		if err != nil {
-			sb.WriteString(fmt.Sprintf("[Could not fetch page: %v]\n\n", err))
+			sources = append(sources, map[string]any{
+				"url":         r.URL,
+				"title":       compactPreview(r.Title, 80),
+				"source_type": webSourceKind(r.URL),
+				"confidence":  "low",
+				"error":       compactPreview(err.Error(), 120),
+			})
 			continue
 		}
-		// Trim per-source to keep total manageable.
-		if len(content) > 1500 {
-			content = content[:1500] + "... [truncated]"
+		source := webSourceArtifact(r.URL, r.Title, r.Description, 200)
+		if data, ok := pageResult.Artifacts["source"].(map[string]any); ok {
+			source = data
+			if title := compactPreview(r.Title, 80); title != "" {
+				source["title"] = title
+			}
 		}
-		sb.WriteString(content + "\n\n")
+		if preview, ok := pageResult.Artifacts["preview"].(string); ok && preview != "" {
+			keyPoints = append(keyPoints, preview)
+		} else if r.Description != "" {
+			keyPoints = append(keyPoints, compactPreview(r.Description, 160))
+		}
+		if source["confidence"] == "high" {
+			highConfidence = true
+		}
+		sources = append(sources, source)
 	}
-	return strings.TrimRight(sb.String(), "\n"), nil
+	summary := fmt.Sprintf("Researched %q using %d source(s).", p.Query, len(sources))
+	if highConfidence {
+		summary += " Includes at least one high-confidence source."
+	}
+	return OKResult(summary, map[string]any{
+		"query":      p.Query,
+		"confidence": map[bool]string{true: "high", false: "medium"}[highConfidence],
+		"sources":    sources,
+		"key_points": compactToolList(keyPoints, 3, 160),
+	}), nil
 }
 
 // ── web.news ──────────────────────────────────────────────────────────────────
@@ -311,28 +397,42 @@ func webNews(ctx context.Context, args json.RawMessage) (string, error) {
 
 // ── web.check_url ─────────────────────────────────────────────────────────────
 
-func webCheckURL(ctx context.Context, args json.RawMessage) (string, error) {
+func webCheckURL(ctx context.Context, args json.RawMessage) (ToolResult, error) {
 	var p struct {
 		URL string `json:"url"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil || p.URL == "" {
-		return "", fmt.Errorf("url is required")
+		return ToolResult{}, fmt.Errorf("url is required")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "HEAD", p.URL, nil)
 	if err != nil {
-		return "", fmt.Errorf("invalid URL: %w", err)
+		return ToolResult{}, fmt.Errorf("invalid URL: %w", err)
 	}
 	req.Header.Set("User-Agent", "Atlas/1.0 (url-checker)")
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Sprintf("%s — unreachable: %v", p.URL, err), nil
+		return OKResult(fmt.Sprintf("%s is unreachable.", p.URL), map[string]any{
+			"source": map[string]any{
+				"url":         p.URL,
+				"domain":      webDomain(p.URL),
+				"source_type": webSourceKind(p.URL),
+				"confidence":  "low",
+				"status":      0,
+			},
+			"error": compactPreview(err.Error(), 140),
+		}), nil
 	}
 	defer resp.Body.Close()
 
-	return fmt.Sprintf("%s — HTTP %d %s", p.URL, resp.StatusCode, resp.Status), nil
+	return OKResult(
+		fmt.Sprintf("%s responded with HTTP %d.", p.URL, resp.StatusCode),
+		map[string]any{
+			"source": webSourceArtifact(p.URL, "", "", resp.StatusCode),
+		},
+	), nil
 }
 
 // ── web.multi_search ──────────────────────────────────────────────────────────

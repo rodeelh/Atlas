@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs'
 import { defineConfig, type Plugin } from 'vite'
 import preact from '@preact/preset-vite'
+
+const { version } = JSON.parse(readFileSync('./package.json', 'utf-8')) as { version: string }
 
 // Remove crossorigin attributes from generated HTML.
 // When the web UI is served from a LAN IP over plain HTTP, crossorigin="anonymous"
@@ -16,6 +19,9 @@ function removeCrossorigin(): Plugin {
 
 export default defineConfig({
   plugins: [preact(), removeCrossorigin()],
+  define: {
+    __APP_VERSION__: JSON.stringify(version),
+  },
   base: '/web/',
   build: {
     // Output to dist/ — served by the Go binary via -web-dir flag.

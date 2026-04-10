@@ -218,6 +218,9 @@ func (m *Module) agentRun(ctx context.Context, args json.RawMessage) (skills.Too
 	if err != nil {
 		return skills.ToolResult{}, err
 	}
+	if status, _ := record["status"].(string); status == "waiting_for_approval" {
+		return skills.OKResult(fmt.Sprintf("Workflow %q is waiting for approval before the next step.", stringValue(item, "name")), map[string]any{"run": record}), nil
+	}
 	return skills.OKResult(fmt.Sprintf("Workflow %q ran successfully.", stringValue(item, "name")), map[string]any{"run": record}), nil
 }
 

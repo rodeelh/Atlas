@@ -433,8 +433,75 @@ func selectiveMindContent(content, userMessage string) string {
 	return strings.TrimSpace(result)
 }
 
+type turnMode string
+
+const (
+	turnModeChat       turnMode = "chat"
+	turnModeFactual    turnMode = "factual"
+	turnModeResearch   turnMode = "research"
+	turnModeExecution  turnMode = "execution"
+	turnModeAutomation turnMode = "automation"
+)
+
+func detectTurnMode(userMessage string) turnMode {
+	lower := strings.ToLower(userMessage)
+
+	for _, marker := range []string{
+		"automation", "schedule", "every day", "every weekday", "every monday", "daily", "weekly",
+		"telegram", "slack", "discord", "whatsapp", "cron", "next run",
+	} {
+		if strings.Contains(lower, marker) {
+			return turnModeAutomation
+		}
+	}
+
+	for _, marker := range []string{
+		"verify", "research", "compare", "search", "look up", "latest", "news", "official source",
+		"from the web", "check the website",
+	} {
+		if strings.Contains(lower, marker) {
+			return turnModeResearch
+		}
+	}
+
+	for _, marker := range []string{
+		"open ", "create ", "write ", "update ", "change ", "edit ", "fix ", "delete ", "remove ",
+		"install ", "run ", "deploy ", "send ", "save ", "patch ",
+	} {
+		if strings.Contains(lower, marker) {
+			return turnModeExecution
+		}
+	}
+
+	for _, marker := range []string{
+		"hi", "hello", "hey", "how are you", "what's up", "check in", "chat", "talk",
+	} {
+		if strings.Contains(lower, marker) {
+			return turnModeChat
+		}
+	}
+
+	return turnModeFactual
+}
+
+func responseContractBlock(mode turnMode) string {
+	switch mode {
+	case turnModeChat:
+		return "Mode: chat\n- Be warm and natural.\n- Keep replies short unless the user asks for depth.\n- Avoid unnecessary tool use for casual conversation."
+	case turnModeResearch:
+		return "Mode: research\n- Answer the question first.\n- Prefer primary or official sources when they exist.\n- Briefly state the basis or confidence after the answer.\n- Keep research summaries tight and avoid dumping raw source text."
+	case turnModeExecution:
+		return "Mode: execution\n- State what you changed or checked.\n- If blocked, name the blocker and the best next step.\n- Prefer decisive action over extended planning when the path is clear."
+	case turnModeAutomation:
+		return "Mode: automation\n- Prefer idempotent actions: update or upsert before creating duplicates.\n- Confirm the resulting schedule, destination, and enabled state in the answer.\n- Preserve existing user intent unless they explicitly ask to replace it."
+	default:
+		return "Mode: factual\n- Lead with the direct answer.\n- Keep wording compact and avoid filler.\n- Mention uncertainty only when it matters."
+	}
+}
+
 func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, supportDir, userMessage string) string {
 	budget := cfg.SystemPromptRuneBudget()
+	mode := detectTurnMode(userMessage)
 
 	// Load MIND.md and apply selective section filtering.
 	// Always-sections (Who I Am, Working Style, etc.) are always injected.
@@ -457,6 +524,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	if shouldInjectDiary(userMessage) {
 		diary = features.DiaryContext(supportDir, 2)
 	}
+	contractBlock := responseContractBlock(mode)
 
 	// Load tool_learning notes — institutional knowledge about which skills Atlas
 	// should avoid or approach differently. Injected before skill schemas so the
@@ -505,15 +573,16 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	skillsCost := len([]rune(skillsBlock)) + 40
 	diaryCost := len([]rune(diary)) + 35
 	toolNotesCost := len([]rune(toolNotesBlock)) + 40 // \n\n<tool_notes>\n...
+	contractCost := len([]rune(contractBlock)) + 45
 
-	total := identityCost + credsCost + memCost + skillsCost + diaryCost + toolNotesCost
+	total := identityCost + credsCost + memCost + skillsCost + diaryCost + toolNotesCost + contractCost
 
 	// Trim from lowest priority up until we're within budget.
 	// creds block is never trimmed — it's small and critical for tool use.
 
 	// Trim diary first (lowest priority).
 	if total > budget && diary != "" {
-		allowed := budget - (identityCost + credsCost + memCost + skillsCost + toolNotesCost)
+		allowed := budget - (identityCost + credsCost + memCost + skillsCost + toolNotesCost + contractCost)
 		if allowed < 100 {
 			diary = ""
 			diaryCost = 0
@@ -524,19 +593,19 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 				diaryCost = allowed + 35
 			}
 		}
-		total = identityCost + credsCost + memCost + skillsCost + diaryCost + toolNotesCost
+		total = identityCost + credsCost + memCost + skillsCost + diaryCost + toolNotesCost + contractCost
 	}
 
 	// Trim tool notes next (also low priority — they help but aren't critical).
 	if total > budget && toolNotesBlock != "" {
 		toolNotesBlock = ""
 		toolNotesCost = 0
-		total = identityCost + credsCost + memCost + skillsCost + diaryCost
+		total = identityCost + credsCost + memCost + skillsCost + diaryCost + contractCost
 	}
 
 	// Trim skills next.
 	if total > budget && skillsBlock != "" {
-		allowed := budget - (identityCost + credsCost + memCost + diaryCost)
+		allowed := budget - (identityCost + credsCost + memCost + diaryCost + contractCost)
 		if allowed < 100 {
 			skillsBlock = ""
 			skillsCost = 0
@@ -547,7 +616,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 				skillsCost = allowed + 40
 			}
 		}
-		total = identityCost + credsCost + memCost + skillsCost + diaryCost
+		total = identityCost + credsCost + memCost + skillsCost + diaryCost + contractCost
 	}
 
 	// Trim memories last (reduce count, don't truncate content mid-sentence).
@@ -560,7 +629,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 			}
 			memText = mb.String()
 			memCost = len([]rune(memText)) + 50
-			total = identityCost + credsCost + memCost + skillsCost + diaryCost
+			total = identityCost + credsCost + memCost + skillsCost + diaryCost + contractCost
 		}
 	}
 
@@ -632,6 +701,12 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 		}
 		sb.WriteString("\nWhen the user asks about weather, time, currency, or anything location-specific without specifying a place, use the above context.")
 		sb.WriteString("\n</user_context>")
+	}
+
+	if contractBlock != "" {
+		sb.WriteString("\n\n<response_contract>\n")
+		sb.WriteString(contractBlock)
+		sb.WriteString("\n</response_contract>")
 	}
 
 	// ── Volatile suffix (changes per-turn, busts cache from here) ──────────
@@ -837,6 +912,7 @@ func (s *Service) buildTrimmedHistoryNote(convID string, trimCount int, trimmed 
 	}
 
 	var excerpts []string
+	var outcomes []string
 	var topics []string
 	for _, m := range trimmed {
 		if m.Role == "user" && m.ID != currentMsgID {
@@ -853,10 +929,22 @@ func (s *Service) buildTrimmedHistoryNote(convID string, trimCount int, trimmed 
 					topics = append(topics, token)
 				}
 			}
+		} else if m.Role == "assistant" {
+			outcome := strings.Join(strings.Fields(m.Content), " ")
+			if outcome == "" {
+				continue
+			}
+			if len([]rune(outcome)) > 90 {
+				outcome = string([]rune(outcome)[:90]) + "…"
+			}
+			outcomes = append(outcomes, outcome)
 		}
 	}
 	if len(excerpts) > 3 {
 		excerpts = excerpts[len(excerpts)-3:]
+	}
+	if len(outcomes) > 2 {
+		outcomes = outcomes[len(outcomes)-2:]
 	}
 	if len(excerpts) == 0 {
 		return ""
@@ -865,7 +953,11 @@ func (s *Service) buildTrimmedHistoryNote(convID string, trimCount int, trimmed 
 	if len(topics) > 0 {
 		note += " Topics: " + strings.Join(topics, ", ") + "."
 	}
-	note += " Recent asks: " + strings.Join(excerpts, " / ") + "]"
+	note += " Recent asks: " + strings.Join(excerpts, " / ") + "."
+	if len(outcomes) > 0 {
+		note += " Latest progress: " + strings.Join(outcomes, " / ") + "."
+	}
+	note += "]"
 
 	// Cache for reuse on subsequent turns in the same conversation.
 	// Evict stale entries to prevent unbounded growth.

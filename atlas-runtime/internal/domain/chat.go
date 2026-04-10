@@ -118,8 +118,8 @@ func (d *ChatDomain) streamMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ch := d.broadcaster.Register(convID)
-	defer d.broadcaster.Remove(convID)
+	subID, ch := d.broadcaster.Register(convID)
+	defer d.broadcaster.Remove(convID, subID)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")

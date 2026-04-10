@@ -3,7 +3,7 @@ import type { JSX } from 'preact/jsx-runtime'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js/lib/common'
-import { api, MessageAttachment, LinkPreview, ConversationSummary, ConversationDetail, CloudModelHealth } from '../api/client'
+import { api, MessageAttachment, LinkPreview, ConversationSummary, ConversationDetail, CloudModelHealth, type ChatStreamEvent } from '../api/client'
 import { pickPresencePhrase } from '../presence_phrases'
 import { toast } from '../toast'
 import { PageHeader } from '../components/PageHeader'
@@ -11,6 +11,7 @@ import { ErrorBanner } from '../components/ErrorBanner'
 import { formatProviderModelName } from '../modelName'
 import { voiceSpeechSupported, startVoiceSpeech, type VoiceSpeechSession } from '../lib/voiceSpeech'
 import { createVoicePlayer, warmupAudioContext, type VoicePlayer } from '../lib/voicePlayback'
+import { extractStreamError } from './chatStream'
 
 // Configure marked once — GFM tables, auto line-breaks, external links
 marked.use({
@@ -550,12 +551,10 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
   onUnreadReplyRef.current = onUnreadReply
   const lastSeenMsgIdRef  = useRef<string | null>(null)
   const prevIsActiveRef   = useRef(isActive)
-  // Always-current snapshot of messages for use inside effects with [] deps.
+  // Always-current snapshot of messages — used in the isActive leave/return
+  // effect so we can read state without adding messages as a dependency.
   const messagesLiveRef   = useRef(messages)
   messagesLiveRef.current = messages
-  // When set, the next messages re-render will scroll to this message ID
-  // instead of scrolling to the bottom. Used for unread-reply scroll.
-  const scrollToUnreadRef = useRef<string | null>(null)
 
   const updateScrollBottomVisibility = useCallback(() => {
     const el = messagesRef.current
@@ -580,22 +579,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
 
   useEffect(() => {
     saveMessages(messages)
-    // If a scroll-to-unread target was set (navigation return with new messages),
-    // scroll to it instead of the bottom so the user lands on the first new message.
-    if (scrollToUnreadRef.current) {
-      const targetId = scrollToUnreadRef.current
-      scrollToUnreadRef.current = null
-      requestAnimationFrame(() => {
-        const el = messagesRef.current?.querySelector(`[data-msg-id="${targetId}"]`)
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        } else {
-          scrollToBottom(true)
-        }
-      })
-    } else {
-      scrollToBottom(!isInitialMount.current)
-    }
+    scrollToBottom(!isInitialMount.current)
     isInitialMount.current = false
   }, [messages])
 
@@ -681,9 +665,10 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
   }, [])
 
   // Track isActive transitions:
-  //   true→false: record the last seen message ID so we know what's "unread"
-  //   false→true: re-sync from server (catch any missed SSE events), then
-  //               scroll to the first unread message if there is one.
+  //   true→false: snapshot the last visible message ID as "seen"
+  //   false→true: scroll to the first unread message (SSE keeps state live while
+  //               away — no server re-sync needed here; mount-time sync covers refresh)
+  //               and fire any pending greeting (fire-and-forget; SSE delivers it).
   useEffect(() => {
     const wasActive = prevIsActiveRef.current
     prevIsActiveRef.current = isActive
@@ -691,68 +676,41 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     if (wasActive && !isActive) {
       // User left chat — snapshot the last visible message as "seen"
       const visible = messagesLiveRef.current.filter(m => !m.isTyping)
-      if (visible.length > 0) {
-        lastSeenMsgIdRef.current = visible[visible.length - 1].id
-      }
+      if (visible.length > 0) lastSeenMsgIdRef.current = visible[visible.length - 1].id
       return
     }
 
     if (!wasActive && isActive) {
       // User returned to chat.
-      // 1. Fire any queued acted-on-thoughts greeting first so it's persisted.
-      // 2. Re-sync from server (picks up greeting + any missed SSE replies).
-      // 3. Compute the first unread message and set scrollToUnreadRef so the
-      //    messages effect scrolls to it after the next render.
-      const convID = conversationID.current
       const seenId = lastSeenMsgIdRef.current
       lastSeenMsgIdRef.current = null
-      if (!convID) return
 
-      ;(async () => {
-        // Step 1: deliver any pending proactive greeting
-        try {
-          const pending = await api.pendingGreetings()
-          if (pending.count > 0) {
-            await api.triggerGreeting(convID)
-          }
-        } catch { /* greeting unavailable — continue to sync */ }
-
-        // Step 2: re-sync messages from server
-        try {
-          const detail = await api.conversationDetail(convID)
-          const serverMsgs = detail.messages
-            .filter((m: { role: string }) => m.role === 'user' || m.role === 'assistant')
-
-          // Compute scroll target from the fresh server list before state update
-          if (seenId) {
-            const seenIdx = serverMsgs.findIndex((m: { id: string }) => m.id === seenId)
-            if (seenIdx >= 0 && seenIdx < serverMsgs.length - 1) {
-              scrollToUnreadRef.current = serverMsgs[seenIdx + 1].id
-            }
-          }
-
-          setMessages(prev => {
-            if (serverMsgs.length > prev.filter(m => !m.isTyping).length) {
-              return serverMsgs.map((m: { id: string; role: string; content: string }) => ({
-                id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
-              }))
-            }
-            // No new messages from server — if scroll target is set (SSE delivered
-            // the reply while we were away), nudge render so the effect fires.
-            return scrollToUnreadRef.current ? [...prev] : prev
-          })
-        } catch {
-          // Server unreachable — fall back to scrolling within in-memory state
-          if (seenId) {
-            const msgs = messagesLiveRef.current.filter(m => !m.isTyping)
-            const seenIdx = msgs.findIndex(m => m.id === seenId)
-            if (seenIdx >= 0 && seenIdx < msgs.length - 1) {
-              scrollToUnreadRef.current = msgs[seenIdx + 1].id
-              setMessages(prev => [...prev]) // nudge render
+      // Scroll to first unread message if new messages arrived via SSE while away.
+      // Chat is always mounted, so SSE continuously updates messages state — by the
+      // time this effect fires the new messages are already in messagesLiveRef.
+      requestAnimationFrame(() => {
+        if (seenId) {
+          const msgs = messagesLiveRef.current.filter(m => !m.isTyping)
+          const seenIdx = msgs.findIndex(m => m.id === seenId)
+          if (seenIdx >= 0 && seenIdx < msgs.length - 1) {
+            const firstNewId = msgs[seenIdx + 1].id
+            const el = messagesRef.current?.querySelector(`[data-msg-id="${firstNewId}"]`)
+            if (el) {
+              el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              return
             }
           }
         }
-      })()
+        scrollToBottom(true)
+      })
+
+      // Fire any pending proactive greeting (fire-and-forget; SSE delivers the reply).
+      const convID = conversationID.current
+      if (convID) {
+        api.pendingGreetings()
+          .then(p => { if (p.count > 0) api.triggerGreeting(convID).catch(() => {}) })
+          .catch(() => {})
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive])
@@ -940,6 +898,24 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       setError(err instanceof Error ? err.message : 'Failed to load conversation.')
     }
   }
+
+  const reconcileConversationState = useCallback(async (convID: string) => {
+    try {
+      const detail = await api.conversationDetail(convID)
+      const loaded: Message[] = detail.messages
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .map(m => ({
+          id: m.id,
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          createdAt: new Date(m.timestamp).getTime(),
+        }))
+      setMessages(loaded)
+      return loaded
+    } catch {
+      return null
+    }
+  }, [])
 
   const handleProviderChange = async (rawProvider: string) => {
     // "local_lm" is the virtual dropdown value — resolve to the configured local engine.
@@ -1384,12 +1360,11 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     let resumedContent = ''
     let awaitingResume = false
     let hasReceivedText = false   // tracks first text delta this turn
+    let turnCompleted = false
 
     es.onmessage = (evt) => {
       try {
-        const data = JSON.parse(evt.data) as {
-          type: string; content?: string; toolName?: string; message?: string; status?: string
-        }
+        const data = JSON.parse(evt.data) as ChatStreamEvent
         switch (data.type) {
 
           // ── Streaming text events ──────────────────────────────────────────────
@@ -1511,6 +1486,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
 
           // ── Conversation complete ──────────────────────────────────────────────
           case 'done':
+            turnCompleted = true
             hideStatus(0)
             setPresenceWorking(false)
             activeMsgId.current = null
@@ -1564,10 +1540,11 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
             break
 
           case 'error':
+            turnCompleted = true
             hideStatus(0)
             setPresenceWorking(false)
             activeMsgId.current = null
-            setError(data.message ?? 'An error occurred.')
+            setError(extractStreamError(data))
             const targetID = resumedMsgID ?? assistantMsg.id
             setMessages(prev => prev.map(m => m.id === targetID ? { ...m, content: resumedContent || accumulatedContent || 'Failed to get response.', isTyping: false } : m))
             setSending(false); es.close()
@@ -1576,12 +1553,19 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       } catch { /* ignore parse errors */ }
     }
 
-    es.onerror = () => {
+    es.onerror = async () => {
+      if (turnCompleted) return
       hideStatus(0)
       setPresenceWorking(false)
       activeMsgId.current = null
       setSending(false)
       es.close()
+      const reconciled = await reconcileConversationState(conversationID.current)
+      if (reconciled && reconciled.length > 0) {
+        toast.info('Connection interrupted. Synced the latest conversation state.', { durationMs: 3600 })
+        return
+      }
+      setError('Connection lost while waiting for a reply. Please try again.')
     }
 
     try {

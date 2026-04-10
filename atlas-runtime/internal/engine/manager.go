@@ -513,7 +513,9 @@ func (m *Manager) ListModels() ([]ModelInfo, error) {
 // DeleteModel removes a model file from the models directory.
 // Returns an error if the model is currently loaded.
 func (m *Manager) DeleteModel(name string) error {
-	if filepath.Base(name) != name || name == "" {
+	// filepath.Base("/") == "/" so the base-equality check passes for "/",
+	// but filepath.Join(modelsDir, "/") resolves to modelsDir itself. Guard explicitly.
+	if name == "" || name == "/" || name == "." || filepath.Base(name) != name {
 		return fmt.Errorf("invalid model name")
 	}
 	m.mu.Lock()

@@ -3,6 +3,7 @@ package control
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/runtime"
@@ -88,4 +89,66 @@ func TestSystemService_OnboardingRoundTrip(t *testing.T) {
 	if !svc.OnboardingCompleted() {
 		t.Fatal("expected onboarding to be true after update")
 	}
+}
+
+func TestSystemService_ScheduleRestartRunsRestartFn(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	cfgStore := config.NewStoreAt(filepath.Join(dir, "config.json"), filepath.Join(dir, "legacy.json"))
+	if err := cfgStore.Save(config.Defaults()); err != nil {
+		t.Fatalf("cfgStore.Save: %v", err)
+	}
+
+	svc := NewSystemService(cfgStore, runtime.NewService(1984), db)
+	done := make(chan struct{}, 1)
+	svc.restartDelay = 0
+	svc.restartFn = func() error {
+		done <- struct{}{}
+		return nil
+	}
+
+	if err := svc.ScheduleRestart(); err != nil {
+		t.Fatalf("ScheduleRestart: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for restart function")
+	}
+}
+
+func TestSystemService_ScheduleRestartPreventsDuplicateRequests(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	cfgStore := config.NewStoreAt(filepath.Join(dir, "config.json"), filepath.Join(dir, "legacy.json"))
+	if err := cfgStore.Save(config.Defaults()); err != nil {
+		t.Fatalf("cfgStore.Save: %v", err)
+	}
+
+	svc := NewSystemService(cfgStore, runtime.NewService(1984), db)
+	block := make(chan struct{})
+	svc.restartDelay = 0
+	svc.restartFn = func() error {
+		<-block
+		return nil
+	}
+
+	if err := svc.ScheduleRestart(); err != nil {
+		t.Fatalf("first ScheduleRestart: %v", err)
+	}
+	if err := svc.ScheduleRestart(); err == nil {
+		t.Fatal("expected duplicate restart to be rejected")
+	}
+	close(block)
 }

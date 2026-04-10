@@ -196,16 +196,20 @@ func (s *Service) HandleGreeting(ctx context.Context, convIDHint string) (Greeti
 	s.detectAndRecordSurfacings(convID, msgID, content, ts)
 
 	// Emit SSE so a live client sees the greeting stream in. Using the
-	// existing token/done pattern so the frontend's chat stream handler
-	// works without any new event type.
+	// same assistant_started/assistant_delta/done pattern as the main chat path.
 	s.broadcaster.Emit(convID, SSEEvent{
-		Type:           "token",
+		Type:           "assistant_started",
 		Role:           "assistant",
 		ConversationID: convID,
 	})
 	s.broadcaster.Emit(convID, SSEEvent{
-		Type:           "token",
+		Type:           "assistant_delta",
 		Content:        content,
+		Role:           "assistant",
+		ConversationID: convID,
+	})
+	s.broadcaster.Emit(convID, SSEEvent{
+		Type:           "assistant_done",
 		Role:           "assistant",
 		ConversationID: convID,
 	})

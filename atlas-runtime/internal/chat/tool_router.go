@@ -182,9 +182,13 @@ func selectToolsWithLLM(
 	writeToolRouterCache(cacheKey, groups)
 	out := registry.ToolDefsForGroupsForMessage(groups, message)
 
+	modelLabel := bgProvider.Model
+	if idx := strings.LastIndexAny(modelLabel, "/\\"); idx >= 0 {
+		modelLabel = modelLabel[idx+1:]
+	}
 	logstore.Write("info",
 		fmt.Sprintf("Tool router: selected groups=%v → %d tools via %s/%s",
-			groups, len(out), bgProvider.Type, bgProvider.Model),
+			groups, len(out), bgProvider.Type, modelLabel),
 		map[string]string{"mode": "llm", "groups": strings.Join(groups, ",")})
 
 	return out

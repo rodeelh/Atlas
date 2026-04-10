@@ -24,6 +24,29 @@ export function parseModelInfo(filename: string): { display: string; quant: stri
 }
 
 /**
+ * parseMLXModelInfo — extracts a human-readable display name and quantization
+ * tag from an MLX model directory name.
+ *
+ * Examples:
+ *   "gemma-4-e2b-it-4bit"              → { display: "Gemma 4 E2B It", quant: "4bit" }
+ *   "Llama-3.2-3B-Instruct-4bit"       → { display: "Llama 3.2 3B Instruct", quant: "4bit" }
+ *   "Qwen2.5-7B-Instruct-8bit"         → { display: "Qwen2.5 7B Instruct", quant: "8bit" }
+ */
+export function parseMLXModelInfo(name: string): { display: string; quant: string | null } {
+  // Model may be a full path — extract the basename.
+  const base = name.split('/').pop() || name
+  const quantMatch = base.match(/-((?:\d+)bit)$/i)
+  const quant = quantMatch ? quantMatch[1].toLowerCase() : null
+  const nameBase = quantMatch ? base.slice(0, quantMatch.index) : base
+  const display = nameBase
+    .replace(/[-_.]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\b(\w)/g, c => c.toUpperCase())
+    .trim()
+  return { display, quant }
+}
+
+/**
  * formatAtlasModelName — returns a single display string combining the
  * parsed name and quantization tag, suitable for compact UI labels.
  *
@@ -111,6 +134,20 @@ export function formatProviderModelName(provider: string, model: string): string
   switch (provider) {
     case 'atlas_engine':
       return formatAtlasModelName(raw)
+    case 'atlas_mlx': {
+      // Model may be a full path (/…/mlx-models/gemma-4-e2b-it-4bit) or bare name.
+      const base = raw.split('/').pop() || raw
+      // Separate trailing quantization suffix (e.g. "4bit", "8bit") from the model name.
+      const quantMatch = base.match(/-((?:\d+)bit)$/i)
+      const quant = quantMatch ? quantMatch[1].toLowerCase() : null
+      const nameBase = quantMatch ? base.slice(0, quantMatch.index) : base
+      const display = nameBase
+        .replace(/[-_.]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/\b(\w)/g, c => c.toUpperCase())
+        .trim()
+      return quant ? `${display} · ${quant}` : display
+    }
     case 'openai':
       return formatOpenAIModel(raw)
     case 'anthropic':

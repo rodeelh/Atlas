@@ -35,3 +35,51 @@ type DownloadProgress struct {
 	Total      int64   `json:"total"`
 	Percent    float64 `json:"percent"`
 }
+
+// ── MLX-LM types ─────────────────────────────────────────────────────────────
+
+// MLXInferenceStats holds per-turn performance metrics for the last completed
+// inference. Populated by MLXManager.RecordInference after each agent turn.
+type MLXInferenceStats struct {
+	DecodeTPS      float64 `json:"decodeTPS"`      // completion tokens / decode seconds
+	PromptTokens   int     `json:"promptTokens"`   // input tokens (from usage)
+	CompletionTokens int   `json:"completionTokens"` // output tokens (from usage)
+	GenerationSec  float64 `json:"generationSec"`  // wall-clock seconds for the full turn
+}
+
+// MLXStatus describes the current state of the MLX-LM process.
+// Mirrors EngineStatus for the llama.cpp subsystem.
+type MLXStatus struct {
+	Running          bool               `json:"running"`
+	Loading          bool               `json:"loading,omitempty"`
+	LoadedModel      string             `json:"loadedModel"`
+	Port             int                `json:"port"`
+	VenvReady        bool               `json:"venvReady"`                // Python venv + mlx-lm package present
+	PackageVersion   string             `json:"packageVersion,omitempty"` // mlx-lm version string (installed)
+	LatestVersion    string             `json:"latestVersion,omitempty"`  // latest version on PyPI
+	LastError        string             `json:"lastError,omitempty"`
+	IsAppleSilicon   bool               `json:"isAppleSilicon"`           // hardware capability gate
+	LastInference    *MLXInferenceStats `json:"lastInference,omitempty"`  // stats from last completed turn
+}
+
+// MLXModelInfo describes one MLX model directory stored in mlx-models/.
+// Unlike llama.cpp where each model is a single .gguf file, MLX models
+// are directories containing safetensors shards + config.json.
+type MLXModelInfo struct {
+	Name      string `json:"name"`      // directory name, e.g. "Llama-3.2-3B-Instruct-4bit"
+	SizeBytes int64  `json:"sizeBytes"` // total bytes of all files in the directory
+	SizeHuman string `json:"sizeHuman"`
+}
+
+// MLXDownloadProgress tracks the state of an in-progress mlx_lm model download.
+// The input is a HuggingFace repo ID (e.g. "mlx-community/Llama-3.2-3B-Instruct-4bit")
+// rather than a direct URL, so we store repo instead of url.
+type MLXDownloadProgress struct {
+	Active     bool    `json:"active"`
+	Repo       string  `json:"repo"`       // HuggingFace repo ID
+	ModelName  string  `json:"modelName"`  // destination directory name (last segment of repo)
+	Downloaded int64   `json:"downloaded"` // bytes downloaded so far (best-effort; subprocess-based)
+	Total      int64   `json:"total"`      // total bytes (-1 when unknown)
+	Percent    float64 `json:"percent"`
+	Error      string  `json:"error,omitempty"`
+}

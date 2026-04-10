@@ -24,7 +24,7 @@ func (m *Module) registerAgentActions() {
 	m.skills.RegisterExternal(skills.SkillEntry{
 		Def: skills.ToolDef{
 			Name:        "automation.create",
-			Description: "Create a new Atlas automation. For Telegram/WhatsApp/Slack/Discord delivery, call communication.list_channels first and pass the returned channel id as destinationID.",
+			Description: "Create a new Atlas automation. Prefer automation.upsert when the request might refer to an existing automation. For Telegram/WhatsApp/Slack/Discord delivery, call communication.list_channels first and pass the returned channel id as destinationID.",
 			Properties: map[string]skills.ToolParam{
 				"name":        {Description: "Short display name for the automation.", Type: "string"},
 				"prompt":      {Description: "Task prompt Atlas should run.", Type: "string"},
@@ -45,6 +45,35 @@ func (m *Module) registerAgentActions() {
 		PermLevel:   "execute",
 		ActionClass: skills.ActionClassLocalWrite,
 		FnResult:    m.agentCreate,
+	})
+
+	m.skills.RegisterExternal(skills.SkillEntry{
+		Def: skills.ToolDef{
+			Name:        "automation.upsert",
+			Description: "Create a new Atlas automation or update an existing one by ID or exact name. Prefer this when the user might already have a matching automation.",
+			Properties: map[string]skills.ToolParam{
+				"id":          {Description: "Automation ID when updating a known automation.", Type: "string"},
+				"name":        {Description: "Automation name. Required when creating a new automation.", Type: "string"},
+				"newName":     {Description: "Optional new display name for updates.", Type: "string"},
+				"prompt":      {Description: "Prompt text. Required when creating a new automation.", Type: "string"},
+				"schedule":    {Description: "Schedule string. Required when creating a new automation.", Type: "string"},
+				"emoji":       {Description: "Optional emoji for display.", Type: "string"},
+				"description": {Description: "Optional description.", Type: "string"},
+				"enabled":     {Description: "Whether the automation is enabled.", Type: "boolean"},
+				"destinationID": {
+					Description: "Authorized communication channel id from communication.list_channels. Use clearDestination=true to clear delivery on update.",
+					Type:        "string",
+				},
+				"platform":         {Description: "Optional delivery platform when destinationID is not provided.", Type: "string"},
+				"channelID":        {Description: "Optional delivery channel/chat ID when destinationID is not provided.", Type: "string"},
+				"threadID":         {Description: "Optional delivery thread ID for Slack or Discord.", Type: "string"},
+				"clearDestination": {Description: "If true, clear the delivery destination on update.", Type: "boolean"},
+			},
+			Required: []string{},
+		},
+		PermLevel:   "execute",
+		ActionClass: skills.ActionClassLocalWrite,
+		FnResult:    m.agentUpsert,
 	})
 
 	m.skills.RegisterExternal(skills.SkillEntry{
@@ -246,6 +275,89 @@ func (m *Module) agentCreate(_ context.Context, args json.RawMessage) (skills.To
 	}
 	created, _ := m.resolveAutomation(automationRefArgs{Name: item.Name}, false)
 	return skills.OKResult(fmt.Sprintf("Automation %q created.", item.Name), map[string]any{"automation": created}), nil
+}
+
+func (m *Module) agentUpsert(ctx context.Context, args json.RawMessage) (skills.ToolResult, error) {
+	var p struct {
+		ID               string  `json:"id"`
+		Name             string  `json:"name"`
+		NewName          string  `json:"newName"`
+		Prompt           *string `json:"prompt"`
+		Schedule         *string `json:"schedule"`
+		Emoji            *string `json:"emoji"`
+		Enabled          *bool   `json:"enabled"`
+		Description      *string `json:"description"`
+		DestinationID    string  `json:"destinationID"`
+		Platform         string  `json:"platform"`
+		ChannelID        string  `json:"channelID"`
+		ThreadID         string  `json:"threadID"`
+		ClearDestination *bool   `json:"clearDestination"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return skills.ToolResult{}, fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	ref := automationRefArgs{ID: p.ID, Name: p.Name}
+	if existing, err := m.resolveAutomation(ref, false); err == nil {
+		updateArgs, _ := json.Marshal(map[string]any{
+			"id":               existing.ID,
+			"name":             existing.Name,
+			"newName":          p.NewName,
+			"prompt":           p.Prompt,
+			"schedule":         p.Schedule,
+			"emoji":            p.Emoji,
+			"enabled":          p.Enabled,
+			"description":      p.Description,
+			"destinationID":    p.DestinationID,
+			"platform":         p.Platform,
+			"channelID":        p.ChannelID,
+			"threadID":         p.ThreadID,
+			"clearDestination": p.ClearDestination,
+		})
+		res, err := m.agentUpdate(ctx, updateArgs)
+		if err != nil {
+			return res, err
+		}
+		if res.Artifacts == nil {
+			res.Artifacts = map[string]any{}
+		}
+		res.Artifacts["operation"] = "updated"
+		return res, nil
+	} else if !strings.Contains(err.Error(), "not found") {
+		return skills.ToolResult{}, err
+	}
+
+	name := strings.TrimSpace(p.Name)
+	if name == "" {
+		return skills.ToolResult{}, fmt.Errorf("name is required when creating a new automation")
+	}
+	if p.Prompt == nil || strings.TrimSpace(*p.Prompt) == "" {
+		return skills.ToolResult{}, fmt.Errorf("prompt is required when creating a new automation")
+	}
+	if p.Schedule == nil || strings.TrimSpace(*p.Schedule) == "" {
+		return skills.ToolResult{}, fmt.Errorf("schedule is required when creating a new automation")
+	}
+	createArgs, _ := json.Marshal(map[string]any{
+		"name":          name,
+		"prompt":        strings.TrimSpace(*p.Prompt),
+		"schedule":      strings.TrimSpace(*p.Schedule),
+		"emoji":         p.Emoji,
+		"description":   p.Description,
+		"enabled":       p.Enabled,
+		"destinationID": p.DestinationID,
+		"platform":      p.Platform,
+		"channelID":     p.ChannelID,
+		"threadID":      p.ThreadID,
+	})
+	res, err := m.agentCreate(ctx, createArgs)
+	if err != nil {
+		return res, err
+	}
+	if res.Artifacts == nil {
+		res.Artifacts = map[string]any{}
+	}
+	res.Artifacts["operation"] = "created"
+	return res, nil
 }
 
 func (m *Module) agentUpdate(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {

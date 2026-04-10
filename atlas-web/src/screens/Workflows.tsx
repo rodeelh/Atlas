@@ -3,12 +3,28 @@ import { JSX } from 'preact'
 import { api, WorkflowDefinition, WorkflowRun, WorkflowSummary } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { Portal } from '../components/Portal'
+import { buildWorkflowPayload, promptPreviewForWorkflow, trustSummaryForWorkflow } from './workflowScreenModel'
 
 const MoreIcon = () => (
   <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
     <circle cx="3" cy="7" r="1.1" />
     <circle cx="7" cy="7" r="1.1" />
     <circle cx="11" cy="7" r="1.1" />
+  </svg>
+)
+
+const PlayIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <polygon points="3,1.5 10.5,6 3,10.5" fill="currentColor" stroke="none" />
+  </svg>
+)
+
+const FlowIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="4" cy="4" r="2" />
+    <circle cx="14" cy="9" r="2" />
+    <circle cx="4" cy="14" r="2" />
+    <path d="M6 4h4l2 3M6 14h4l2 -3" />
   </svg>
 )
 
@@ -44,24 +60,12 @@ function statusBadge(status: string) {
   }
 }
 
-function workflowCopy(workflow: WorkflowDefinition) {
-  return workflow.description || workflow.promptTemplate.slice(0, 120) || 'No prompt template yet.'
-}
-
 function promptPreview(workflow: WorkflowDefinition) {
-  const trimmed = workflow.promptTemplate.trim()
-  if (!trimmed) return ''
-  if (workflow.description && workflow.description.trim() === trimmed) return ''
-  return trimmed
+  return promptPreviewForWorkflow(workflow)
 }
 
 function trustSummary(workflow: WorkflowDefinition) {
-  const parts: string[] = []
-  if (workflow.trustScope.allowedApps.length > 0) parts.push(`${workflow.trustScope.allowedApps.length} apps`)
-  if (workflow.trustScope.approvedRootPaths.length > 0) parts.push(`${workflow.trustScope.approvedRootPaths.length} paths`)
-  if (workflow.trustScope.allowsSensitiveRead) parts.push('sensitive reads')
-  if (workflow.trustScope.allowsLiveWrite) parts.push('live writes')
-  return parts.length ? parts.join(' · ') : 'Default trust scope'
+  return trustSummaryForWorkflow(workflow)
 }
 
 interface WorkflowModalProps {
@@ -92,27 +96,17 @@ function WorkflowModal({ workflow, onSave, onClose }: WorkflowModalProps) {
     setSaving(true)
     setError(null)
     try {
-      const now = new Date().toISOString()
-      const id = workflow?.id ?? name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
-      await onSave({
-        id,
-        name: name.trim(),
-        description: description.trim(),
-        promptTemplate: promptTemplate.trim(),
-        tags: tags.split(',').map(value => value.trim()).filter(Boolean),
-        steps: workflow?.steps ?? [],
-        trustScope: {
-          approvedRootPaths: approvedRootPaths.split('\n').map(value => value.trim()).filter(Boolean),
-          allowedApps: allowedApps.split(',').map(value => value.trim()).filter(Boolean),
-          allowsSensitiveRead,
-          allowsLiveWrite,
-        },
+      await onSave(buildWorkflowPayload({
+        name,
+        description,
+        promptTemplate,
+        tags,
         approvalMode,
-        createdAt: workflow?.createdAt ?? now,
-        updatedAt: now,
-        sourceConversationID: workflow?.sourceConversationID,
-        isEnabled: workflow?.isEnabled ?? true,
-      })
+        approvedRootPaths,
+        allowedApps,
+        allowsSensitiveRead,
+        allowsLiveWrite,
+      }, workflow))
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save workflow.')
@@ -302,6 +296,7 @@ export function Workflows() {
   const [editing, setEditing] = useState<WorkflowDefinition | 'new' | null>(null)
   const [runsTarget, setRunsTarget] = useState<WorkflowDefinition | null>(null)
   const [runningID, setRunningID] = useState<string | null>(null)
+  const [togglingID, setTogglingID] = useState<string | null>(null)
 
   async function load() {
     setLoading(true)
@@ -336,6 +331,18 @@ export function Workflows() {
     if (!confirm(`Delete workflow "${workflow.name}"?`)) return
     await api.deleteWorkflow(workflow.id)
     setWorkflows(current => current.filter(item => item.id !== workflow.id))
+  }
+
+  async function handleToggle(workflow: WorkflowDefinition) {
+    setTogglingID(workflow.id)
+    try {
+      const updated = await api.updateWorkflow({ ...workflow, isEnabled: !workflow.isEnabled, updatedAt: new Date().toISOString() })
+      setWorkflows(current => current.map(item => item.id === updated.id ? updated : item))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to toggle workflow.')
+    } finally {
+      setTogglingID(null)
+    }
   }
 
   async function handleRun(workflow: WorkflowDefinition) {
@@ -381,18 +388,34 @@ export function Workflows() {
             const summary = summaries[workflow.id]
             const preview = promptPreview(workflow)
             return (
-            <div key={workflow.id} class={`card automation-card workflow-console-card${workflow.isEnabled ? '' : ' disabled'}`}>
+            <div key={workflow.id} class={`card automation-card automation-console-card workflow-console-card${workflow.isEnabled ? '' : ' disabled'}`}>
               <div class="automation-card-header">
+                <div class="automation-identity">
+                  <span class="automation-emoji"><FlowIcon /></span>
+                </div>
                 <div class="automation-meta">
                   <div class="automation-title-row">
                     <span class="automation-name">{workflow.name}</span>
                     {statusBadge(summary?.health ?? (workflow.isEnabled ? 'never_run' : 'disabled'))}
                   </div>
-                  <span class="automation-schedule">{workflowCopy(workflow)}</span>
+                  <span class="automation-schedule">{workflow.description || 'Reusable workflow'}</span>
                 </div>
                 <div class="automation-actions">
-                  <button class="btn btn-ghost btn-xs" onClick={() => handleRun(workflow)} disabled={runningID === workflow.id}>
-                    {runningID === workflow.id ? '…' : 'Run'}
+                  <button
+                    class={`btn btn-sm automation-action-btn automation-toggle-btn${workflow.isEnabled ? ' enabled' : ''}`}
+                    onClick={() => handleToggle(workflow)}
+                    disabled={togglingID === workflow.id}
+                    title={workflow.isEnabled ? 'Disable' : 'Enable'}
+                  >
+                    {togglingID === workflow.id ? '…' : (workflow.isEnabled ? 'On' : 'Off')}
+                  </button>
+                  <button
+                    class="btn btn-sm btn-icon automation-action-btn automation-action-icon"
+                    onClick={() => handleRun(workflow)}
+                    disabled={runningID === workflow.id}
+                    title="Run now"
+                  >
+                    {runningID === workflow.id ? '…' : <PlayIcon />}
                   </button>
                   <CompactActionMenu>
                     <button class="btn btn-sm automation-action-btn" onClick={() => setRunsTarget(workflow)}>Runs</button>
@@ -401,6 +424,13 @@ export function Workflows() {
                   </CompactActionMenu>
                 </div>
               </div>
+
+              {preview && (
+                <div class="automation-prompt-section">
+                  <span class="automation-console-label">Prompt</span>
+                  <p class="automation-prompt">{preview}</p>
+                </div>
+              )}
 
               <div class="automation-console-grid workflow-console-grid">
                 <div class="automation-console-cell">
@@ -424,9 +454,9 @@ export function Workflows() {
                   {workflow.tags.map(tag => <span key={tag} class="badge badge-gray">{tag}</span>)}
                 </div>
               )}
-              {(summary?.lastRunError || preview) && (
-                <p class={`automation-prompt ${summary?.lastRunError ? 'automation-prompt-error' : ''}`}>
-                  {summary?.lastRunError ?? preview}
+              {summary?.lastRunError && (
+                <p class="automation-prompt automation-prompt-error">
+                  {summary.lastRunError}
                 </p>
               )}
             </div>
