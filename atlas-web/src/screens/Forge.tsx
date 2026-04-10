@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'preact/hooks'
 import { api, ForgeProposalRecord, ForgeResearchingItem, SkillRecord } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
+import { PageSpinner } from '../components/PageSpinner'
 import { ErrorBanner } from '../components/ErrorBanner'
 
 /* ── Helpers ─────────────────────────────────────────────── */
@@ -488,9 +489,7 @@ export function Forge() {
     return (
       <div class="screen">
         <PageHeader title="Forge" subtitle="Propose, review, and install AI-generated skills" />
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
-          <span class="spinner" />
-        </div>
+        <PageSpinner />
       </div>
     )
   }

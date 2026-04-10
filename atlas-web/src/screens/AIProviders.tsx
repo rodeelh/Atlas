@@ -9,6 +9,8 @@ import {
 } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
+import { PageSpinner } from '../components/PageSpinner'
+import { toast } from '../toast'
 import type { RuntimeConfigUpdateResponse } from '../api/client'
 import { formatAtlasModelName } from '../modelName'
 
@@ -113,7 +115,6 @@ export function AIProviders() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
   const [restartRequired, setRestartRequired] = useState(false)
   const [cloudModels, setCloudModels] = useState<ModelSelectorInfo | null>(null)
   const [localModels, setLocalModels] = useState<ModelSelectorInfo | null>(null)
@@ -183,21 +184,19 @@ export function AIProviders() {
 
   const update = <K extends keyof RuntimeConfig>(key: K, value: RuntimeConfig[K]) => {
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev))
-    setSaved(false)
   }
 
   const save = async () => {
     if (!draft) return
     setSaving(true)
     setError(null)
-    setSaved(false)
     try {
       const prevPrimaryModel = config?.selectedAtlasEngineModel
       const prevProvider = config?.activeAIProvider
       const result: RuntimeConfigUpdateResponse = await api.updateConfig(draft)
       setConfig(result.config)
       setDraft(result.config)
-      setSaved(true)
+      toast.success('Changes saved.')
       setRestartRequired(result.restartRequired)
       void fetchCloudModels(cloudProvider, true)
       void fetchLocalModels(localBackend, true)
@@ -233,7 +232,7 @@ export function AIProviders() {
     return (
       <div class="screen ai-providers-screen">
         <PageHeader title="AI Providers" subtitle="Set up how Atlas chooses between cloud and local models" />
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}><span class="spinner" /></div>
+        <PageSpinner />
       </div>
     )
   }
@@ -407,13 +406,6 @@ export function AIProviders() {
     window.location.hash = 'api-keys'
   }
 
-  const saveBanner = saved && !isDirty ? (
-    <div class="banner banner-success">
-      <strong>Changes saved.</strong> Provider and model changes apply immediately after save.
-      {restartRequired ? ' Atlas only needs a daemon restart for port-level changes.' : ''}
-    </div>
-  ) : null
-
   const cloudConnectionBadge = cloudModelHealth
     ? (
       <span class={`badge ${providerToneClass(cloudHealthTone(cloudModelHealth.status))}`} style={BADGE_STYLE} title={cloudModelHealth.message}>
@@ -478,7 +470,6 @@ export function AIProviders() {
       />
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
-      {saveBanner}
 
       <div>
         <div class="section-label">Setup</div>

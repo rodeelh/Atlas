@@ -1,4 +1,5 @@
 import { createPortal } from 'preact/compat'
+import { useEffect, useRef } from 'preact/hooks'
 import type { VNode } from 'preact'
 
 interface ConfirmDialogProps {
@@ -27,20 +28,50 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const cardRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const card = cardRef.current
+    if (!card) return
+
+    // Focus first button on mount
+    const focusable = card.querySelectorAll<HTMLElement>('button, [href], input, [tabindex]:not([tabindex="-1"])')
+    focusable[0]?.focus()
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onCancel()
+        return
+      }
+      if (e.key === 'Tab' && focusable.length > 0) {
+        const first = focusable[0]
+        const last = focusable[focusable.length - 1]
+        if (e.shiftKey) {
+          if (document.activeElement === first) { e.preventDefault(); last.focus() }
+        } else {
+          if (document.activeElement === last) { e.preventDefault(); first.focus() }
+        }
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onCancel])
+
   const main = document.querySelector('main')
   if (!main) return null
 
   return createPortal(
     <div class="confirm-dialog-overlay" onClick={e => { if (e.target === e.currentTarget) onCancel() }}>
-      <div class="confirm-dialog-card">
+      <div class="confirm-dialog-card" ref={cardRef} role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
         <div class={`confirm-dialog-glyph${danger ? ' confirm-dialog-glyph-danger' : ''}`}>
           <WarningIcon />
         </div>
-        <div class="confirm-dialog-title">{title}</div>
+        <div id="confirm-dialog-title" class="confirm-dialog-title">{title}</div>
         {body && <div class="confirm-dialog-body">{body}</div>}
         <div class="confirm-dialog-actions">
           <button class="btn" onClick={onCancel}>{cancelLabel}</button>
-          <button class={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} onClick={onConfirm}>{confirmLabel}</button>
+          <button class="btn btn-primary" onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </div>
     </div>,

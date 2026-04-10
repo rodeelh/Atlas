@@ -2,6 +2,9 @@ import { useState, useEffect } from 'preact/hooks'
 import { api, SkillRecord, FsRoot } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
+import { EmptyState } from '../components/EmptyState'
+import { PageSpinner } from '../components/PageSpinner'
+import { toast } from '../toast'
 
 /* ── Badge helpers ──────────────────────────────────────── */
 
@@ -109,20 +112,18 @@ export function Skills() {
 
   // Custom skill install state
   const [customInstalling, setCustomInstalling] = useState(false)
-  const [customInstallMsg, setCustomInstallMsg] = useState<string | null>(null)
-  const [customInstallErr, setCustomInstallErr] = useState<string | null>(null)
   const [customRemoving, setCustomRemoving] = useState<Set<string>>(new Set())
 
   const installCustomSkill = async () => {
-    setCustomInstalling(true); setCustomInstallMsg(null); setCustomInstallErr(null)
+    setCustomInstalling(true)
     try {
       const result = await api.pickFsFolder()
       if (!result?.path) { setCustomInstalling(false); return }
       const res = await api.installCustomSkill(result.path)
-      setCustomInstallMsg(res.message ?? 'Skill installed. Restart Atlas to activate it.')
+      toast.success(res.message ?? 'Skill installed. Restart Atlas to activate it.')
       await loadSkills()
     } catch (e: unknown) {
-      setCustomInstallErr(e instanceof Error ? e.message : 'Install failed.')
+      toast.error(e instanceof Error ? e.message : 'Install failed.')
     } finally {
       setCustomInstalling(false)
     }
@@ -223,7 +224,7 @@ export function Skills() {
     return (
       <div class="screen">
         <PageHeader title="Skills" subtitle="Capabilities available to Atlas" />
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}><span class="spinner" /></div>
+        <PageSpinner />
       </div>
     )
   }
@@ -239,13 +240,11 @@ export function Skills() {
 
       {/* Skills list */}
       {skills.length === 0 && !error ? (
-        <div class="empty-state">
-          <svg class="empty-icon" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="18,3 22,13 33,13 24,20 27,31 18,24 9,31 12,20 3,13 14,13" />
-          </svg>
-          <h3>No skills registered</h3>
-          <p>Skills will appear here once the daemon bootstraps</p>
-        </div>
+        <EmptyState
+          icon={<svg viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="18,3 22,13 33,13 24,20 27,31 18,24 9,31 12,20 3,13 14,13" /></svg>}
+          title="No skills registered"
+          body="Skills will appear here once the daemon bootstraps"
+        />
       ) : (() => {
         const grouped = skills.reduce<Record<string, SkillRecord[]>>((acc, skill) => {
           const key = classifySkill(skill)
@@ -368,19 +367,7 @@ export function Skills() {
                     {group.sub && <p class="skill-group-sub">{group.sub}</p>}
                   </div>
 
-                  {/* Install feedback */}
-                  {isCustomGroup && customInstallMsg && (
-                    <div class="skill-inline-message skill-inline-message-success">
-                      <span>{customInstallMsg}</span>
-                      <button class="btn btn-sm btn-ghost" onClick={() => setCustomInstallMsg(null)}>Close</button>
-                    </div>
-                  )}
-                  {isCustomGroup && customInstallErr && (
-                    <div class="skill-inline-message skill-inline-message-error">
-                      <span>{customInstallErr}</span>
-                      <button class="btn btn-sm btn-ghost" onClick={() => setCustomInstallErr(null)}>Close</button>
-                    </div>
-                  )}
+
 
                   {isCustomGroup && groupSkills.length === 0 ? (
                     <div class="card skill-empty-card">

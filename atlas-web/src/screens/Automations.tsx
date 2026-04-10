@@ -3,6 +3,8 @@ import { JSX } from 'preact'
 import { api, AutomationSummary, CommunicationChannel, GremlinItem, GremlinRun, WorkflowDefinition } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { Portal } from '../components/Portal'
+import { EmptyState } from '../components/EmptyState'
+import { PageSpinner } from '../components/PageSpinner'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 
 // ── Icons ────────────────────────────────────────────────────────────────────
@@ -480,17 +482,14 @@ export function Automations() {
 
       {error && <p class="error-banner">{error}</p>}
 
-      {loading && <p class="empty-state">Loading automations…</p>}
+      {loading && <PageSpinner />}
 
       {!loading && items.length === 0 && (
-        <div class="empty-state">
-          <svg class="empty-icon" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="18" cy="18" r="13" />
-            <path d="M18 11v7l4 4" />
-          </svg>
-          <h3>No automations yet</h3>
-          <p>Click <strong>+ New</strong> to create a schedule and Atlas will run it automatically.</p>
-        </div>
+        <EmptyState
+          icon={<svg viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="13" /><path d="M18 11v7l4 4" /></svg>}
+          title="No automations yet"
+          body="Click + New to create a schedule and Atlas will run it automatically."
+        />
       )}
 
       {!loading && items.length > 0 && (

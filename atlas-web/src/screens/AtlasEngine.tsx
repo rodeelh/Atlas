@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'preact/hooks'
 import { api, type EngineStatus, type EngineModelInfo, type RuntimeConfig } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
+import { PageSpinner } from '../components/PageSpinner'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { parseModelInfo } from '../modelName'
 import { ConfirmDialog } from '../components/ConfirmDialog'
@@ -493,9 +494,7 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
     return (
       <div class="screen">
         {!hidePageHeader && <PageHeader title="Llama" subtitle="Built-in local inference — no external tools required." />}
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
-          <span class="spinner" />
-        </div>
+        <PageSpinner />
       </div>
     )
   }

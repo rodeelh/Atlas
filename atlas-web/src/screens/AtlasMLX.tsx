@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'preact/hooks'
 import { api, type MLXStatus, type MLXModelInfo, type RuntimeConfig } from '../api/client'
 import type { MLXInferenceStats, MLXSchedulerStats } from '../api/contracts'
 import { PageHeader } from '../components/PageHeader'
+import { PageSpinner } from '../components/PageSpinner'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { parseMLXModelInfo } from '../modelName'
 import { ConfirmDialog } from '../components/ConfirmDialog'
@@ -408,9 +409,7 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
     return (
       <div class="screen">
         {!hidePageHeader && <PageHeader title="MLX" subtitle="Apple Silicon local inference via mlx-lm." />}
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
-          <span class="spinner" />
-        </div>
+        <PageSpinner />
       </div>
     )
   }

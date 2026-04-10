@@ -5,6 +5,8 @@ import { PageHeader } from '../components/PageHeader'
 import { Portal } from '../components/Portal'
 import { buildWorkflowPayload, promptPreviewForWorkflow, trustSummaryForWorkflow } from './workflowScreenModel'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { EmptyState } from '../components/EmptyState'
+import { PageSpinner } from '../components/PageSpinner'
 
 const MoreIcon = () => (
   <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
@@ -378,16 +380,13 @@ export function Workflows() {
       />
 
       {error && <p class="error-banner">{error}</p>}
-      {loading && <p class="empty-state">Loading workflows…</p>}
+      {loading && <PageSpinner />}
       {!loading && workflows.length === 0 && (
-        <div class="empty-state">
-          <svg class="empty-icon" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="18" cy="18" r="13" />
-            <path d="M13 18h10M18 13l5 5-5 5" />
-          </svg>
-          <h3>No workflows saved yet</h3>
-          <p>Click <strong>+ New</strong> to build a reusable operator flow, then attach it to an automation.</p>
-        </div>
+        <EmptyState
+          icon={<svg viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="13" /><path d="M13 18h10M18 13l5 5-5 5" /></svg>}
+          title="No workflows saved yet"
+          body="Click + New to build a reusable operator flow, then attach it to an automation."
+        />
       )}
 
       {!loading && workflows.length > 0 && (

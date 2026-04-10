@@ -437,12 +437,6 @@ export interface EngineModelInfo {
   sizeHuman: string
 }
 
-export interface EngineDownloadProgress {
-  downloaded: number
-  total: number
-  percent: number
-}
-
 export interface EngineDownloadStatus {
   active: boolean
   filename: string
@@ -753,13 +747,6 @@ export interface VoiceTranscribeResult {
   language?: string
   duration?: number
   sessionID?: string
-}
-
-export interface VoiceSynthesizeChunkEvent {
-  index: number
-  text: string
-  final: boolean
-  chunk: string // base64 WAV
 }
 
 // ── Dashboards ──────────────────────────────────────────────────────────────

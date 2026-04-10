@@ -2,6 +2,8 @@ import { createPortal } from 'preact/compat'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api, type RuntimeConfig } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
+import { PageSpinner } from '../components/PageSpinner'
+import { toast } from '../toast'
 import { ErrorBanner } from '../components/ErrorBanner'
 import type { RuntimeConfigUpdateResponse } from '../api/client'
 
@@ -13,7 +15,6 @@ export function Settings() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
   const [restartRequired, setRestartRequired] = useState(false)
 
   const [location, setLocation] = useState<{ city: string; country: string; timezone: string; source: string } | null>(null)
@@ -51,19 +52,17 @@ export function Settings() {
 
   const update = <K extends keyof RuntimeConfig>(key: K, value: RuntimeConfig[K]) => {
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev))
-    setSaved(false)
   }
 
   const save = async () => {
     if (!draft) return
     setSaving(true)
     setError(null)
-    setSaved(false)
     try {
       const result: RuntimeConfigUpdateResponse = await api.updateConfig(draft)
       setConfig(result.config)
       setDraft(result.config)
-      setSaved(true)
+      toast.success('Changes saved.')
       setRestartRequired(result.restartRequired)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save config.')
@@ -78,7 +77,6 @@ export function Settings() {
     setRestartPhase('restarting')
     setRestartStatus('Restarting Atlas…')
     setError(null)
-    setSaved(false)
     setRestartRequired(false)
     try {
       await api.restartAtlas()
@@ -103,9 +101,7 @@ export function Settings() {
     return (
       <div class="screen general-settings-screen">
         <PageHeader title="General" subtitle="Profile and access preferences" />
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
-          <span class="spinner" />
-        </div>
+        <PageSpinner />
       </div>
     )
   }
@@ -147,7 +143,6 @@ export function Settings() {
         document.body
       )}
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
-      {saved && !isDirty && !restartRequired && <div class="banner banner-success">Changes saved.</div>}
       {restartRequired && (
         <div
           class="banner"
@@ -232,7 +227,7 @@ export function Settings() {
               setConfig(result.config)
               setDraft(result.config)
               setRestartRequired(result.restartRequired)
-              setSaved(true)
+              toast.success('Changes saved.')
             } catch (err) {
               update('remoteAccessEnabled', !v)
               setError(err instanceof Error ? err.message : 'Failed to update remote access.')
@@ -245,7 +240,7 @@ export function Settings() {
               setConfig(result.config)
               setDraft(result.config)
               setRestartRequired(result.restartRequired)
-              setSaved(true)
+              toast.success('Changes saved.')
             } catch (err) {
               update('tailscaleEnabled', !v)
               setError(err instanceof Error ? err.message : 'Failed to update Tailscale setting.')
@@ -568,6 +563,13 @@ function RestartOverlay({
   onConfirm: () => void
   onCancel: () => void
 }) {
+  useEffect(() => {
+    if (phase !== 'confirm') return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); onCancel() } }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [phase, onCancel])
+
   return (
     <div class="restart-overlay">
       <div class="restart-overlay-card">

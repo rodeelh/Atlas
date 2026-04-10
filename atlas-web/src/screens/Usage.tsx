@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks'
 import { api } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
+import { PageSpinner } from '../components/PageSpinner'
 import { ErrorBanner } from '../components/ErrorBanner'
 import type { TokenUsageSummary, TokenUsageEvent, DailyUsageSeries } from '../api/contracts'
 import { formatProviderModelName } from '../modelName'
@@ -307,9 +308,7 @@ export function Usage() {
     return (
       <div class="screen">
         <PageHeader title="Usage" subtitle="Token consumption and estimated cost" />
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
-          <span class="spinner" />
-        </div>
+        <PageSpinner />
       </div>
     )
   }

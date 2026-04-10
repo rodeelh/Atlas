@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'preact/hooks'
 import { api, APIKeyStatus } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
+import { PageSpinner } from '../components/PageSpinner'
 import { ErrorBanner } from '../components/ErrorBanner'
 
 // ── Key name helpers ──────────────────────────────────────────────────────────
@@ -79,9 +80,7 @@ export function APIKeys() {
     return (
       <div class="screen">
         <PageHeader title="Credentials" subtitle="Keys, tokens, and provider credentials Atlas uses to operate." />
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
-          <span class="spinner" />
-        </div>
+        <PageSpinner />
       </div>
     )
   }

@@ -2,6 +2,8 @@ import { useState, useEffect } from 'preact/hooks'
 import { api, Approval } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
+import { EmptyState } from '../components/EmptyState'
+import { PageSpinner } from '../components/PageSpinner'
 
 interface Props {
   onBadgeChange?: (count: number) => void
@@ -345,9 +347,7 @@ export function Approvals({ onBadgeChange, onApproved }: Props) {
     return (
       <div class="screen">
         <PageHeader title="Approvals" subtitle="Review actions Atlas needs your sign-off on" />
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
-          <span class="spinner" />
-        </div>
+        <PageSpinner />
       </div>
     )
   }
@@ -359,14 +359,11 @@ export function Approvals({ onBadgeChange, onApproved }: Props) {
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
 
       {visible.length === 0 && (
-        <div class="empty-state">
-          <svg class="empty-icon" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="18" cy="18" r="13" />
-            <path d="M12 18l4 4 8-8" />
-          </svg>
-          <h3>All clear</h3>
-          <p>When Atlas needs your approval for an action, it will appear here.</p>
-        </div>
+        <EmptyState
+          icon={<svg viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="13" /><path d="M12 18l4 4 8-8" /></svg>}
+          title="All clear"
+          body="When Atlas needs your approval for an action, it will appear here."
+        />
       )}
 
       {/* Pending section */}

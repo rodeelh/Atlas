@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'preact/hooks'
 import { api, type RuntimeConfig } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
+import { PageSpinner } from '../components/PageSpinner'
 import { ErrorBanner } from '../components/ErrorBanner'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -360,11 +361,7 @@ export function Mind() {
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
 
-      {loading && (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
-          <span class="spinner" />
-        </div>
-      )}
+      {loading && <PageSpinner />}
 
       {!loading && !content && !editing && (
         <div class="empty-state">

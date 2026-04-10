@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'preact/hooks'
 import { api, MemoryItem } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
+import { EmptyState } from '../components/EmptyState'
+import { PageSpinner } from '../components/PageSpinner'
 
 type Category = 'all' | 'profile' | 'preference' | 'project' | 'workflow' | 'episodic'
 
@@ -90,9 +92,7 @@ export function Memory() {
     return (
       <div class="screen">
         <PageHeader title="Memory" subtitle="Facts Atlas has learned from your conversations" />
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
-          <span class="spinner" />
-        </div>
+        <PageSpinner />
       </div>
     )
   }
@@ -148,15 +148,12 @@ export function Memory() {
       )}
 
       {!searching && filtered.length === 0 && (
-        <div class="card memory-empty-card empty-state">
-          <svg class="empty-icon" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-            <ellipse cx="18" cy="9" rx="11" ry="4" />
-            <path d="M7 9v6c0 2.2 4.9 4 11 4s11-1.8 11-4V9" />
-            <path d="M7 15v6c0 2.2 4.9 4 11 4s11-1.8 11-4v-6" />
-          </svg>
-          <h3>No memories found</h3>
-          <p>{query ? `No results for "${query}"` : 'Atlas will save facts here as you chat.'}</p>
-        </div>
+        <EmptyState
+          class="memory-empty-card"
+          icon={<svg viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="18" cy="9" rx="11" ry="4" /><path d="M7 9v6c0 2.2 4.9 4 11 4s11-1.8 11-4V9" /><path d="M7 15v6c0 2.2 4.9 4 11 4s11-1.8 11-4v-6" /></svg>}
+          title="No memories found"
+          body={query ? `No results for "${query}"` : 'Atlas will save facts here as you chat.'}
+        />
       )}
 
       {!searching && filtered.length > 0 && (

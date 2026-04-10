@@ -9,22 +9,25 @@
 export type ThemeMode = 'system' | 'light' | 'dark'
 export type ThemePreset = 'atlas' | 'studio' | 'terminal'
 
-export type DensityMode = 'compact' | 'comfortable' | 'spacious'
-
-export type ChatFontSize = 'small' | 'default' | 'large'
-export type ChatRadius   = 'sharp' | 'default' | 'rounded'
-export type ChatFont     = 'default' | 'mono' | 'serif'
+export type DensityMode     = 'compact' | 'comfortable' | 'spacious'
+export type ChatFontSize    = 'small' | 'default' | 'large'
+export type ChatRadius      = 'sharp' | 'default' | 'rounded'
+export type ChatFont        = 'default' | 'mono' | 'serif'
 export type ChatAvatarStyle = 'glyph' | 'initial' | 'minimal'
+export type ChatBubbleStyle = 'bubbles' | 'ghost' | 'flat'
+export type ChatWidth       = 'narrow' | 'default' | 'wide' | 'full'
 
 export interface ThemeConfig {
-  preset:       ThemePreset
-  mode:         ThemeMode
-  accent:       string
-  density:      DensityMode
-  chatFontSize: ChatFontSize
-  chatRadius:   ChatRadius
-  chatFont:     ChatFont
+  preset:          ThemePreset
+  mode:            ThemeMode
+  accent:          string
+  density:         DensityMode
+  chatFontSize:    ChatFontSize
+  chatRadius:      ChatRadius
+  chatFont:        ChatFont
   chatAvatarStyle: ChatAvatarStyle
+  chatBubbleStyle: ChatBubbleStyle
+  chatWidth:       ChatWidth
 }
 
 const STORAGE_KEY = 'atlas.theme'
@@ -204,14 +207,16 @@ const PRESET_TOKEN_KEYS = Array.from(
 )
 
 export const DEFAULT_THEME: ThemeConfig = {
-  preset:       'atlas',
-  mode:         'system',
-  accent:       DEFAULT_ACCENT,
-  density:      'comfortable',
-  chatFontSize: 'default',
-  chatRadius:   'default',
-  chatFont:     'default',
+  preset:          'atlas',
+  mode:            'system',
+  accent:          DEFAULT_ACCENT,
+  density:         'comfortable',
+  chatFontSize:    'default',
+  chatRadius:      'default',
+  chatFont:        'default',
   chatAvatarStyle: 'glyph',
+  chatBubbleStyle: 'ghost',
+  chatWidth:       'default',
 }
 
 // ── Persistence ──────────────────────────────────────────────
@@ -268,6 +273,13 @@ const FONT_TOKENS: Record<ChatFont, Record<string, string>> = {
   serif:   { '--bubble-font': "'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, serif" },
 }
 
+const WIDTH_TOKENS: Record<ChatWidth, Record<string, string>> = {
+  narrow:  { '--chat-content-max': 'min(600px,  calc(100% - 96px))' },
+  default: { '--chat-content-max': 'min(900px,  calc(100% - 96px))' },
+  wide:    { '--chat-content-max': 'min(1200px, calc(100% - 48px))' },
+  full:    { '--chat-content-max': 'calc(100% - 32px)'              },
+}
+
 function writeTokens(tokens: Record<string, string>): void {
   Object.entries(tokens).forEach(([key, value]) => {
     document.documentElement.style.setProperty(key, value)
@@ -295,6 +307,7 @@ function semanticAccentTokens(accent: string): Record<string, string> {
     '--control-selected-bg-strong': `color-mix(in srgb, ${accent} 12%, var(--surface-2))`,
     '--control-selected-border': `color-mix(in srgb, ${accent} 45%, var(--border-2))`,
     '--control-selected-outline': `color-mix(in srgb, ${accent} 12%, transparent)`,
+    '--theme-selection-bg': `color-mix(in srgb, ${accent} 32%, transparent)`,
   }
 }
 
@@ -338,6 +351,9 @@ export function applyTheme(config: ThemeConfig): void {
     ...fontTokens,
     '--theme-chat-font': fontTokens['--bubble-font'],
   })
+
+  document.documentElement.setAttribute('data-chat-bubble-style', config.chatBubbleStyle)
+  writeTokens(WIDTH_TOKENS[config.chatWidth])
 }
 
 /**

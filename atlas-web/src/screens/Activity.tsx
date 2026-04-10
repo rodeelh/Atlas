@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'preact/hooks'
 import { api, LogEntry, RuntimeStatus, RuntimeConfig, EngineStatus } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
+import { PageSpinner } from '../components/PageSpinner'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { formatAtlasModelName, formatProviderModelName } from '../modelName'
 import { toast } from '../toast'
@@ -199,9 +200,7 @@ export function Activity() {
     return (
       <div class="screen">
         <PageHeader title="Activity" subtitle="Daemon health and event log" />
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
-          <span class="spinner" />
-        </div>
+        <PageSpinner />
       </div>
     )
   }
