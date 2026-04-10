@@ -66,6 +66,8 @@ func (m *Module) registerRoutes(r chi.Router) {
 	// The /engine/mlx/* namespace mirrors /engine/* exactly.
 	if m.mlxMgr != nil {
 		r.Get("/engine/mlx/status", m.getMLXStatus)
+		r.Get("/engine/mlx/scheduler", m.getMLXScheduler)
+		r.Post("/engine/mlx/scheduler", m.postMLXScheduler)
 		r.Get("/engine/mlx/models", m.getMLXModels)
 		r.Post("/engine/mlx/start", m.postMLXStart)
 		r.Post("/engine/mlx/stop", m.postMLXStop)
@@ -355,6 +357,32 @@ func (m *Module) getMLXStatus(w http.ResponseWriter, _ *http.Request) {
 		s.Loading = true
 	}
 	writeJSON(w, http.StatusOK, s)
+}
+
+func (m *Module) getMLXScheduler(w http.ResponseWriter, _ *http.Request) {
+	cfg := m.cfgStore.Load()
+	port := cfg.AtlasMLXPort
+	if port == 0 {
+		port = 11990
+	}
+	writeJSON(w, http.StatusOK, m.mlxMgr.SchedulerSnapshot(port))
+}
+
+func (m *Module) postMLXScheduler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		MaxConcurrency int `json:"maxConcurrency"`
+		BatchWindowMs  int `json:"batchWindowMs"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	cfg := m.cfgStore.Load()
+	port := cfg.AtlasMLXPort
+	if port == 0 {
+		port = 11990
+	}
+	writeJSON(w, http.StatusOK, m.mlxMgr.ConfigureScheduler(port, req.MaxConcurrency, req.BatchWindowMs))
 }
 
 func (m *Module) getMLXModels(w http.ResponseWriter, _ *http.Request) {

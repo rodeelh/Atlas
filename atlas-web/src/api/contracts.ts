@@ -452,6 +452,21 @@ export interface MLXInferenceStats {
   promptTokens: number
   completionTokens: number
   generationSec: number
+  firstTokenSec?: number
+  streamChunks?: number
+  streamChars?: number
+  avgChunkChars?: number
+}
+
+export interface MLXSchedulerStats {
+  queueDepth: number
+  activeRequests: number
+  maxConcurrency: number
+  batchWindowMs: number
+  lastBatchSize?: number
+  totalRequests?: number
+  totalBatches?: number
+  avgQueueWaitSec?: number
 }
 
 export interface MLXStatus {
@@ -465,6 +480,7 @@ export interface MLXStatus {
   lastError?: string
   isAppleSilicon: boolean
   lastInference?: MLXInferenceStats  // stats from last completed turn
+  scheduler: MLXSchedulerStats
 }
 
 export interface MLXModelInfo {

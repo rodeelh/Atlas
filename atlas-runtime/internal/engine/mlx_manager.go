@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -63,6 +64,10 @@ type MLXManager struct {
 	// Per-turn inference stats — updated by RecordInference after each agent turn.
 	inferMu       sync.Mutex
 	lastInference *MLXInferenceStats
+
+	warmMu          sync.Mutex
+	warmedPromptKey string
+	warmupInFlight  string
 }
 
 // NewMLXManager creates an MLXManager.
@@ -314,16 +319,24 @@ func (m *MLXManager) RecordActivity() {
 // Decode TPS is computed as completionTokens / elapsed. This is a conservative
 // lower bound — it includes scheduling overhead — but it's the only timing
 // available without patching mlx_lm.server itself.
-func (m *MLXManager) RecordInference(promptTokens, completionTokens int, elapsed time.Duration) {
+func (m *MLXManager) RecordInference(promptTokens, completionTokens int, elapsed time.Duration, firstToken time.Duration, streamChunks int, streamChars int) {
 	if elapsed <= 0 || completionTokens <= 0 {
 		return
 	}
 	tps := float64(completionTokens) / elapsed.Seconds()
+	avgChunkChars := 0.0
+	if streamChunks > 0 && streamChars > 0 {
+		avgChunkChars = float64(streamChars) / float64(streamChunks)
+	}
 	stats := &MLXInferenceStats{
 		DecodeTPS:        tps,
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
 		GenerationSec:    elapsed.Seconds(),
+		FirstTokenSec:    firstToken.Seconds(),
+		StreamChunks:     streamChunks,
+		StreamChars:      streamChars,
+		AvgChunkChars:    avgChunkChars,
 	}
 	m.inferMu.Lock()
 	m.lastInference = stats
@@ -397,6 +410,86 @@ func (m *MLXManager) LastError() string {
 	return m.lastError
 }
 
+// PrefillPrompt warms the mlx_lm.server KV cache by sending a one-token
+// completion request containing only the system prompt. The response is
+// discarded — the goal is to pre-compute KV states so the first real user
+// turn hits the cache instead of paying full prefill cost.
+//
+// Call this in a goroutine immediately after WaitUntilReady returns. The
+// request queues on the single-threaded MLX server ahead of the first user
+// turn, which typically arrives a few seconds later (model still warming up
+// in the UI). On a 2 000-token system prompt at --prefill-step-size 4096 the
+// warm-up completes in under one second on M-series hardware.
+func (m *MLXManager) PrefillPrompt(ctx context.Context, port int, model, systemPrompt string) {
+	if systemPrompt == "" {
+		return
+	}
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d/v1", port)
+	if stats := MLXSchedulerSnapshot(baseURL); stats.ActiveRequests > 0 || stats.QueueDepth > 0 {
+		logstore.Write("info", "MLX KV warm-up skipped because interactive traffic is active", map[string]string{
+			"model": model,
+		})
+		return
+	}
+	promptKey := model + "\x00" + systemPrompt
+	m.warmMu.Lock()
+	if m.warmedPromptKey == promptKey || m.warmupInFlight == promptKey {
+		m.warmMu.Unlock()
+		return
+	}
+	m.warmupInFlight = promptKey
+	m.warmMu.Unlock()
+	defer func() {
+		m.warmMu.Lock()
+		if m.warmupInFlight == promptKey {
+			m.warmupInFlight = ""
+		}
+		m.warmMu.Unlock()
+	}()
+
+	release, _, _, err := AcquireMLXRequest(ctx, baseURL)
+	if err != nil {
+		return
+	}
+	defer release()
+
+	url := fmt.Sprintf("%s/chat/completions", baseURL)
+	payload, err := json.Marshal(map[string]any{
+		"model": model,
+		"messages": []map[string]any{
+			{"role": "system", "content": systemPrompt},
+		},
+		"max_tokens": 1,
+		"stream":     false,
+	})
+	if err != nil {
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		logstore.Write("warn", "MLX KV cache warm-up failed", map[string]string{"error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body) //nolint:errcheck
+	if resp.StatusCode != http.StatusOK {
+		logstore.Write("warn", "MLX KV cache warm-up returned non-200", map[string]string{
+			"model":  model,
+			"status": strconv.Itoa(resp.StatusCode),
+		})
+		return
+	}
+	m.warmMu.Lock()
+	m.warmedPromptKey = promptKey
+	m.warmMu.Unlock()
+	logstore.Write("info", "MLX KV cache warmed — first-turn prefill cost eliminated", map[string]string{"model": model})
+}
+
 // Status returns a snapshot of the current MLX engine state.
 // PackageVersion, LatestVersion, and IsAppleSilicon are read from the
 // in-memory cache — no subprocesses are launched while holding mu.
@@ -417,6 +510,7 @@ func (m *MLXManager) Status(cfgPort int) MLXStatus {
 	if port == 0 {
 		port = cfgPort
 	}
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d/v1", port)
 	return MLXStatus{
 		Running:        m.isRunningLocked(),
 		LoadedModel:    m.loadedModel,
@@ -427,7 +521,23 @@ func (m *MLXManager) Status(cfgPort int) MLXStatus {
 		LastError:      m.lastError,
 		IsAppleSilicon: appleSi,
 		LastInference:  lastInf,
+		Scheduler:      MLXSchedulerSnapshot(baseURL),
 	}
+}
+
+func (m *MLXManager) ConfigureScheduler(port, maxConcurrency, batchWindowMs int) MLXSchedulerStats {
+	if port == 0 {
+		port = 11990
+	}
+	window := time.Duration(batchWindowMs) * time.Millisecond
+	return ConfigureMLXScheduler(fmt.Sprintf("http://127.0.0.1:%d/v1", port), maxConcurrency, window)
+}
+
+func (m *MLXManager) SchedulerSnapshot(port int) MLXSchedulerStats {
+	if port == 0 {
+		port = 11990
+	}
+	return MLXSchedulerSnapshot(fmt.Sprintf("http://127.0.0.1:%d/v1", port))
 }
 
 // Start launches mlx_lm.server with the given model directory, port, and max-tokens.
@@ -458,8 +568,18 @@ func (m *MLXManager) Start(modelName string, port int, ctxSize int, _ string, _ 
 		ctxSize = 4096
 	}
 
+	modelBase := filepath.Base(modelName)
+	if m.isRunningLocked() && m.loadedModel == modelBase && m.port == port {
+		m.lastActivity = time.Now()
+		return nil
+	}
+
 	// Stop any existing process first.
 	m.stopLocked()
+	m.warmMu.Lock()
+	m.warmedPromptKey = ""
+	m.warmupInFlight = ""
+	m.warmMu.Unlock()
 
 	args := []string{
 		"-m", "mlx_lm.server",
@@ -467,11 +587,11 @@ func (m *MLXManager) Start(modelName string, port int, ctxSize int, _ string, _ 
 		"--port", fmt.Sprintf("%d", port),
 		"--host", "127.0.0.1",
 		"--max-tokens", fmt.Sprintf("%d", ctxSize),
-		"--trust-remote-code",                                              // required for some model families (Phi, Qwen, etc.)
-		"--log-level", "WARNING",                                           // suppress verbose mlx-lm output
-		"--prompt-cache-bytes", fmt.Sprintf("%d", mlxPromptCacheBytes()),   // cap KV cache at 60 % of total RAM
-		"--prompt-cache-size", "1",                                         // single-user: one KV cache is sufficient
-		"--prefill-step-size", "4096",                                      // 2× default (2048) for faster prompt prefill
+		"--trust-remote-code",    // required for some model families (Phi, Qwen, etc.)
+		"--log-level", "WARNING", // suppress verbose mlx-lm output
+		"--prompt-cache-bytes", fmt.Sprintf("%d", mlxPromptCacheBytes()), // cap KV cache at 60 % of total RAM
+		"--prompt-cache-size", "1", // single-user: one KV cache is sufficient
+		"--prefill-step-size", "4096", // 2× default (2048) for faster prompt prefill
 	}
 
 	var stderrBuf bytes.Buffer
@@ -485,7 +605,7 @@ func (m *MLXManager) Start(modelName string, port int, ctxSize int, _ string, _ 
 
 	m.cmd = cmd
 	m.port = port
-	m.loadedModel = filepath.Base(modelName)
+	m.loadedModel = modelBase
 	m.lastError = ""
 	m.lastActivity = time.Now()
 	m.startIdleWatcher()
@@ -567,6 +687,10 @@ func (m *MLXManager) stopLocked() error {
 	}
 	m.cmd = nil
 	m.loadedModel = ""
+	m.warmMu.Lock()
+	m.warmedPromptKey = ""
+	m.warmupInFlight = ""
+	m.warmMu.Unlock()
 	return nil
 }
 

@@ -96,6 +96,9 @@ type RunResult struct {
 	PendingApprovals    []PendingApproval
 	Error               error
 	TotalUsage          TokenUsage
+	FirstTokenAt        time.Duration
+	StreamChunkCount    int
+	StreamChars         int
 	ToolCallSummaries   []string // tool names called during this turn (all iterations)
 	ToolResultSummaries []string // short result summaries, one per tool call
 }
@@ -280,6 +283,9 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 
 	var (
 		totalUsage         TokenUsage
+		firstTokenAt       time.Duration
+		streamChunkCount   int
+		streamChars        int
 		allToolSummaries   []string
 		allResultSummaries []string
 		toolUpgradeStage   int  // lazy mode: 0 meta only, 1 short list, 2 broad/category list
@@ -309,6 +315,11 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		totalUsage.InputTokens += sr.Usage.InputTokens
 		totalUsage.OutputTokens += sr.Usage.OutputTokens
 		AddSessionTokens(sr.Usage.InputTokens, sr.Usage.OutputTokens)
+		if firstTokenAt <= 0 && sr.FirstTokenAt > 0 {
+			firstTokenAt = sr.FirstTokenAt
+		}
+		streamChunkCount += sr.ChunkCount
+		streamChars += sr.StreamChars
 
 		// Mark the end of this assistant model turn before any tool execution starts.
 		l.BC.Emit(convID, EmitEvent{
@@ -323,6 +334,9 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 				Status:              "complete",
 				FinalText:           sr.FinalText,
 				TotalUsage:          totalUsage,
+				FirstTokenAt:        firstTokenAt,
+				StreamChunkCount:    streamChunkCount,
+				StreamChars:         streamChars,
 				ToolCallSummaries:   allToolSummaries,
 				ToolResultSummaries: allResultSummaries,
 			}
@@ -549,6 +563,9 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		Status:              "complete",
 		FinalText:           "Maximum agent iterations reached.",
 		TotalUsage:          totalUsage,
+		FirstTokenAt:        firstTokenAt,
+		StreamChunkCount:    streamChunkCount,
+		StreamChars:         streamChars,
 		ToolCallSummaries:   allToolSummaries,
 		ToolResultSummaries: allResultSummaries,
 	}

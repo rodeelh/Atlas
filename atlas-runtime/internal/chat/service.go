@@ -70,7 +70,7 @@ type MessageItem struct {
 // that can track per-turn performance stats. Type-asserted at call sites so the
 // interface stays minimal for engines that don't support it.
 type InferenceRecorder interface {
-	RecordInference(promptTokens, completionTokens int, elapsed time.Duration)
+	RecordInference(promptTokens, completionTokens int, elapsed time.Duration, firstToken time.Duration, streamChunks int, streamChars int)
 }
 
 // EngineAutoStarter is satisfied by engine.Manager and engine.MLXManager.
@@ -84,6 +84,14 @@ type EngineAutoStarter interface {
 	Stop() error
 	WaitUntilReady(port int, timeout time.Duration) error
 	RecordActivity()
+}
+
+// mlxPrefiller is an optional capability that the MLX engine manager can
+// expose to warm the server KV cache after a cold model load. Implemented
+// by *engine.MLXManager; checked via interface assertion so the chat package
+// stays free of a direct engine import.
+type mlxPrefiller interface {
+	PrefillPrompt(ctx context.Context, port int, model, systemPrompt string)
 }
 
 // conversationSummary caches a compressed summary of trimmed history messages
@@ -1165,6 +1173,17 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 				logstore.Write("warn", "MLX Engine auto-start failed", map[string]string{"error": err.Error()})
 			} else if err := s.mlxEngine.WaitUntilReady(port, 120*time.Second); err != nil {
 				logstore.Write("warn", "MLX Engine ready-wait timed out", map[string]string{"error": err.Error()})
+			} else if p, ok := s.mlxEngine.(mlxPrefiller); ok {
+				// Model just loaded — warm the KV cache with the system prompt so
+				// the first user turn doesn't pay full prefill cost. Fire in a
+				// goroutine so the current turn can proceed in parallel; the prefill
+				// request will queue ahead of it on the single-threaded MLX server.
+				go func(snapCfg config.RuntimeConfigSnapshot, snapPort int, snapModel string) {
+					ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+					defer cancel()
+					warmPrompt := buildSystemPrompt(snapCfg, s.db, config.SupportDir(), "")
+					p.PrefillPrompt(ctx, snapPort, snapModel, warmPrompt)
+				}(cfg, port, filepath.Base(cfg.SelectedAtlasMLXModel))
 			}
 		}
 	}
@@ -1488,6 +1507,9 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 					result.TotalUsage.InputTokens,
 					result.TotalUsage.OutputTokens,
 					time.Since(turnStart),
+					result.FirstTokenAt,
+					result.StreamChunkCount,
+					result.StreamChars,
 				)
 			}
 		}

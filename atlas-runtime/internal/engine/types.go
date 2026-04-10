@@ -41,25 +41,30 @@ type DownloadProgress struct {
 // MLXInferenceStats holds per-turn performance metrics for the last completed
 // inference. Populated by MLXManager.RecordInference after each agent turn.
 type MLXInferenceStats struct {
-	DecodeTPS      float64 `json:"decodeTPS"`      // completion tokens / decode seconds
-	PromptTokens   int     `json:"promptTokens"`   // input tokens (from usage)
-	CompletionTokens int   `json:"completionTokens"` // output tokens (from usage)
-	GenerationSec  float64 `json:"generationSec"`  // wall-clock seconds for the full turn
+	DecodeTPS        float64 `json:"decodeTPS"`               // completion tokens / decode seconds
+	PromptTokens     int     `json:"promptTokens"`            // input tokens (from usage)
+	CompletionTokens int     `json:"completionTokens"`        // output tokens (from usage)
+	GenerationSec    float64 `json:"generationSec"`           // wall-clock seconds for the full turn
+	FirstTokenSec    float64 `json:"firstTokenSec,omitempty"` // time-to-first-token when streaming
+	StreamChunks     int     `json:"streamChunks,omitempty"`  // number of streamed assistant deltas
+	StreamChars      int     `json:"streamChars,omitempty"`   // total streamed text chars
+	AvgChunkChars    float64 `json:"avgChunkChars,omitempty"` // derived from stream chars / chunks
 }
 
 // MLXStatus describes the current state of the MLX-LM process.
 // Mirrors EngineStatus for the llama.cpp subsystem.
 type MLXStatus struct {
-	Running          bool               `json:"running"`
-	Loading          bool               `json:"loading,omitempty"`
-	LoadedModel      string             `json:"loadedModel"`
-	Port             int                `json:"port"`
-	VenvReady        bool               `json:"venvReady"`                // Python venv + mlx-lm package present
-	PackageVersion   string             `json:"packageVersion,omitempty"` // mlx-lm version string (installed)
-	LatestVersion    string             `json:"latestVersion,omitempty"`  // latest version on PyPI
-	LastError        string             `json:"lastError,omitempty"`
-	IsAppleSilicon   bool               `json:"isAppleSilicon"`           // hardware capability gate
-	LastInference    *MLXInferenceStats `json:"lastInference,omitempty"`  // stats from last completed turn
+	Running        bool               `json:"running"`
+	Loading        bool               `json:"loading,omitempty"`
+	LoadedModel    string             `json:"loadedModel"`
+	Port           int                `json:"port"`
+	VenvReady      bool               `json:"venvReady"`                // Python venv + mlx-lm package present
+	PackageVersion string             `json:"packageVersion,omitempty"` // mlx-lm version string (installed)
+	LatestVersion  string             `json:"latestVersion,omitempty"`  // latest version on PyPI
+	LastError      string             `json:"lastError,omitempty"`
+	IsAppleSilicon bool               `json:"isAppleSilicon"`          // hardware capability gate
+	LastInference  *MLXInferenceStats `json:"lastInference,omitempty"` // stats from last completed turn
+	Scheduler      MLXSchedulerStats  `json:"scheduler"`
 }
 
 // MLXModelInfo describes one MLX model directory stored in mlx-models/.

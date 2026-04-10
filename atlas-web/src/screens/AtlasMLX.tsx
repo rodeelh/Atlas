@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'preact/hooks'
 import { api, type MLXStatus, type MLXModelInfo, type RuntimeConfig } from '../api/client'
-import type { MLXInferenceStats } from '../api/contracts'
+import type { MLXInferenceStats, MLXSchedulerStats } from '../api/contracts'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { parseMLXModelInfo } from '../modelName'
@@ -351,6 +351,10 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
   const isAppleSilicon  = status?.isAppleSilicon ?? true // optimistic until first load
   const isDownloading   = !!download && !download.done && !download.error
   const isInstalling    = !!install && !install.done && !install.error
+  const scheduler: MLXSchedulerStats | null = status?.scheduler ?? null
+  const schedulerQueueDepth = scheduler?.queueDepth ?? 0
+  const schedulerActive = scheduler?.activeRequests ?? 0
+  const schedulerAvgWaitMs = ((scheduler?.avgQueueWaitSec ?? 0) * 1000)
 
   // Version comparison helpers
   const hasUpgrade = venvReady && pkgVersion && latestVersion && pkgVersion !== latestVersion
@@ -415,6 +419,15 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
               </div>
             </div>
             <div class="stat-cell">
+              <div class="stat-label">First Token</div>
+              <div class="stat-value">
+                {(status?.lastInference?.firstTokenSec ?? 0) > 0
+                  ? `${(status!.lastInference!.firstTokenSec! * 1000).toFixed(0)}ms`
+                  : '—'}
+              </div>
+              <div class="stat-note">time to first token</div>
+            </div>
+            <div class="stat-cell">
               <div class="stat-label">Prompt Tokens</div>
               <div class="stat-value">
                 {(status?.lastInference?.promptTokens ?? 0) > 0
@@ -442,6 +455,11 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
                   : '—'}
               </div>
               <div class="stat-note">output tokens</div>
+            </div>
+            <div class="stat-cell">
+              <div class="stat-label">Scheduler</div>
+              <div class="stat-value">{schedulerActive}/{scheduler?.maxConcurrency ?? '—'}</div>
+              <div class="stat-note">active / max · queue {schedulerQueueDepth}</div>
             </div>
           </div>
         </div>

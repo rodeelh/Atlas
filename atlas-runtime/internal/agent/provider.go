@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"atlas-runtime-go/internal/engine"
 )
 
 // TokenUsage holds the input and output token counts from a single AI call.
@@ -26,6 +28,9 @@ type streamResult struct {
 	ToolCalls    []OAIToolCall // non-nil means a tool-call turn
 	FinishReason string
 	Usage        TokenUsage
+	FirstTokenAt time.Duration
+	ChunkCount   int
+	StreamChars  int
 }
 
 // ProviderType identifies which AI backend to use.
@@ -46,6 +51,13 @@ const (
 // that may return 503 while loading a model.
 func isLocalProvider(t ProviderType) bool {
 	return t == ProviderAtlasEngine || t == ProviderAtlasMLX || t == ProviderLMStudio || t == ProviderOllama
+}
+
+func acquireMLXRequestGate(ctx context.Context, p ProviderConfig) (func(), time.Duration, int, error) {
+	if p.Type != ProviderAtlasMLX {
+		return func() {}, 0, 0, nil
+	}
+	return engine.AcquireMLXRequest(ctx, oaiCompatBaseURL(p))
 }
 
 // ProviderConfig carries everything the agent loop needs to call an AI backend.
@@ -159,11 +171,11 @@ func streamWithToolDetection(
 	switch p.Type {
 	case ProviderAnthropic:
 		return streamAnthropicWithToolDetection(ctx, p, messages, tools, convID, bc)
-	case ProviderAtlasEngine, ProviderAtlasMLX, ProviderLMStudio, ProviderOllama:
+	case ProviderAtlasEngine, ProviderLMStudio, ProviderOllama:
 		// These providers do not reliably support stream:true + tools. Use non-streaming
 		// and emit the full response text as one token event.
 		return nonStreamingAsStream(ctx, p, messages, tools, convID, bc)
-	default: // openai, gemini
+	default: // openai, gemini, atlas_mlx
 		return streamOpenAICompatWithToolDetection(ctx, p, messages, tools, convID, bc)
 	}
 }
@@ -201,6 +213,8 @@ func nonStreamingAsStream(
 		ToolCalls:    msg.ToolCalls,
 		FinishReason: finishReason,
 		Usage:        usage,
+		ChunkCount:   1,
+		StreamChars:  len(text),
 	}, nil
 }
 
@@ -393,6 +407,12 @@ func callOpenAICompatNonStreaming(
 	}
 	applyOpenAICompatHeaders(req, p)
 
+	releaseGate, _, _, err := acquireMLXRequestGate(ctx, p)
+	if err != nil {
+		return OAIMessage{}, "", TokenUsage{}, err
+	}
+	defer releaseGate()
+
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return OAIMessage{}, "", TokenUsage{}, fmt.Errorf("AI non-streaming request failed (%s): %w", p.Type, err)
@@ -509,6 +529,12 @@ func streamOpenAICompatWithToolDetection(
 	}
 	applyOpenAICompatHeaders(req, p)
 
+	releaseGate, _, _, err := acquireMLXRequestGate(ctx, p)
+	if err != nil {
+		return streamResult{}, err
+	}
+	defer releaseGate()
+
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return streamResult{}, fmt.Errorf("AI streaming request failed (%s): %w", p.Type, err)
@@ -558,9 +584,13 @@ func streamOpenAICompatWithToolDetection(
 		usage        TokenUsage
 		finishReason string
 		accums       = map[int]*toolAccum{}
+		firstTokenAt time.Duration
+		chunkCount   int
 	)
 
 	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	streamStart := time.Now()
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -640,6 +670,10 @@ func streamOpenAICompatWithToolDetection(
 
 		// Emit text tokens in real time.
 		if token := choice.Delta.Content; token != "" {
+			if firstTokenAt <= 0 {
+				firstTokenAt = time.Since(streamStart)
+			}
+			chunkCount++
 			fullText.WriteString(token)
 			bc.Emit(convID, EmitEvent{Type: "assistant_delta", Content: token, Role: "assistant", ConvID: convID})
 		}
@@ -690,6 +724,9 @@ func streamOpenAICompatWithToolDetection(
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
 		Usage:        usage,
+		FirstTokenAt: firstTokenAt,
+		ChunkCount:   chunkCount,
+		StreamChars:  fullText.Len(),
 	}, nil
 }
 
