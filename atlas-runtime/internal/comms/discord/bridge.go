@@ -2,10 +2,15 @@
 package discord
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -43,8 +48,8 @@ type BridgeRequest struct {
 }
 
 // ChatHandler routes a BridgeRequest to the Atlas agent loop.
-// Returns (assistantReply, conversationID, error).
-type ChatHandler func(ctx context.Context, req BridgeRequest) (string, string, error)
+// Returns (assistantReply, generatedFilePaths, conversationID, error).
+type ChatHandler func(ctx context.Context, req BridgeRequest) (string, []string, string, error)
 
 // Bridge implements the Discord Gateway WebSocket bridge.
 type Bridge struct {
@@ -351,7 +356,7 @@ func (b *Bridge) handleMessage(ev messageCreateEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	reply, newConvID, err := b.handler(ctx, BridgeRequest{Text: text, ConvID: convID, Platform: "discord"})
+	reply, filePaths, newConvID, err := b.handler(ctx, BridgeRequest{Text: text, ConvID: convID, Platform: "discord"})
 	if err != nil {
 		logstore.Write("error", "Discord: handler error: "+err.Error(), map[string]string{"platform": "discord"})
 		b.sendMessage(ev.ChannelID, ev.ID, "An error occurred. Please try again.")
@@ -376,8 +381,17 @@ func (b *Bridge) handleMessage(ev messageCreateEvent) {
 		logstore.Write("error", "Discord: upsert session: "+upsertErr.Error(), map[string]string{"platform": "discord"})
 	}
 
-	// Send response in chunks.
-	for _, chunk := range chunkText(reply, maxChunk) {
+	// Send generated files as Discord attachments.
+	for _, fp := range filePaths {
+		b.sendFile(ev.ChannelID, ev.ID, fp)
+	}
+
+	// Send response in chunks, stripping any raw file paths the model included.
+	cleanReply := reply
+	for _, fp := range filePaths {
+		cleanReply = strings.ReplaceAll(cleanReply, fp, filepath.Base(fp))
+	}
+	for _, chunk := range chunkText(cleanReply, maxChunk) {
 		b.sendMessage(ev.ChannelID, ev.ID, chunk)
 	}
 }
@@ -444,7 +458,7 @@ func (b *Bridge) handleCommand(channelID, refMsgID, text string, isDM bool) {
 	case "!status":
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		reply, _, err := b.handler(ctx, BridgeRequest{Text: "What is your current status? Give a brief summary.", Platform: "discord"})
+		reply, _, _, err := b.handler(ctx, BridgeRequest{Text: "What is your current status? Give a brief summary.", Platform: "discord"})
 		if err != nil {
 			b.sendMessage(channelID, refMsgID, "Status: running.")
 			return
@@ -490,6 +504,59 @@ type discordMessageReq struct {
 
 type discordMsgRef struct {
 	MessageID string `json:"message_id"`
+}
+
+// sendFile uploads a local file to a Discord channel as an attachment.
+func (b *Bridge) sendFile(channelID, refMsgID, filePath string) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		logstore.Write("error", "Discord: open file for upload: "+err.Error(), map[string]string{"platform": "discord"})
+		return
+	}
+	defer f.Close()
+
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+
+	// Attach the file.
+	filename := filepath.Base(filePath)
+	fw, err := w.CreateFormFile("files[0]", filename)
+	if err != nil {
+		logstore.Write("error", "Discord: create form file: "+err.Error(), map[string]string{"platform": "discord"})
+		return
+	}
+	if _, err = io.Copy(fw, f); err != nil {
+		logstore.Write("error", "Discord: copy file data: "+err.Error(), map[string]string{"platform": "discord"})
+		return
+	}
+
+	// Optional JSON payload_json for message reference.
+	if refMsgID != "" {
+		payload, _ := json.Marshal(map[string]any{
+			"message_reference": map[string]string{"message_id": refMsgID},
+		})
+		_ = w.WriteField("payload_json", string(payload))
+	}
+	w.Close()
+
+	apiURL := fmt.Sprintf("%s/channels/%s/messages", apiBase, channelID)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, &body)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bot "+b.token)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := b.client.Do(req)
+	if err != nil {
+		logstore.Write("error", "Discord: sendFile: "+err.Error(), map[string]string{"platform": "discord"})
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		logstore.Write("warn", fmt.Sprintf("Discord: sendFile rejected %d for %s", resp.StatusCode, filename), map[string]string{"platform": "discord"})
+	}
 }
 
 func (b *Bridge) sendMessage(channelID, refMsgID, text string) {

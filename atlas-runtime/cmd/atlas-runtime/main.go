@@ -194,6 +194,7 @@ func main() {
 	chatSvc.SetMLXEngineManager(mlxMgr)
 	chatSvc.SetMLXRouterEngineManager(mlxRouterMgr)
 	commsSvc := comms.New(cfgStore, db)
+	commsSvc.SetWebChatSender(chatSvc.InjectAssistantMessage)
 	forgeSvc := forge.NewService(config.SupportDir())
 	platformHost := platform.NewHost(
 		cfgStore,

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"atlas-runtime-go/internal/logstore"
 )
 
 const (
@@ -160,7 +162,10 @@ func readJSON(supportDir, filename string, v any) {
 	if err != nil {
 		return
 	}
-	json.Unmarshal(data, v) //nolint:errcheck
+	if err := json.Unmarshal(data, v); err != nil {
+		logstore.Write("warn", "forge: corrupted JSON in "+filename+" — data discarded: "+err.Error(),
+			map[string]string{"file": filepath.Join(supportDir, filename)})
+	}
 }
 
 func writeJSON(supportDir, filename string, v any) error {

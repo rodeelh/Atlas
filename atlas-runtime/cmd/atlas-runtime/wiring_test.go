@@ -26,7 +26,7 @@ func TestNewBridgeChatHandler_MapsBridgeRequest(t *testing.T) {
 	stub.response.Response.AssistantMessage = "done"
 
 	handler := newBridgeChatHandler(stub)
-	msg, convID, err := handler(context.Background(), comms.BridgeRequest{
+	msg, _, convID, err := handler(context.Background(), comms.BridgeRequest{
 		Text:     "hello",
 		ConvID:   "conv-input",
 		Platform: "telegram",
@@ -52,7 +52,7 @@ func TestNewBridgeChatHandler_PropagatesErrors(t *testing.T) {
 	stub := &stubBridgeHandler{err: errors.New("boom")}
 	handler := newBridgeChatHandler(stub)
 
-	if _, _, err := handler(context.Background(), comms.BridgeRequest{Text: "hello"}); err == nil {
+	if _, _, _, err := handler(context.Background(), comms.BridgeRequest{Text: "hello"}); err == nil {
 		t.Fatal("expected error")
 	}
 }

@@ -216,15 +216,36 @@ func TestServicePropose_PersistsCanonicalProposalShape(t *testing.T) {
 	}
 }
 
-func TestBuildResearchPromptMentionsBuiltInFileActions(t *testing.T) {
-	prompt := buildResearchPrompt(ProposeRequest{
+func TestBuildDraftPromptMentionsBuiltInFileActions(t *testing.T) {
+	prompt := buildDraftPrompt(ProposeRequest{
 		Name:        "PDF Writer",
 		Description: "Create PDF reports",
 	})
 
 	for _, expected := range []string{"fs.create_pdf", "fs.create_docx", "fs.create_zip", "fs.save_image"} {
 		if !strings.Contains(prompt, expected) {
-			t.Fatalf("expected prompt to mention %s, got %q", expected, prompt)
+			t.Fatalf("expected draft prompt to mention %s, got %q", expected, prompt)
 		}
+	}
+}
+
+func TestBuildFormalizePromptContainsSelfCheckRules(t *testing.T) {
+	req := ProposeRequest{Name: "GitHub", Description: "GitHub API", APIURL: "https://api.github.com"}
+	draft := `{"purpose":"GitHub integration","endpoints":[{"actionName":"List Repos","method":"GET","url":"https://api.github.com/user/repos"}]}`
+	prompt := buildFormalizePrompt(req, draft)
+
+	for _, expected := range []string{
+		"plans[].actionID",
+		"spec.actions[]",
+		"placeholder domains",
+		"authType",
+		"lowercase-hyphenated",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("expected formalize prompt to contain %q", expected)
+		}
+	}
+	if !strings.Contains(prompt, draft) {
+		t.Fatal("expected formalize prompt to embed the draft")
 	}
 }

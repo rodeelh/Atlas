@@ -13,7 +13,7 @@ type bridgeMessageHandler interface {
 }
 
 func newBridgeChatHandler(handler bridgeMessageHandler) comms.ChatHandler {
-	return func(ctx context.Context, req comms.BridgeRequest) (string, string, error) {
+	return func(ctx context.Context, req comms.BridgeRequest) (string, []string, string, error) {
 		chatAttachments := make([]chat.MessageAttachment, len(req.Attachments))
 		for i, a := range req.Attachments {
 			chatAttachments[i] = chat.MessageAttachment{Filename: a.Filename, MimeType: a.MimeType, Data: a.Data}
@@ -25,11 +25,11 @@ func newBridgeChatHandler(handler bridgeMessageHandler) comms.ChatHandler {
 			Attachments:    chatAttachments,
 		})
 		if err != nil {
-			return "", "", err
+			return "", nil, "", err
 		}
 		if resp.Response.ErrorMessage != "" {
-			return "", "", fmt.Errorf("%s", resp.Response.ErrorMessage)
+			return "", nil, "", fmt.Errorf("%s", resp.Response.ErrorMessage)
 		}
-		return resp.Response.AssistantMessage, resp.Conversation.ID, nil
+		return resp.Response.AssistantMessage, resp.GeneratedFiles, resp.Conversation.ID, nil
 	}
 }

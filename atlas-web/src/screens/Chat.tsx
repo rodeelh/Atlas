@@ -43,6 +43,13 @@ marked.use({
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+interface FileAttachment {
+  filename: string
+  mimeType: string
+  fileSize: number
+  fileToken: string
+}
+
 interface Message {
   id: string
   role: 'user' | 'assistant'
@@ -51,6 +58,8 @@ interface Message {
   createdAt?: number
   /** URL → preview map so each card can be anchored to its source URL. */
   linkPreviews?: Record<string, LinkPreview>
+  /** Files produced by tools during this assistant turn. */
+  fileAttachments?: FileAttachment[]
 }
 
 type ChatProvider = 'openai' | 'anthropic' | 'gemini' | 'openrouter' | 'lm_studio' | 'ollama' | 'atlas_engine' | 'atlas_mlx'
@@ -159,7 +168,7 @@ function saveMessages(msgs: Message[]) {
   try {
     const toSave = msgs
       .filter(m => m.content.length > 0 && !m.isTyping)
-      .map(({ id, role, content, createdAt }) => ({ id, role, content, createdAt }))
+      .map(({ id, role, content, createdAt, fileAttachments }) => ({ id, role, content, createdAt, fileAttachments }))
     localStorage.setItem(STORAGE_MSG_KEY, JSON.stringify(toSave))
   } catch {
     // QuotaExceededError — storage full; skip silently
@@ -327,6 +336,76 @@ const LinkPreviewCard = ({ preview }: { preview: LinkPreview }) => {
         {preview.title && <span class="link-preview-title">{preview.title}</span>}
         {preview.description && <span class="link-preview-desc">{preview.description}</span>}
       </div>
+    </a>
+  )
+}
+
+// ── File attachment card ───────────────────────────────────────────────────────
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function fileIcon(mimeType: string): JSX.Element {
+  const isImage = mimeType.startsWith('image/')
+  const isPDF   = mimeType === 'application/pdf'
+  if (isImage) return (
+    <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="1.5" y="1.5" width="13" height="13" rx="2"/>
+      <circle cx="5.5" cy="5.5" r="1.3"/>
+      <path d="M1.5 11l3.5-3.5 2.5 2.5 2-2 4.5 4.5"/>
+    </svg>
+  )
+  if (isPDF) return (
+    <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M9.5 1.5H4a1.5 1.5 0 0 0-1.5 1.5v10A1.5 1.5 0 0 0 4 14.5h8a1.5 1.5 0 0 0 1.5-1.5V5.5L9.5 1.5z"/>
+      <path d="M9.5 1.5V5.5H13.5"/>
+      <path d="M5 9.5h6M5 12h4"/>
+    </svg>
+  )
+  return (
+    <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M9.5 1.5H4a1.5 1.5 0 0 0-1.5 1.5v10A1.5 1.5 0 0 0 4 14.5h8a1.5 1.5 0 0 0 1.5-1.5V5.5L9.5 1.5z"/>
+      <path d="M9.5 1.5V5.5H13.5"/>
+    </svg>
+  )
+}
+
+const FileAttachmentCard = ({ file }: { file: FileAttachment }) => {
+  const downloadUrl = `/artifacts/${file.fileToken}`
+  const isImage = file.mimeType.startsWith('image/')
+  return (
+    <a
+      href={downloadUrl}
+      download={file.filename}
+      target="_blank"
+      rel="noopener noreferrer"
+      class="file-attachment-card"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {isImage ? (
+        <img
+          src={downloadUrl}
+          class="file-attachment-preview"
+          alt={file.filename}
+          loading="lazy"
+          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+        />
+      ) : (
+        <span class="file-attachment-icon">{fileIcon(file.mimeType)}</span>
+      )}
+      <div class="file-attachment-meta">
+        <span class="file-attachment-name">{file.filename}</span>
+        <span class="file-attachment-size">{formatFileSize(file.fileSize)}</span>
+      </div>
+      <span class="file-attachment-dl" aria-label="Download">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M8 3v8M5 8l3 3 3-3"/>
+          <path d="M3 13h10"/>
+        </svg>
+      </span>
     </a>
   )
 }
@@ -642,6 +721,75 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       }
     })()
     return () => { cancelled = true }
+  }, [])
+
+  // Persistent background SSE — stays open between turns so automation and
+  // workflow results injected by the backend (platform="webchat") stream in
+  // live without a user-initiated message. Events arriving while a regular
+  // turn is in progress are silently dropped (esRef.current is occupied).
+  const pushEsRef = useRef<EventSource | null>(null)
+  useEffect(() => {
+    const convID = conversationID.current
+    if (!convID) return
+
+    const open = () => {
+      const es = new EventSource(`/message/stream?conversationID=${encodeURIComponent(convID)}`)
+      pushEsRef.current = es
+
+      es.onmessage = (evt) => {
+        // If a regular turn is active, its own EventSource is handling events.
+        if (esRef.current) return
+        try {
+          const data = JSON.parse(evt.data) as ChatStreamEvent
+          if (data.type === 'assistant_started') {
+            const msg: Message = { id: uuid(), role: 'assistant', content: '', isTyping: true, createdAt: Date.now() }
+            activeMsgId.current = msg.id
+            setMessages(prev => [...prev, msg])
+          } else if (data.type === 'assistant_delta') {
+            const delta = data.content ?? ''
+            setMessages(prev => prev.map(m =>
+              m.id === activeMsgId.current
+                ? { ...m, content: m.content + delta, isTyping: true }
+                : m
+            ))
+          } else if (data.type === 'assistant_done') {
+            setMessages(prev => prev.map(m =>
+              m.id === activeMsgId.current ? { ...m, isTyping: false } : m
+            ))
+            activeMsgId.current = null
+          } else if (data.type === 'file_generated' && data.fileToken && data.filename) {
+            const attachment: FileAttachment = {
+              filename:  data.filename,
+              mimeType:  data.mimeType ?? 'application/octet-stream',
+              fileSize:  data.fileSize ?? 0,
+              fileToken: data.fileToken,
+            }
+            setMessages(prev => {
+              const last = [...prev].reverse().find((m: Message) => m.role === 'assistant')
+              if (!last) return prev
+              return prev.map(m =>
+                m.id === last.id
+                  ? { ...m, fileAttachments: [...(m.fileAttachments ?? []), attachment] }
+                  : m
+              )
+            })
+          }
+        } catch { /* malformed event */ }
+      }
+
+      es.onerror = () => {
+        es.close()
+        pushEsRef.current = null
+        // Reopen after 5 s to survive daemon restarts.
+        window.setTimeout(open, 5000)
+      }
+    }
+
+    open()
+    return () => {
+      pushEsRef.current?.close()
+      pushEsRef.current = null
+    }
   }, [])
 
   // On mount, sync messages from the server. If the agent completed a turn
@@ -1425,6 +1573,25 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
           case 'tool_finished':
             break
 
+          case 'file_generated': {
+            if (!data.fileToken || !data.filename) break
+            const attachment: FileAttachment = {
+              filename:  data.filename,
+              mimeType:  data.mimeType ?? 'application/octet-stream',
+              fileSize:  data.fileSize ?? 0,
+              fileToken: data.fileToken,
+            }
+            const targetId = awaitingResume ? resumedMsgID : assistantMsg.id
+            if (targetId) {
+              setMessages(prev => prev.map(m =>
+                m.id === targetId
+                  ? { ...m, fileAttachments: [...(m.fileAttachments ?? []), attachment] }
+                  : m
+              ))
+            }
+            break
+          }
+
           case 'tool_failed':
             break
 
@@ -1837,6 +2004,13 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                           ? <TypingDots />
                           : null
                     }
+                    {msg.fileAttachments && msg.fileAttachments.length > 0 && (
+                      <div class="file-attachment-list">
+                        {msg.fileAttachments.map(f => (
+                          <FileAttachmentCard key={f.fileToken} file={f} />
+                        ))}
+                      </div>
+                    )}
                   </div>
                   {!msg.isTyping && (msg.content || msg.createdAt) && (
                     <div class="chat-message-meta">

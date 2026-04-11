@@ -172,6 +172,7 @@ export interface ChatStreamEvent {
     | 'tool_started'
     | 'tool_finished'
     | 'tool_failed'
+    | 'file_generated'
     | 'approval_required'
     | 'done'
     | 'error'
@@ -188,6 +189,11 @@ export interface ChatStreamEvent {
   approvalID?: string
   toolCallID?: string
   arguments?: string
+  /** file_generated fields */
+  filename?: string
+  mimeType?: string
+  fileSize?: number
+  fileToken?: string
 }
 
 export interface ApprovalToolCall {
@@ -319,7 +325,7 @@ export interface TelegramChat {
 
 export interface CommunicationDestination {
   id: string
-  platform: 'telegram' | 'discord' | 'slack' | 'whatsapp' | 'companion'
+  platform: 'telegram' | 'discord' | 'slack' | 'whatsapp' | 'companion' | 'webchat'
   channelID: string
   channelName?: string
   userID?: string

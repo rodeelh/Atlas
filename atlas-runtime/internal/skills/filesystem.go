@@ -183,7 +183,7 @@ func (r *Registry) registerFilesystem() {
 	r.register(SkillEntry{
 		Def: ToolDef{
 			Name:        "fs.create_pdf",
-			Description: "Creates a simple PDF document from text content. Requires an approved root.",
+			Description: "Creates a PDF file from text content. Use this whenever the user asks to save, export, or create a PDF — never use fs.write_file for PDF output. Requires an approved root.",
 			Properties: map[string]ToolParam{
 				"path":           {Description: "Absolute path to the PDF file to create", Type: "string"},
 				"title":          {Description: "Optional title shown at the top of the document", Type: "string"},
@@ -866,68 +866,328 @@ func fsSaveImage(_ context.Context, args json.RawMessage, supportDir string) (st
 	return fmt.Sprintf("Saved %s image to %s (%d bytes)", strings.ToUpper(format), p.Path, len(data)), nil
 }
 
+// ── Markdown-aware PDF renderer ────────────────────────────────────────────
+//
+// Supports block-level: # headings (1–3), - bullet lists, ``` fenced code,
+// --- horizontal rules, blank-line paragraph breaks.
+// Supports inline: **bold** (font switch within a line).
+// Uses PDF 1.4 standard Type1 fonts — no external dependencies.
+
+type pdfRun struct {
+	text string
+	font string  // F1=Helvetica  F2=Helvetica-Bold  F3=Helvetica-Oblique  F4=Courier
+	size float64
+}
+
+type pdfLine struct {
+	runs        []pdfRun
+	x           float64
+	spaceBefore float64
+	lineHeight  float64
+	isRule      bool
+}
+
+const (
+	pdfPageW  = 612.0
+	pdfPageH  = 792.0
+	pdfMarL   = 50.0
+	pdfMarR   = 50.0
+	pdfMarT   = 60.0
+	pdfMarB   = 60.0
+	pdfStartY = pdfPageH - pdfMarT // 732
+	pdfEndY   = pdfMarB            // 60
+)
+
 func buildSimplePDF(title, content string) ([]byte, error) {
-	lines := renderDocumentLines(title, content, 92)
+	lines := parsePDFContent(title, content)
 	if len(lines) == 0 {
 		return nil, fmt.Errorf("content is required")
 	}
-	const linesPerPage = 46
-	pageCount := (len(lines) + linesPerPage - 1) / linesPerPage
-	fontID := 1
-	lastPageID := 1 + pageCount*2
-	pagesID := lastPageID + 1
-	catalogID := pagesID + 1
-	objects := make([]string, catalogID+1)
-	objects[fontID] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+	pages := pdfPaginate(lines)
+	return pdfAssemble(pages)
+}
 
-	lineIndex := 0
-	for page := 0; page < pageCount; page++ {
-		contentID := 2 + page*2
-		pageID := contentID + 1
-		end := lineIndex + linesPerPage
-		if end > len(lines) {
-			end = len(lines)
+// parsePDFContent converts title + Markdown content into a flat list of pdfLines.
+func parsePDFContent(title, content string) []pdfLine {
+	var out []pdfLine
+
+	if t := strings.TrimSpace(title); t != "" {
+		for wi, wl := range wrapText(t, 52) {
+			sb := 0.0
+			if wi > 0 {
+				sb = 0
+			}
+			out = append(out, pdfLine{
+				runs:        []pdfRun{{text: wl, font: "F2", size: 20}},
+				x:           pdfMarL,
+				spaceBefore: sb,
+				lineHeight:  26,
+			})
 		}
-		stream := buildPDFPageStream(lines[lineIndex:end])
-		objects[contentID] = fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(stream), stream)
-		objects[pageID] = fmt.Sprintf("<< /Type /Page /Parent %d 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 %d 0 R >> >> /Contents %d 0 R >>", pagesID, fontID, contentID)
-		lineIndex = end
+		out = append(out, pdfLine{isRule: true, x: pdfMarL, spaceBefore: 8, lineHeight: 10})
 	}
 
-	var kids []string
-	for page := 0; page < pageCount; page++ {
-		pageID := 3 + page*2
-		kids = append(kids, fmt.Sprintf("%d 0 R", pageID))
+	rawLines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	inCode := false
+
+	for _, raw := range rawLines {
+		stripped := strings.TrimSpace(raw)
+
+		if strings.HasPrefix(stripped, "```") {
+			inCode = !inCode
+			out = append(out, pdfLine{lineHeight: 4})
+			continue
+		}
+
+		if inCode {
+			cl := raw
+			if len(cl) > 80 {
+				cl = cl[:80]
+			}
+			out = append(out, pdfLine{
+				runs:       []pdfRun{{text: cl, font: "F4", size: 10}},
+				x:          pdfMarL + 20,
+				lineHeight: 13,
+			})
+			continue
+		}
+
+		if stripped == "" {
+			out = append(out, pdfLine{lineHeight: 8})
+			continue
+		}
+
+		if stripped == "---" || stripped == "___" || stripped == "***" {
+			out = append(out, pdfLine{isRule: true, x: pdfMarL, spaceBefore: 4, lineHeight: 8})
+			continue
+		}
+
+		// Headings
+		if level, text := parsePDFHeading(stripped); level > 0 {
+			type hStyle struct {
+				size, lh, sb float64
+				ww            int
+			}
+			styles := [3]hStyle{{18, 26, 16, 57}, {15, 22, 12, 68}, {13, 19, 10, 79}}
+			s := styles[2]
+			if level <= 3 {
+				s = styles[level-1]
+			}
+			for wi, wl := range wrapText(text, s.ww) {
+				sb := s.sb
+				if wi > 0 {
+					sb = 0
+				}
+				out = append(out, pdfLine{
+					runs:        []pdfRun{{text: wl, font: "F2", size: s.size}},
+					x:           pdfMarL,
+					spaceBefore: sb,
+					lineHeight:  s.lh,
+				})
+			}
+			continue
+		}
+
+		// Bullet list
+		if btext, ok := parsePDFBullet(stripped); ok {
+			for wi, wl := range wrapText(btext, 82) {
+				var runs []pdfRun
+				if wi == 0 {
+					runs = append([]pdfRun{{text: "- ", font: "F1", size: 12}}, parsePDFInline(wl, 12)...)
+				} else {
+					runs = append([]pdfRun{{text: "  ", font: "F1", size: 12}}, parsePDFInline(wl, 12)...)
+				}
+				sb := 1.0
+				if wi == 0 {
+					sb = 4
+				}
+				out = append(out, pdfLine{
+					runs:        runs,
+					x:           pdfMarL + 18,
+					spaceBefore: sb,
+					lineHeight:  16,
+				})
+			}
+			continue
+		}
+
+		// Regular paragraph
+		for wi, wl := range wrapText(stripped, 85) {
+			sb := 0.0
+			if wi == 0 {
+				sb = 1
+			}
+			out = append(out, pdfLine{
+				runs:        parsePDFInline(wl, 12),
+				x:           pdfMarL,
+				spaceBefore: sb,
+				lineHeight:  16,
+			})
+		}
 	}
-	objects[pagesID] = fmt.Sprintf("<< /Type /Pages /Count %d /Kids [%s] >>", pageCount, strings.Join(kids, " "))
-	objects[catalogID] = fmt.Sprintf("<< /Type /Catalog /Pages %d 0 R >>", pagesID)
+
+	return out
+}
+
+func parsePDFHeading(s string) (int, string) {
+	for level := 3; level >= 1; level-- {
+		prefix := strings.Repeat("#", level) + " "
+		if strings.HasPrefix(s, prefix) {
+			return level, strings.TrimPrefix(s, prefix)
+		}
+	}
+	return 0, ""
+}
+
+func parsePDFBullet(s string) (string, bool) {
+	for _, pfx := range []string{"- ", "* ", "+ "} {
+		if strings.HasPrefix(s, pfx) {
+			return strings.TrimPrefix(s, pfx), true
+		}
+	}
+	return "", false
+}
+
+// parsePDFInline splits text into styled runs on **bold** markers.
+func parsePDFInline(text string, size float64) []pdfRun {
+	var runs []pdfRun
+	for len(text) > 0 {
+		i := strings.Index(text, "**")
+		if i == -1 {
+			runs = append(runs, pdfRun{text: text, font: "F1", size: size})
+			break
+		}
+		if i > 0 {
+			runs = append(runs, pdfRun{text: text[:i], font: "F1", size: size})
+		}
+		text = text[i+2:]
+		j := strings.Index(text, "**")
+		if j == -1 {
+			runs = append(runs, pdfRun{text: text, font: "F2", size: size})
+			break
+		}
+		if j > 0 {
+			runs = append(runs, pdfRun{text: text[:j], font: "F2", size: size})
+		}
+		text = text[j+2:]
+	}
+	return runs
+}
+
+// pdfPaginate assigns lines to pages based on Y position tracking.
+func pdfPaginate(lines []pdfLine) [][]pdfLine {
+	var pages [][]pdfLine
+	var cur []pdfLine
+	y := pdfStartY
+	for _, line := range lines {
+		need := line.spaceBefore + line.lineHeight
+		if y-need < pdfEndY && len(cur) > 0 {
+			pages = append(pages, cur)
+			cur = nil
+			y = pdfStartY
+		}
+		cur = append(cur, line)
+		y -= need
+	}
+	if len(cur) > 0 {
+		pages = append(pages, cur)
+	}
+	if len(pages) == 0 {
+		pages = [][]pdfLine{nil}
+	}
+	return pages
+}
+
+// pdfAssemble builds the final PDF binary from paginated lines.
+// Object layout: 1–4 = fonts, then pairs (content, page) per page, then pages dict, catalog.
+func pdfAssemble(pages [][]pdfLine) ([]byte, error) {
+	const numFonts = 4
+	n := len(pages)
+	pagesID := numFonts + n*2 + 1
+	catalogID := pagesID + 1
+	total := catalogID
+
+	objs := make([]string, total+1)
+	objs[1] = `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>`
+	objs[2] = `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>`
+	objs[3] = `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique /Encoding /WinAnsiEncoding >>`
+	objs[4] = `<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>`
+
+	pageIDs := make([]int, n)
+	for i, page := range pages {
+		cid := numFonts + 1 + i*2
+		pid := cid + 1
+		pageIDs[i] = pid
+		stream := pdfRenderPage(page)
+		objs[cid] = fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(stream), stream)
+		objs[pid] = fmt.Sprintf(
+			`<< /Type /Page /Parent %d 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R /F2 2 0 R /F3 3 0 R /F4 4 0 R >> >> /Contents %d 0 R >>`,
+			pagesID, cid,
+		)
+	}
+
+	kids := make([]string, n)
+	for i, id := range pageIDs {
+		kids[i] = fmt.Sprintf("%d 0 R", id)
+	}
+	objs[pagesID] = fmt.Sprintf(`<< /Type /Pages /Count %d /Kids [%s] >>`, n, strings.Join(kids, " "))
+	objs[catalogID] = fmt.Sprintf(`<< /Type /Catalog /Pages %d 0 R >>`, pagesID)
 
 	var buf bytes.Buffer
 	buf.WriteString("%PDF-1.4\n%\xFF\xFF\xFF\xFF\n")
-	offsets := make([]int, catalogID+1)
-	for id := 1; id <= catalogID; id++ {
+	offsets := make([]int, total+1)
+	for id := 1; id <= total; id++ {
 		offsets[id] = buf.Len()
-		fmt.Fprintf(&buf, "%d 0 obj\n%s\nendobj\n", id, objects[id])
+		fmt.Fprintf(&buf, "%d 0 obj\n%s\nendobj\n", id, objs[id])
 	}
-	xrefOffset := buf.Len()
-	fmt.Fprintf(&buf, "xref\n0 %d\n", catalogID+1)
+	xref := buf.Len()
+	fmt.Fprintf(&buf, "xref\n0 %d\n", total+1)
 	buf.WriteString("0000000000 65535 f \n")
-	for id := 1; id <= catalogID; id++ {
+	for id := 1; id <= total; id++ {
 		fmt.Fprintf(&buf, "%010d 00000 n \n", offsets[id])
 	}
-	fmt.Fprintf(&buf, "trailer\n<< /Size %d /Root %d 0 R >>\nstartxref\n%d\n%%%%EOF", catalogID+1, catalogID, xrefOffset)
+	fmt.Fprintf(&buf, "trailer\n<< /Size %d /Root %d 0 R >>\nstartxref\n%d\n%%%%EOF", total+1, catalogID, xref)
 	return buf.Bytes(), nil
 }
 
-func buildPDFPageStream(lines []string) string {
+// pdfRenderPage emits the content stream for a single page.
+// Each line is positioned absolutely via Tm so Y tracking is exact.
+func pdfRenderPage(lines []pdfLine) string {
 	var sb strings.Builder
-	sb.WriteString("BT\n/F1 12 Tf\n50 760 Td\n14 TL\n")
+	y := pdfStartY
+
 	for _, line := range lines {
-		sb.WriteString("(")
-		sb.WriteString(escapePDFText(line))
-		sb.WriteString(") Tj\nT*\n")
+		y -= line.spaceBefore
+
+		if line.isRule {
+			fmt.Fprintf(&sb, "0.7 g\n0.5 w\n%.1f %.1f m %.1f %.1f l S\n0 g\n",
+				pdfMarL, y, pdfPageW-pdfMarR, y)
+			y -= line.lineHeight
+			continue
+		}
+
+		if len(line.runs) == 0 {
+			y -= line.lineHeight
+			continue
+		}
+
+		sb.WriteString("BT\n")
+		fmt.Fprintf(&sb, "1 0 0 1 %.1f %.1f Tm\n", line.x, y)
+		curFont, curSize := "", 0.0
+		for _, run := range line.runs {
+			if run.text == "" {
+				continue
+			}
+			if run.font != curFont || run.size != curSize {
+				fmt.Fprintf(&sb, "/%s %.1f Tf\n", run.font, run.size)
+				curFont, curSize = run.font, run.size
+			}
+			fmt.Fprintf(&sb, "(%s) Tj\n", escapePDFText(run.text))
+		}
+		sb.WriteString("ET\n")
+		y -= line.lineHeight
 	}
-	sb.WriteString("ET")
+
 	return sb.String()
 }
 

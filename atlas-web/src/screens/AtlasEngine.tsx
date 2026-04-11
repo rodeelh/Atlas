@@ -1012,15 +1012,14 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
               {update?.done && (
                 <div class="banner banner-success" style={{ borderRadius: 6 }}>
                   <span class="banner-message">✓ Engine updated to {update.version}.</span>
+                  <button class="banner-dismiss" onClick={() => setUpdate(null)} title="Dismiss">✕</button>
                 </div>
               )}
               {update?.error && (
                 <div class="banner banner-error" style={{ borderRadius: 6 }}>
                   <span class="banner-message">Update failed: {update.error}</span>
+                  <button class="banner-dismiss" onClick={() => setUpdate(null)} title="Dismiss">✕</button>
                 </div>
-              )}
-              {(update?.done || update?.error) && (
-                <button class="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setUpdate(null)}>Dismiss</button>
               )}
             </div>
           )}
@@ -1108,6 +1107,7 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
             {download?.done && (
               <div class="banner banner-success" style={{ borderRadius: 6 }}>
                 <span class="banner-message">✓ {download.filename} downloaded successfully.</span>
+                <button class="banner-dismiss" onClick={handleDismissDownload} title="Dismiss">✕</button>
               </div>
             )}
             {download?.error && download.error !== 'paused' && (
@@ -1117,9 +1117,6 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
             )}
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              {download?.done && (
-                <button class="btn btn-sm btn-ghost" onClick={handleDismissDownload}>Dismiss</button>
-              )}
               {isDownloading && (
                 <button class="btn btn-sm" onClick={handleCancelDownload}>Cancel</button>
               )}

@@ -168,7 +168,19 @@ func (m *Module) installProposal(w http.ResponseWriter, id string, enable bool) 
 		status = "enabled"
 	}
 
-	record := forgesvc.BuildInstalledRecord(*proposal, status, target)
+	record, err := forgesvc.BuildInstalledRecord(*proposal, status, target)
+	if err != nil {
+		rollbackArtifacts := func() {
+			if target != nil && target.Type == "custom_skill" {
+				_ = forgesvc.RemoveCustomSkillDir(m.supportDir, proposal.SkillID)
+			} else if target != nil && target.Type == "workflow" {
+				_ = forgesvc.RemoveWorkflowInstall(m.supportDir, target.Ref)
+			}
+		}
+		rollbackArtifacts()
+		writeError(w, http.StatusInternalServerError, "malformed proposal spec — cannot install: "+err.Error())
+		return
+	}
 
 	// rollbackArtifacts removes disk artifacts and de-registers the skill from the
 	// in-memory registry. Called on any failure after in-memory registration succeeds.

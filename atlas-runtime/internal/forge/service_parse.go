@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"atlas-runtime-go/internal/logstore"
 )
 
 type aiProposalResponse struct {
@@ -49,6 +51,20 @@ func parseProposalResponse(id string, req ProposeRequest, raw string) (ForgeProp
 	}
 
 	spec, plans := normalizeCanonicalProposal(req, aiResp)
+	// Auto-correct risk level from actual HTTP methods — removes AI responsibility
+	// for this dimension and makes it structurally correct by construction:
+	//   DELETE present           → "high"
+	//   POST/PUT/PATCH present   → "medium"
+	//   all GET or no HTTP plans → "low"
+	spec.RiskLevel = autoCorrectRiskLevel(plans)
+
+	// Reject proposals where an HTTP plan has an empty or non-http/https URL.
+	// This catches the case where the AI omits the URL (req.APIURL was empty and
+	// the model didn't generate one), which would produce an unrunnable custom skill.
+	if msg := validateHTTPPlanURLs(plans); msg != "" {
+		return ForgeProposal{}, fmt.Errorf("forge: %s", msg)
+	}
+
 	specBytes, err := json.Marshal(spec)
 	if err != nil {
 		return ForgeProposal{}, fmt.Errorf("forge: marshal spec: %w", err)
@@ -131,6 +147,8 @@ func normalizeCanonicalProposal(req ProposeRequest, aiResp aiProposalResponse) (
 	if len(spec.Actions) == 0 {
 		if len(actionNames) == 0 {
 			actionNames = []string{"Query"}
+			logstore.Write("warn", "forge: AI returned no actions and no actionNames — synthesizing default 'Query' action; proposal may need manual review",
+				map[string]string{"skill": req.Name})
 		}
 		for _, name := range actionNames {
 			actionID := slugify(name)
@@ -196,6 +214,34 @@ func normalizeCanonicalProposal(req ProposeRequest, aiResp aiProposalResponse) (
 	return spec, plans
 }
 
+// autoCorrectRiskLevel derives riskLevel from the HTTP methods present in plans,
+// making risk assessment code-derived rather than AI-decided.
+func autoCorrectRiskLevel(plans []ForgeActionPlan) string {
+	hasDelete, hasMutation, hasHTTP := false, false, false
+	for _, plan := range plans {
+		if plan.HTTPRequest == nil {
+			continue
+		}
+		hasHTTP = true
+		switch strings.ToUpper(plan.HTTPRequest.Method) {
+		case "DELETE":
+			hasDelete = true
+		case "POST", "PUT", "PATCH":
+			hasMutation = true
+		}
+	}
+	if !hasHTTP {
+		return "low" // local or workflow skills — no HTTP operations
+	}
+	if hasDelete {
+		return "high"
+	}
+	if hasMutation {
+		return "medium"
+	}
+	return "low"
+}
+
 func collectDomains(plans []ForgeActionPlan) []string {
 	seen := map[string]bool{}
 	domains := []string{}
@@ -211,6 +257,26 @@ func collectDomains(plans []ForgeActionPlan) []string {
 		domains = append(domains, u.Host)
 	}
 	return domains
+}
+
+// validateHTTPPlanURLs returns a non-empty error string if any HTTP plan has an
+// empty URL or a URL with a scheme other than http/https. Local and workflow
+// plans are skipped — they do not have HTTP requests.
+func validateHTTPPlanURLs(plans []ForgeActionPlan) string {
+	for _, plan := range plans {
+		h := plan.HTTPRequest
+		if h == nil {
+			continue
+		}
+		if strings.TrimSpace(h.URL) == "" {
+			return fmt.Sprintf("plan %q has an empty URL — the AI must return a real HTTPS endpoint", plan.ActionID)
+		}
+		u, err := url.Parse(h.URL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+			return fmt.Sprintf("plan %q URL %q is not a valid http/https URL — the AI must return a real HTTPS endpoint", plan.ActionID, h.URL)
+		}
+	}
+	return ""
 }
 
 func humanizeSlug(s string) string {

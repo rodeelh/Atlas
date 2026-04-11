@@ -899,15 +899,14 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
               {install?.done && (
                 <div class="banner banner-success" style={{ borderRadius: 6 }}>
                   <span class="banner-message">✓ {install.line}</span>
+                  <button class="banner-dismiss" onClick={() => setInstall(null)} title="Dismiss">✕</button>
                 </div>
               )}
               {install?.error && (
                 <div class="banner banner-error" style={{ borderRadius: 6 }}>
                   <span class="banner-message">Install failed: {install.error}</span>
+                  <button class="banner-dismiss" onClick={() => setInstall(null)} title="Dismiss">✕</button>
                 </div>
-              )}
-              {(install?.done || install?.error) && (
-                <button class="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setInstall(null)}>Dismiss</button>
               )}
             </div>
           )}
@@ -985,6 +984,7 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
             {download?.done && (
               <div class="banner banner-success" style={{ borderRadius: 6 }}>
                 <span class="banner-message">✓ {download.repo.split('/').pop()} downloaded successfully.</span>
+                <button class="banner-dismiss" onClick={handleDismissDownload} title="Dismiss">✕</button>
               </div>
             )}
             {download?.error && download.error !== 'paused' && (
@@ -999,9 +999,6 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
             )}
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              {download?.done && (
-                <button class="btn btn-sm btn-ghost" onClick={handleDismissDownload}>Dismiss</button>
-              )}
               {isDownloading && (
                 <button class="btn btn-sm" onClick={handleCancelDownload}>Cancel</button>
               )}

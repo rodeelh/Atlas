@@ -113,6 +113,7 @@ Required behavior:
 - send-message requests work without the web app having to understand internal agent orchestration
 - streaming remains SSE-based for incremental assistant progress
 - conversation history remains queryable
+- when a tool produces a local file, the runtime emits a `file_generated` SSE event and registers a short-lived download token redeemable at `GET /artifacts/{token}`
 
 Core routes:
 
@@ -121,6 +122,35 @@ Core routes:
 - `GET /conversations`
 - `GET /conversations/search`
 - `GET /conversations/{id}`
+- `GET /artifacts/{token}`
+
+#### SSE event types (GET /message/stream)
+
+All events are JSON-encoded `data:` lines. The `type` field determines the shape:
+
+| type | key fields | meaning |
+|---|---|---|
+| `assistant_started` | `role`, `conversationID` | model turn beginning |
+| `assistant_delta` | `content`, `role` | incremental token |
+| `assistant_done` | `role` | model turn complete |
+| `tool_started` | `toolName`, `toolCallID` | tool execution beginning |
+| `tool_finished` | `toolName`, `toolCallID` | tool execution complete |
+| `tool_failed` | `toolName`, `toolCallID`, `error` | tool execution failed |
+| `file_generated` | `filename`, `mimeType`, `fileSize`, `fileToken`, `toolName` | tool produced a local file; redeem token at `GET /artifacts/{token}` |
+| `approval_required` | `approvalID`, `toolCallID`, `toolName`, `arguments` | tool call deferred for user approval |
+| `done` | `status` (`completed` \| `waitingForApproval` \| `denied` \| `failed` \| `cancelled`) | turn lifecycle complete |
+| `error` | `error` | unrecoverable turn error |
+| `cancelled` | — | turn cancelled via `POST /message/cancel` |
+
+#### GET /artifacts/{token}
+
+Resolves a `fileToken` from a `file_generated` event to the underlying file.
+
+- Token is a 32-hex-character random string (128-bit, unguessable).
+- Images are served with `Content-Disposition: inline` so the browser can preview them.
+- All other file types are served with `Content-Disposition: attachment`.
+- Returns 404 if the token is not found or has been evicted (store holds up to 500 entries).
+- Requires session auth (same as all other routes).
 
 ### Approvals and policies
 

@@ -49,8 +49,8 @@ type BridgeRequest struct {
 }
 
 // ChatHandler routes a BridgeRequest to the Atlas agent loop.
-// Returns (assistantReply, conversationID, error).
-type ChatHandler func(ctx context.Context, req BridgeRequest) (string, string, error)
+// Returns (assistantReply, generatedFilePaths, conversationID, error).
+type ChatHandler func(ctx context.Context, req BridgeRequest) (string, []string, string, error)
 
 // ApprovalResolver resolves a pending approval by tool call ID.
 type ApprovalResolver func(toolCallID string, approved bool) error
@@ -400,7 +400,7 @@ func (b *Bridge) processText(chatID, msgID int64, from *tgUser, text string, att
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	reply, newConvID, err := b.handler(ctx, BridgeRequest{Text: text, ConvID: convID, Platform: "telegram", Attachments: attachments})
+	reply, filePaths, newConvID, err := b.handler(ctx, BridgeRequest{Text: text, ConvID: convID, Platform: "telegram", Attachments: attachments})
 	if err != nil {
 		logstore.Write("error", "Telegram: handler error: "+err.Error(), map[string]string{"platform": "telegram"})
 		b.sendReaction(chatID, msgID, errorEmoji)
@@ -452,16 +452,41 @@ func (b *Bridge) processText(chatID, msgID int64, from *tgUser, text string, att
 		b.sendReaction(chatID, msgID, checkEmoji)
 	}
 
-	// FIX #3: send any image/file artifacts referenced in the reply.
-	for _, fp := range extractFilePaths(reply) {
+	// Send all generated files. Prefer the explicit list returned by the handler
+	// (guaranteed delivery even when the model doesn't mention the path in text),
+	// then fall back to scanning the reply text for any paths not already sent.
+	sentPaths := map[string]bool{}
+	for _, fp := range filePaths {
+		if sentPaths[fp] {
+			continue
+		}
+		sentPaths[fp] = true
 		if isImageExt(strings.ToLower(filepath.Ext(fp))) {
 			b.sendPhoto(chatID, fp)
 		} else {
 			b.sendDocument(chatID, fp)
 		}
 	}
+	// Also scan reply text for any paths the model mentioned that weren't in filePaths.
+	cleanReply := reply
+	for _, fp := range extractFilePaths(reply) {
+		if !sentPaths[fp] {
+			sentPaths[fp] = true
+			if isImageExt(strings.ToLower(filepath.Ext(fp))) {
+				b.sendPhoto(chatID, fp)
+			} else {
+				b.sendDocument(chatID, fp)
+			}
+		}
+		// Strip raw path from text regardless of whether the file was already sent.
+		cleanReply = strings.ReplaceAll(cleanReply, fp, filepath.Base(fp))
+	}
+	// Also strip paths that were sent from filePaths but not mentioned in text.
+	for fp := range sentPaths {
+		cleanReply = strings.ReplaceAll(cleanReply, fp, filepath.Base(fp))
+	}
 
-	for _, chunk := range chunkText(markdownToHTML(reply), maxChunk) {
+	for _, chunk := range chunkText(markdownToHTML(cleanReply), maxChunk) {
 		b.sendMessage(chatID, chunk)
 	}
 }
@@ -667,7 +692,7 @@ func (b *Bridge) handleCommand(chatID, msgID int64, text string, cfg config.Runt
 		b.sendChatAction(chatID, "typing")
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		reply, _, err := b.handler(ctx, BridgeRequest{Text: "What is your current status? Give a brief one-line summary.", Platform: "telegram"})
+		reply, _, _, err := b.handler(ctx, BridgeRequest{Text: "What is your current status? Give a brief one-line summary.", Platform: "telegram"})
 		if err != nil {
 			b.sendMessage(chatID, "Status: running.")
 			return
@@ -738,7 +763,7 @@ func (b *Bridge) handleCommand(chatID, msgID int64, text string, cfg config.Runt
 		b.sendChatAction(chatID, "typing")
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		reply, _, err := b.handler(ctx, BridgeRequest{
+		reply, _, _, err := b.handler(ctx, BridgeRequest{
 			Text:     "List all scheduled automations (GREMLINS) with their names and schedules. Be concise.",
 			Platform: "telegram",
 		})
@@ -759,7 +784,7 @@ func (b *Bridge) handleCommand(chatID, msgID int64, text string, cfg config.Runt
 		b.sendChatAction(chatID, "typing")
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		reply, _, err := b.handler(ctx, BridgeRequest{
+		reply, _, _, err := b.handler(ctx, BridgeRequest{
 			Text:     fmt.Sprintf("Run the automation named or with ID %q now.", automationName),
 			Platform: "telegram",
 		})

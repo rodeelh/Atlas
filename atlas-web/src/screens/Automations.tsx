@@ -143,6 +143,7 @@ function formatDate(iso?: string) {
 function destinationLabel(item: GremlinItem, summary?: AutomationSummary) {
   if (summary?.destinationLabel) return summary.destinationLabel
   const dest = item.communicationDestination
+  if (dest?.platform === 'webchat') return 'Web Chat'
   if (dest) return `${dest.platform} · ${dest.channelName ?? dest.channelID}`
   if (item.telegramChatID != null) return `Telegram · ${item.telegramChatID}`
   return 'Not configured'
@@ -263,15 +264,17 @@ function EditModal({ gremlin, capabilities, onSave, onClose }: EditModalProps) {
       return
     }
     const selectedChannel = knownChannels.find(channel => channel.id === destinationID)
-    const selectedDestination = selectedChannel
-      ? {
-          id: selectedChannel.id,
-          platform: selectedChannel.platform,
-          channelID: selectedChannel.channelID,
-          channelName: selectedChannel.channelName,
-          userID: selectedChannel.userID,
-        }
-      : (gremlin?.communicationDestination?.id === destinationID ? gremlin.communicationDestination : undefined)
+    const selectedDestination = destinationID === 'webchat:current'
+      ? { id: 'webchat:current', platform: 'webchat' as const, channelID: 'current', channelName: 'Web Chat' }
+      : selectedChannel
+        ? {
+            id: selectedChannel.id,
+            platform: selectedChannel.platform,
+            channelID: selectedChannel.channelID,
+            channelName: selectedChannel.channelName,
+            userID: selectedChannel.userID,
+          }
+        : (gremlin?.communicationDestination?.id === destinationID ? gremlin.communicationDestination : undefined)
     let parsedWorkflowInputs: Record<string, string> | undefined
     if (workflowInputValues.trim()) {
       try {
@@ -381,9 +384,7 @@ function EditModal({ gremlin, capabilities, onSave, onClose }: EditModalProps) {
             <label class="field-label">Execution Target</label>
             <label class="field-label">Delivery Destination <span class="automation-optional-label">(optional)</span></label>
             <span class="workflow-field-hint">Choose whether this automation runs a prompt, workflow, skill, or command target</span>
-            <span class="workflow-field-hint">
-              {knownChannels.length > 0 ? 'Channel that receives results after each run' : 'No channels found — configure Telegram or Discord first'}
-            </span>
+            <span class="workflow-field-hint">Where results are delivered after each run</span>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <select class="field-input" value={targetType} onChange={(e) => setTargetType((e.target as HTMLSelectElement).value)}>
                 <option value="command">Prompt / command</option>
@@ -410,18 +411,15 @@ function EditModal({ gremlin, capabilities, onSave, onClose }: EditModalProps) {
                 <input class="field-input" value={targetRef} onInput={(e) => setTargetRef((e.target as HTMLInputElement).value)} placeholder="Optional command ref, or leave blank for prompt-only" />
               )}
             </div>
-            {knownChannels.length > 0 ? (
-              <select class="field-input" value={destinationID} onChange={(e) => setDestinationID((e.target as HTMLSelectElement).value)}>
-                <option value="">— None —</option>
-                {knownChannels.map(channel => (
-                  <option key={channel.id} value={channel.id}>
-                    {channel.platform} · {channel.channelName ?? channel.channelID}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input class="field-input" value="" disabled placeholder="No channels discovered yet" />
-            )}
+            <select class="field-input" value={destinationID} onChange={(e) => setDestinationID((e.target as HTMLSelectElement).value)}>
+              <option value="">— None —</option>
+              <option value="webchat:current">Web Chat</option>
+              {knownChannels.map(channel => (
+                <option key={channel.id} value={channel.id}>
+                  {channel.platform} · {channel.channelName ?? channel.channelID}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Workflow Inputs JSON */}

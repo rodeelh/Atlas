@@ -56,6 +56,10 @@ type MessageResponse struct {
 		Status           string `json:"status"`
 		ErrorMessage     string `json:"errorMessage,omitempty"`
 	} `json:"response"`
+	// GeneratedFiles holds absolute local file paths produced during this turn.
+	// Populated from tool artifacts and FinalText scanning; used by bridges
+	// (Telegram, Discord) to send files natively without relying on text parsing.
+	GeneratedFiles []string `json:"generatedFiles,omitempty"`
 }
 
 // MessageItem is a single message in a conversation.
@@ -213,6 +217,10 @@ func (be *broadcasterEmitter) Emit(convID string, e agent.EmitEvent) {
 		Arguments:      e.Arguments,
 		Error:          e.Error,
 		Status:         e.Status,
+		Filename:       e.Filename,
+		MimeType:       e.MimeType,
+		FileSize:       e.FileSize,
+		FileToken:      e.FileToken,
 	})
 }
 
@@ -737,6 +745,11 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 		sb.WriteString(capabilityPolicyBlock)
 		sb.WriteString("\n</capability_policy>")
 	}
+
+	sb.WriteString("\n\n<tool_rules>\n")
+	sb.WriteString("- To save content as a PDF file, always call fs.create_pdf. Never use fs.write_file with a .pdf path.\n")
+	sb.WriteString("- To save content as a Word document, always call fs.create_docx. Never use fs.write_file with a .docx path.\n")
+	sb.WriteString("</tool_rules>")
 
 	// ── Volatile suffix (changes per-turn, busts cache from here) ──────────
 
@@ -1677,6 +1690,41 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		// if no scheduler has been registered (tests, dormant config).
 		mind.NotifyTurnNonBlocking()
 
+		// Collect all generated files for this turn: start from what the loop
+		// already tracked (tool artifacts + tool summaries), then scan FinalText
+		// for any additional paths the model mentioned in its narrative.
+		generatedFiles := append([]string(nil), result.GeneratedFiles...)
+		emittedSet := map[string]bool{}
+		for _, p := range generatedFiles {
+			emittedSet[p] = true
+		}
+		if result.FinalText != "" {
+			for _, filePath := range agent.ExtractPathsFromText(result.FinalText) {
+				if emittedSet[filePath] {
+					continue
+				}
+				emittedSet[filePath] = true
+				token := agent.RegisterArtifact(filePath)
+				if token == "" {
+					continue
+				}
+				info, statErr := os.Stat(filePath)
+				var size int64
+				if statErr == nil {
+					size = info.Size()
+				}
+				s.broadcaster.Emit(convID, SSEEvent{
+					Type:           "file_generated",
+					ConversationID: convID,
+					Filename:       filepath.Base(filePath),
+					MimeType:       agent.MimeTypeForPath(filePath),
+					FileSize:       size,
+					FileToken:      token,
+				})
+				generatedFiles = append(generatedFiles, filePath)
+			}
+		}
+
 		// Emit done event with status="completed" so the web UI can trigger
 		// post-turn work (e.g. link preview fetching) gated on this status.
 		s.broadcaster.Emit(convID, SSEEvent{
@@ -1706,6 +1754,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		resp.Conversation.Messages = allMessages
 		resp.Response.AssistantMessage = assistantText
 		resp.Response.Status = "complete"
+		resp.GeneratedFiles = generatedFiles
 		return resp, nil
 	}
 }
@@ -2039,4 +2088,30 @@ func (s *Service) recordTokenUsage(convID string, provider agent.ProviderConfig,
 	); err != nil {
 		logstore.Write("warn", "token usage: failed to persist: "+err.Error(), nil)
 	}
+}
+
+// InjectAssistantMessage delivers text as an assistant message into the web
+// chat UI without running the agent loop. It persists the message to the most
+// recent conversation and emits SSE events so live clients receive it instantly.
+// Used by automations and workflows to deliver results to the web chat target.
+func (s *Service) InjectAssistantMessage(text string) error {
+	convs, err := s.db.ListConversationSummaries(1)
+	if err != nil {
+		return fmt.Errorf("webchat inject: list conversations: %w", err)
+	}
+	if len(convs) == 0 {
+		return fmt.Errorf("webchat inject: no conversations exist yet")
+	}
+	convID := convs[0].ID
+	msgID := newUUID()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := s.db.SaveMessage(msgID, convID, "assistant", text, now); err != nil {
+		return fmt.Errorf("webchat inject: save message: %w", err)
+	}
+	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_started", Role: "assistant", ConversationID: convID})
+	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_delta", Content: text, Role: "assistant", ConversationID: convID})
+	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_done", Role: "assistant", ConversationID: convID})
+	s.broadcaster.Emit(convID, SSEEvent{Type: "done", Status: "completed", ConversationID: convID})
+	logstore.Write("info", "Webchat inject: delivered automation result", map[string]string{"conv": convID[:8]})
+	return nil
 }

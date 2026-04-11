@@ -43,7 +43,8 @@ type BridgeRequest struct {
 }
 
 // ChatHandler is the function type used by bridges to route messages to Atlas.
-type ChatHandler func(ctx context.Context, req BridgeRequest) (string, string, error)
+// Returns: reply text, generated file paths (absolute local paths), conversation ID, error.
+type ChatHandler func(ctx context.Context, req BridgeRequest) (string, []string, string, error)
 
 type AutomationDestination struct {
 	Platform  string
@@ -115,11 +116,22 @@ type Service struct {
 	discBridge       *discord.Bridge
 	slackBridge      *slack.Bridge
 	waBridge         *whatsapp.Bridge
+
+	// webchatSender delivers text directly into the web chat UI by injecting
+	// it as an assistant message into the most recent conversation.
+	// Set via SetWebChatSender before calling SendAutomationResult.
+	webchatSender func(text string) error
 }
 
 // New creates a new communications Service.
 func New(cfgStore *config.Store, db *storage.DB) *Service {
 	return &Service{cfgStore: cfgStore, db: db}
+}
+
+// SetWebChatSender wires the function used to deliver automation output to
+// the web chat UI. Must be called before automations begin executing.
+func (s *Service) SetWebChatSender(fn func(text string) error) {
+	s.webchatSender = fn
 }
 
 // SetChatHandler sets the handler function used by bridges to route messages to Atlas.
@@ -162,7 +174,7 @@ func (s *Service) startBridges(cfg config.RuntimeConfigSnapshot, bundle credBund
 
 	if cfg.TelegramEnabled && strVal(bundle.TelegramBotToken) != "" && s.tgBridge == nil {
 		h := s.handler
-		tgHandler := telegram.ChatHandler(func(ctx context.Context, req telegram.BridgeRequest) (string, string, error) {
+		tgHandler := telegram.ChatHandler(func(ctx context.Context, req telegram.BridgeRequest) (string, []string, string, error) {
 			ba := make([]BridgeAttachment, len(req.Attachments))
 			for i, a := range req.Attachments {
 				ba[i] = BridgeAttachment{Filename: a.Filename, MimeType: a.MimeType, Data: a.Data}
@@ -182,7 +194,7 @@ func (s *Service) startBridges(cfg config.RuntimeConfigSnapshot, bundle credBund
 
 	if cfg.DiscordEnabled && strVal(bundle.DiscordBotToken) != "" && s.discBridge == nil {
 		h := s.handler
-		discHandler := discord.ChatHandler(func(ctx context.Context, req discord.BridgeRequest) (string, string, error) {
+		discHandler := discord.ChatHandler(func(ctx context.Context, req discord.BridgeRequest) (string, []string, string, error) {
 			ba := make([]BridgeAttachment, len(req.Attachments))
 			for i, a := range req.Attachments {
 				ba[i] = BridgeAttachment{Filename: a.Filename, MimeType: a.MimeType, Data: a.Data}
@@ -204,7 +216,8 @@ func (s *Service) startBridges(cfg config.RuntimeConfigSnapshot, bundle credBund
 			for i, a := range req.Attachments {
 				ba[i] = BridgeAttachment{Filename: a.Filename, MimeType: a.MimeType, Data: a.Data}
 			}
-			return h(ctx, BridgeRequest{Text: req.Text, ConvID: req.ConvID, Platform: req.Platform, Attachments: ba})
+			text, _, convID, err := h(ctx, BridgeRequest{Text: req.Text, ConvID: req.ConvID, Platform: req.Platform, Attachments: ba})
+			return text, convID, err
 		})
 		b := slack.New(strVal(bundle.SlackBotToken), strVal(bundle.SlackAppToken), s.db, cfgFn, slackHandler)
 		s.slackBridge = b
@@ -214,7 +227,8 @@ func (s *Service) startBridges(cfg config.RuntimeConfigSnapshot, bundle credBund
 		h := s.handler
 		storeDSN := "file:" + filepath.Join(config.SupportDir(), "whatsapp_auth.db") + "?_pragma=foreign_keys(ON)&_foreign_keys=on"
 		b := whatsapp.New(storeDSN, s.db, func(ctx context.Context, req whatsapp.BridgeRequest) (string, string, error) {
-			return h(ctx, BridgeRequest{Text: req.Text, ConvID: req.ConvID, Platform: req.Platform})
+			text, _, convID, err := h(ctx, BridgeRequest{Text: req.Text, ConvID: req.ConvID, Platform: req.Platform})
+			return text, convID, err
 		})
 		s.waBridge = b
 		b.Start()
@@ -823,6 +837,11 @@ func (s *Service) SendAutomationResult(ctx context.Context, dest AutomationDesti
 	s.mu.RUnlock()
 
 	switch platform {
+	case "webchat":
+		if s.webchatSender == nil {
+			return fmt.Errorf("webchat sender is not configured")
+		}
+		return s.webchatSender(content)
 	case "telegram":
 		if tg == nil {
 			return fmt.Errorf("telegram bridge is not running")

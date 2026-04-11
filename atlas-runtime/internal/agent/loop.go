@@ -39,6 +39,12 @@ type EmitEvent struct {
 	Arguments  string
 	Error      string
 	Status     string
+
+	// file_generated fields — set when a tool produces a local file artifact.
+	Filename  string
+	MimeType  string
+	FileSize  int64
+	FileToken string
 }
 
 // OAIMessage is an OpenAI chat message.
@@ -101,6 +107,7 @@ type RunResult struct {
 	StreamChars         int
 	ToolCallSummaries   []string // tool names called during this turn (all iterations)
 	ToolResultSummaries []string // short result summaries, one per tool call
+	GeneratedFiles      []string // absolute local file paths emitted as file_generated events
 }
 
 // requestToolsName is the internal action ID for the lazy-mode meta-tool.
@@ -288,6 +295,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		streamChars        int
 		allToolSummaries   []string
 		allResultSummaries []string
+		allGeneratedFiles  []string
 		toolUpgradeStage   int  // lazy mode: 0 meta only, 1 short list, 2 broad/category list
 		compacted          bool // overflow recovery: compact at most once per turn
 	)
@@ -339,6 +347,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 				StreamChars:         streamChars,
 				ToolCallSummaries:   allToolSummaries,
 				ToolResultSummaries: allResultSummaries,
+				GeneratedFiles:      allGeneratedFiles,
 			}
 		}
 
@@ -548,6 +557,39 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 					ToolCallID: tc.ID,
 					ConvID:     convID,
 				})
+				// Emit file_generated for each local file artifact produced by the tool.
+				// Scan both structured Artifacts map and the free-text Summary so that
+				// skills which only describe the output path in their summary are covered.
+				emittedPaths := map[string]bool{}
+				allToolPaths := append(
+					ExtractArtifactPaths(r.result.Artifacts),
+					ExtractPathsFromText(r.result.Summary)...,
+				)
+				for _, filePath := range allToolPaths {
+					if emittedPaths[filePath] {
+						continue
+					}
+					emittedPaths[filePath] = true
+					token := RegisterArtifact(filePath)
+					if token == "" {
+						continue
+					}
+					info, err := os.Stat(filePath)
+					var size int64
+					if err == nil {
+						size = info.Size()
+					}
+					l.BC.Emit(convID, EmitEvent{
+						Type:      "file_generated",
+						ConvID:    convID,
+						ToolName:  tc.Function.Name,
+						Filename:  filepath.Base(filePath),
+						MimeType:  MimeTypeForPath(filePath),
+						FileSize:  size,
+						FileToken: token,
+					})
+					allGeneratedFiles = append(allGeneratedFiles, filePath)
+				}
 				messages = append(messages, OAIMessage{
 					Role:       "tool",
 					Content:    buildToolContent(cfg.Provider, r.result.FormatForModel()),
@@ -568,6 +610,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		StreamChars:         streamChars,
 		ToolCallSummaries:   allToolSummaries,
 		ToolResultSummaries: allResultSummaries,
+		GeneratedFiles:      allGeneratedFiles,
 	}
 }
 

@@ -649,7 +649,9 @@ func forgeValidatePlanHostnames(plans []forgetypes.ForgeActionPlan, contractBase
 	}
 	cu, err := url.Parse(contractBaseURL)
 	if err != nil || cu.Hostname() == "" {
-		return ""
+		return fmt.Sprintf(
+			"Forge refused: contract baseURL %q is not a valid URL with a hostname — hostname matching cannot be performed.",
+			contractBaseURL)
 	}
 	contractBase := baseDomain(strings.ToLower(cu.Hostname()))
 

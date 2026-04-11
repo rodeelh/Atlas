@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"atlas-runtime-go/internal/agent"
 	"atlas-runtime-go/internal/chat"
 	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/features"
@@ -77,6 +79,9 @@ func (d *ChatDomain) Register(r chi.Router) {
 
 	// DIARY.md — read-only; written exclusively by the dream cycle.
 	r.Get("/diary", d.getDiary)
+
+	// Artifact file download — token redeemable once, served inline or as attachment.
+	r.Get("/artifacts/{token}", d.getArtifact)
 
 	// Mind-thoughts greeting flow (phase 5). The web client calls
 	// POST /chat/greeting on chat-open to drain any queued acted-on
@@ -610,6 +615,53 @@ func (d *ChatDomain) getMemoryTags(w http.ResponseWriter, r *http.Request) {
 		tags = []string{}
 	}
 	writeJSON(w, http.StatusOK, tags)
+}
+
+// ── Artifact file download ──────────────────────────────────────────────────
+
+// getArtifact resolves a download token to a local file path and serves the
+// file inline (images) or as an attachment (everything else). The token is
+// registered by the agent loop whenever a tool produces a file artifact.
+func (d *ChatDomain) getArtifact(w http.ResponseWriter, r *http.Request) {
+	token := chi.URLParam(r, "token")
+	if token == "" {
+		writeError(w, http.StatusBadRequest, "Missing artifact token.")
+		return
+	}
+
+	path, ok := agent.ResolveArtifact(token)
+	if !ok {
+		writeError(w, http.StatusNotFound, "Artifact not found or token expired.")
+		return
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "Artifact file not found on disk.")
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Could not stat artifact file.")
+		return
+	}
+
+	mimeType := agent.MimeTypeForPath(path)
+	filename := info.Name()
+
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
+	// Serve images inline so the browser can preview; everything else as attachment.
+	if strings.HasPrefix(mimeType, "image/") {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, filename))
+	} else {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	}
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+
+	http.ServeContent(w, r, filename, info.ModTime(), f)
 }
 
 // ── DIARY.md ──────────────────────────────────────────────────────────────────

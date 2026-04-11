@@ -176,7 +176,7 @@ func builtInSkills() []SkillRecord {
 				{ID: "fs.write_binary_file", Name: "Write Binary File", Description: "Create or overwrite a binary file from base64 data.", PermissionLevel: "draft", IsEnabled: true},
 				{ID: "fs.patch_file", Name: "Patch File", Description: "Apply a unified diff patch to a file.", PermissionLevel: "draft", IsEnabled: true},
 				{ID: "fs.create_directory", Name: "Create Directory", Description: "Create a directory.", PermissionLevel: "draft", IsEnabled: true},
-				{ID: "fs.create_pdf", Name: "Create PDF", Description: "Create a PDF document from text content.", PermissionLevel: "draft", IsEnabled: true},
+				{ID: "fs.create_pdf", Name: "Create PDF", Description: "Create a PDF file from text content. Use this for any PDF output — never write_file.", PermissionLevel: "draft", IsEnabled: true},
 				{ID: "fs.create_docx", Name: "Create DOCX", Description: "Create a DOCX document from text content.", PermissionLevel: "draft", IsEnabled: true},
 				{ID: "fs.create_zip", Name: "Create ZIP", Description: "Create a ZIP archive from files or folders.", PermissionLevel: "draft", IsEnabled: true},
 				{ID: "fs.save_image", Name: "Save Image", Description: "Save a PNG, JPEG, or GIF image from base64 data.", PermissionLevel: "draft", IsEnabled: true},

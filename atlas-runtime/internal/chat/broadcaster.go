@@ -22,6 +22,13 @@ type SSEEvent struct {
 	ApprovalID     string `json:"approvalID,omitempty"`
 	ToolCallID     string `json:"toolCallID,omitempty"`
 	Arguments      string `json:"arguments,omitempty"`
+
+	// file_generated — emitted when a tool produces a local file artifact.
+	// FileToken is a short-lived random token redeemable at GET /artifacts/{token}.
+	Filename  string `json:"filename,omitempty"`
+	MimeType  string `json:"mimeType,omitempty"`
+	FileSize  int64  `json:"fileSize,omitempty"`
+	FileToken string `json:"fileToken,omitempty"`
 }
 
 // Encoded returns the event serialised as an SSE data line.
