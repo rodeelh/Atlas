@@ -110,6 +110,7 @@ export function Skills() {
   const [acting, setActing] = useState<Set<string>>(new Set())
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [policies, setPolicies] = useState<Record<string, string>>({})
+  const [bulkActing, setBulkActing] = useState<Set<string>>(new Set())
 
   // Custom skill install state
   const [customInstalling, setCustomInstalling] = useState(false)
@@ -213,6 +214,28 @@ export function Skills() {
     }
   }
 
+  // Apply one policy to all actions of a skill (or a flat list of action IDs).
+  const bulkChangePolicy = async (scopeKey: string, actionIDs: string[], policy: string) => {
+    if (!actionIDs.length) return
+    setBulkActing(prev => new Set(prev).add(scopeKey))
+    // Optimistic update
+    setPolicies(prev => {
+      const next = { ...prev }
+      actionIDs.forEach(id => { next[id] = policy })
+      return next
+    })
+    try {
+      await Promise.all(actionIDs.map(id => api.setActionPolicy(id, policy)))
+      const updated = await api.actionPolicies()
+      setPolicies(updated)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update policies.')
+      await loadSkills()
+    } finally {
+      setBulkActing(prev => { const s = new Set(prev); s.delete(scopeKey); return s })
+    }
+  }
+
   const validate = async (id: string) => {
     setActing(prev => new Set(prev).add(`v:${id}`))
     try {
@@ -312,21 +335,28 @@ export function Skills() {
                 <div class="skill-actions-list">
                   <div class="skill-actions-toolbar">
                     <span>Actions</span>
-                    <span>{skill.actions.length} available</span>
-                  </div>
-                  {(targetLabel || artifactTypes.length > 0 || requiredRoots.length > 0 || requiredCapabilities.length > 0) && (
-                    <div class="skill-action-row">
-                      <div class="skill-action-copy">
-                        <div class="skill-action-heading">
-                          <span class="skill-action-name">Capability Contract</span>
-                        </div>
-                        {targetLabel && <div class="skill-action-desc"><strong>Target:</strong> {targetLabel}</div>}
-                        {artifactTypes.length > 0 && <div class="skill-action-desc"><strong>Artifacts:</strong> {artifactTypes.join(', ')}</div>}
-                        {requiredCapabilities.length > 0 && <div class="skill-action-desc"><strong>Depends on:</strong> {requiredCapabilities.join(', ')}</div>}
-                        {requiredRoots.length > 0 && <div class="skill-action-desc"><strong>Prerequisites:</strong> {requiredRoots.join(', ')}</div>}
+                    <div class="skill-bulk-controls">
+                      <span class="skill-bulk-label">{skill.actions.length} available</span>
+                      <div class="skill-bulk-picker">
+                        <span class="skill-bulk-set-label">Set all:</span>
+                        <select
+                          class="policy-select"
+                          disabled={bulkActing.has(id)}
+                          value=""
+                          onChange={e => {
+                            const val = (e.target as HTMLSelectElement).value
+                            if (!val) return
+                            ;(e.target as HTMLSelectElement).value = ''
+                            bulkChangePolicy(id, skill.actions.map(a => a.id), val)
+                          }}
+                        >
+                          <option value="" disabled>Choose…</option>
+                          {Object.entries(POLICY_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
+                        </select>
+                        {bulkActing.has(id) && <span class="spinner" style={{ width: '11px', height: '11px' }} />}
                       </div>
                     </div>
-                  )}
+                  </div>
                   {skill.actions.map(action => (
                     <div class="skill-action-row" key={action.id}>
                       <div class="skill-action-copy">
@@ -345,6 +375,19 @@ export function Skills() {
                       </div>
                     </div>
                   ))}
+                  {(targetLabel || artifactTypes.length > 0 || requiredRoots.length > 0 || requiredCapabilities.length > 0) && (
+                    <div class="skill-action-row">
+                      <div class="skill-action-copy">
+                        <div class="skill-action-heading">
+                          <span class="skill-action-name">Capability Contract</span>
+                        </div>
+                        {targetLabel && <div class="skill-action-desc"><strong>Target:</strong> {targetLabel}</div>}
+                        {artifactTypes.length > 0 && <div class="skill-action-desc"><strong>Artifacts:</strong> {artifactTypes.join(', ')}</div>}
+                        {requiredCapabilities.length > 0 && <div class="skill-action-desc"><strong>Depends on:</strong> {requiredCapabilities.join(', ')}</div>}
+                        {requiredRoots.length > 0 && <div class="skill-action-desc"><strong>Prerequisites:</strong> {requiredRoots.join(', ')}</div>}
+                      </div>
+                    </div>
+                  )}
                   {id === 'file-system' && (
                     <div class="skill-fs-roots">
                       <div class="skill-actions-toolbar"><span>Approved Folders</span></div>
