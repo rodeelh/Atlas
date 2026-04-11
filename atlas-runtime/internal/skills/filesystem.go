@@ -201,18 +201,6 @@ func (r *Registry) registerFilesystem() {
 
 	r.register(SkillEntry{
 		Def: ToolDef{
-			Name:        "fs.ensure_pdf_engine",
-			Description: "Installs pandoc and typst via Homebrew so that fs.create_pdf can produce richly formatted PDFs from Markdown. Call this when the user wants better PDF output and pandoc is not yet installed.",
-			Properties:  map[string]ToolParam{},
-		},
-		PermLevel: "execute",
-		Fn: func(ctx context.Context, args json.RawMessage) (string, error) {
-			return fsEnsurePDFEngine(ctx, args)
-		},
-	})
-
-	r.register(SkillEntry{
-		Def: ToolDef{
 			Name:        "fs.create_docx",
 			Description: "Creates a DOCX document from text content. Requires an approved root.",
 			Properties: map[string]ToolParam{
@@ -827,36 +815,11 @@ func fsCreatePDF(_ context.Context, args json.RawMessage, supportDir string) (st
 
 	msg := fmt.Sprintf("Created PDF %s (%d bytes, renderer: %s)", p.Path, len(data), renderer)
 	if pandocErr != nil {
-		msg += ". Note: pandoc not found — call fs.ensure_pdf_engine to install pandoc+typst for rich Markdown layout."
+		msg += ". Note: pandoc not found — call terminal.brew_install with packages=[\"pandoc\",\"typst\"] for rich Markdown layout."
 	} else if engine == "" {
-		msg += ". Note: no PDF engine found — call fs.ensure_pdf_engine to install typst."
+		msg += ". Note: no PDF engine found — call terminal.brew_install with packages=[\"typst\"] to enable pandoc rendering."
 	}
 	return msg, nil
-}
-
-// fsEnsurePDFEngine installs pandoc and typst via Homebrew so that fs.create_pdf
-// can use rich Markdown-to-PDF rendering on subsequent calls.
-func fsEnsurePDFEngine(_ context.Context, _ json.RawMessage) (string, error) {
-	brewPath, err := exec.LookPath("brew")
-	if err != nil {
-		return "", fmt.Errorf("Homebrew not found — install it from https://brew.sh then retry")
-	}
-
-	var results []string
-	for _, pkg := range []string{"pandoc", "typst"} {
-		if _, err := exec.LookPath(pkg); err == nil {
-			results = append(results, pkg+" already installed")
-			continue
-		}
-		cmd := exec.Command(brewPath, "install", pkg)
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			return "", fmt.Errorf("brew install %s failed: %w — %s", pkg, err, strings.TrimSpace(stderr.String()))
-		}
-		results = append(results, "installed "+pkg)
-	}
-	return "PDF engine ready: " + strings.Join(results, ", ") + ". fs.create_pdf will now use pandoc+typst.", nil
 }
 
 // buildPDFWithPandoc renders Markdown content to PDF via pandoc + a PDF engine.

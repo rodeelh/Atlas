@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func (r *Registry) registerTerminal() {
@@ -143,9 +144,105 @@ func (r *Registry) registerTerminal() {
 	})
 }
 
+func (r *Registry) registerPackageManagers() {
+	// ── Homebrew ─────────────────────────────────────────────────────────────
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "terminal.brew_install",
+			Description: "Install one or more Homebrew formulae or casks. Always requires user approval. Use cask=true for GUI applications.",
+			Properties: map[string]ToolParam{
+				"packages": {Description: "Package names to install", Type: "array", Items: &ToolParam{Type: "string"}},
+				"cask":     {Description: "Install as a Homebrew cask (GUI apps, fonts, etc.)", Type: "boolean"},
+			},
+			Required: []string{"packages"},
+		},
+		PermLevel:   "execute",
+		ActionClass: ActionClassExternalSideEffect,
+		Fn:          terminalBrewInstall,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "terminal.brew_uninstall",
+			Description: "Uninstall one or more Homebrew formulae or casks. Always requires user approval.",
+			Properties: map[string]ToolParam{
+				"packages": {Description: "Package names to uninstall", Type: "array", Items: &ToolParam{Type: "string"}},
+				"cask":     {Description: "Uninstall casks instead of formulae", Type: "boolean"},
+			},
+			Required: []string{"packages"},
+		},
+		PermLevel:   "execute",
+		ActionClass: ActionClassExternalSideEffect,
+		Fn:          terminalBrewUninstall,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "terminal.brew_upgrade",
+			Description: "Upgrade Homebrew formulae or casks to their latest versions. Pass an empty packages list to upgrade everything. Always requires user approval.",
+			Properties: map[string]ToolParam{
+				"packages": {Description: "Specific package names to upgrade, or empty to upgrade all", Type: "array", Items: &ToolParam{Type: "string"}},
+				"cask":     {Description: "Upgrade casks instead of formulae", Type: "boolean"},
+			},
+			Required: []string{},
+		},
+		PermLevel:   "execute",
+		ActionClass: ActionClassExternalSideEffect,
+		Fn:          terminalBrewUpgrade,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "terminal.brew_info",
+			Description: "Get information about a Homebrew formula or cask — version, dependencies, install status.",
+			Properties: map[string]ToolParam{
+				"package": {Description: "Formula or cask name", Type: "string"},
+			},
+			Required: []string{"package"},
+		},
+		PermLevel: "read",
+		Fn:        terminalBrewInfo,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "terminal.brew_list",
+			Description: "List installed Homebrew formulae or casks, optionally filtered by name.",
+			Properties: map[string]ToolParam{
+				"filter": {Description: "Optional substring to filter results", Type: "string"},
+				"cask":   {Description: "List installed casks instead of formulae", Type: "boolean"},
+			},
+			Required: []string{},
+		},
+		PermLevel: "read",
+		Fn:        terminalBrewList,
+	})
+
+	// ── pip ──────────────────────────────────────────────────────────────────
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "terminal.pip_install",
+			Description: "Install Python packages via pip3. Always requires user approval. Optionally upgrade existing packages.",
+			Properties: map[string]ToolParam{
+				"packages": {Description: "Package names to install (e.g. ['weasyprint', 'requests'])", Type: "array", Items: &ToolParam{Type: "string"}},
+				"upgrade":  {Description: "Pass --upgrade to update existing packages", Type: "boolean"},
+			},
+			Required: []string{"packages"},
+		},
+		PermLevel:   "execute",
+		ActionClass: ActionClassExternalSideEffect,
+		Fn:          terminalPipInstall,
+	})
+}
+
 // ── constants & helpers ───────────────────────────────────────────────────────
 
 const terminalMaxOutput = 8 * 1024 // 8 KB
+
+// pkgInstallTimeout allows brew/pip installs to take up to 10 minutes.
+const pkgInstallTimeout = 10 * time.Minute
 
 // terminalBlocklist contains bare binary names that are blocked in run_command.
 // run_script requires explicit user approval on every call, so it is not blocked here.
@@ -442,4 +539,173 @@ func terminalWhich(ctx context.Context, args json.RawMessage) (string, error) {
 		return "command not found: " + p.Command, nil
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// ── package manager handlers ──────────────────────────────────────────────────
+
+func terminalBrewInstall(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		Packages []string `json:"packages"`
+		Cask     bool     `json:"cask"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || len(p.Packages) == 0 {
+		return "", fmt.Errorf("packages is required")
+	}
+	brewPath, err := exec.LookPath("brew")
+	if err != nil {
+		return "", fmt.Errorf("Homebrew not found — install it from https://brew.sh first")
+	}
+	cmdArgs := []string{"install"}
+	if p.Cask {
+		cmdArgs = append(cmdArgs, "--cask")
+	}
+	cmdArgs = append(cmdArgs, p.Packages...)
+	ctx, cancel := context.WithTimeout(ctx, pkgInstallTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, brewPath, cmdArgs...)
+	out, err := cmd.CombinedOutput()
+	result := terminalTruncate(strings.TrimSpace(string(out)))
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return fmt.Sprintf("[exit %d]\n%s", exitErr.ExitCode(), result), nil
+		}
+		return "", fmt.Errorf("brew install: %w", err)
+	}
+	return result, nil
+}
+
+func terminalBrewUninstall(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		Packages []string `json:"packages"`
+		Cask     bool     `json:"cask"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || len(p.Packages) == 0 {
+		return "", fmt.Errorf("packages is required")
+	}
+	brewPath, err := exec.LookPath("brew")
+	if err != nil {
+		return "", fmt.Errorf("Homebrew not found")
+	}
+	cmdArgs := []string{"uninstall"}
+	if p.Cask {
+		cmdArgs = append(cmdArgs, "--cask")
+	}
+	cmdArgs = append(cmdArgs, p.Packages...)
+	ctx, cancel := context.WithTimeout(ctx, pkgInstallTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, brewPath, cmdArgs...)
+	out, err := cmd.CombinedOutput()
+	result := terminalTruncate(strings.TrimSpace(string(out)))
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return fmt.Sprintf("[exit %d]\n%s", exitErr.ExitCode(), result), nil
+		}
+		return "", fmt.Errorf("brew uninstall: %w", err)
+	}
+	return result, nil
+}
+
+func terminalBrewUpgrade(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		Packages []string `json:"packages"`
+		Cask     bool     `json:"cask"`
+	}
+	json.Unmarshal(args, &p) //nolint:errcheck
+	brewPath, err := exec.LookPath("brew")
+	if err != nil {
+		return "", fmt.Errorf("Homebrew not found")
+	}
+	cmdArgs := []string{"upgrade"}
+	if p.Cask {
+		cmdArgs = append(cmdArgs, "--cask")
+	}
+	cmdArgs = append(cmdArgs, p.Packages...)
+	ctx, cancel := context.WithTimeout(ctx, pkgInstallTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, brewPath, cmdArgs...)
+	out, err := cmd.CombinedOutput()
+	result := terminalTruncate(strings.TrimSpace(string(out)))
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return fmt.Sprintf("[exit %d]\n%s", exitErr.ExitCode(), result), nil
+		}
+		return "", fmt.Errorf("brew upgrade: %w", err)
+	}
+	return result, nil
+}
+
+func terminalBrewInfo(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		Package string `json:"package"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || p.Package == "" {
+		return "", fmt.Errorf("package is required")
+	}
+	out, err := runCmd(ctx, "brew", "info", p.Package)
+	if err != nil {
+		return fmt.Sprintf("package not found: %s", p.Package), nil
+	}
+	return terminalTruncate(strings.TrimSpace(out)), nil
+}
+
+func terminalBrewList(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		Filter string `json:"filter"`
+		Cask   bool   `json:"cask"`
+	}
+	json.Unmarshal(args, &p) //nolint:errcheck
+	brewArgs := []string{"list"}
+	if p.Cask {
+		brewArgs = append(brewArgs, "--cask")
+	}
+	out, err := runCmd(ctx, "brew", brewArgs...)
+	if err != nil {
+		return "", fmt.Errorf("brew list: %w", err)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if p.Filter != "" {
+		filter := strings.ToLower(p.Filter)
+		var filtered []string
+		for _, l := range lines {
+			if strings.Contains(strings.ToLower(l), filter) {
+				filtered = append(filtered, l)
+			}
+		}
+		lines = filtered
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func terminalPipInstall(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		Packages []string `json:"packages"`
+		Upgrade  bool     `json:"upgrade"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || len(p.Packages) == 0 {
+		return "", fmt.Errorf("packages is required")
+	}
+	pipPath, err := exec.LookPath("pip3")
+	if err != nil {
+		pipPath, err = exec.LookPath("pip")
+		if err != nil {
+			return "", fmt.Errorf("pip3/pip not found — install Python 3 first")
+		}
+	}
+	cmdArgs := []string{"install"}
+	if p.Upgrade {
+		cmdArgs = append(cmdArgs, "--upgrade")
+	}
+	cmdArgs = append(cmdArgs, p.Packages...)
+	ctx, cancel := context.WithTimeout(ctx, pkgInstallTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, pipPath, cmdArgs...)
+	out, err := cmd.CombinedOutput()
+	result := terminalTruncate(strings.TrimSpace(string(out)))
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return fmt.Sprintf("[exit %d]\n%s", exitErr.ExitCode(), result), nil
+		}
+		return "", fmt.Errorf("pip install: %w", err)
+	}
+	return result, nil
 }
