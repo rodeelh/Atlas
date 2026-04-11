@@ -249,9 +249,6 @@ export function Settings() {
               setError(err instanceof Error ? err.message : 'Failed to update Tailscale setting.')
             }
           }}
-          onRestart={restartAtlas}
-          restarting={restartPhase === 'restarting'}
-          canRestartLocally={canRestartLocally}
         />
       </SettingsGroup>
 
@@ -304,6 +301,20 @@ export function Settings() {
               {storageCleaning ? 'Clearing…' : 'Clear all'}
             </button>
           </div>
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup title="System">
+        <SettingsRow
+          label="Restart Atlas"
+          sublabel={canRestartLocally
+            ? 'Gracefully restart the Atlas daemon and reconnect this page automatically.'
+            : 'Restart is only available from a local Atlas session on this Mac.'}
+          mobileSplit
+        >
+          <button class="btn btn-sm" onClick={restartAtlas} disabled={restartPhase === 'restarting' || !canRestartLocally}>
+            {restartPhase === 'restarting' ? 'Restarting…' : 'Restart Atlas'}
+          </button>
         </SettingsRow>
       </SettingsGroup>
     </div>
@@ -432,17 +443,11 @@ function RemoteAccessSection({
   tailscaleEnabled,
   onToggle,
   onTailscaleToggle,
-  onRestart,
-  restarting,
-  canRestartLocally,
 }: {
   enabled: boolean
   tailscaleEnabled: boolean
   onToggle: (v: boolean) => void
   onTailscaleToggle: (v: boolean) => void
-  onRestart: () => void
-  restarting: boolean
-  canRestartLocally: boolean
 }) {
   const [status, setStatus] = useState<{
     lanIP: string | null
@@ -600,17 +605,6 @@ function RemoteAccessSection({
           )}
         </SettingsRow>
       )}
-      <SettingsRow
-        label="Restart Atlas"
-        sublabel={canRestartLocally
-          ? 'Gracefully restart the Atlas daemon and reconnect this page automatically.'
-          : 'Restart is only available from a local Atlas session on this Mac.'}
-        mobileSplit
-      >
-        <button class="btn btn-sm" onClick={onRestart} disabled={restarting || !canRestartLocally}>
-          {restarting ? 'Restarting…' : 'Restart Atlas'}
-        </button>
-      </SettingsRow>
     </>
   )
 }
