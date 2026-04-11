@@ -50,6 +50,7 @@ import type {
   VoiceStatus,
   VoiceModelInfo,
   VoiceTranscribeResult,
+  StorageStats,
 } from './contracts'
 
 export type {
@@ -103,6 +104,7 @@ export type {
   VoiceStatus,
   VoiceModelInfo,
   VoiceTranscribeResult,
+  StorageStats,
 } from './contracts'
 
 export function getPort(): string {
@@ -295,6 +297,10 @@ export const api = {
   ),
   cloudModelHealth: (provider: string, model: string) =>
     get<CloudModelHealth>('/providers/cloud/model-health', { provider, model, _t: Date.now() }),
+
+  // Storage
+  getStorageStats: () => get<StorageStats>('/storage/stats'),
+  clearStorageFiles: () => del<void>('/storage/files', undefined),
 
   // Communications
   communications: () => get<CommunicationsSnapshot>('/communications'),

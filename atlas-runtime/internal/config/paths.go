@@ -82,3 +82,12 @@ func MLXVenvDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".atlas-mlx")
 }
+
+// FilesDir returns the default directory where Atlas stores files it generates,
+// receives, or sends — unless the user or a skill specifies a different path.
+// Created on first access if it does not exist.
+func FilesDir() string {
+	dir := filepath.Join(SupportDir(), "files")
+	_ = os.MkdirAll(dir, 0o755)
+	return dir
+}

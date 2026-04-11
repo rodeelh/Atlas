@@ -5,7 +5,7 @@ import { PageHeader } from '../components/PageHeader'
 import { PageSpinner } from '../components/PageSpinner'
 import { toast } from '../toast'
 import { ErrorBanner } from '../components/ErrorBanner'
-import type { RuntimeConfigUpdateResponse } from '../api/client'
+import type { RuntimeConfigUpdateResponse, StorageStats } from '../api/client'
 
 type RestartPhase = 'confirm' | 'restarting' | 'done'
 
@@ -24,6 +24,8 @@ export function Settings() {
   const [prefs, setPrefs] = useState<{ temperatureUnit: string; currency: string; unitSystem: string } | null>(null)
   const [restartPhase, setRestartPhase] = useState<RestartPhase | null>(null)
   const [restartStatus, setRestartStatus] = useState('Restarting Atlas…')
+  const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
+  const [storageCleaning, setStorageCleaning] = useState(false)
 
   const canRestartLocally = typeof window !== 'undefined' &&
     (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
@@ -41,6 +43,7 @@ export function Settings() {
           })
           .catch(() => {})
         api.preferences().then(setPrefs).catch(() => {})
+        api.getStorageStats().then(setStorageStats).catch(() => {})
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load config.')
       } finally {
@@ -251,8 +254,53 @@ export function Settings() {
           canRestartLocally={canRestartLocally}
         />
       </SettingsGroup>
+
+      <SettingsGroup title="Local Storage">
+        <SettingsRow label="Files folder" sublabel="Default location for generated, received, and sent files">
+          <span style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--theme-text-secondary)', wordBreak: 'break-all' }}>
+            {storageStats?.dir ?? '—'}
+          </span>
+        </SettingsRow>
+        <SettingsRow label="Storage used" sublabel="Files Atlas has generated or received in this session">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: '13px', color: 'var(--theme-text-secondary)' }}>
+              {storageStats
+                ? `${storageStats.fileCount} file${storageStats.fileCount === 1 ? '' : 's'} · ${formatBytes(storageStats.totalSize)}`
+                : '—'}
+            </span>
+            <button
+              class="btn btn-sm btn-danger"
+              disabled={storageCleaning || !storageStats || storageStats.fileCount === 0}
+              onClick={async () => {
+                if (!storageStats || storageStats.fileCount === 0) return
+                setStorageCleaning(true)
+                try {
+                  await api.clearStorageFiles()
+                  const stats = await api.getStorageStats()
+                  setStorageStats(stats)
+                  toast.success('Storage cleared.')
+                } catch {
+                  toast.error('Failed to clear storage.')
+                } finally {
+                  setStorageCleaning(false)
+                }
+              }}
+            >
+              {storageCleaning ? 'Clearing…' : 'Clear all'}
+            </button>
+          </div>
+        </SettingsRow>
+      </SettingsGroup>
     </div>
   )
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
 async function waitForAtlasRestart(): Promise<boolean> {

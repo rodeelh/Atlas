@@ -868,3 +868,9 @@ export interface DashboardWidgetData {
   sourceKind: string
   durationMs: number
 }
+
+export interface StorageStats {
+  dir: string
+  fileCount: number
+  totalSize: number // bytes
+}

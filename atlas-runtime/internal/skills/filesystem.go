@@ -14,6 +14,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -195,6 +196,18 @@ func (r *Registry) registerFilesystem() {
 		PermLevel: "draft",
 		Fn: func(ctx context.Context, args json.RawMessage) (string, error) {
 			return fsCreatePDF(ctx, args, supportDir)
+		},
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "fs.ensure_pdf_engine",
+			Description: "Installs pandoc and typst via Homebrew so that fs.create_pdf can produce richly formatted PDFs from Markdown. Call this when the user wants better PDF output and pandoc is not yet installed.",
+			Properties:  map[string]ToolParam{},
+		},
+		PermLevel: "execute",
+		Fn: func(ctx context.Context, args json.RawMessage) (string, error) {
+			return fsEnsurePDFEngine(ctx, args)
 		},
 	})
 
@@ -776,14 +789,106 @@ func fsCreatePDF(_ context.Context, args json.RawMessage, supportDir string) (st
 	if _, err := approvedRootsForPath(supportDir, p.Path); err != nil {
 		return "", err
 	}
-	data, err := buildSimplePDF(p.Title, p.Content)
-	if err != nil {
-		return "", err
+
+	// Try pandoc + typst for rich Markdown rendering.
+	// Falls back to the built-in renderer if pandoc/typst are not installed.
+	engine := ""
+	pandocPath, pandocErr := exec.LookPath("pandoc")
+	if pandocErr == nil {
+		for _, e := range []string{"typst", "pdflatex", "xelatex", "lualatex", "weasyprint"} {
+			if _, err := exec.LookPath(e); err == nil {
+				engine = e
+				break
+			}
+		}
 	}
+
+	var data []byte
+	var renderer string
+	if pandocErr == nil && engine != "" {
+		var err error
+		data, err = buildPDFWithPandoc(pandocPath, engine, p.Title, p.Content)
+		if err == nil {
+			renderer = "pandoc+" + engine
+		}
+	}
+	if data == nil {
+		var err error
+		data, err = buildSimplePDF(p.Title, p.Content)
+		if err != nil {
+			return "", err
+		}
+		renderer = "built-in"
+	}
+
 	if err := writeBytesAtomically(p.Path, data, p.CreateParents); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Created PDF %s (%d bytes)", p.Path, len(data)), nil
+
+	msg := fmt.Sprintf("Created PDF %s (%d bytes, renderer: %s)", p.Path, len(data), renderer)
+	if pandocErr != nil {
+		msg += ". Note: pandoc not found — call fs.ensure_pdf_engine to install pandoc+typst for rich Markdown layout."
+	} else if engine == "" {
+		msg += ". Note: no PDF engine found — call fs.ensure_pdf_engine to install typst."
+	}
+	return msg, nil
+}
+
+// fsEnsurePDFEngine installs pandoc and typst via Homebrew so that fs.create_pdf
+// can use rich Markdown-to-PDF rendering on subsequent calls.
+func fsEnsurePDFEngine(_ context.Context, _ json.RawMessage) (string, error) {
+	brewPath, err := exec.LookPath("brew")
+	if err != nil {
+		return "", fmt.Errorf("Homebrew not found — install it from https://brew.sh then retry")
+	}
+
+	var results []string
+	for _, pkg := range []string{"pandoc", "typst"} {
+		if _, err := exec.LookPath(pkg); err == nil {
+			results = append(results, pkg+" already installed")
+			continue
+		}
+		cmd := exec.Command(brewPath, "install", pkg)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			return "", fmt.Errorf("brew install %s failed: %w — %s", pkg, err, strings.TrimSpace(stderr.String()))
+		}
+		results = append(results, "installed "+pkg)
+	}
+	return "PDF engine ready: " + strings.Join(results, ", ") + ". fs.create_pdf will now use pandoc+typst.", nil
+}
+
+// buildPDFWithPandoc renders Markdown content to PDF via pandoc + a PDF engine.
+func buildPDFWithPandoc(pandocPath, engine, title, content string) ([]byte, error) {
+	// Build the markdown source — prepend YAML front matter if a title is set.
+	var md strings.Builder
+	if t := strings.TrimSpace(title); t != "" {
+		fmt.Fprintf(&md, "---\ntitle: %q\n---\n\n", t)
+	}
+	md.WriteString(content)
+
+	tmpIn, err := os.CreateTemp("", "atlas-pdf-in-*.md")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(tmpIn.Name())
+	if _, err := tmpIn.WriteString(md.String()); err != nil {
+		tmpIn.Close()
+		return nil, err
+	}
+	tmpIn.Close()
+
+	tmpOut := strings.TrimSuffix(tmpIn.Name(), filepath.Ext(tmpIn.Name())) + ".pdf"
+	defer os.Remove(tmpOut)
+
+	cmd := exec.Command(pandocPath, "--pdf-engine="+engine, "-o", tmpOut, tmpIn.Name())
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("pandoc: %w — %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return os.ReadFile(tmpOut)
 }
 
 func fsCreateDOCX(_ context.Context, args json.RawMessage, supportDir string) (string, error) {

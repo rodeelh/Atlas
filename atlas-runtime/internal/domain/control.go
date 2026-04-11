@@ -3,6 +3,8 @@ package domain
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -65,6 +67,8 @@ func (d *ControlDomain) Register(r chi.Router) {
 	r.Get("/providers/openrouter/models", d.getOpenRouterModels)
 	r.Get("/providers/openrouter/model-health", d.getOpenRouterModelHealth)
 	r.Get("/providers/cloud/model-health", d.getCloudModelHealth)
+	r.Get("/storage/stats", d.getStorageStats)
+	r.Delete("/storage/files", d.deleteStorageFiles)
 }
 
 func (d *ControlDomain) getStatus(w http.ResponseWriter, _ *http.Request) {
@@ -276,4 +280,48 @@ func (d *ControlDomain) getCloudModelHealth(w http.ResponseWriter, r *http.Reque
 		r.URL.Query().Get("provider"),
 		r.URL.Query().Get("model"),
 	))
+}
+
+// StorageStats is returned by GET /storage/stats.
+type StorageStats struct {
+	Dir       string `json:"dir"`
+	FileCount int    `json:"fileCount"`
+	TotalSize int64  `json:"totalSize"` // bytes
+}
+
+func (d *ControlDomain) getStorageStats(w http.ResponseWriter, _ *http.Request) {
+	dir := config.FilesDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		writeJSON(w, http.StatusOK, StorageStats{Dir: dir})
+		return
+	}
+	var count int
+	var total int64
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		count++
+		if info, err := e.Info(); err == nil {
+			total += info.Size()
+		}
+	}
+	writeJSON(w, http.StatusOK, StorageStats{Dir: dir, FileCount: count, TotalSize: total})
+}
+
+func (d *ControlDomain) deleteStorageFiles(w http.ResponseWriter, _ *http.Request) {
+	dir := config.FilesDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, e.Name()))
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

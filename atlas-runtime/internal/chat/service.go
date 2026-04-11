@@ -749,6 +749,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	sb.WriteString("\n\n<tool_rules>\n")
 	sb.WriteString("- To save content as a PDF file, always call fs.create_pdf. Never use fs.write_file with a .pdf path.\n")
 	sb.WriteString("- To save content as a Word document, always call fs.create_docx. Never use fs.write_file with a .docx path.\n")
+	sb.WriteString(fmt.Sprintf("- Default directory for generated, received, and sent files: %s — use this path unless the user specifies otherwise.\n", config.FilesDir()))
 	sb.WriteString("</tool_rules>")
 
 	// ── Volatile suffix (changes per-turn, busts cache from here) ──────────
