@@ -100,14 +100,19 @@ func DefaultNeedsConfirmation(ac ActionClass) bool {
 
 // ToolResult is the standardised execution result returned by all skills.
 //
-// Summary is always a human-readable one-liner. Artifacts carries
-// machine-readable data (created IDs, paths, URLs, before/after state,
-// mutation diffs) useful for chaining, debugging, and the action log.
-// Warnings lists non-fatal issues. NextActions hints at follow-up calls.
-// DryRun is set when the result was synthesised without applying side effects.
+// Summary is the full result text passed to the AI model. It may be
+// multi-line (e.g. command output). LogOutcome, when set, is a clean
+// one-liner used for the activity log instead of Summary — use this to
+// avoid collapsing multi-line output into a noisy single line.
+// Artifacts carries machine-readable data (created IDs, paths, URLs,
+// before/after state, mutation diffs) useful for chaining, debugging,
+// and the action log. Warnings lists non-fatal issues. NextActions
+// hints at follow-up calls. DryRun is set when the result was
+// synthesised without applying side effects.
 type ToolResult struct {
 	Success     bool           `json:"success"`
 	Summary     string         `json:"summary"`
+	LogOutcome  string         `json:"-"` // clean one-liner for the activity log (not sent to model)
 	Artifacts   map[string]any `json:"artifacts,omitempty"`
 	Warnings    []string       `json:"warnings,omitempty"`
 	NextActions []string       `json:"next_actions,omitempty"`

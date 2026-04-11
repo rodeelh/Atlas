@@ -26,6 +26,17 @@ func ListProposals(supportDir string) []ForgeProposal {
 	return out
 }
 
+// GetProposalBySkillID returns the most recent proposal with the given skillID, or nil.
+func GetProposalBySkillID(supportDir, skillID string) *ForgeProposal {
+	proposals := ListProposals(supportDir)
+	for i := len(proposals) - 1; i >= 0; i-- {
+		if proposals[i].SkillID == skillID {
+			return &proposals[i]
+		}
+	}
+	return nil
+}
+
 // GetProposal returns the proposal with the given ID, or nil.
 func GetProposal(supportDir, id string) *ForgeProposal {
 	proposals := ListProposals(supportDir)

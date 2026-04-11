@@ -47,7 +47,39 @@ function formatRelative(iso: string): string {
   return `${Math.floor(diff / 86400000)}d ago`
 }
 
+const SKILL_CATEGORY_LABELS: Record<string, string> = {
+  terminal:    'Terminal',
+  fs:          'Files',
+  browser:     'Browser',
+  applescript: 'AppleScript',
+  system:      'System',
+  weather:     'Weather',
+  web:         'Web',
+  websearch:   'Web Search',
+  finance:     'Finance',
+  image:       'Image',
+  diary:       'Diary',
+  vault:       'Vault',
+  gremlin:     'Automations',
+  forge:       'Forge',
+  workflow:    'Workflow',
+  dashboard:   'Dashboard',
+  memory:      'Memory',
+  atlas:       'Atlas',
+  info:        'Atlas',
+}
+
 function formatLogMessage(message: string): string {
+  // Rewrite "skill__action: outcome" or "skill.action: outcome" → "Skill Name: outcome"
+  // The model sends tool names with __ separator (OpenAI format); internal names use .
+  const dryRun = message.startsWith('[dry-run] ')
+  const base = dryRun ? message.slice('[dry-run] '.length) : message
+  const m = base.match(/^([a-zA-Z]+)(?:__|\.)[a-zA-Z_]+:\s+([\s\S]*)$/)
+  if (m) {
+    const label = SKILL_CATEGORY_LABELS[m[1]] ?? (m[1].charAt(0).toUpperCase() + m[1].slice(1))
+    const outcome = m[2].replace(/\s+/g, ' ').trim()
+    return `${dryRun ? '[dry-run] ' : ''}${label}: ${outcome}`
+  }
   return message.replace(/\s+/g, ' ').trim()
 }
 
@@ -81,8 +113,50 @@ function formatMetadataKey(key: string): string {
   return expanded.charAt(0).toUpperCase() + expanded.slice(1)
 }
 
-function formatMetadataValue(value: string): string {
+function formatMetadataValue(key: string, value: string): string {
+  if (key === 'elapsed_ms') {
+    const n = parseInt(value, 10)
+    if (!isNaN(n)) return n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${n}ms`
+  }
+  if (key === 'class') {
+    const labels: Record<string, string> = {
+      read: 'Read', local_write: 'Local write', destructive_local: 'Destructive',
+      external_side_effect: 'External', send_publish_delete: 'Send / publish',
+    }
+    return labels[value] ?? value
+  }
   return value.replace(/\s+/g, ' ').trim()
+}
+
+// formatInputMeta formats the "input" metadata field.
+// If it's JSON with a "command" key (terminal skill shape), render as
+// "command arg1 arg2" instead of raw JSON.
+function formatInputMeta(raw: string): string {
+  try {
+    const obj = JSON.parse(raw)
+    if (obj && typeof obj === 'object') {
+      if (typeof obj.command === 'string') {
+        const parts: string[] = [obj.command]
+        if (Array.isArray(obj.args)) parts.push(...obj.args.map(String))
+        else if (typeof obj.args === 'string' && obj.args) parts.push(obj.args)
+        return parts.join(' ')
+      }
+      if (typeof obj.script === 'string') {
+        // First non-comment, non-empty line of the script.
+        const line = obj.script.split('\n').find((l: string) => {
+          const t = l.trim(); return t && !t.startsWith('#')
+        })
+        return line ? line.trim() : obj.script.trim()
+      }
+    }
+  } catch { /* not JSON — fall through */ }
+  return raw.replace(/\s+/g, ' ').trim()
+}
+
+// isMultilineOutput returns true if the value looks like terminal output
+// that should be rendered verbatim in a <pre> block.
+function isMultilineOutput(key: string, value: string): boolean {
+  return (key === 'output' || key === 'stdout' || key === 'stderr') && value.includes('\n')
 }
 
 function stateBadge(state: string) {
@@ -141,7 +215,7 @@ export function Activity() {
   const copyLog = async (entry: LogEntry) => {
     const metadataLines = entry.metadata && Object.keys(entry.metadata).length > 0
       ? '\n' + Object.entries(entry.metadata)
-        .map(([key, value]) => `${formatMetadataKey(key)}: ${formatMetadataValue(value)}`)
+        .map(([key, value]) => `${formatMetadataKey(key)}: ${formatMetadataValue(key, value)}`)
         .join('\n')
       : ''
     const text = `[${formatTime(entry.timestamp)}] [${formatLevelLabel(entry.level).toUpperCase()}] ${formatLogMessage(entry.message)}${metadataLines}`
@@ -305,12 +379,16 @@ export function Activity() {
               {filteredLogs.map(entry => {
                 const isError = entry.level === 'error' || entry.level === 'fault'
                 const isExpanded = expandedLogIds.has(entry.id)
+                // Keys that are redundant with the message text or level badge.
+                const SKIP_META_KEYS = new Set(['tool', 'success', 'conv'])
                 const metadataEntries = entry.metadata
                   ? Object.entries(entry.metadata)
+                      .filter(([key]) => !SKIP_META_KEYS.has(key))
                       .map(([key, value]) => ({
                         key,
                         label: formatMetadataKey(key),
-                        value: formatMetadataValue(value),
+                        value: (key === 'input' || key === 'args') ? formatInputMeta(value) : formatMetadataValue(key, value),
+                        preformatted: isMultilineOutput(key, value),
                       }))
                       .filter(item => item.value.length > 0)
                   : []
@@ -338,7 +416,10 @@ export function Activity() {
                                 {metadataEntries.map(item => (
                                   <div class="log-details-meta-item" key={`${entry.id}-${item.key}`}>
                                     <span class="log-details-meta-key">{item.label}</span>
-                                    <span class="log-details-meta-value">{item.value}</span>
+                                    {item.preformatted
+                                      ? <pre class="log-details-meta-pre">{item.value}</pre>
+                                      : <span class="log-details-meta-value">{item.value}</span>
+                                    }
                                   </div>
                                 ))}
                               </div>

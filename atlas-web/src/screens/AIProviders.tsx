@@ -534,7 +534,6 @@ export function AIProviders() {
             itemCountLabel={cloudProvider === 'openrouter' && cloudModels?.totalAvailable
               ? `${cloudModels.availableModels?.length ?? 0} of ${cloudModels.totalAvailable} shown`
               : undefined}
-            status={cloudConnectionBadge}
           />
           <details class="ai-provider-advanced-panel">
             <summary>Advanced cloud options</summary>
@@ -594,7 +593,6 @@ export function AIProviders() {
             itemCountLabel={cloudProvider === 'openrouter' && cloudModels?.totalAvailable
               ? `${cloudModels.availableModels?.length ?? 0} of ${cloudModels.totalAvailable} shown`
               : undefined}
-            status={cloudConnectionBadge}
           />
           <div class="ai-provider-mini-section-label">Background</div>
           <SettingsRow

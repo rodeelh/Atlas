@@ -297,48 +297,37 @@ export function Settings() {
         <SettingsRow label="Memory" sublabel="Extract and persist facts from conversations" mobileSplit>
           <ToggleField checked={draft.memoryEnabled} onChange={(v) => update('memoryEnabled', v)} />
         </SettingsRow>
-        <SettingsRow label="Memories per turn" sublabel="How many recalled facts are injected as context per request" hint="Higher values give Atlas more long-term context but use more of the model's token budget.">
+        {draft.memoryEnabled && <SettingsRow label="Memories per turn" sublabel="How many recalled facts are injected as context per request" hint="Higher values give Atlas more long-term context but use more of the model's token budget.">
           <select class="input" value={draft.maxRetrievedMemoriesPerTurn} onChange={(e) => update('maxRetrievedMemoriesPerTurn', Number((e.target as HTMLSelectElement).value))}>
             <option value={0}>0 — disabled</option>
             <option value={2}>2 — minimal</option>
-            <option value={3}>3</option>
-            <option value={4}>4 — default</option>
+<option value={4}>4 — default</option>
             <option value={6}>6 — more context</option>
             <option value={10}>10 — maximum</option>
           </select>
-        </SettingsRow>
+        </SettingsRow>}
       </SettingsGroup>
 
       <SettingsGroup title="Local Storage">
-        <div class="settings-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '8px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div>
-              <div class="settings-label">Files folder</div>
-              <div class="settings-sublabel">Default location for generated, received, and sent files</div>
-            </div>
-            <button
-              class="btn btn-sm"
-              title="Open in Finder"
-              onClick={async () => { await api.openStorageFolder().catch(() => {}) }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style={{ display: 'block' }}>
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-              </svg>
-            </button>
-          </div>
-          <span style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--theme-text-secondary)', wordBreak: 'break-all' }}>
-            {storageStats?.dir ?? '—'}
-          </span>
-        </div>
-        <SettingsRow label="Storage used" sublabel="Files Atlas has generated or received in this session">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span style={{ fontSize: '13px', color: 'var(--theme-text-secondary)' }}>
-              {storageStats
-                ? `${storageStats.fileCount} file${storageStats.fileCount === 1 ? '' : 's'} · ${formatBytes(storageStats.totalSize)}`
-                : '—'}
-            </span>
-            <button
-              class="btn btn-sm btn-danger"
+        <SettingsRow label="Files folder" sublabel={storageStats?.dir ? `Location: ${storageStats.dir}` : 'Default location for generated, received, and sent files'}>
+          <button
+            class="btn btn-sm btn-icon"
+            title="Open in Finder"
+            onClick={async () => { await api.openStorageFolder().catch(() => {}) }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style={{ display: 'block' }}>
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+          </button>
+        </SettingsRow>
+        <SettingsRow
+          label="Storage used"
+          sublabel={storageStats
+            ? `Files Atlas has generated or received in this session · ${storageStats.fileCount} file${storageStats.fileCount === 1 ? '' : 's'} · ${formatBytes(storageStats.totalSize)}`
+            : 'Files Atlas has generated or received in this session'}
+        >
+          <button
+              class="btn btn-sm btn-icon btn-danger"
               title="Clear all"
               disabled={storageCleaning || !storageStats || storageStats.fileCount === 0}
               onClick={async () => {
@@ -367,7 +356,6 @@ export function Settings() {
                 </svg>
               )}
             </button>
-          </div>
         </SettingsRow>
       </SettingsGroup>
 
@@ -378,7 +366,7 @@ export function Settings() {
             type="number"
             min="1024"
             max="65535"
-            style={{ width: '90px' }}
+            style={{ width: '100px' }}
             value={draft.runtimePort}
             onInput={(e) => update('runtimePort', parseInt((e.target as HTMLInputElement).value, 10) || draft.runtimePort)}
           />
@@ -390,7 +378,7 @@ export function Settings() {
             : 'Restart is only available from a local Atlas session on this Mac.'}
           mobileSplit
         >
-          <button class="btn btn-sm" onClick={restartAtlas} disabled={restartPhase === 'restarting' || !canRestartLocally}>
+          <button class="btn btn-sm" style={{ width: '100px' }} onClick={restartAtlas} disabled={restartPhase === 'restarting' || !canRestartLocally}>
             {restartPhase === 'restarting' ? 'Restarting…' : 'Restart'}
           </button>
         </SettingsRow>

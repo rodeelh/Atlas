@@ -500,13 +500,6 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 			actionClass := string(l.Skills.GetActionClass(tc.Function.Name))
 			redactedArgs := skills.RedactArgs(json.RawMessage(tc.Function.Arguments))
 
-			logstore.Write("info", "Tool call: "+tc.Function.Name, map[string]string{
-				"conv":    shortConv,
-				"class":   actionClass,
-				"args":    redactedArgs,
-				"elapsed": fmt.Sprintf("%dms", r.elapsedMs),
-			})
-
 			// Accumulate tool summaries for post-turn reflection.
 			allToolSummaries = append(allToolSummaries, tc.Function.Name)
 			if r.execErr != nil {
@@ -802,11 +795,22 @@ func computeWriteDiffPreview(actionID, argsJSON string) string {
 // ── Log outcome sanitisation ──────────────────────────────────────────────────
 
 // sanitizeLogOutcome returns a clean one-liner for the action log and post-turn
-// MIND reflection. It strips binary payloads (screenshots) and truncates long
-// text (page reads) that would bloat the log or MIND context.
+// MIND reflection. It prefers LogOutcome when set (skills that produce
+// multi-line output like terminal commands set this to avoid collapsing
+// the full output into the log message). Falls back to Summary, strips
+// binary payloads (screenshots), and truncates long text.
 func sanitizeLogOutcome(r skills.ToolResult) string {
 	const imgPrefix = "__ATLAS_IMAGE__:"
 	const maxRunes = 300
+
+	// Prefer the dedicated log one-liner if the skill set it.
+	if r.LogOutcome != "" {
+		runes := []rune(r.LogOutcome)
+		if len(runes) > maxRunes {
+			return string(runes[:maxRunes]) + "…"
+		}
+		return r.LogOutcome
+	}
 
 	s := r.Summary
 	if strings.HasPrefix(s, imgPrefix) {
@@ -815,6 +819,8 @@ func sanitizeLogOutcome(r skills.ToolResult) string {
 	if s == "" {
 		s = r.FormatForModel()
 	}
+	// Collapse newlines — log entries are single lines.
+	s = strings.Join(strings.Fields(s), " ")
 	runes := []rune(s)
 	if len(runes) > maxRunes {
 		return string(runes[:maxRunes]) + "…"

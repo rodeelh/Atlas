@@ -5557,6 +5557,20 @@ input[type=number] { -moz-appearance: textfield; }
   word-break: break-word;
 }
 
+.log-details-meta-pre {
+  color: var(--text-2);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--surface-2, rgba(0,0,0,0.04));
+  border-radius: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
 .log-action-btn {
   flex-shrink: 0;
   display: flex;

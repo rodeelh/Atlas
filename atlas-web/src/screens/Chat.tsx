@@ -780,8 +780,8 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       es.onerror = () => {
         es.close()
         pushEsRef.current = null
-        // Reopen after 5 s to survive daemon restarts.
-        window.setTimeout(open, 5000)
+        // Reopen after 1 s to survive daemon restarts and post-turn close.
+        window.setTimeout(open, 1000)
       }
     }
 
@@ -970,22 +970,19 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     }).catch(() => setMlxHasThinking(false))
   }, [activeProvider, selectedLocalEngine, modelByProvider])
 
+  const activeCloudModel = CLOUD_CHAT_PROVIDERS.includes(activeProvider)
+    ? (modelByProvider[activeProvider]?.trim() || (activeProvider === 'openrouter' ? 'openrouter/auto:free' : ''))
+    : ''
+
   useEffect(() => {
-    if (!CLOUD_CHAT_PROVIDERS.includes(activeProvider)) {
-      setCloudModelHealth(null)
-      setCheckingCloudModelHealth(false)
-      return
-    }
-    const resolvedModel = (modelByProvider[activeProvider]?.trim()
-      || (activeProvider === 'openrouter' ? 'openrouter/auto:free' : ''))
-    if (!resolvedModel) {
+    if (!CLOUD_CHAT_PROVIDERS.includes(activeProvider) || !activeCloudModel) {
       setCloudModelHealth(null)
       setCheckingCloudModelHealth(false)
       return
     }
     let cancelled = false
     setCheckingCloudModelHealth(true)
-    api.cloudModelHealth(activeProvider, resolvedModel)
+    api.cloudModelHealth(activeProvider, activeCloudModel)
       .then((health) => { if (!cancelled) setCloudModelHealth(health) })
       .catch(() => {
         if (!cancelled) {
@@ -998,7 +995,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       })
       .finally(() => { if (!cancelled) setCheckingCloudModelHealth(false) })
     return () => { cancelled = true }
-  }, [activeProvider, modelByProvider])
+  }, [activeProvider, activeCloudModel])
 
   // Click-outside handler for search dropdown
   useEffect(() => {

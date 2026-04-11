@@ -263,6 +263,13 @@ func (m *Module) uninstall(w http.ResponseWriter, r *http.Request) {
 
 	features.SetForgeSkillState(m.supportDir, skillID, "uninstalled")
 
+	// Mark the corresponding proposal as uninstalled so History stays accurate.
+	if proposal := forgesvc.GetProposalBySkillID(m.supportDir, skillID); proposal != nil {
+		if _, err := forgesvc.UpdateProposalStatus(m.supportDir, proposal.ID, "uninstalled"); err != nil {
+			logstore.Write("warn", "forge/uninstall: could not update proposal status: "+err.Error(), nil)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"skillID":     skillID,
 		"uninstalled": true,

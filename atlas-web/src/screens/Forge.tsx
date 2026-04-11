@@ -27,12 +27,33 @@ function riskBadge(level: string) {
 
 function statusBadge(status: string) {
   switch (status) {
-    case 'pending':   return <span class="badge badge-yellow">Pending</span>
-    case 'installed': return <span class="badge badge-gray">Installed</span>
-    case 'enabled':   return <span class="badge badge-green">Enabled</span>
-    case 'rejected':  return <span class="badge badge-red">Rejected</span>
-    default:          return <span class="badge badge-gray">{status}</span>
+    case 'pending':     return <span class="badge badge-yellow">Pending</span>
+    case 'installed':   return <span class="badge badge-gray">Installed</span>
+    case 'enabled':     return <span class="badge badge-green">Enabled</span>
+    case 'rejected':    return <span class="badge badge-red">Rejected</span>
+    case 'uninstalled': return <span class="badge badge-gray">Uninstalled</span>
+    default:            return <span class="badge badge-gray">{status}</span>
   }
+}
+
+type SkillKind = 'http' | 'local' | 'workflow'
+
+function inferSkillKind(plansJSON: string): SkillKind | null {
+  try {
+    const plans = JSON.parse(plansJSON)
+    if (!Array.isArray(plans) || plans.length === 0) return null
+    const t = plans[0]?.type
+    if (t === 'http') return 'http'
+    if (t === 'local') return 'local'
+    if (t === 'llm.generate' || t === 'atlas.tool' || t === 'return') return 'workflow'
+  } catch { /* ignore */ }
+  return null
+}
+
+function kindBadge(kind: SkillKind | null) {
+  if (!kind) return null
+  const label = kind === 'http' ? 'HTTP' : kind === 'local' ? 'Local' : 'Workflow'
+  return <span class="badge badge-blue" style={{ fontSize: '10px' }}>{label}</span>
 }
 
 /* ── Icons ──────────────────────────────────────────────── */
@@ -123,6 +144,7 @@ interface ProposalCardProps {
 
 function ProposalCard({ proposal, onInstall, onReject, acting }: ProposalCardProps) {
   const [showDetails, setShowDetails] = useState(false)
+  const kind = inferSkillKind(proposal.plansJSON)
 
   return (
     <div class="card forge-proposal-card">
@@ -135,6 +157,7 @@ function ProposalCard({ proposal, onInstall, onReject, acting }: ProposalCardPro
                 {proposal.name}
               </span>
               {riskBadge(proposal.riskLevel)}
+              {kindBadge(kind)}
               <span class="badge" style={{
                 background: 'var(--badge-forge-bg)',
                 color: 'var(--badge-forge-text)',
@@ -495,7 +518,9 @@ export function Forge() {
   }
 
   const pendingProposals   = proposals.filter(p => p.status === 'pending')
-  const completedProposals = proposals.filter(p => p.status !== 'pending')
+  // History shows only terminal states — rejected or uninstalled.
+  // installed/enabled proposals are shown in the Installed section instead.
+  const completedProposals = proposals.filter(p => p.status === 'rejected' || p.status === 'uninstalled')
 
   return (
     <div class="screen">
@@ -592,7 +617,8 @@ export function Forge() {
                   <span style={{ fontSize: '13px', color: 'var(--text)' }}>{p.name}</span>
                   <span style={{ fontSize: '12px', color: 'var(--text-2)', marginLeft: '8px' }}>{p.description}</span>
                 </div>
-                <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                  {kindBadge(inferSkillKind(p.plansJSON))}
                   {statusBadge(p.status)}
                   <span style={{ fontSize: '11px', color: 'var(--text-2)' }}>{relativeTime(p.updatedAt)}</span>
                 </div>
