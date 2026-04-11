@@ -256,11 +256,26 @@ export function Settings() {
       </SettingsGroup>
 
       <SettingsGroup title="Local Storage">
-        <SettingsRow label="Files folder" sublabel="Default location for generated, received, and sent files">
+        <div class="settings-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <div class="settings-label">Files folder</div>
+              <div class="settings-sublabel">Default location for generated, received, and sent files</div>
+            </div>
+            <button
+              class="btn btn-sm"
+              title="Open in Finder"
+              onClick={async () => { await api.openStorageFolder().catch(() => {}) }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style={{ display: 'block' }}>
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+            </button>
+          </div>
           <span style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--theme-text-secondary)', wordBreak: 'break-all' }}>
             {storageStats?.dir ?? '—'}
           </span>
-        </SettingsRow>
+        </div>
         <SettingsRow label="Storage used" sublabel="Files Atlas has generated or received in this session">
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <span style={{ fontSize: '13px', color: 'var(--theme-text-secondary)' }}>

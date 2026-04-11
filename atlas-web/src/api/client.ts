@@ -301,6 +301,7 @@ export const api = {
   // Storage
   getStorageStats: () => get<StorageStats>('/storage/stats'),
   clearStorageFiles: () => del<void>('/storage/files', undefined),
+  openStorageFolder: () => post<void>('/storage/open-folder', {}),
 
   // Communications
   communications: () => get<CommunicationsSnapshot>('/communications'),

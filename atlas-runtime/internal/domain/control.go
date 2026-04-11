@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -69,6 +70,7 @@ func (d *ControlDomain) Register(r chi.Router) {
 	r.Get("/providers/cloud/model-health", d.getCloudModelHealth)
 	r.Get("/storage/stats", d.getStorageStats)
 	r.Delete("/storage/files", d.deleteStorageFiles)
+	r.Post("/storage/open-folder", d.postStorageOpenFolder)
 }
 
 func (d *ControlDomain) getStatus(w http.ResponseWriter, _ *http.Request) {
@@ -308,6 +310,15 @@ func (d *ControlDomain) getStorageStats(w http.ResponseWriter, _ *http.Request) 
 		}
 	}
 	writeJSON(w, http.StatusOK, StorageStats{Dir: dir, FileCount: count, TotalSize: total})
+}
+
+func (d *ControlDomain) postStorageOpenFolder(w http.ResponseWriter, _ *http.Request) {
+	dir := config.FilesDir()
+	if err := exec.Command("open", dir).Start(); err != nil {
+		http.Error(w, "failed to open folder", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (d *ControlDomain) deleteStorageFiles(w http.ResponseWriter, _ *http.Request) {
