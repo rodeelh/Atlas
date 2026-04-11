@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"atlas-runtime-go/internal/customskills"
+	"atlas-runtime-go/internal/features"
 	"atlas-runtime-go/internal/logstore"
 )
 
@@ -90,6 +91,135 @@ func GenerateAndInstallCustomSkill(supportDir string, proposal ForgeProposal) er
 
 	logstore.Write("info", fmt.Sprintf("forge/codegen: installed %q → %s", proposal.SkillID, skillDir), nil)
 	return nil
+}
+
+func InstallProposalArtifacts(supportDir string, proposal ForgeProposal) (*InstallTarget, error) {
+	var plans []ForgeActionPlan
+	if err := json.Unmarshal([]byte(proposal.PlansJSON), &plans); err != nil {
+		return nil, fmt.Errorf("forge/install: bad plansJSON: %w", err)
+	}
+	if usesWorkflowRuntime(plans) {
+		workflowID, err := GenerateAndInstallWorkflow(supportDir, proposal)
+		if err != nil {
+			return nil, err
+		}
+		return &InstallTarget{Type: "workflow", Ref: workflowID}, nil
+	}
+	if err := GenerateAndInstallCustomSkill(supportDir, proposal); err != nil {
+		return nil, err
+	}
+	return &InstallTarget{Type: "custom_skill", Ref: proposal.SkillID}, nil
+}
+
+func GenerateAndInstallWorkflow(supportDir string, proposal ForgeProposal) (string, error) {
+	var spec ForgeSkillSpec
+	if err := json.Unmarshal([]byte(proposal.SpecJSON), &spec); err != nil {
+		return "", fmt.Errorf("forge/workflow: bad specJSON: %w", err)
+	}
+	var plans []ForgeActionPlan
+	if err := json.Unmarshal([]byte(proposal.PlansJSON), &plans); err != nil {
+		return "", fmt.Errorf("forge/workflow: bad plansJSON: %w", err)
+	}
+
+	workflowID := proposal.SkillID + ".v1"
+	titleByAction := map[string]string{}
+	for _, action := range spec.Actions {
+		titleByAction[action.ID] = action.Name
+	}
+
+	steps := make([]map[string]any, 0, len(plans))
+	for _, plan := range plans {
+		step, err := workflowStepFromPlan(plan, titleByAction[plan.ActionID])
+		if err != nil {
+			return "", err
+		}
+		steps = append(steps, step)
+	}
+
+	definition := map[string]any{
+		"id":            workflowID,
+		"name":          spec.Name,
+		"description":   proposal.Description,
+		"artifactTypes": []string{"workflow.run_result"},
+		"isEnabled":     true,
+		"source":        "forge",
+		"tags":          spec.Tags,
+		"steps":         steps,
+		"forgeSkillID":  proposal.SkillID,
+	}
+
+	if existing := features.GetWorkflowDefinition(supportDir, workflowID); existing != nil {
+		if _, err := features.UpdateWorkflowDefinition(supportDir, workflowID, definition); err != nil {
+			return "", fmt.Errorf("forge/workflow: update workflow definition: %w", err)
+		}
+	} else {
+		if _, err := features.AppendWorkflowDefinition(supportDir, definition); err != nil {
+			return "", fmt.Errorf("forge/workflow: append workflow definition: %w", err)
+		}
+	}
+	logstore.Write("info", fmt.Sprintf("forge/workflow: installed %q → %s", proposal.SkillID, workflowID), nil)
+	return workflowID, nil
+}
+
+func RemoveWorkflowInstall(supportDir, workflowID string) error {
+	if strings.TrimSpace(workflowID) == "" {
+		return nil
+	}
+	_, err := features.DeleteWorkflowDefinition(supportDir, workflowID)
+	if err != nil {
+		return fmt.Errorf("forge/workflow: delete %s: %w", workflowID, err)
+	}
+	return nil
+}
+
+func usesWorkflowRuntime(plans []ForgeActionPlan) bool {
+	if len(plans) == 0 {
+		return false
+	}
+	for _, plan := range plans {
+		switch plan.Type {
+		case "prompt", "llm.generate", "atlas.tool", "return":
+			return true
+		}
+	}
+	return false
+}
+
+func workflowStepFromPlan(plan ForgeActionPlan, fallbackTitle string) (map[string]any, error) {
+	title := strings.TrimSpace(fallbackTitle)
+	if plan.WorkflowStep != nil && strings.TrimSpace(plan.WorkflowStep.Title) != "" {
+		title = strings.TrimSpace(plan.WorkflowStep.Title)
+	}
+	if title == "" {
+		title = strings.TrimSpace(plan.ActionID)
+	}
+	step := map[string]any{
+		"id":    plan.ActionID,
+		"title": title,
+		"type":  plan.Type,
+	}
+	switch plan.Type {
+	case "prompt", "llm.generate":
+		if plan.WorkflowStep == nil || strings.TrimSpace(plan.WorkflowStep.Prompt) == "" {
+			return nil, fmt.Errorf("forge/workflow: step %q is missing prompt", plan.ActionID)
+		}
+		step["prompt"] = plan.WorkflowStep.Prompt
+	case "atlas.tool":
+		if plan.WorkflowStep == nil || strings.TrimSpace(plan.WorkflowStep.Action) == "" {
+			return nil, fmt.Errorf("forge/workflow: step %q is missing action", plan.ActionID)
+		}
+		step["action"] = plan.WorkflowStep.Action
+		if len(plan.WorkflowStep.Args) > 0 {
+			step["args"] = plan.WorkflowStep.Args
+		}
+	case "return":
+		if plan.WorkflowStep != nil {
+			step["value"] = plan.WorkflowStep.Value
+		}
+	default:
+		return nil, fmt.Errorf("forge/workflow: unsupported workflow plan type %q", plan.Type)
+	}
+	return step, nil
 }
 
 // RemoveCustomSkillDir removes the generated custom skill directory for a

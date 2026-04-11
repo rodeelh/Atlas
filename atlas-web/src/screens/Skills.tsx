@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'preact/hooks'
-import { api, SkillRecord, FsRoot } from '../api/client'
+import { api, SkillRecord, FsRoot, CapabilityRecord } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { EmptyState } from '../components/EmptyState'
@@ -104,6 +104,7 @@ function sortByRisk(a: SkillRecord, b: SkillRecord) {
 export function Skills() {
   // Skills state
   const [skills, setSkills] = useState<SkillRecord[]>([])
+  const [capabilities, setCapabilities] = useState<Record<string, CapabilityRecord>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [acting, setActing] = useState<Set<string>>(new Set())
@@ -165,10 +166,13 @@ export function Skills() {
 
   const loadSkills = async () => {
     try {
-      const [skillsResult, policiesResult] = await Promise.allSettled([api.skills(), api.actionPolicies()])
+      const [skillsResult, policiesResult, capabilitiesResult] = await Promise.allSettled([api.skills(), api.actionPolicies(), api.capabilities()])
       if (skillsResult.status === 'fulfilled') { setSkills(skillsResult.value); setError(null) }
       else throw skillsResult.reason
       if (policiesResult.status === 'fulfilled') setPolicies(policiesResult.value)
+      if (capabilitiesResult.status === 'fulfilled') {
+        setCapabilities(Object.fromEntries(capabilitiesResult.value.map(capability => [capability.id, capability])))
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load skills.')
     } finally {
@@ -258,6 +262,11 @@ export function Skills() {
           const id = skill.manifest.id
           const isEnabled = skill.manifest.lifecycleState === 'enabled'
           const isExpanded = expanded.has(id)
+          const capability = capabilities[id]
+          const artifactTypes = capability?.artifactTypes ?? []
+          const requiredRoots = capability?.requiredRoots ?? []
+          const requiredCapabilities = capability?.requiredCapabilities ?? []
+          const targetLabel = capability ? `${capability.target.type} · ${capability.target.ref}` : null
           return (
             <div key={id} class={`skill-row-shell ${isExpanded ? 'skill-row-shell-expanded' : ''} ${i >= total - 1 ? 'skill-row-shell-last' : ''}`}>
               <div class="skill-row">
@@ -305,6 +314,19 @@ export function Skills() {
                     <span>Actions</span>
                     <span>{skill.actions.length} available</span>
                   </div>
+                  {(targetLabel || artifactTypes.length > 0 || requiredRoots.length > 0 || requiredCapabilities.length > 0) && (
+                    <div class="skill-action-row">
+                      <div class="skill-action-copy">
+                        <div class="skill-action-heading">
+                          <span class="skill-action-name">Capability Contract</span>
+                        </div>
+                        {targetLabel && <div class="skill-action-desc"><strong>Target:</strong> {targetLabel}</div>}
+                        {artifactTypes.length > 0 && <div class="skill-action-desc"><strong>Artifacts:</strong> {artifactTypes.join(', ')}</div>}
+                        {requiredCapabilities.length > 0 && <div class="skill-action-desc"><strong>Depends on:</strong> {requiredCapabilities.join(', ')}</div>}
+                        {requiredRoots.length > 0 && <div class="skill-action-desc"><strong>Prerequisites:</strong> {requiredRoots.join(', ')}</div>}
+                      </div>
+                    </div>
+                  )}
                   {skill.actions.map(action => (
                     <div class="skill-action-row" key={action.id}>
                       <div class="skill-action-copy">

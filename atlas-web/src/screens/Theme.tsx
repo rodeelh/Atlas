@@ -13,6 +13,7 @@ import {
   type ChatWidth,
   DEFAULT_ACCENT,
   THEME_PRESETS,
+  PRESET_TOKENS,
 } from '../theme'
 
 interface Props {
@@ -217,7 +218,10 @@ export function Theme({
       ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
       : activeTheme
 
+  const presetColorTokens = PRESET_TOKENS[activePreset][resolvedMode]
+
   const previewStyle = {
+    ...presetColorTokens,
     '--appearance-accent': activeAccent,
     '--appearance-preview-font': FONT_FAMILIES[activeChatFont],
     '--appearance-preview-font-size': FONT_SIZE_PX[activeChatFontSize],

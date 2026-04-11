@@ -171,7 +171,8 @@ func (s *Service) HandleGreeting(ctx context.Context, convIDHint string) (Greeti
 			"reason": "model_failed",
 			"error":  err.Error(),
 		})
-		return GreetingResponse{Delivered: false, Skipped: "model_failed"}, fmt.Errorf("greeting model call: %w", err)
+		logstore.Write("warn", "greeting: model call failed: "+err.Error(), nil)
+		return GreetingResponse{Delivered: false, Skipped: "model_failed"}, nil
 	}
 	content = strings.TrimSpace(content)
 	if content == "" {

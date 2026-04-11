@@ -63,6 +63,7 @@ func (m *Module) Manifest() platform.Manifest {
 }
 
 func (m *Module) Register(host platform.Host) error {
+	m.registerInstalledWorkflowActions()
 	host.MountProtected(m.registerRoutes)
 	return nil
 }
@@ -133,14 +134,7 @@ func (m *Module) propose(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Module) listInstalled(w http.ResponseWriter, _ *http.Request) {
-	allSkills := features.ListSkills(m.supportDir)
-	forgeSkills := make([]features.SkillRecord, 0, len(allSkills))
-	for _, skill := range allSkills {
-		if skill.Manifest.Source == "forge" {
-			forgeSkills = append(forgeSkills, skill)
-		}
-	}
-	writeJSON(w, http.StatusOK, forgeSkills)
+	writeJSON(w, http.StatusOK, forgesvc.ListInstalled(m.supportDir))
 }
 
 func (m *Module) install(w http.ResponseWriter, r *http.Request) {
@@ -158,12 +152,15 @@ func (m *Module) installProposal(w http.ResponseWriter, id string, enable bool) 
 		return
 	}
 
-	if err := forgesvc.GenerateAndInstallCustomSkill(m.supportDir, *proposal); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to generate installed skill: "+err.Error())
+	target, err := forgesvc.InstallProposalArtifacts(m.supportDir, *proposal)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to install proposal artifacts: "+err.Error())
 		return
 	}
-	if m.skillsReg != nil {
+	if target != nil && target.Type == "custom_skill" && m.skillsReg != nil {
 		m.skillsReg.ReloadCustomSkill(m.supportDir, proposal.SkillID)
+	} else if target != nil && target.Type == "workflow" {
+		m.registerInstalledWorkflowActions()
 	}
 
 	status := "installed"
@@ -171,9 +168,14 @@ func (m *Module) installProposal(w http.ResponseWriter, id string, enable bool) 
 		status = "enabled"
 	}
 
-	record := forgesvc.BuildInstalledRecord(*proposal, status)
+	record := forgesvc.BuildInstalledRecord(*proposal, status, target)
 	if err := forgesvc.SaveInstalled(m.supportDir, record); err != nil {
-		_ = forgesvc.RemoveCustomSkillDir(m.supportDir, proposal.SkillID)
+		if target != nil && target.Type == "custom_skill" {
+			_ = forgesvc.RemoveCustomSkillDir(m.supportDir, proposal.SkillID)
+		}
+		if target != nil && target.Type == "workflow" {
+			_ = forgesvc.RemoveWorkflowInstall(m.supportDir, target.Ref)
+		}
 		writeError(w, http.StatusInternalServerError, "failed to save installed skill: "+err.Error())
 		return
 	}
@@ -181,13 +183,23 @@ func (m *Module) installProposal(w http.ResponseWriter, id string, enable bool) 
 	updatedProposal, err := forgesvc.UpdateProposalStatus(m.supportDir, id, status)
 	if err != nil {
 		_, _ = forgesvc.DeleteInstalled(m.supportDir, proposal.SkillID)
-		_ = forgesvc.RemoveCustomSkillDir(m.supportDir, proposal.SkillID)
+		if target != nil && target.Type == "custom_skill" {
+			_ = forgesvc.RemoveCustomSkillDir(m.supportDir, proposal.SkillID)
+		}
+		if target != nil && target.Type == "workflow" {
+			_ = forgesvc.RemoveWorkflowInstall(m.supportDir, target.Ref)
+		}
 		writeError(w, http.StatusInternalServerError, "failed to update proposal status: "+err.Error())
 		return
 	}
 	if updatedProposal == nil {
 		_, _ = forgesvc.DeleteInstalled(m.supportDir, proposal.SkillID)
-		_ = forgesvc.RemoveCustomSkillDir(m.supportDir, proposal.SkillID)
+		if target != nil && target.Type == "custom_skill" {
+			_ = forgesvc.RemoveCustomSkillDir(m.supportDir, proposal.SkillID)
+		}
+		if target != nil && target.Type == "workflow" {
+			_ = forgesvc.RemoveWorkflowInstall(m.supportDir, target.Ref)
+		}
 		writeError(w, http.StatusNotFound, "proposal not found: "+id)
 		return
 	}
@@ -213,6 +225,7 @@ func (m *Module) reject(w http.ResponseWriter, r *http.Request) {
 
 func (m *Module) uninstall(w http.ResponseWriter, r *http.Request) {
 	skillID := chi.URLParam(r, "skillID")
+	record := forgesvc.GetInstalled(m.supportDir, skillID)
 
 	found, err := forgesvc.DeleteInstalled(m.supportDir, skillID)
 	if err != nil {
@@ -224,7 +237,13 @@ func (m *Module) uninstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := forgesvc.RemoveCustomSkillDir(m.supportDir, skillID); err != nil {
+	targetType, targetRef := installedTarget(record)
+	if targetType == "workflow" {
+		m.unregisterInstalledActions(record)
+		if err := forgesvc.RemoveWorkflowInstall(m.supportDir, targetRef); err != nil {
+			logstore.Write("warn", "forge/uninstall: could not remove workflow install for "+skillID+": "+err.Error(), nil)
+		}
+	} else if err := forgesvc.RemoveCustomSkillDir(m.supportDir, skillID); err != nil {
 		logstore.Write("warn", "forge/uninstall: could not remove custom skill dir for "+skillID+": "+err.Error(), nil)
 	}
 
@@ -234,6 +253,113 @@ func (m *Module) uninstall(w http.ResponseWriter, r *http.Request) {
 		"skillID":     skillID,
 		"uninstalled": true,
 	})
+}
+
+func installedTarget(record map[string]any) (string, string) {
+	if record == nil {
+		return "", ""
+	}
+	target, _ := record["target"].(map[string]any)
+	targetType, _ := target["type"].(string)
+	targetRef, _ := target["ref"].(string)
+	return strings.TrimSpace(targetType), strings.TrimSpace(targetRef)
+}
+
+func (m *Module) registerInstalledWorkflowActions() {
+	if m.skillsReg == nil {
+		return
+	}
+	for _, record := range forgesvc.ListInstalled(m.supportDir) {
+		targetType, targetRef := installedTarget(record)
+		if targetType != "workflow" || targetRef == "" {
+			continue
+		}
+		for _, action := range installedActions(record) {
+			action := action
+			if action.ID == "" {
+				continue
+			}
+			m.skillsReg.RegisterExternal(skills.SkillEntry{
+				Def: skills.ToolDef{
+					Name:        action.ID,
+					Description: defaultForgeActionDescription(action.Description, targetRef),
+					Properties: map[string]skills.ToolParam{
+						"inputValuesJSON": {
+							Description: "Optional JSON object string with workflow input values, for example {\"theme\":\"Atlas productivity\",\"path\":\"/tmp/out.pdf\"}.",
+							Type:        "string",
+						},
+					},
+				},
+				PermLevel: action.PermissionLevel,
+				FnResult: func(ctx context.Context, args json.RawMessage) (skills.ToolResult, error) {
+					var payload struct {
+						InputValuesJSON string `json:"inputValuesJSON"`
+					}
+					if len(args) > 0 {
+						if err := json.Unmarshal(args, &payload); err != nil {
+							return skills.ToolResult{}, fmt.Errorf("invalid workflow-backed skill args: %w", err)
+						}
+					}
+					workflowArgs := map[string]any{"id": targetRef}
+					if strings.TrimSpace(payload.InputValuesJSON) != "" {
+						workflowArgs["inputValuesJSON"] = payload.InputValuesJSON
+					}
+					runArgs, err := json.Marshal(workflowArgs)
+					if err != nil {
+						return skills.ToolResult{}, fmt.Errorf("encode workflow run args: %w", err)
+					}
+					return m.skillsReg.Execute(ctx, "workflow.run", runArgs)
+				},
+			})
+		}
+	}
+}
+
+func (m *Module) unregisterInstalledActions(record map[string]any) {
+	if m.skillsReg == nil {
+		return
+	}
+	for _, action := range installedActions(record) {
+		if action.ID != "" {
+			m.skillsReg.Unregister(action.ID)
+		}
+	}
+}
+
+type forgeInstalledAction struct {
+	ID              string
+	Description     string
+	PermissionLevel string
+}
+
+func installedActions(record map[string]any) []forgeInstalledAction {
+	raw, _ := record["actions"].([]any)
+	out := make([]forgeInstalledAction, 0, len(raw))
+	for _, item := range raw {
+		action, _ := item.(map[string]any)
+		if action == nil {
+			continue
+		}
+		out = append(out, forgeInstalledAction{
+			ID:              strings.TrimSpace(stringValueAny(action["id"])),
+			Description:     strings.TrimSpace(stringValueAny(action["description"])),
+			PermissionLevel: strings.TrimSpace(stringValueAny(action["permissionLevel"])),
+		})
+	}
+	return out
+}
+
+func defaultForgeActionDescription(description, workflowID string) string {
+	description = strings.TrimSpace(description)
+	if description != "" {
+		return description
+	}
+	return "Run workflow-backed Forge capability " + workflowID + "."
+}
+
+func stringValueAny(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 func newID() string {

@@ -521,7 +521,7 @@ func responseContractBlock(mode turnMode) string {
 	}
 }
 
-func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, supportDir, userMessage string) string {
+func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, supportDir, userMessage, capabilityPolicyBlock string) string {
 	budget := cfg.SystemPromptRuneBudget()
 	mode := detectTurnMode(userMessage)
 
@@ -547,6 +547,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 		diary = features.DiaryContext(supportDir, 2)
 	}
 	contractBlock := responseContractBlock(mode)
+	capabilityPolicyCost := len([]rune(capabilityPolicyBlock)) + 50
 
 	// Load tool_learning notes — institutional knowledge about which skills Atlas
 	// should avoid or approach differently. Injected before skill schemas so the
@@ -597,14 +598,14 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	toolNotesCost := len([]rune(toolNotesBlock)) + 40 // \n\n<tool_notes>\n...
 	contractCost := len([]rune(contractBlock)) + 45
 
-	total := identityCost + credsCost + memCost + skillsCost + diaryCost + toolNotesCost + contractCost
+	total := identityCost + credsCost + memCost + skillsCost + diaryCost + toolNotesCost + contractCost + capabilityPolicyCost
 
 	// Trim from lowest priority up until we're within budget.
 	// creds block is never trimmed — it's small and critical for tool use.
 
 	// Trim diary first (lowest priority).
 	if total > budget && diary != "" {
-		allowed := budget - (identityCost + credsCost + memCost + skillsCost + toolNotesCost + contractCost)
+		allowed := budget - (identityCost + credsCost + memCost + skillsCost + toolNotesCost + contractCost + capabilityPolicyCost)
 		if allowed < 100 {
 			diary = ""
 			diaryCost = 0
@@ -615,19 +616,19 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 				diaryCost = allowed + 35
 			}
 		}
-		total = identityCost + credsCost + memCost + skillsCost + diaryCost + toolNotesCost + contractCost
+		total = identityCost + credsCost + memCost + skillsCost + diaryCost + toolNotesCost + contractCost + capabilityPolicyCost
 	}
 
 	// Trim tool notes next (also low priority — they help but aren't critical).
 	if total > budget && toolNotesBlock != "" {
 		toolNotesBlock = ""
 		toolNotesCost = 0
-		total = identityCost + credsCost + memCost + skillsCost + diaryCost + contractCost
+		total = identityCost + credsCost + memCost + skillsCost + diaryCost + contractCost + capabilityPolicyCost
 	}
 
 	// Trim skills next.
 	if total > budget && skillsBlock != "" {
-		allowed := budget - (identityCost + credsCost + memCost + diaryCost + contractCost)
+		allowed := budget - (identityCost + credsCost + memCost + diaryCost + contractCost + capabilityPolicyCost)
 		if allowed < 100 {
 			skillsBlock = ""
 			skillsCost = 0
@@ -638,7 +639,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 				skillsCost = allowed + 40
 			}
 		}
-		total = identityCost + credsCost + memCost + skillsCost + diaryCost + contractCost
+		total = identityCost + credsCost + memCost + skillsCost + diaryCost + contractCost + capabilityPolicyCost
 	}
 
 	// Trim memories last (reduce count, don't truncate content mid-sentence).
@@ -651,7 +652,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 			}
 			memText = mb.String()
 			memCost = len([]rune(memText)) + 50
-			total = identityCost + credsCost + memCost + skillsCost + diaryCost + contractCost
+			total = identityCost + credsCost + memCost + skillsCost + diaryCost + contractCost + capabilityPolicyCost
 		}
 	}
 
@@ -729,6 +730,12 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 		sb.WriteString("\n\n<response_contract>\n")
 		sb.WriteString(contractBlock)
 		sb.WriteString("\n</response_contract>")
+	}
+
+	if capabilityPolicyBlock != "" {
+		sb.WriteString("\n\n<capability_policy>\n")
+		sb.WriteString(capabilityPolicyBlock)
+		sb.WriteString("\n</capability_policy>")
 	}
 
 	// ── Volatile suffix (changes per-turn, busts cache from here) ──────────
@@ -1195,7 +1202,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 				go func(snapCfg config.RuntimeConfigSnapshot, snapPort int, snapModel string) {
 					ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 					defer cancel()
-					warmPrompt := buildSystemPrompt(snapCfg, s.db, config.SupportDir(), "")
+					warmPrompt := buildSystemPrompt(snapCfg, s.db, config.SupportDir(), "", "")
 					p.PrefillPrompt(ctx, snapPort, snapModel, warmPrompt)
 				}(cfg, port, filepath.Base(cfg.SelectedAtlasMLXModel))
 			}
@@ -1284,7 +1291,8 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		limit = 15
 	}
 
-	systemPrompt := buildSystemPrompt(cfg, s.db, config.SupportDir(), req.Message)
+	capabilityPlan, capabilityPolicy := capabilityPolicy(req.Message, config.SupportDir(), s.db, s.db)
+	systemPrompt := buildSystemPrompt(cfg, s.db, config.SupportDir(), req.Message, capabilityPolicy.PromptBlock)
 	oaiMessages := []agent.OAIMessage{
 		{Role: "system", Content: systemPrompt},
 	}
@@ -1465,6 +1473,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		selectedTools = s.registry.SelectiveToolDefs(req.Message)
 		// "off" → selectedTools stays nil → agent uses full tool list
 	}
+	selectedTools = applyCapabilityPlanToolHints(s.registry, selectedTools, req.Message, capabilityPlan)
 
 	loopCfg := agent.LoopConfig{
 		Provider:      provider,

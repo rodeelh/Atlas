@@ -180,7 +180,7 @@ func (m *Module) runWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeWorkflowRunError(w, err)
 		return
 	}
-	if requiresStepByStepApproval(prepared.Definition, promptStepDefinitions(prepared.Definition)) {
+	if requiresStepByStepApproval(prepared.Definition, workflowStepDefinitions(prepared.Definition)) {
 		record, err := m.pauseWorkflowForApproval(prepared, 0, workflowexec.InitialStepRuns(prepared.Definition), "")
 		if err != nil {
 			writeWorkflowRunError(w, err)
@@ -278,7 +278,7 @@ func (m *Module) runWorkflowSync(ctx context.Context, id string, inputValues map
 	if err != nil {
 		return nil, err
 	}
-	if requiresStepByStepApproval(prepared.Definition, promptStepDefinitions(prepared.Definition)) {
+	if requiresStepByStepApproval(prepared.Definition, workflowStepDefinitions(prepared.Definition)) {
 		return m.pauseWorkflowForApproval(prepared, 0, workflowexec.InitialStepRuns(prepared.Definition), "")
 	}
 	record := m.finishWorkflowRun(ctx, prepared)

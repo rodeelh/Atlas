@@ -238,6 +238,13 @@ func mergeAutomationPatch(existing features.GremlinItem, raw map[string]json.Raw
 	} else if ok {
 		out.WorkflowID = value
 	}
+	if _, ok := raw["target"]; ok {
+		var target *features.ExecutableTarget
+		if err := decodeNullable(raw["target"], &target); err != nil {
+			return features.GremlinItem{}, fmt.Errorf("target: %w", err)
+		}
+		out.ExecutableTarget = target
+	}
 	if _, ok := raw["workflowInputValues"]; ok {
 		var values map[string]string
 		if err := decodeNullable(raw["workflowInputValues"], &values); err != nil {
@@ -272,7 +279,7 @@ func mergeAutomationPatch(existing features.GremlinItem, raw map[string]json.Raw
 		out.Tags = tags
 	}
 	out.LastModifiedAt = strPtr(time.Now().UTC().Format(time.RFC3339))
-	return out, nil
+	return normalizeAutomationItem(out), nil
 }
 
 func patchString(raw map[string]json.RawMessage, key string) (string, bool, error) {
@@ -328,14 +335,29 @@ func decodeNullable[T any](data json.RawMessage, out *T) error {
 }
 
 func (m *Module) mirrorDefinitionsToGremlins() error {
-	items, err := m.listDefinitions()
+	// Query the DB directly rather than going through listDefinitions(), which
+	// would re-import from GREMLINS.md when the DB is empty (e.g. after the
+	// last automation is deleted), undoing the deletion.
+	if m.store == nil {
+		return nil
+	}
+	rows, err := m.store.ListAutomations()
 	if err != nil {
 		return err
+	}
+	items := make([]features.GremlinItem, 0, len(rows))
+	for _, row := range rows {
+		item, err := automationItemFromRow(row)
+		if err != nil {
+			return err
+		}
+		items = append(items, item)
 	}
 	return features.WriteGremlinItems(m.supportDir, items)
 }
 
 func automationRowFromItem(item features.GremlinItem) storage.AutomationRow {
+	item = normalizeAutomationItem(item)
 	now := time.Now().UTC().Format(time.RFC3339)
 	updatedAt := now
 	if item.LastModifiedAt != nil && strings.TrimSpace(*item.LastModifiedAt) != "" {
@@ -362,6 +384,7 @@ func automationRowFromItem(item features.GremlinItem) storage.AutomationRow {
 			}
 		}
 	}
+	workflowID, workflowInputsJSON := automationStorageTarget(item)
 	return storage.AutomationRow{
 		ID:                           item.ID,
 		Name:                         item.Name,
@@ -374,8 +397,8 @@ func automationRowFromItem(item features.GremlinItem) storage.AutomationRow {
 		CreatedAt:                    defaultString(item.CreatedAt, time.Now().Format("2006-01-02")),
 		UpdatedAt:                    updatedAt,
 		NextRunAt:                    nextRunAt,
-		WorkflowID:                   item.WorkflowID,
-		WorkflowInputsJSON:           optionalJSON(item.WorkflowInputValues),
+		WorkflowID:                   workflowID,
+		WorkflowInputsJSON:           workflowInputsJSON,
 		CommunicationDestinationJSON: optionalJSON(item.CommunicationDestination),
 		GremlinDescription:           item.GremlinDescription,
 		TagsJSON:                     tagsJSON,
@@ -407,7 +430,7 @@ func automationItemFromRow(row storage.AutomationRow) (features.GremlinItem, err
 		tags = []string{}
 	}
 	updatedAt := row.UpdatedAt
-	return features.GremlinItem{
+	item := features.GremlinItem{
 		ID:                       row.ID,
 		Name:                     row.Name,
 		Emoji:                    row.Emoji,
@@ -424,7 +447,9 @@ func automationItemFromRow(row storage.AutomationRow) (features.GremlinItem, err
 		Tags:                     tags,
 		NextRunAt:                row.NextRunAt,
 		LastModifiedAt:           &updatedAt,
-	}, nil
+	}
+	item.ExecutableTarget = decodeAutomationTarget(row.WorkflowID)
+	return normalizeAutomationItem(item), nil
 }
 
 func optionalJSON(value any) *string {
@@ -466,4 +491,63 @@ func automationID(name string) string {
 		}
 	}
 	return strings.Trim(out.String(), "-")
+}
+
+func normalizeAutomationItem(item features.GremlinItem) features.GremlinItem {
+	if item.ExecutableTarget != nil {
+		targetType := strings.TrimSpace(item.ExecutableTarget.Type)
+		targetRef := strings.TrimSpace(item.ExecutableTarget.Ref)
+		if targetType != "" && targetRef != "" {
+			item.ExecutableTarget = &features.ExecutableTarget{Type: targetType, Ref: targetRef}
+			if targetType == "workflow" {
+				item.WorkflowID = strPtr(targetRef)
+			} else {
+				item.WorkflowID = nil
+			}
+			return item
+		}
+		item.ExecutableTarget = nil
+	}
+	if item.WorkflowID != nil && strings.TrimSpace(*item.WorkflowID) != "" {
+		item.ExecutableTarget = &features.ExecutableTarget{Type: "workflow", Ref: strings.TrimSpace(*item.WorkflowID)}
+	}
+	return item
+}
+
+func automationStorageTarget(item features.GremlinItem) (*string, *string) {
+	if item.ExecutableTarget == nil {
+		return item.WorkflowID, optionalJSON(item.WorkflowInputValues)
+	}
+	targetType := strings.TrimSpace(item.ExecutableTarget.Type)
+	targetRef := strings.TrimSpace(item.ExecutableTarget.Ref)
+	if targetType == "" || targetRef == "" {
+		return nil, optionalJSON(item.WorkflowInputValues)
+	}
+	switch targetType {
+	case "workflow":
+		return strPtr(targetRef), optionalJSON(item.WorkflowInputValues)
+	case "skill":
+		return strPtr("skill:" + targetRef), optionalJSON(item.WorkflowInputValues)
+	case "command":
+		return strPtr("command:" + targetRef), optionalJSON(item.WorkflowInputValues)
+	default:
+		return strPtr(targetType + ":" + targetRef), optionalJSON(item.WorkflowInputValues)
+	}
+}
+
+func decodeAutomationTarget(raw *string) *features.ExecutableTarget {
+	if raw == nil {
+		return nil
+	}
+	value := strings.TrimSpace(*raw)
+	if value == "" {
+		return nil
+	}
+	if strings.HasPrefix(value, "skill:") {
+		return &features.ExecutableTarget{Type: "skill", Ref: strings.TrimSpace(strings.TrimPrefix(value, "skill:"))}
+	}
+	if strings.HasPrefix(value, "command:") {
+		return &features.ExecutableTarget{Type: "command", Ref: strings.TrimSpace(strings.TrimPrefix(value, "command:"))}
+	}
+	return &features.ExecutableTarget{Type: "workflow", Ref: value}
 }

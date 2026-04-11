@@ -396,9 +396,6 @@ func main() {
 	controlDomain := domain.NewControlDomain(cfgStore, runtimeSvc, db, engineMgr)
 	controlDomain.SetMLXManager(mlxMgr)
 	chatDomain := domain.NewChatDomain(chatSvc, bc, db)
-	var approvalsDomain *domain.ApprovalsDomain
-	var commsDomain *domain.CommunicationsDomain
-
 	// Wire dream cycle force-trigger → POST /mind/dream.
 	chatDomain.SetDreamRunner(func() {
 		mind.RunDreamNow(config.SupportDir(), db, cfgStore, func() (agent.ProviderConfig, error) {
@@ -414,8 +411,6 @@ func main() {
 		authDomain,
 		controlDomain,
 		chatDomain,
-		approvalsDomain,
-		commsDomain,
 		authSvc,
 		runtimeSvc,
 		remoteEnabled,

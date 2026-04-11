@@ -93,6 +93,16 @@ func ListInstalled(supportDir string) []map[string]any {
 	return out
 }
 
+// GetInstalled returns one installed forge record by skill ID.
+func GetInstalled(supportDir, skillID string) map[string]any {
+	for _, rec := range ListInstalled(supportDir) {
+		if id, _ := rec["id"].(string); id == skillID {
+			return rec
+		}
+	}
+	return nil
+}
+
 // SaveInstalled adds or replaces an installed skill record (keyed by skillID).
 func SaveInstalled(supportDir string, record map[string]any) error {
 	storeMu.Lock()

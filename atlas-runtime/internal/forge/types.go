@@ -72,10 +72,20 @@ type ForgeActionSpec struct {
 
 // ForgeActionPlan is the execution plan for one action in a Forge skill.
 type ForgeActionPlan struct {
-	ActionID    string           `json:"actionID"`
-	Type        string           `json:"type"`                  // "http" | "local"
-	HTTPRequest *HTTPRequestPlan `json:"httpRequest,omitempty"` // set when Type == "http"
-	LocalPlan   *LocalPlan       `json:"localPlan,omitempty"`   // set when Type == "local"
+	ActionID     string            `json:"actionID"`
+	Type         string            `json:"type"`                   // "http" | "local" | "llm.generate" | "atlas.tool" | "return"
+	HTTPRequest  *HTTPRequestPlan  `json:"httpRequest,omitempty"`  // set when Type == "http"
+	LocalPlan    *LocalPlan        `json:"localPlan,omitempty"`    // set when Type == "local"
+	WorkflowStep *WorkflowStepPlan `json:"workflowStep,omitempty"` // set for workflow-backed composed plans
+}
+
+// WorkflowStepPlan describes one typed workflow step for a workflow-backed Forge capability.
+type WorkflowStepPlan struct {
+	Title  string         `json:"title,omitempty"`
+	Prompt string         `json:"prompt,omitempty"`
+	Action string         `json:"action,omitempty"`
+	Args   map[string]any `json:"args,omitempty"`
+	Value  any            `json:"value,omitempty"`
 }
 
 // LocalPlan describes how to run a macOS-local script for a ForgeActionPlan.

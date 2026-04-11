@@ -161,8 +161,8 @@ func builtInSkills() []SkillRecord {
 		},
 		{
 			Manifest: SkillManifestInfo{
-				ID: "file-system", Name: "File System", Version: "1.1",
-				Description:    "Read and edit files in approved folders.",
+				ID: "file-system", Name: "File System", Version: "1.2",
+				Description:    "Read and create files in approved folders, including common document and archive formats.",
 				LifecycleState: "enabled", RiskLevel: "medium", IsUserVisible: true,
 				Category: "system", Capabilities: []string{"file_read", "file_write"}, Tags: []string{"files"},
 			},
@@ -173,8 +173,13 @@ func builtInSkills() []SkillRecord {
 				{ID: "fs.get_metadata", Name: "File Metadata", Description: "Get metadata for a file or directory.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "fs.content_search", Name: "Content Search", Description: "Search file contents.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "fs.write_file", Name: "Write File", Description: "Create or overwrite a file with new content.", PermissionLevel: "draft", IsEnabled: true},
+				{ID: "fs.write_binary_file", Name: "Write Binary File", Description: "Create or overwrite a binary file from base64 data.", PermissionLevel: "draft", IsEnabled: true},
 				{ID: "fs.patch_file", Name: "Patch File", Description: "Apply a unified diff patch to a file.", PermissionLevel: "draft", IsEnabled: true},
 				{ID: "fs.create_directory", Name: "Create Directory", Description: "Create a directory.", PermissionLevel: "draft", IsEnabled: true},
+				{ID: "fs.create_pdf", Name: "Create PDF", Description: "Create a PDF document from text content.", PermissionLevel: "draft", IsEnabled: true},
+				{ID: "fs.create_docx", Name: "Create DOCX", Description: "Create a DOCX document from text content.", PermissionLevel: "draft", IsEnabled: true},
+				{ID: "fs.create_zip", Name: "Create ZIP", Description: "Create a ZIP archive from files or folders.", PermissionLevel: "draft", IsEnabled: true},
+				{ID: "fs.save_image", Name: "Save Image", Description: "Save a PNG, JPEG, or GIF image from base64 data.", PermissionLevel: "draft", IsEnabled: true},
 			},
 		},
 		{

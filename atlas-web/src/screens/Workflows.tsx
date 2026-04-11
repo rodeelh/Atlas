@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { JSX } from 'preact'
-import { api, WorkflowDefinition, WorkflowRun, WorkflowSummary } from '../api/client'
+import { api, CapabilityRecord, WorkflowDefinition, WorkflowRun, WorkflowSummary } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { Portal } from '../components/Portal'
 import { buildWorkflowPayload, promptPreviewForWorkflow, trustSummaryForWorkflow } from './workflowScreenModel'
@@ -294,6 +294,7 @@ function WorkflowRunsPanel({ workflow, onClose }: { workflow: WorkflowDefinition
 export function Workflows() {
   const [workflows, setWorkflows] = useState<WorkflowDefinition[]>([])
   const [summaries, setSummaries] = useState<Record<string, WorkflowSummary>>({})
+  const [capabilities, setCapabilities] = useState<Record<string, CapabilityRecord>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState<WorkflowDefinition | 'new' | null>(null)
@@ -306,12 +307,14 @@ export function Workflows() {
     setLoading(true)
     setError(null)
     try {
-      const [workflowData, summaryData] = await Promise.all([
+      const [workflowData, summaryData, capabilityData] = await Promise.all([
         api.workflows(),
         api.workflowSummaries().catch(() => [] as WorkflowSummary[]),
+        api.capabilities().catch(() => [] as CapabilityRecord[]),
       ])
       setWorkflows(workflowData)
       setSummaries(Object.fromEntries(summaryData.map(summary => [summary.id, summary])))
+      setCapabilities(Object.fromEntries(capabilityData.map(capability => [capability.id, capability])))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load workflows.')
     } finally {
@@ -393,6 +396,7 @@ export function Workflows() {
         <div class="automation-list">
           {workflows.map(workflow => {
             const summary = summaries[workflow.id]
+            const capability = capabilities[workflow.id]
             const preview = promptPreview(workflow)
             return (
             <div key={workflow.id} class={`card automation-card automation-console-card workflow-console-card${workflow.isEnabled ? '' : ' disabled'}`}>
@@ -449,6 +453,11 @@ export function Workflows() {
                   <span class="automation-console-label">Trust Scope</span>
                   <strong>{workflow.approvalMode === 'step_by_step' ? 'Step by step' : 'Workflow boundary'}</strong>
                   <span>{trustSummary(workflow)}</span>
+                </div>
+                <div class="automation-console-cell">
+                  <span class="automation-console-label">Artifacts</span>
+                  <strong>{capability?.artifactTypes?.length ? capability.artifactTypes.join(', ') : 'workflow.run_result'}</strong>
+                  <span>{capability?.requiredRoots?.length ? `Needs ${capability.requiredRoots.join(', ')}` : 'No extra file prerequisites declared'}</span>
                 </div>
                 <div class="automation-console-cell">
                   <span class="automation-console-label">Last Run</span>

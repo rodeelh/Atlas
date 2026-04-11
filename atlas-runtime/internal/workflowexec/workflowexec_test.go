@@ -13,3 +13,21 @@ func TestComposePromptFallsBackAndAppendsInputsAndInstruction(t *testing.T) {
 		t.Fatalf("unexpected composed prompt: %q", out)
 	}
 }
+
+func TestInitialStepRunsIncludesTypedWorkflowSteps(t *testing.T) {
+	runs := InitialStepRuns(map[string]any{
+		"steps": []map[string]any{
+			{"id": "draft", "type": "llm.generate", "title": "Draft"},
+			{"id": "save", "type": "atlas.tool", "title": "Save"},
+			{"id": "done", "type": "return", "title": "Done"},
+		},
+	})
+	if len(runs) != 3 {
+		t.Fatalf("expected 3 step runs, got %+v", runs)
+	}
+	for _, run := range runs {
+		if run["status"] != "pending" {
+			t.Fatalf("expected pending status for typed step, got %+v", runs)
+		}
+	}
+}

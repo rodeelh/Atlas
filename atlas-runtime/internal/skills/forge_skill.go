@@ -24,6 +24,19 @@ import (
 	"atlas-runtime-go/internal/validate"
 )
 
+var forgeAllowedPythonStdlibImports = map[string]bool{
+	"base64": true, "collections": true, "csv": true, "datetime": true,
+	"decimal": true, "functools": true, "hashlib": true, "io": true,
+	"itertools": true, "json": true, "math": true, "os": true,
+	"pathlib": true, "random": true, "re": true, "shlex": true,
+	"shutil": true, "statistics": true, "string": true, "subprocess": true,
+	"sys": true, "tempfile": true, "textwrap": true, "time": true,
+	"typing": true, "urllib": true, "uuid": true, "xml": true,
+	"zipfile": true,
+}
+
+var forgePythonImportRe = regexp.MustCompile(`(?m)^\s*(?:from\s+([A-Za-z0-9_\.]+)\s+import|import\s+([A-Za-z0-9_\. ,]+))`)
+
 // ── Local type mirrors ────────────────────────────────────────────────────────
 // These match forge.ForgeSkillSpec / ForgeActionPlan / HTTPRequestPlan /
 // APIResearchContract exactly. Keep in sync with forge/types.go.
@@ -47,15 +60,24 @@ type forgeActionSpec struct {
 }
 
 type forgePlan struct {
-	ActionID    string            `json:"actionID"`
-	Type        string            `json:"type"`
-	HTTPRequest *forgeHTTPRequest `json:"httpRequest"`
-	LocalPlan   *forgeLocalPlan   `json:"localPlan"`
+	ActionID     string             `json:"actionID"`
+	Type         string             `json:"type"`
+	HTTPRequest  *forgeHTTPRequest  `json:"httpRequest"`
+	LocalPlan    *forgeLocalPlan    `json:"localPlan"`
+	WorkflowStep *forgeWorkflowStep `json:"workflowStep"`
 }
 
 type forgeLocalPlan struct {
 	Interpreter string `json:"interpreter"`
 	Script      string `json:"script"`
+}
+
+type forgeWorkflowStep struct {
+	Title  string         `json:"title,omitempty"`
+	Prompt string         `json:"prompt,omitempty"`
+	Action string         `json:"action,omitempty"`
+	Args   map[string]any `json:"args,omitempty"`
+	Value  any            `json:"value,omitempty"`
 }
 
 type forgeHTTPRequest struct {
@@ -299,8 +321,11 @@ func (r *Registry) forgeOrchestrationPropose(ctx context.Context, args json.RawM
 		}
 
 	} else {
-		// Composed / transform / workflow: check auth field completeness and credential
-		// readiness for any plans that happen to reference secrets.
+		// Composed / transform / workflow: validate workflow-capable step shapes,
+		// then check auth field completeness and credential readiness for any HTTP plans.
+		if msg := forgeValidateWorkflowPlans(plans); msg != "" {
+			return msg, nil
+		}
 		if msg := forgeValidatePlansAuth(plans); msg != "" {
 			return msg, nil
 		}
@@ -772,7 +797,92 @@ func forgeValidateLocalPlans(plans []forgePlan) string {
 		if strings.TrimSpace(lp.Script) == "" {
 			return fmt.Sprintf("Forge refused: local plan %q has an empty script.", plan.ActionID)
 		}
+		if msg := forgeValidateLocalScript(plan.ActionID, lp.Interpreter, lp.Script); msg != "" {
+			return msg
+		}
 	}
+	return ""
+}
+
+func forgeValidateWorkflowPlans(plans []forgePlan) string {
+	for _, plan := range plans {
+		switch plan.Type {
+		case "http":
+			if plan.HTTPRequest == nil {
+				return fmt.Sprintf("Forge refused: workflow plan %q is missing 'httpRequest'.", plan.ActionID)
+			}
+		case "local":
+			if plan.LocalPlan == nil {
+				return fmt.Sprintf("Forge refused: workflow plan %q is missing 'localPlan'.", plan.ActionID)
+			}
+		case "prompt", "llm.generate":
+			if plan.WorkflowStep == nil || strings.TrimSpace(plan.WorkflowStep.Prompt) == "" {
+				return fmt.Sprintf("Forge refused: workflow step %q must include workflowStep.prompt for type %q.", plan.ActionID, plan.Type)
+			}
+		case "atlas.tool":
+			if plan.WorkflowStep == nil || strings.TrimSpace(plan.WorkflowStep.Action) == "" {
+				return fmt.Sprintf("Forge refused: workflow step %q must include workflowStep.action for type atlas.tool.", plan.ActionID)
+			}
+		case "return":
+			if plan.WorkflowStep == nil {
+				return fmt.Sprintf("Forge refused: workflow step %q must include workflowStep for type return.", plan.ActionID)
+			}
+		default:
+			return fmt.Sprintf("Forge refused: unsupported workflow/composed plan type %q for action %q.", plan.Type, plan.ActionID)
+		}
+	}
+	return ""
+}
+
+func forgeValidateLocalScript(actionID, interpreter, script string) string {
+	lower := strings.ToLower(script)
+
+	if interpreter == "python3" {
+		for _, blocked := range []string{
+			"pip install", "python -m pip", "python3 -m pip",
+			"reportlab", "pypdf", "fpdf", "docx", "python-docx", "pillow", "pil",
+		} {
+			if strings.Contains(lower, blocked) {
+				return fmt.Sprintf(
+					"Forge refused: local python plan %q depends on %q. Forge-generated python skills must use the standard library only. "+
+						"For PDFs, DOCX, ZIPs, and images, use Atlas built-ins like fs.create_pdf, fs.create_docx, fs.create_zip, or fs.save_image instead of forging a custom skill.",
+					actionID, blocked)
+			}
+		}
+		for _, match := range forgePythonImportRe.FindAllStringSubmatch(script, -1) {
+			modules := match[1]
+			if modules == "" {
+				modules = match[2]
+			}
+			for _, part := range strings.Split(modules, ",") {
+				module := strings.TrimSpace(part)
+				module = strings.TrimPrefix(module, "import ")
+				if module == "" {
+					continue
+				}
+				root := strings.Split(strings.Split(module, " as ")[0], ".")[0]
+				if !forgeAllowedPythonStdlibImports[root] {
+					return fmt.Sprintf(
+						"Forge refused: local python plan %q imports %q, which is not in Forge's stdlib allowlist. "+
+							"Forge-generated python skills must avoid third-party dependencies. Prefer Atlas built-ins for file creation tasks.",
+						actionID, root)
+				}
+			}
+		}
+	}
+
+	if strings.Contains(lower, "create pdf") || strings.Contains(lower, ".pdf") ||
+		strings.Contains(lower, "create docx") || strings.Contains(lower, ".docx") ||
+		strings.Contains(lower, "create zip") || strings.Contains(lower, ".zip") ||
+		strings.Contains(lower, "save image") || strings.Contains(lower, ".png") ||
+		strings.Contains(lower, ".jpg") || strings.Contains(lower, ".jpeg") ||
+		strings.Contains(lower, ".gif") {
+		return fmt.Sprintf(
+			"Forge refused: local plan %q is trying to generate a document/archive/image format that Atlas already supports natively. "+
+				"Use the built-in filesystem actions fs.create_pdf, fs.create_docx, fs.create_zip, fs.save_image, or fs.write_binary_file instead of forging a custom skill.",
+			actionID)
+	}
+
 	return ""
 }
 

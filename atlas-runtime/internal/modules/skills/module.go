@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"atlas-runtime-go/internal/capabilities"
 	"github.com/go-chi/chi/v5"
 
 	"atlas-runtime-go/internal/creds"
@@ -25,6 +26,7 @@ import (
 type Module struct {
 	supportDir string
 	fsRootsMu  sync.Mutex
+	storage    platform.Storage
 }
 
 func New(supportDir string) *Module {
@@ -38,6 +40,7 @@ func (m *Module) Manifest() platform.Manifest {
 }
 
 func (m *Module) Register(host platform.Host) error {
+	m.storage = host.Storage()
 	host.MountProtected(m.registerRoutes)
 	return nil
 }
@@ -47,6 +50,7 @@ func (m *Module) Start(context.Context) error { return nil }
 func (m *Module) Stop(context.Context) error { return nil }
 
 func (m *Module) registerRoutes(r chi.Router) {
+	r.Get("/capabilities", m.listCapabilities)
 	r.Get("/skills", m.listSkills)
 	r.Get("/skills/custom", m.listCustomSkills)
 	r.Post("/skills/install", m.installCustomSkill)
@@ -60,8 +64,26 @@ func (m *Module) registerRoutes(r chi.Router) {
 	r.Delete("/skills/{id}", m.removeCustomSkill)
 }
 
+func (m *Module) listCapabilities(w http.ResponseWriter, _ *http.Request) {
+	var workflows capabilities.WorkflowLister
+	var automations capabilities.AutomationLister
+	if m.storage != nil {
+		workflows = m.storage.Workflows()
+		automations = m.storage.Automations()
+	}
+	records, err := capabilities.List(m.supportDir, workflows, automations)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list capabilities: "+err.Error())
+		return
+	}
+	if records == nil {
+		records = []capabilities.Record{}
+	}
+	writeJSON(w, http.StatusOK, records)
+}
+
 func (m *Module) listSkills(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, features.ListSkills(m.supportDir))
+	writeJSON(w, http.StatusOK, m.listVisibleSkills())
 }
 
 func (m *Module) listCustomSkills(w http.ResponseWriter, _ *http.Request) {
@@ -169,6 +191,12 @@ func (m *Module) disableSkill(w http.ResponseWriter, r *http.Request) {
 func (m *Module) setSkillState(w http.ResponseWriter, r *http.Request, state string) {
 	id := chi.URLParam(r, "id")
 	rec := features.SetSkillState(m.supportDir, id, state)
+	if rec == nil {
+		if forgeRec := updateForgeInstalledSkillState(m.supportDir, id, state); forgeRec != nil {
+			writeJSON(w, http.StatusOK, forgeRec)
+			return
+		}
+	}
 	if rec == nil {
 		writeError(w, http.StatusNotFound, "skill not found: "+id)
 		return
@@ -308,6 +336,127 @@ func validateForgeSkill(supportDir, skillID string) map[string]any {
 			"issues":  issues,
 		},
 	}
+}
+
+func (m *Module) listVisibleSkills() []features.SkillRecord {
+	base := features.ListSkills(m.supportDir)
+	seen := make(map[string]bool, len(base))
+	for _, rec := range base {
+		seen[rec.Manifest.ID] = true
+	}
+	for _, installed := range forge.ListInstalled(m.supportDir) {
+		rec, ok := installedForgeSkillRecord(installed)
+		if !ok || seen[rec.Manifest.ID] {
+			continue
+		}
+		base = append(base, rec)
+		seen[rec.Manifest.ID] = true
+	}
+	return base
+}
+
+func installedForgeSkillRecord(installed map[string]any) (features.SkillRecord, bool) {
+	manifest, _ := installed["manifest"].(map[string]any)
+	skillID := strings.TrimSpace(stringValueFromAny(installed["id"]))
+	if skillID == "" || manifest == nil {
+		return features.SkillRecord{}, false
+	}
+	actionsRaw, _ := installed["actions"].([]any)
+	actions := make([]features.SkillAction, 0, len(actionsRaw))
+	for _, item := range actionsRaw {
+		action, _ := item.(map[string]any)
+		if action == nil {
+			continue
+		}
+		actions = append(actions, features.SkillAction{
+			ID:              strings.TrimSpace(stringValueFromAny(action["id"])),
+			Name:            strings.TrimSpace(stringValueFromAny(action["name"])),
+			Description:     strings.TrimSpace(stringValueFromAny(action["description"])),
+			PermissionLevel: strings.TrimSpace(stringValueFromAny(action["permissionLevel"])),
+			ApprovalPolicy:  strings.TrimSpace(stringValueFromAny(action["approvalPolicy"])),
+			IsEnabled:       boolFromAny(action["isEnabled"]),
+		})
+	}
+	return features.SkillRecord{
+		Manifest: features.SkillManifestInfo{
+			ID:             skillID,
+			Name:           defaultStringValue(stringValueFromAny(manifest["name"]), skillID),
+			Version:        defaultStringValue(stringValueFromAny(manifest["version"]), "1.0"),
+			Description:    defaultStringValue(stringValueFromAny(manifest["description"]), strings.TrimSpace(stringValueFromAny(installed["description"]))),
+			LifecycleState: defaultStringValue(stringValueFromAny(manifest["lifecycleState"]), "installed"),
+			RiskLevel:      defaultStringValue(stringValueFromAny(manifest["riskLevel"]), "medium"),
+			IsUserVisible:  true,
+			Category:       defaultStringValue(stringValueFromAny(manifest["category"]), "productivity"),
+			Source:         defaultStringValue(stringValueFromAny(manifest["source"]), "forge"),
+			Capabilities:   []string{},
+			Tags:           stringSliceFromAny(manifest["tags"]),
+		},
+		Actions: actions,
+	}, true
+}
+
+func updateForgeInstalledSkillState(supportDir, skillID, state string) *features.SkillRecord {
+	record := forge.GetInstalled(supportDir, skillID)
+	if record == nil {
+		return nil
+	}
+	manifest, _ := record["manifest"].(map[string]any)
+	if manifest == nil {
+		manifest = map[string]any{}
+		record["manifest"] = manifest
+	}
+	manifest["lifecycleState"] = state
+	actionsRaw, _ := record["actions"].([]any)
+	isEnabled := state == "enabled"
+	for _, item := range actionsRaw {
+		action, _ := item.(map[string]any)
+		if action != nil {
+			action["isEnabled"] = isEnabled
+		}
+	}
+	if err := forge.SaveInstalled(supportDir, record); err != nil {
+		return nil
+	}
+	features.SetForgeSkillState(supportDir, skillID, state)
+	rec, ok := installedForgeSkillRecord(record)
+	if !ok {
+		return nil
+	}
+	return &rec
+}
+
+func stringValueFromAny(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func boolFromAny(v any) bool {
+	b, _ := v.(bool)
+	return b
+}
+
+func stringSliceFromAny(v any) []string {
+	switch raw := v.(type) {
+	case []string:
+		return append([]string(nil), raw...)
+	case []any:
+		out := make([]string, 0, len(raw))
+		for _, item := range raw {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+		return out
+	default:
+		return []string{}
+	}
+}
+
+func defaultStringValue(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return strings.TrimSpace(value)
 }
 
 func credentialCheckForSkill(skillID string) (bool, string) {

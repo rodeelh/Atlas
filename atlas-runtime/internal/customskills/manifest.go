@@ -74,7 +74,7 @@ func ListManifests(supportDir string) []CustomSkillManifest {
 			continue
 		}
 		skillDir := filepath.Join(dir, entry.Name())
-		manifest, err := ReadManifest(skillDir, entry.Name())
+		manifest, err := readManifest(skillDir, entry.Name())
 		if err != nil {
 			logstore.Write("warn", fmt.Sprintf("custom skills: skip %s: %v", entry.Name(), err), nil)
 			continue
@@ -84,8 +84,8 @@ func ListManifests(supportDir string) []CustomSkillManifest {
 	return manifests
 }
 
-// ReadManifest reads and validates the skill.json in skillDir.
-func ReadManifest(skillDir, dirName string) (CustomSkillManifest, error) {
+// readManifest reads and validates the skill.json in skillDir.
+func readManifest(skillDir, dirName string) (CustomSkillManifest, error) {
 	data, err := os.ReadFile(filepath.Join(skillDir, "skill.json"))
 	if err != nil {
 		return CustomSkillManifest{}, fmt.Errorf("no skill.json: %w", err)

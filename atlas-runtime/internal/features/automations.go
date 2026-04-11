@@ -29,6 +29,7 @@ type GremlinItem struct {
 	IsEnabled                bool                      `json:"isEnabled"`
 	SourceType               string                    `json:"sourceType"`
 	CreatedAt                string                    `json:"createdAt"`
+	ExecutableTarget         *ExecutableTarget         `json:"target,omitempty"`
 	WorkflowID               *string                   `json:"workflowID,omitempty"`
 	WorkflowInputValues      map[string]string         `json:"workflowInputValues,omitempty"`
 	TelegramChatID           *int64                    `json:"telegramChatID,omitempty"`
@@ -39,6 +40,11 @@ type GremlinItem struct {
 	TimeoutSeconds           *int                      `json:"timeoutSeconds,omitempty"`
 	NextRunAt                *string                   `json:"nextRunAt,omitempty"`
 	LastModifiedAt           *string                   `json:"lastModifiedAt,omitempty"`
+}
+
+type ExecutableTarget struct {
+	Type string `json:"type"`
+	Ref  string `json:"ref"`
 }
 
 type CommunicationDestination struct {
@@ -143,6 +149,7 @@ type gremlinBlock struct {
 	createdAt      string
 	workflowID     *string
 	workflowInputs map[string]string
+	target         *ExecutableTarget
 	telegramChatID *int64
 	destination    *CommunicationDestination
 	id             string
@@ -181,6 +188,7 @@ func (b *gremlinBlock) toItem() (GremlinItem, bool) {
 		IsEnabled:                b.isEnabled,
 		SourceType:               b.sourceType,
 		CreatedAt:                b.createdAt,
+		ExecutableTarget:         b.target,
 		WorkflowID:               b.workflowID,
 		WorkflowInputValues:      b.workflowInputs,
 		TelegramChatID:           b.telegramChatID,
@@ -271,9 +279,42 @@ func parseGremlinMarkdown(content string) []GremlinItem {
 					} else {
 						v := strings.TrimSpace(val)
 						cur.workflowID = &v
+						cur.target = &ExecutableTarget{Type: "workflow", Ref: v}
 					}
 					continue
 				case "workflow_inputs":
+					if strings.TrimSpace(val) == "" {
+						cur.workflowInputs = nil
+						continue
+					}
+					var parsed map[string]string
+					if err := json.Unmarshal([]byte(val), &parsed); err == nil {
+						cur.workflowInputs = parsed
+					}
+					continue
+				case "target_type":
+					if strings.TrimSpace(val) == "" {
+						cur.target = nil
+					} else {
+						if cur.target == nil {
+							cur.target = &ExecutableTarget{}
+						}
+						cur.target.Type = strings.TrimSpace(val)
+					}
+					continue
+				case "target_ref":
+					if strings.TrimSpace(val) == "" {
+						if cur.target != nil {
+							cur.target.Ref = ""
+						}
+					} else {
+						if cur.target == nil {
+							cur.target = &ExecutableTarget{}
+						}
+						cur.target.Ref = strings.TrimSpace(val)
+					}
+					continue
+				case "target_inputs":
 					if strings.TrimSpace(val) == "" {
 						cur.workflowInputs = nil
 						continue
@@ -344,6 +385,9 @@ func parseGremlinMarkdown(content string) []GremlinItem {
 	}
 
 	flush() // flush last block (no trailing ---)
+	for i := range items {
+		items[i] = normalizeAutomationTarget(items[i])
+	}
 	return items
 }
 
@@ -400,6 +444,7 @@ func ListGremlinRuns(db *storage.DB, gremlinID string, limit int) []GremlinRunRe
 func AppendGremlin(supportDir string, item GremlinItem) error {
 	gremlinsMu.Lock()
 	defer gremlinsMu.Unlock()
+	item = normalizeAutomationTarget(item)
 	if item.ID == "" {
 		item.ID = slugify(item.Name)
 	}
@@ -457,6 +502,7 @@ func UpdateGremlin(supportDir, gremlinID string, updates GremlinItem) (*GremlinI
 		found.ScheduleRaw = updates.ScheduleRaw
 	}
 	found.IsEnabled = updates.IsEnabled
+	found.ExecutableTarget = updates.ExecutableTarget
 	found.WorkflowID = updates.WorkflowID
 	found.WorkflowInputValues = updates.WorkflowInputValues
 	found.TelegramChatID = updates.TelegramChatID
@@ -516,6 +562,7 @@ func WriteGremlinItems(supportDir string, items []GremlinItem) error {
 	seen := map[string]bool{}
 	blocks := make([]string, 0, len(items))
 	for _, item := range items {
+		item = normalizeAutomationTarget(item)
 		id := item.ID
 		if strings.TrimSpace(id) == "" {
 			id = slugify(item.Name)
@@ -531,6 +578,7 @@ func WriteGremlinItems(supportDir string, items []GremlinItem) error {
 
 // formatGremlinBlock serialises a GremlinItem as a GREMLINS.md section.
 func formatGremlinBlock(item GremlinItem) string {
+	item = normalizeAutomationTarget(item)
 	status := "enabled"
 	if !item.IsEnabled {
 		status = "disabled"
@@ -550,11 +598,16 @@ func formatGremlinBlock(item GremlinItem) string {
 	if len(item.Tags) > 0 {
 		sb.WriteString("tags: " + strings.Join(item.Tags, ", ") + "\n")
 	}
-	if item.WorkflowID != nil && strings.TrimSpace(*item.WorkflowID) != "" {
-		sb.WriteString("workflow_id: " + strings.TrimSpace(*item.WorkflowID) + "\n")
+	if item.ExecutableTarget != nil && strings.TrimSpace(item.ExecutableTarget.Type) != "" && strings.TrimSpace(item.ExecutableTarget.Ref) != "" {
+		sb.WriteString("target_type: " + strings.TrimSpace(item.ExecutableTarget.Type) + "\n")
+		sb.WriteString("target_ref: " + strings.TrimSpace(item.ExecutableTarget.Ref) + "\n")
+		if item.ExecutableTarget.Type == "workflow" {
+			sb.WriteString("workflow_id: " + strings.TrimSpace(item.ExecutableTarget.Ref) + "\n")
+		}
 	}
 	if len(item.WorkflowInputValues) > 0 {
 		if data, err := json.Marshal(item.WorkflowInputValues); err == nil {
+			sb.WriteString("target_inputs: " + string(data) + "\n")
 			sb.WriteString("workflow_inputs: " + string(data) + "\n")
 		}
 	}
@@ -569,6 +622,27 @@ func formatGremlinBlock(item GremlinItem) string {
 	sb.WriteString(item.Prompt)
 	sb.WriteString("\n---")
 	return sb.String()
+}
+
+func normalizeAutomationTarget(item GremlinItem) GremlinItem {
+	if item.ExecutableTarget != nil && strings.TrimSpace(item.ExecutableTarget.Type) != "" && strings.TrimSpace(item.ExecutableTarget.Ref) != "" {
+		item.ExecutableTarget = &ExecutableTarget{
+			Type: strings.TrimSpace(item.ExecutableTarget.Type),
+			Ref:  strings.TrimSpace(item.ExecutableTarget.Ref),
+		}
+		if item.ExecutableTarget.Type == "workflow" {
+			ref := item.ExecutableTarget.Ref
+			item.WorkflowID = &ref
+		}
+		return item
+	}
+	if item.WorkflowID != nil && strings.TrimSpace(*item.WorkflowID) != "" {
+		item.ExecutableTarget = &ExecutableTarget{
+			Type: "workflow",
+			Ref:  strings.TrimSpace(*item.WorkflowID),
+		}
+	}
+	return item
 }
 
 func unixToISO(ts float64) string {

@@ -216,6 +216,13 @@ func (r *Registry) RegisterExternal(entry SkillEntry) {
 	r.register(entry)
 }
 
+// Unregister removes a previously registered action by its canonical ID.
+// Safe to call for actions that are not currently present.
+func (r *Registry) Unregister(actionID string) {
+	actionID = r.normalise(actionID)
+	delete(r.entries, actionID)
+}
+
 // defaultActionClass derives a reasonable ActionClass from the legacy PermLevel.
 // Callers should set ActionClass explicitly for accurate classification.
 func defaultActionClass(permLevel string) ActionClass {
@@ -611,6 +618,13 @@ func scoreToolForMessage(def ToolDef, msgSet map[string]bool) int {
 	score := 0
 	hasNow := msgSet["now"] || msgSet["current"] || msgSet["today"]
 	hasFuture := msgSet["tomorrow"] || msgSet["week"] || msgSet["forecast"]
+	wantsWrite := msgSet["write"] || msgSet["save"] || msgSet["saved"]
+	wantsCreate := msgSet["create"] || msgSet["new"] || msgSet["make"]
+	wantsRead := msgSet["read"] || msgSet["open"]
+	wantsPDF := msgSet["pdf"]
+	wantsDOCX := msgSet["docx"]
+	wantsZIP := msgSet["zip"]
+	wantsImage := msgSet["png"] || msgSet["jpg"] || msgSet["jpeg"] || msgSet["gif"] || msgSet["image"]
 	nameTokens := tokenize(strings.ReplaceAll(def.Name, ".", " "))
 	for _, token := range nameTokens {
 		if msgSet[token] {
@@ -628,6 +642,36 @@ func scoreToolForMessage(def ToolDef, msgSet map[string]bool) int {
 	}
 	if hasNow && strings.Contains(def.Name, "brief") {
 		score += 2
+	}
+	if wantsWrite && strings.Contains(def.Name, "write_file") {
+		score += 6
+	}
+	if wantsCreate && strings.Contains(def.Name, "create_directory") {
+		score += 5
+	}
+	if wantsRead && strings.Contains(def.Name, "read_file") {
+		score += 5
+	}
+	if wantsPDF && strings.Contains(def.Name, "create_pdf") {
+		score += 8
+	}
+	if wantsDOCX && strings.Contains(def.Name, "create_docx") {
+		score += 8
+	}
+	if wantsZIP && strings.Contains(def.Name, "create_zip") {
+		score += 8
+	}
+	if wantsImage && strings.Contains(def.Name, "save_image") {
+		score += 8
+	}
+	if wantsImage && strings.Contains(def.Name, "write_binary_file") {
+		score += 3
+	}
+	if (msgSet["search"] || msgSet["find"]) && strings.Contains(def.Name, "search") {
+		score += 4
+	}
+	if (msgSet["list"] || msgSet["show"]) && strings.Contains(def.Name, "list_directory") {
+		score += 4
 	}
 	descTokens := tokenize(def.Description)
 	for _, token := range descTokens {

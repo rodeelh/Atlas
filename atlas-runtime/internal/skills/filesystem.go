@@ -1,17 +1,28 @@
 package skills
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+)
+
+import (
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 )
 
 // errWalkLimit is returned by WalkDir callbacks to stop early once the result
@@ -138,6 +149,23 @@ func (r *Registry) registerFilesystem() {
 
 	r.register(SkillEntry{
 		Def: ToolDef{
+			Name:        "fs.write_binary_file",
+			Description: "Writes a base64-encoded binary file (creates or overwrites). Requires an approved root.",
+			Properties: map[string]ToolParam{
+				"path":           {Description: "Absolute path to write to", Type: "string"},
+				"content_base64": {Description: "Base64-encoded file content. Data URLs are also accepted.", Type: "string"},
+				"create_parents": {Description: "Create missing parent directories if true", Type: "boolean"},
+			},
+			Required: []string{"path", "content_base64"},
+		},
+		PermLevel: "draft",
+		Fn: func(ctx context.Context, args json.RawMessage) (string, error) {
+			return fsWriteBinaryFile(ctx, args, supportDir)
+		},
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
 			Name:        "fs.create_directory",
 			Description: "Creates a directory at the given path (must be within an approved root).",
 			Properties: map[string]ToolParam{
@@ -149,6 +177,76 @@ func (r *Registry) registerFilesystem() {
 		PermLevel: "draft",
 		Fn: func(ctx context.Context, args json.RawMessage) (string, error) {
 			return fsCreateDirectory(ctx, args, supportDir)
+		},
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "fs.create_pdf",
+			Description: "Creates a simple PDF document from text content. Requires an approved root.",
+			Properties: map[string]ToolParam{
+				"path":           {Description: "Absolute path to the PDF file to create", Type: "string"},
+				"title":          {Description: "Optional title shown at the top of the document", Type: "string"},
+				"content":        {Description: "Main document text content", Type: "string"},
+				"create_parents": {Description: "Create missing parent directories if true", Type: "boolean"},
+			},
+			Required: []string{"path", "content"},
+		},
+		PermLevel: "draft",
+		Fn: func(ctx context.Context, args json.RawMessage) (string, error) {
+			return fsCreatePDF(ctx, args, supportDir)
+		},
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "fs.create_docx",
+			Description: "Creates a DOCX document from text content. Requires an approved root.",
+			Properties: map[string]ToolParam{
+				"path":           {Description: "Absolute path to the DOCX file to create", Type: "string"},
+				"title":          {Description: "Optional title shown at the top of the document", Type: "string"},
+				"content":        {Description: "Main document text content", Type: "string"},
+				"create_parents": {Description: "Create missing parent directories if true", Type: "boolean"},
+			},
+			Required: []string{"path", "content"},
+		},
+		PermLevel: "draft",
+		Fn: func(ctx context.Context, args json.RawMessage) (string, error) {
+			return fsCreateDOCX(ctx, args, supportDir)
+		},
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "fs.create_zip",
+			Description: "Creates a ZIP archive from approved files or folders. Requires approved roots for both source paths and the destination path.",
+			Properties: map[string]ToolParam{
+				"path":           {Description: "Absolute path to the ZIP file to create", Type: "string"},
+				"source_paths":   {Description: "Absolute file or directory paths to include in the archive", Type: "array", Items: &ToolParam{Type: "string"}},
+				"create_parents": {Description: "Create missing parent directories if true", Type: "boolean"},
+			},
+			Required: []string{"path", "source_paths"},
+		},
+		PermLevel: "draft",
+		Fn: func(ctx context.Context, args json.RawMessage) (string, error) {
+			return fsCreateZIP(ctx, args, supportDir)
+		},
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "fs.save_image",
+			Description: "Saves a PNG, JPEG, or GIF image from base64 data. Requires an approved root.",
+			Properties: map[string]ToolParam{
+				"path":           {Description: "Absolute path to the image file to create", Type: "string"},
+				"image_base64":   {Description: "Base64-encoded PNG, JPEG, or GIF data. Data URLs are also accepted.", Type: "string"},
+				"create_parents": {Description: "Create missing parent directories if true", Type: "boolean"},
+			},
+			Required: []string{"path", "image_base64"},
+		},
+		PermLevel: "draft",
+		Fn: func(ctx context.Context, args json.RawMessage) (string, error) {
+			return fsSaveImage(ctx, args, supportDir)
 		},
 	})
 }
@@ -234,6 +332,64 @@ func checkApproved(path string, roots []string) error {
 		}
 	}
 	return fmt.Errorf("path %q is not within any approved root. Approved roots: %s", path, strings.Join(roots, ", "))
+}
+
+func approvedRootsForPath(supportDir, path string) ([]string, error) {
+	roots, err := loadApprovedRoots(supportDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkApproved(path, roots); err != nil {
+		return nil, err
+	}
+	return roots, nil
+}
+
+func writeBytesAtomically(path string, data []byte, createParents bool) error {
+	if createParents {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return fmt.Errorf("could not create parent directories: %w", err)
+		}
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".atlas-write-*.tmp")
+	if err != nil {
+		return fmt.Errorf("could not create temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("could not write file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("could not close temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("could not rename file: %w", err)
+	}
+	return nil
+}
+
+func decodeBase64Payload(value string) ([]byte, error) {
+	payload := strings.TrimSpace(value)
+	if payload == "" {
+		return nil, fmt.Errorf("base64 content is required")
+	}
+	if comma := strings.Index(payload, ","); strings.HasPrefix(payload, "data:") && comma >= 0 {
+		payload = payload[comma+1:]
+	}
+	data, err := base64.StdEncoding.DecodeString(payload)
+	if err == nil {
+		return data, nil
+	}
+	data, rawErr := base64.RawStdEncoding.DecodeString(payload)
+	if rawErr == nil {
+		return data, nil
+	}
+	return nil, fmt.Errorf("invalid base64 payload: %w", err)
 }
 
 // ── fs.list_directory ─────────────────────────────────────────────────────────
@@ -494,18 +650,8 @@ func fsWriteFile(_ context.Context, args json.RawMessage, supportDir string) (st
 		return "", fmt.Errorf("path and content are required")
 	}
 
-	roots, err := loadApprovedRoots(supportDir)
-	if err != nil {
+	if _, err := approvedRootsForPath(supportDir, p.Path); err != nil {
 		return "", err
-	}
-	if err := checkApproved(p.Path, roots); err != nil {
-		return "", err
-	}
-
-	if p.CreateParents {
-		if err := os.MkdirAll(filepath.Dir(p.Path), 0o755); err != nil {
-			return "", fmt.Errorf("could not create parent directories: %w", err)
-		}
 	}
 
 	// Read existing content so we can generate a diff.
@@ -520,25 +666,8 @@ func fsWriteFile(_ context.Context, args json.RawMessage, supportDir string) (st
 		oldContent = string(existing)
 	}
 
-	// Atomic write: temp file in same directory, then rename.
-	dir := filepath.Dir(p.Path)
-	tmp, err := os.CreateTemp(dir, ".atlas-write-*.tmp")
-	if err != nil {
-		return "", fmt.Errorf("could not create temp file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	if _, err := tmp.WriteString(p.Content); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("could not write file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("could not close temp file: %w", err)
-	}
-	if err := os.Rename(tmpPath, p.Path); err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("could not rename file: %w", err)
+	if err := writeBytesAtomically(p.Path, []byte(p.Content), p.CreateParents); err != nil {
+		return "", err
 	}
 
 	if isNew {
@@ -562,11 +691,7 @@ func fsPatchFile(_ context.Context, args json.RawMessage, supportDir string) (st
 		return "", fmt.Errorf("path and patch are required")
 	}
 
-	roots, err := loadApprovedRoots(supportDir)
-	if err != nil {
-		return "", err
-	}
-	if err := checkApproved(p.Path, roots); err != nil {
+	if _, err := approvedRootsForPath(supportDir, p.Path); err != nil {
 		return "", err
 	}
 
@@ -581,25 +706,8 @@ func fsPatchFile(_ context.Context, args json.RawMessage, supportDir string) (st
 		return "", fmt.Errorf("patch failed: %w", err)
 	}
 
-	// Atomic write.
-	dir := filepath.Dir(p.Path)
-	tmp, err := os.CreateTemp(dir, ".atlas-patch-*.tmp")
-	if err != nil {
-		return "", fmt.Errorf("could not create temp file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	if _, err := tmp.WriteString(newContent); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("could not write patched content: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("could not close temp file: %w", err)
-	}
-	if err := os.Rename(tmpPath, p.Path); err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("could not rename patched file: %w", err)
+	if err := writeBytesAtomically(p.Path, []byte(newContent), false); err != nil {
+		return "", err
 	}
 
 	diff := UnifiedDiff(p.Path, p.Path, oldContent, newContent)
@@ -617,11 +725,7 @@ func fsCreateDirectory(_ context.Context, args json.RawMessage, supportDir strin
 		return "", fmt.Errorf("path is required")
 	}
 
-	roots, err := loadApprovedRoots(supportDir)
-	if err != nil {
-		return "", err
-	}
-	if err := checkApproved(p.Path, roots); err != nil {
+	if _, err := approvedRootsForPath(supportDir, p.Path); err != nil {
 		return "", err
 	}
 
@@ -635,4 +739,383 @@ func fsCreateDirectory(_ context.Context, args json.RawMessage, supportDir strin
 		return "", fmt.Errorf("could not create directory: %w", err)
 	}
 	return fmt.Sprintf("Created directory: %s", p.Path), nil
+}
+
+func fsWriteBinaryFile(_ context.Context, args json.RawMessage, supportDir string) (string, error) {
+	var p struct {
+		Path          string `json:"path"`
+		ContentBase64 string `json:"content_base64"`
+		CreateParents bool   `json:"create_parents"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || p.Path == "" || p.ContentBase64 == "" {
+		return "", fmt.Errorf("path and content_base64 are required")
+	}
+	if _, err := approvedRootsForPath(supportDir, p.Path); err != nil {
+		return "", err
+	}
+	data, err := decodeBase64Payload(p.ContentBase64)
+	if err != nil {
+		return "", err
+	}
+	if err := writeBytesAtomically(p.Path, data, p.CreateParents); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Wrote %d bytes to %s", len(data), p.Path), nil
+}
+
+func fsCreatePDF(_ context.Context, args json.RawMessage, supportDir string) (string, error) {
+	var p struct {
+		Path          string `json:"path"`
+		Title         string `json:"title"`
+		Content       string `json:"content"`
+		CreateParents bool   `json:"create_parents"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || p.Path == "" || strings.TrimSpace(p.Content) == "" {
+		return "", fmt.Errorf("path and content are required")
+	}
+	if _, err := approvedRootsForPath(supportDir, p.Path); err != nil {
+		return "", err
+	}
+	data, err := buildSimplePDF(p.Title, p.Content)
+	if err != nil {
+		return "", err
+	}
+	if err := writeBytesAtomically(p.Path, data, p.CreateParents); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Created PDF %s (%d bytes)", p.Path, len(data)), nil
+}
+
+func fsCreateDOCX(_ context.Context, args json.RawMessage, supportDir string) (string, error) {
+	var p struct {
+		Path          string `json:"path"`
+		Title         string `json:"title"`
+		Content       string `json:"content"`
+		CreateParents bool   `json:"create_parents"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || p.Path == "" || strings.TrimSpace(p.Content) == "" {
+		return "", fmt.Errorf("path and content are required")
+	}
+	if _, err := approvedRootsForPath(supportDir, p.Path); err != nil {
+		return "", err
+	}
+	data, err := buildSimpleDOCX(p.Title, p.Content)
+	if err != nil {
+		return "", err
+	}
+	if err := writeBytesAtomically(p.Path, data, p.CreateParents); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Created DOCX %s (%d bytes)", p.Path, len(data)), nil
+}
+
+func fsCreateZIP(_ context.Context, args json.RawMessage, supportDir string) (string, error) {
+	var p struct {
+		Path          string   `json:"path"`
+		SourcePaths   []string `json:"source_paths"`
+		CreateParents bool     `json:"create_parents"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || p.Path == "" || len(p.SourcePaths) == 0 {
+		return "", fmt.Errorf("path and source_paths are required")
+	}
+	roots, err := approvedRootsForPath(supportDir, p.Path)
+	if err != nil {
+		return "", err
+	}
+	for _, sourcePath := range p.SourcePaths {
+		if sourcePath == "" {
+			return "", fmt.Errorf("source_paths cannot contain empty values")
+		}
+		if err := checkApproved(sourcePath, roots); err != nil {
+			return "", err
+		}
+	}
+	data, fileCount, err := buildZIPArchive(p.SourcePaths)
+	if err != nil {
+		return "", err
+	}
+	if err := writeBytesAtomically(p.Path, data, p.CreateParents); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Created ZIP %s with %d entries", p.Path, fileCount), nil
+}
+
+func fsSaveImage(_ context.Context, args json.RawMessage, supportDir string) (string, error) {
+	var p struct {
+		Path          string `json:"path"`
+		ImageBase64   string `json:"image_base64"`
+		CreateParents bool   `json:"create_parents"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || p.Path == "" || p.ImageBase64 == "" {
+		return "", fmt.Errorf("path and image_base64 are required")
+	}
+	if _, err := approvedRootsForPath(supportDir, p.Path); err != nil {
+		return "", err
+	}
+	data, err := decodeBase64Payload(p.ImageBase64)
+	if err != nil {
+		return "", err
+	}
+	_, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return "", fmt.Errorf("image data must be a valid PNG, JPEG, or GIF: %w", err)
+	}
+	if err := writeBytesAtomically(p.Path, data, p.CreateParents); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Saved %s image to %s (%d bytes)", strings.ToUpper(format), p.Path, len(data)), nil
+}
+
+func buildSimplePDF(title, content string) ([]byte, error) {
+	lines := renderDocumentLines(title, content, 92)
+	if len(lines) == 0 {
+		return nil, fmt.Errorf("content is required")
+	}
+	const linesPerPage = 46
+	pageCount := (len(lines) + linesPerPage - 1) / linesPerPage
+	fontID := 1
+	lastPageID := 1 + pageCount*2
+	pagesID := lastPageID + 1
+	catalogID := pagesID + 1
+	objects := make([]string, catalogID+1)
+	objects[fontID] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+
+	lineIndex := 0
+	for page := 0; page < pageCount; page++ {
+		contentID := 2 + page*2
+		pageID := contentID + 1
+		end := lineIndex + linesPerPage
+		if end > len(lines) {
+			end = len(lines)
+		}
+		stream := buildPDFPageStream(lines[lineIndex:end])
+		objects[contentID] = fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(stream), stream)
+		objects[pageID] = fmt.Sprintf("<< /Type /Page /Parent %d 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 %d 0 R >> >> /Contents %d 0 R >>", pagesID, fontID, contentID)
+		lineIndex = end
+	}
+
+	var kids []string
+	for page := 0; page < pageCount; page++ {
+		pageID := 3 + page*2
+		kids = append(kids, fmt.Sprintf("%d 0 R", pageID))
+	}
+	objects[pagesID] = fmt.Sprintf("<< /Type /Pages /Count %d /Kids [%s] >>", pageCount, strings.Join(kids, " "))
+	objects[catalogID] = fmt.Sprintf("<< /Type /Catalog /Pages %d 0 R >>", pagesID)
+
+	var buf bytes.Buffer
+	buf.WriteString("%PDF-1.4\n%\xFF\xFF\xFF\xFF\n")
+	offsets := make([]int, catalogID+1)
+	for id := 1; id <= catalogID; id++ {
+		offsets[id] = buf.Len()
+		fmt.Fprintf(&buf, "%d 0 obj\n%s\nendobj\n", id, objects[id])
+	}
+	xrefOffset := buf.Len()
+	fmt.Fprintf(&buf, "xref\n0 %d\n", catalogID+1)
+	buf.WriteString("0000000000 65535 f \n")
+	for id := 1; id <= catalogID; id++ {
+		fmt.Fprintf(&buf, "%010d 00000 n \n", offsets[id])
+	}
+	fmt.Fprintf(&buf, "trailer\n<< /Size %d /Root %d 0 R >>\nstartxref\n%d\n%%%%EOF", catalogID+1, catalogID, xrefOffset)
+	return buf.Bytes(), nil
+}
+
+func buildPDFPageStream(lines []string) string {
+	var sb strings.Builder
+	sb.WriteString("BT\n/F1 12 Tf\n50 760 Td\n14 TL\n")
+	for _, line := range lines {
+		sb.WriteString("(")
+		sb.WriteString(escapePDFText(line))
+		sb.WriteString(") Tj\nT*\n")
+	}
+	sb.WriteString("ET")
+	return sb.String()
+}
+
+func escapePDFText(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `(`, `\(`, `)`, `\)`)
+	return replacer.Replace(value)
+}
+
+func buildSimpleDOCX(title, content string) ([]byte, error) {
+	lines := renderDocumentLines(title, content, 0)
+	if len(lines) == 0 {
+		return nil, fmt.Errorf("content is required")
+	}
+	var document strings.Builder
+	document.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	document.WriteString(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>`)
+	for _, line := range lines {
+		document.WriteString(`<w:p><w:r><w:t xml:space="preserve">`)
+		document.WriteString(escapeXMLText(line))
+		document.WriteString(`</w:t></w:r></w:p>`)
+	}
+	document.WriteString(`<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>`)
+	document.WriteString(`</w:body></w:document>`)
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	files := map[string]string{
+		"[Content_Types].xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+			`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+			`<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+			`<Default Extension="xml" ContentType="application/xml"/>` +
+			`<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>` +
+			`</Types>`,
+		"_rels/.rels": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+			`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+			`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>` +
+			`</Relationships>`,
+		"word/document.xml": document.String(),
+	}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		w, err := zw.Create(name)
+		if err != nil {
+			return nil, fmt.Errorf("create docx entry %s: %w", name, err)
+		}
+		if _, err := io.WriteString(w, files[name]); err != nil {
+			return nil, fmt.Errorf("write docx entry %s: %w", name, err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("close docx archive: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+func buildZIPArchive(sourcePaths []string) ([]byte, int, error) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	entryCount := 0
+
+	for _, sourcePath := range sourcePaths {
+		info, err := os.Lstat(sourcePath)
+		if err != nil {
+			zw.Close()
+			return nil, 0, fmt.Errorf("stat %s: %w", sourcePath, err)
+		}
+		baseName := filepath.Base(sourcePath)
+		if info.IsDir() {
+			err = filepath.WalkDir(sourcePath, func(path string, d fs.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
+				}
+				rel, err := filepath.Rel(sourcePath, path)
+				if err != nil {
+					return err
+				}
+				archiveName := filepath.ToSlash(baseName)
+				if rel != "." {
+					archiveName = filepath.ToSlash(filepath.Join(baseName, rel))
+				}
+				if d.IsDir() {
+					if rel == "." {
+						return nil
+					}
+					_, err := zw.Create(archiveName + "/")
+					if err == nil {
+						entryCount++
+					}
+					return err
+				}
+				if d.Type()&os.ModeSymlink != 0 {
+					return fmt.Errorf("symlinks are not supported in zip sources: %s", path)
+				}
+				return addZipFile(zw, path, archiveName, &entryCount)
+			})
+			if err != nil {
+				zw.Close()
+				return nil, 0, err
+			}
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			zw.Close()
+			return nil, 0, fmt.Errorf("symlinks are not supported in zip sources: %s", sourcePath)
+		}
+		if err := addZipFile(zw, sourcePath, filepath.ToSlash(baseName), &entryCount); err != nil {
+			zw.Close()
+			return nil, 0, err
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return nil, 0, fmt.Errorf("close zip archive: %w", err)
+	}
+	return buf.Bytes(), entryCount, nil
+}
+
+func addZipFile(zw *zip.Writer, sourcePath, archiveName string, entryCount *int) error {
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", sourcePath, err)
+	}
+	w, err := zw.Create(archiveName)
+	if err != nil {
+		return fmt.Errorf("create zip entry %s: %w", archiveName, err)
+	}
+	if _, err := w.Write(data); err != nil {
+		return fmt.Errorf("write zip entry %s: %w", archiveName, err)
+	}
+	*entryCount = *entryCount + 1
+	return nil
+}
+
+func renderDocumentLines(title, content string, wrapWidth int) []string {
+	var lines []string
+	if trimmedTitle := strings.TrimSpace(title); trimmedTitle != "" {
+		lines = append(lines, trimmedTitle, "")
+	}
+	for _, paragraph := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(paragraph)
+		if trimmed == "" {
+			lines = append(lines, "")
+			continue
+		}
+		if wrapWidth <= 0 {
+			lines = append(lines, trimmed)
+			continue
+		}
+		lines = append(lines, wrapText(trimmed, wrapWidth)...)
+	}
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+func wrapText(text string, width int) []string {
+	if len(text) <= width {
+		return []string{text}
+	}
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{text}
+	}
+	var lines []string
+	current := words[0]
+	for _, word := range words[1:] {
+		if len(current)+1+len(word) <= width {
+			current += " " + word
+			continue
+		}
+		lines = append(lines, current)
+		current = word
+	}
+	lines = append(lines, current)
+	return lines
+}
+
+func escapeXMLText(value string) string {
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&quot;",
+		"'", "&apos;",
+	)
+	return replacer.Replace(value)
 }

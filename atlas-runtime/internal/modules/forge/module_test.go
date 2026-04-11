@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +13,6 @@ import (
 
 	"atlas-runtime-go/internal/browser"
 	"atlas-runtime-go/internal/config"
-	"atlas-runtime-go/internal/features"
 	forgesvc "atlas-runtime-go/internal/forge"
 	"atlas-runtime-go/internal/platform"
 	"atlas-runtime-go/internal/skills"
@@ -155,7 +155,7 @@ func TestModule_InstallEnableMovesProposalToInstalled(t *testing.T) {
 	}
 }
 
-func TestModule_ListInstalledReflectsLiveForgeSkillState(t *testing.T) {
+func TestModule_ListInstalledReflectsSavedForgeInstalledRecords(t *testing.T) {
 	dir := t.TempDir()
 	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
 	if err != nil {
@@ -198,22 +198,207 @@ func TestModule_ListInstalledReflectsLiveForgeSkillState(t *testing.T) {
 		t.Fatalf("list want 200, got %d body=%s", listRR.Code, listRR.Body.String())
 	}
 
-	var installed []features.SkillRecord
+	var installed []map[string]any
 	if err := json.NewDecoder(listRR.Body).Decode(&installed); err != nil {
 		t.Fatalf("decode installed body: %v", err)
 	}
 	if len(installed) != 1 {
-		t.Fatalf("expected one live forge skill, got %d", len(installed))
+		t.Fatalf("expected one forge installed record, got %d", len(installed))
 	}
-	if installed[0].Manifest.Source != "forge" {
-		t.Fatalf("expected forge source, got %+v", installed[0].Manifest)
+	manifest, _ := installed[0]["manifest"].(map[string]any)
+	if manifest["source"] != "forge" {
+		t.Fatalf("expected forge source, got %+v", manifest)
 	}
-	if installed[0].Manifest.LifecycleState != "installed" {
-		t.Fatalf("expected lifecycleState installed, got %q", installed[0].Manifest.LifecycleState)
+	if manifest["lifecycleState"] != "installed" {
+		t.Fatalf("expected lifecycleState installed, got %v", manifest["lifecycleState"])
 	}
-	if len(installed[0].Actions) != 1 || installed[0].Actions[0].IsEnabled {
-		t.Fatalf("expected installed skill actions to be disabled until enabled, got %+v", installed[0].Actions)
+	actions, _ := installed[0]["actions"].([]any)
+	if len(actions) != 1 {
+		t.Fatalf("expected one installed action, got %+v", installed[0])
 	}
+	action, _ := actions[0].(map[string]any)
+	if enabled, _ := action["isEnabled"].(bool); enabled {
+		t.Fatalf("expected installed skill actions to be disabled until enabled, got %+v", action)
+	}
+}
+
+func TestModule_InstallEnableWorkflowProposalCreatesWorkflowTarget(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	host := platform.NewHost(
+		stubConfig{},
+		platform.NewSQLiteStorage(db),
+		nil,
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(8),
+	)
+	registry := skills.NewRegistry(dir, db, (*browser.Manager)(nil))
+	module := New(dir, forgesvc.NewService(dir), nil, registry)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	proposal := forgesvc.ForgeProposal{
+		ID:          "proposal-workflow-1",
+		SkillID:     "theme-pdf",
+		Name:        "Theme PDF",
+		Description: "Generate themed text and save it as a PDF.",
+		Summary:     "Workflow-backed PDF generation",
+		Status:      "pending",
+		SpecJSON: `{
+			"id":"theme-pdf",
+			"name":"Theme PDF",
+			"description":"Generate themed text and save it as a PDF.",
+			"category":"productivity",
+			"riskLevel":"low",
+			"tags":["workflow","pdf"],
+			"actions":[
+				{"id":"draft","name":"Draft","description":"Draft themed content","permissionLevel":"read"},
+				{"id":"save-pdf","name":"Save PDF","description":"Save the PDF","permissionLevel":"draft"},
+				{"id":"done","name":"Done","description":"Return completion summary","permissionLevel":"read"}
+			]
+		}`,
+		PlansJSON: `[
+			{"actionID":"draft","type":"llm.generate","workflowStep":{"prompt":"Write a concise brief about {input.theme}."}},
+			{"actionID":"save-pdf","type":"atlas.tool","workflowStep":{"action":"fs.create_pdf","args":{"path":"{input.path}","title":"{input.theme}","content":"{steps.draft.output}"}}},
+			{"actionID":"done","type":"return","workflowStep":{"value":"Saved themed PDF to {input.path}"}}
+		]`,
+		CreatedAt: "2026-04-05T00:00:00Z",
+		UpdatedAt: "2026-04-05T00:00:00Z",
+	}
+	if err := forgesvc.SaveProposal(dir, proposal); err != nil {
+		t.Fatalf("SaveProposal: %v", err)
+	}
+
+	r := chi.NewRouter()
+	host.ApplyProtected(r)
+
+	req := httptest.NewRequest(http.MethodPost, "/forge/proposals/proposal-workflow-1/install-enable", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	installed := forgesvc.ListInstalled(dir)
+	if len(installed) != 1 {
+		t.Fatalf("expected one installed record, got %+v", installed)
+	}
+	target, _ := installed[0]["target"].(map[string]any)
+	if target["type"] != "workflow" || target["ref"] != "theme-pdf.v1" {
+		t.Fatalf("expected workflow target, got %+v", target)
+	}
+}
+
+func TestModule_WorkflowBackedInstallRegistersCallableAction(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	host := platform.NewHost(
+		stubConfig{},
+		platform.NewSQLiteStorage(db),
+		nil,
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(8),
+	)
+	registry := skills.NewRegistry(dir, db, (*browser.Manager)(nil))
+	workflowsManifest := map[string]any{
+		"id":          "theme-pdf.v1",
+		"name":        "Theme PDF",
+		"description": "Workflow-backed Forge skill",
+		"isEnabled":   true,
+	}
+	if err := db.SaveWorkflow(storage.WorkflowRow{
+		ID:             "theme-pdf.v1",
+		Name:           "Theme PDF",
+		DefinitionJSON: mustJSON(workflowsManifest),
+		IsEnabled:      true,
+		CreatedAt:      "2026-04-05T00:00:00Z",
+		UpdatedAt:      "2026-04-05T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("SaveWorkflow: %v", err)
+	}
+	registry.RegisterExternal(skills.SkillEntry{
+		Def: skills.ToolDef{
+			Name:        "workflow.run",
+			Description: "Run workflow",
+			Properties: map[string]skills.ToolParam{
+				"id":              {Description: "Workflow id", Type: "string"},
+				"inputValuesJSON": {Description: "Inputs", Type: "string"},
+			},
+		},
+		PermLevel: "execute",
+		FnResult: func(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
+			var payload map[string]any
+			if err := json.Unmarshal(args, &payload); err != nil {
+				return skills.ToolResult{}, err
+			}
+			return skills.OKResult("workflow invoked", map[string]any{
+				"id":              payload["id"],
+				"inputValuesJSON": payload["inputValuesJSON"],
+			}), nil
+		},
+	})
+
+	module := New(dir, forgesvc.NewService(dir), nil, registry)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	record := map[string]any{
+		"id": "theme-pdf",
+		"manifest": map[string]any{
+			"id":             "theme-pdf",
+			"name":           "Theme PDF",
+			"description":    "Generate themed text and save it as a PDF.",
+			"lifecycleState": "enabled",
+			"source":         "forge",
+		},
+		"actions": []map[string]any{
+			{
+				"id":              "theme-pdf.run",
+				"name":            "Run Theme PDF",
+				"description":     "Run the workflow-backed skill.",
+				"permissionLevel": "execute",
+				"approvalPolicy":  "auto_approve",
+				"isEnabled":       true,
+			},
+		},
+		"target": map[string]any{
+			"type": "workflow",
+			"ref":  "theme-pdf.v1",
+		},
+	}
+	if err := forgesvc.SaveInstalled(dir, record); err != nil {
+		t.Fatalf("SaveInstalled: %v", err)
+	}
+
+	module.registerInstalledWorkflowActions()
+
+	result, err := registry.Execute(context.Background(), "theme-pdf.run", json.RawMessage(`{"inputValuesJSON":"{\"theme\":\"Atlas\"}"}`))
+	if err != nil {
+		t.Fatalf("registry.Execute: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	if result.Artifacts["id"] != "theme-pdf.v1" {
+		t.Fatalf("expected workflow target ref, got %+v", result.Artifacts)
+	}
+}
+
+func mustJSON(v any) string {
+	data, _ := json.Marshal(v)
+	return string(data)
 }
 
 func TestModule_RejectReturns500WhenStatusPersistenceFails(t *testing.T) {

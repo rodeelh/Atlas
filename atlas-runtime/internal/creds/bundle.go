@@ -39,7 +39,7 @@ const (
 )
 
 // mu serialises all read-modify-write Keychain operations.
-// Reads (Read) do not hold the mutex — only Store/DeleteCustomKey do.
+// Reads (Read) do not hold the mutex — only Store does.
 var mu sync.Mutex
 
 // Read reads the credential bundle from the macOS Keychain via security CLI.
@@ -120,71 +120,6 @@ func Store(provider, key, name string) error {
 	}
 
 	return writeRaw(m)
-}
-
-// DeleteCustomKey removes a custom key from the bundle's customSecrets map.
-func DeleteCustomKey(name string) error {
-	mu.Lock()
-	defer mu.Unlock()
-
-	m, ok := readRaw()
-	if !ok {
-		return fmt.Errorf("credential bundle could not be read from Keychain")
-	}
-	customs, _ := m["customSecrets"].(map[string]interface{})
-	if customs != nil {
-		delete(customs, name)
-		m["customSecrets"] = customs
-	}
-	return writeRaw(m)
-}
-
-// MigrateCustomKeys moves keys that were previously stored under customSecrets
-// (because of a provider-ID mismatch) into their proper top-level fields.
-// Safe to call every startup — no-ops when already clean.
-func MigrateCustomKeys() {
-	mu.Lock()
-	defer mu.Unlock()
-
-	m, ok := readRaw()
-	if !ok {
-		return
-	}
-	customs, _ := m["customSecrets"].(map[string]interface{})
-	if customs == nil {
-		return
-	}
-	changed := false
-
-	// braveSearch → braveSearchAPIKey
-	if v, ok := customs["braveSearch"].(string); ok && v != "" {
-		if existing, _ := m["braveSearchAPIKey"].(string); existing == "" {
-			m["braveSearchAPIKey"] = v
-			delete(customs, "braveSearch")
-			changed = true
-		}
-	}
-	// finnhub → finnhubAPIKey
-	if v, ok := customs["finnhub"].(string); ok && v != "" {
-		if existing, _ := m["finnhubAPIKey"].(string); existing == "" {
-			m["finnhubAPIKey"] = v
-			delete(customs, "finnhub")
-			changed = true
-		}
-	}
-	// slackBot → slackBotToken (web UI provider ID mismatch)
-	if v, ok := customs["slackBot"].(string); ok && v != "" {
-		if existing, _ := m["slackBotToken"].(string); existing == "" {
-			m["slackBotToken"] = v
-			delete(customs, "slackBot")
-			changed = true
-		}
-	}
-
-	if changed {
-		m["customSecrets"] = customs
-		_ = writeRaw(m)
-	}
 }
 
 // ── internal helpers ──────────────────────────────────────────────────────────

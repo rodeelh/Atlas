@@ -3,6 +3,7 @@ package automations
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -337,7 +338,13 @@ func (m *Module) runAutomation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if m.agent == nil {
+	target := automationTarget(item)
+	explicitTarget := item.ExecutableTarget != nil
+	if target.Type == "skill" && m.skills == nil {
+		writeError(w, http.StatusNotImplemented, "skill registry not available")
+		return
+	}
+	if (!explicitTarget || target.Type != "skill") && m.agent == nil {
 		writeError(w, http.StatusNotImplemented, "agent loop not available")
 		return
 	}
@@ -390,7 +397,12 @@ func (m *Module) runAutomationSync(ctx context.Context, id, trigger string) (Run
 	if !ok {
 		return RunResult{}, fmt.Errorf("automation not found: %s", id)
 	}
-	if m.agent == nil {
+	target := automationTarget(item)
+	explicitTarget := item.ExecutableTarget != nil
+	if target.Type == "skill" && m.skills == nil {
+		return RunResult{}, fmt.Errorf("skill registry not available")
+	}
+	if (!explicitTarget || target.Type != "skill") && m.agent == nil {
 		return RunResult{}, fmt.Errorf("agent loop not available")
 	}
 
@@ -426,7 +438,9 @@ func (m *Module) runAutomationSync(ctx context.Context, id, trigger string) (Run
 
 func (m *Module) executeAutomationRun(ctx context.Context, item features.GremlinItem, runID, convID string) RunResult {
 	started := time.Now()
-	prompt, workflowRunID, workflowStartedAt, prepErr := m.prepareAutomationPrompt(item, runID, convID)
+	execPlan, prepErr := m.prepareAutomationExecution(item, runID, convID)
+	workflowRunID := execPlan.WorkflowRunID
+	workflowStartedAt := execPlan.WorkflowStartedAt
 	if workflowRunID != "" {
 		_ = m.store.UpdateGremlinRunWorkflowRunID(runID, workflowRunID)
 	}
@@ -434,7 +448,7 @@ func (m *Module) executeAutomationRun(ctx context.Context, item features.Gremlin
 		finishedAt := float64(time.Now().UnixNano()) / 1e9
 		output := prepErr.Error()
 		durationMs := time.Since(started).Milliseconds()
-		_ = m.store.CompleteGremlinRun(runID, "failed", nil, &output, finishedAt, "skipped", nil, durationMs, runArtifactsJSON("failed", "skipped", nil))
+		_ = m.store.CompleteGremlinRun(runID, "failed", nil, &output, finishedAt, "skipped", nil, durationMs, runArtifactsJSON(item, "failed", "skipped", nil, workflowRunID, nil))
 		return RunResult{
 			RunID:          runID,
 			GremlinID:      item.ID,
@@ -444,29 +458,42 @@ func (m *Module) executeAutomationRun(ctx context.Context, item features.Gremlin
 			Output:         output,
 		}
 	}
-	req := chat.MessageRequest{
-		Message:        prompt,
-		ConversationID: convID,
-		Platform:       "automation",
-	}
-	resp, err := m.agent.HandleMessage(ctx, req)
 	finishedAt := float64(time.Now().UnixNano()) / 1e9
 
 	status := "completed"
 	deliveryStatus := "skipped"
 	out := ""
+	executionArtifacts := map[string]any{}
 	var errorMessage *string
 	var deliveryError *string
-	if err != nil {
-		status = "failed"
-		out = err.Error()
-		errorMessage = &out
-	} else {
-		out = resp.Response.AssistantMessage
-		if resp.Response.Status == "error" {
+	if execPlan.Mode == automationExecutionSkill {
+		result, err := m.executeAutomationSkill(ctx, execPlan)
+		if err != nil {
 			status = "failed"
-			out = resp.Response.ErrorMessage
+			out = err.Error()
 			errorMessage = &out
+		} else {
+			out = result.Output
+			executionArtifacts = result.Artifacts
+		}
+	} else {
+		req := chat.MessageRequest{
+			Message:        execPlan.Prompt,
+			ConversationID: convID,
+			Platform:       "automation",
+		}
+		resp, err := m.agent.HandleMessage(ctx, req)
+		if err != nil {
+			status = "failed"
+			out = err.Error()
+			errorMessage = &out
+		} else {
+			out = resp.Response.AssistantMessage
+			if resp.Response.Status == "error" {
+				status = "failed"
+				out = resp.Response.ErrorMessage
+				errorMessage = &out
+			}
 		}
 	}
 
@@ -485,7 +512,7 @@ func (m *Module) executeAutomationRun(ctx context.Context, item features.Gremlin
 		_ = workflowexec.CompleteRun(m.workflows, workflowRunID, status, output, strVal(errorMessage), workflowStartedAt)
 	}
 	durationMs := time.Since(started).Milliseconds()
-	artifactsJSON := runArtifactsJSON(status, deliveryStatus, deliveryError)
+	artifactsJSON := runArtifactsJSON(item, status, deliveryStatus, deliveryError, workflowRunID, executionArtifacts)
 	_ = m.store.CompleteGremlinRun(runID, status, &output, errorMessage, finishedAt, deliveryStatus, deliveryError, durationMs, artifactsJSON)
 	if deliveryError != nil {
 		logstore.Write("error", "automation delivery failed: "+*deliveryError, map[string]string{
@@ -513,22 +540,98 @@ func (m *Module) executeAutomationRun(ctx context.Context, item features.Gremlin
 	}
 }
 
-func (m *Module) prepareAutomationPrompt(item features.GremlinItem, runID, convID string) (string, string, time.Time, error) {
+type automationExecutionMode string
+
+const (
+	automationExecutionPrompt automationExecutionMode = "prompt"
+	automationExecutionSkill  automationExecutionMode = "skill"
+)
+
+type automationExecutionPlan struct {
+	Mode              automationExecutionMode
+	Prompt            string
+	WorkflowRunID     string
+	WorkflowStartedAt time.Time
+	ActionID          string
+	Args              json.RawMessage
+}
+
+type automationExecutionResult struct {
+	Output    string
+	Artifacts map[string]any
+}
+
+func (m *Module) prepareAutomationExecution(item features.GremlinItem, runID, convID string) (automationExecutionPlan, error) {
+	target := automationTarget(item)
 	basePrompt := buildAutomationPrompt(item)
-	if item.WorkflowID == nil || strings.TrimSpace(*item.WorkflowID) == "" {
-		return basePrompt, "", time.Time{}, nil
+	switch target.Type {
+	case "skill":
+		args, err := json.Marshal(automationInputValues(item))
+		if err != nil {
+			return automationExecutionPlan{}, err
+		}
+		return automationExecutionPlan{
+			Mode:     automationExecutionSkill,
+			ActionID: target.Ref,
+			Args:     args,
+		}, nil
+	case "workflow":
+		workflowID := target.Ref
+		workflowRunID := "workflow-" + runID
+		extraInstruction := ""
+		if strings.TrimSpace(item.Prompt) != "" {
+			extraInstruction = basePrompt
+		}
+		prepared, err := workflowexec.PrepareRun(m.workflows, workflowID, workflowRunID, convID, "automation", automationInputValues(item), extraInstruction)
+		if err != nil {
+			return automationExecutionPlan{}, err
+		}
+		return automationExecutionPlan{
+			Mode:              automationExecutionPrompt,
+			Prompt:            prepared.Prompt,
+			WorkflowRunID:     workflowRunID,
+			WorkflowStartedAt: prepared.StartedAt,
+		}, nil
+	case "command":
+		if item.ExecutableTarget != nil && m.skills != nil {
+			args, err := json.Marshal(automationInputValues(item))
+			if err != nil {
+				return automationExecutionPlan{}, err
+			}
+			return automationExecutionPlan{
+				Mode:     automationExecutionSkill,
+				ActionID: target.Ref,
+				Args:     args,
+			}, nil
+		}
+		fallthrough
+	default:
+		return automationExecutionPlan{Mode: automationExecutionPrompt, Prompt: basePrompt}, nil
 	}
-	workflowID := strings.TrimSpace(*item.WorkflowID)
-	workflowRunID := "workflow-" + runID
-	extraInstruction := ""
-	if strings.TrimSpace(item.Prompt) != "" {
-		extraInstruction = basePrompt
+}
+
+func (m *Module) executeAutomationSkill(ctx context.Context, plan automationExecutionPlan) (automationExecutionResult, error) {
+	if m.skills == nil {
+		return automationExecutionResult{}, fmt.Errorf("skill registry not available")
 	}
-	prepared, err := workflowexec.PrepareRun(m.workflows, workflowID, workflowRunID, convID, "automation", item.WorkflowInputValues, extraInstruction)
+	result, err := m.skills.Execute(ctx, plan.ActionID, plan.Args)
 	if err != nil {
-		return "", "", time.Time{}, err
+		return automationExecutionResult{}, err
 	}
-	return prepared.Prompt, workflowRunID, prepared.StartedAt, nil
+	if !result.Success {
+		return automationExecutionResult{}, errors.New(result.Summary)
+	}
+	artifacts := map[string]any{}
+	for key, value := range result.Artifacts {
+		artifacts[key] = value
+	}
+	if plan.ActionID != "" {
+		artifacts["actionID"] = plan.ActionID
+	}
+	return automationExecutionResult{
+		Output:    result.FormatForModel(),
+		Artifacts: artifacts,
+	}, nil
 }
 
 func (m *Module) deliverAutomationOutput(ctx context.Context, item features.GremlinItem, output string) error {
@@ -739,10 +842,21 @@ func destinationJSON(item features.GremlinItem) *string {
 	return &out
 }
 
-func runArtifactsJSON(status, deliveryStatus string, deliveryError *string) *string {
+func runArtifactsJSON(item features.GremlinItem, status, deliveryStatus string, deliveryError *string, workflowRunID string, executionArtifacts map[string]any) *string {
+	target := automationTarget(item)
 	artifacts := map[string]any{
 		"executionStatus": status,
 		"deliveryStatus":  deliveryStatus,
+		"target": map[string]any{
+			"type": target.Type,
+			"ref":  target.Ref,
+		},
+	}
+	if workflowRunID != "" {
+		artifacts["workflowRunID"] = workflowRunID
+	}
+	if len(executionArtifacts) > 0 {
+		artifacts["execution"] = executionArtifacts
 	}
 	if deliveryError != nil {
 		artifacts["deliveryError"] = *deliveryError
@@ -799,6 +913,25 @@ func buildAutomationPrompt(item features.GremlinItem) string {
 		return prompt
 	}
 	return strings.TrimSpace(strings.Join(guards, "\n\n") + "\n\n" + prompt)
+}
+
+func automationTarget(item features.GremlinItem) features.ExecutableTarget {
+	item = normalizeAutomationItem(item)
+	if item.ExecutableTarget != nil {
+		return *item.ExecutableTarget
+	}
+	return features.ExecutableTarget{Type: "command", Ref: item.ID}
+}
+
+func automationInputValues(item features.GremlinItem) map[string]string {
+	if item.WorkflowInputValues == nil {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(item.WorkflowInputValues))
+	for key, value := range item.WorkflowInputValues {
+		out[key] = value
+	}
+	return out
 }
 
 func isBriefingPrompt(prompt string) bool {

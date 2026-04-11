@@ -730,6 +730,98 @@ func TestModule_WorkflowBoundAutomationCreatesWorkflowRunLink(t *testing.T) {
 	}
 }
 
+func TestModule_SkillTargetAutomationExecutesSkillDirectly(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	if err := features.AppendGremlin(dir, features.GremlinItem{
+		Name:        "Skill Automation",
+		Emoji:       "⚡",
+		Prompt:      "Legacy prompt should not run",
+		ScheduleRaw: "daily 09:00",
+		IsEnabled:   true,
+		SourceType:  "manual",
+		CreatedAt:   "2026-04-05",
+		ExecutableTarget: &features.ExecutableTarget{
+			Type: "skill",
+			Ref:  "test.echo",
+		},
+		WorkflowInputValues: map[string]string{
+			"theme": "weekly recap",
+		},
+	}); err != nil {
+		t.Fatalf("AppendGremlin: %v", err)
+	}
+	items := features.ParseGremlins(dir)
+	if len(items) != 1 {
+		t.Fatalf("expected one automation, got %d", len(items))
+	}
+
+	stub := &stubAgentRuntime{}
+	registry := skills.NewRegistry(dir, db, nil)
+	registry.RegisterExternal(skills.SkillEntry{
+		Def: skills.ToolDef{
+			Name:        "test.echo",
+			Description: "Echo inputs for automation tests",
+		},
+		PermLevel:   "draft",
+		ActionClass: skills.ActionClassLocalWrite,
+		FnResult: func(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
+			var payload map[string]string
+			if err := json.Unmarshal(args, &payload); err != nil {
+				return skills.ToolResult{}, err
+			}
+			return skills.OKResult("Echoed "+payload["theme"], map[string]any{
+				"theme": payload["theme"],
+			}), nil
+		},
+	})
+
+	host := platform.NewHost(
+		stubConfig{},
+		platform.NewSQLiteStorage(db),
+		nil,
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(8),
+	)
+	module := New(dir)
+	module.SetSkillRegistry(registry)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	result, err := module.runAutomationSync(context.Background(), items[0].ID, "agent")
+	if err != nil {
+		t.Fatalf("runAutomationSync: %v", err)
+	}
+	if result.Status != "completed" {
+		t.Fatalf("expected completed skill automation, got %+v", result)
+	}
+	if !strings.Contains(result.Output, "Echoed weekly recap") {
+		t.Fatalf("expected skill result output, got %q", result.Output)
+	}
+	if stub.LastRequest().Message != "" {
+		t.Fatalf("expected no agent invocation, got %+v", stub.LastRequest())
+	}
+	runs, err := db.ListGremlinRuns(items[0].ID, 10)
+	if err != nil {
+		t.Fatalf("ListGremlinRuns: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected one run, got %+v", runs)
+	}
+	if runs[0].WorkflowRunID != nil {
+		t.Fatalf("skill-target automation should not create workflow run link, got %+v", runs[0].WorkflowRunID)
+	}
+	if runs[0].Output == nil || !strings.Contains(*runs[0].Output, "Echoed weekly recap") {
+		t.Fatalf("expected run output to preserve skill result, got %+v", runs[0].Output)
+	}
+}
+
 func TestModule_ListAutomationsReturnsCurrentShape(t *testing.T) {
 	dir := t.TempDir()
 	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))

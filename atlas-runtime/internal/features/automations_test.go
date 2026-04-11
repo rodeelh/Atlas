@@ -136,3 +136,46 @@ Second
 		t.Fatalf("expected duplicate raw ID error, got %v", err)
 	}
 }
+
+func TestGremlinExecutableTargetRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	item := GremlinItem{
+		Name:        "Theme PDF",
+		Emoji:       "⚡",
+		Prompt:      "Create the weekly PDF",
+		ScheduleRaw: "weekly Friday at 09:00",
+		IsEnabled:   true,
+		SourceType:  "web",
+		CreatedAt:   "2026-04-07",
+		ExecutableTarget: &ExecutableTarget{
+			Type: "skill",
+			Ref:  "theme-pdf.run",
+		},
+		WorkflowInputValues: map[string]string{
+			"theme": "market recap",
+		},
+	}
+	if err := AppendGremlin(dir, item); err != nil {
+		t.Fatalf("AppendGremlin: %v", err)
+	}
+	items := ParseGremlins(dir)
+	if len(items) != 1 {
+		t.Fatalf("expected one item, got %d", len(items))
+	}
+	if items[0].ExecutableTarget == nil {
+		t.Fatal("expected executable target to be preserved")
+	}
+	if items[0].ExecutableTarget.Type != "skill" || items[0].ExecutableTarget.Ref != "theme-pdf.run" {
+		t.Fatalf("unexpected target: %+v", items[0].ExecutableTarget)
+	}
+	if items[0].WorkflowID != nil {
+		t.Fatalf("skill target should not populate workflowID, got %q", *items[0].WorkflowID)
+	}
+	if items[0].WorkflowInputValues["theme"] != "market recap" {
+		t.Fatalf("expected target inputs to round-trip, got %+v", items[0].WorkflowInputValues)
+	}
+	raw := ReadGremlinsRaw(dir)
+	if !strings.Contains(raw, "target_type: skill") || !strings.Contains(raw, "target_ref: theme-pdf.run") {
+		t.Fatalf("expected target metadata in GREMLINS.md, got:\n%s", raw)
+	}
+}

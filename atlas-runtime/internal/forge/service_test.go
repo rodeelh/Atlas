@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -212,5 +213,18 @@ func TestServicePropose_PersistsCanonicalProposalShape(t *testing.T) {
 	}
 	if len(plans) == 0 || plans[0].HTTPRequest == nil {
 		t.Fatalf("stored proposal should have canonical plans, got %+v", plans)
+	}
+}
+
+func TestBuildResearchPromptMentionsBuiltInFileActions(t *testing.T) {
+	prompt := buildResearchPrompt(ProposeRequest{
+		Name:        "PDF Writer",
+		Description: "Create PDF reports",
+	})
+
+	for _, expected := range []string{"fs.create_pdf", "fs.create_docx", "fs.create_zip", "fs.save_image"} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("expected prompt to mention %s, got %q", expected, prompt)
+		}
 	}
 }

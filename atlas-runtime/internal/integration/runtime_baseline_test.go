@@ -128,8 +128,6 @@ func newRuntimeHarness(t *testing.T) *runtimeHarness {
 		domain.NewAuthDomain(authSvc, cfgStore, "", 1984),
 		domain.NewControlDomain(cfgStore, runtimeSvc, db, nil),
 		domain.NewChatDomain(chatSvc, bc, db),
-		nil,
-		nil,
 		authSvc,
 		runtimeSvc,
 		func() bool { return false },

@@ -83,7 +83,7 @@ func TestDetectTurnMode(t *testing.T) {
 
 func TestBuildSystemPromptAddsResponseContract(t *testing.T) {
 	cfg := storageTestDefaults()
-	prompt := buildSystemPrompt(cfg, nil, t.TempDir(), "Verify the current OpenAI CEO from the official website.")
+	prompt := buildSystemPrompt(cfg, nil, t.TempDir(), "Verify the current OpenAI CEO from the official website.", "")
 	if !strings.Contains(prompt, "<response_contract>") {
 		t.Fatal("expected response contract block in prompt")
 	}

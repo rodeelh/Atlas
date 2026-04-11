@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,11 +14,19 @@ import (
 	"atlas-runtime-go/internal/workflowexec"
 )
 
-type workflowPromptStep struct {
+type workflowStep struct {
 	ID     string
 	Title  string
-	Kind   string
+	Type   string
 	Prompt string
+	Action string
+	Args   any
+	Value  any
+}
+
+type workflowStepResult struct {
+	Output    string
+	Artifacts map[string]any
 }
 
 type workflowApprovalState struct {
@@ -35,7 +44,7 @@ type workflowApprovalState struct {
 }
 
 func (m *Module) executePreparedWorkflow(ctx context.Context, prepared workflowexec.PreparedRun) (status, summary, errorMessage string, stepRuns []map[string]any) {
-	steps := promptStepDefinitions(prepared.Definition)
+	steps := workflowStepDefinitions(prepared.Definition)
 	if requiresStepByStepApproval(prepared.Definition, steps) {
 		record, err := m.pauseWorkflowForApproval(prepared, 0, workflowexec.InitialStepRuns(prepared.Definition), "")
 		if err != nil {
@@ -67,7 +76,8 @@ func (m *Module) executePreparedWorkflow(ctx context.Context, prepared workflowe
 	stepRuns = workflowexec.InitialStepRuns(prepared.Definition)
 	summaries := make([]string, 0, len(steps))
 	policy := toolPolicyForDefinition(prepared.Definition)
-	objective := strings.TrimSpace(workflowexec.ComposePrompt(prepared.Definition, nil, ""))
+	objective := strings.TrimSpace(workflowexec.ComposePrompt(prepared.Definition, prepared.InputValues, ""))
+	stepResults := map[string]workflowStepResult{}
 	for idx, step := range steps {
 		stepIndex := stepRunIndex(stepRuns, step.ID)
 		if stepIndex < 0 {
@@ -75,30 +85,25 @@ func (m *Module) executePreparedWorkflow(ctx context.Context, prepared workflowe
 		}
 		markStepRun(stepRuns[stepIndex], "running", "", "")
 		_ = m.persistStepRuns(prepared.RunID, stepRuns)
-
-		message := composeStepPrompt(objective, step, idx+1, len(steps))
-		req := chat.MessageRequest{Message: message, ConversationID: prepared.ConversationID, ToolPolicy: policy}
-		resp, execErr := m.agent.HandleMessage(ctx, req)
+		result, stop, execErr := m.executeWorkflowStep(ctx, prepared, objective, step, idx, len(steps), policy, stepResults)
 		if execErr != nil {
 			markStepRun(stepRuns[stepIndex], "failed", "", execErr.Error())
 			_ = m.persistStepRuns(prepared.RunID, stepRuns)
 			return "failed", strings.Join(summaries, "\n\n"), execErr.Error(), stepRuns
 		}
-		if resp.Response.Status == "error" {
-			errMsg := strings.TrimSpace(resp.Response.AssistantMessage)
-			if errMsg == "" {
-				errMsg = strings.TrimSpace(resp.Response.ErrorMessage)
-			}
-			markStepRun(stepRuns[stepIndex], "failed", "", errMsg)
-			_ = m.persistStepRuns(prepared.RunID, stepRuns)
-			return "failed", strings.Join(summaries, "\n\n"), errMsg, stepRuns
-		}
-		out := strings.TrimSpace(resp.Response.AssistantMessage)
+		out := strings.TrimSpace(result.Output)
 		markStepRun(stepRuns[stepIndex], "completed", out, "")
+		if len(result.Artifacts) > 0 {
+			stepRuns[stepIndex]["artifacts"] = result.Artifacts
+		}
 		if out != "" {
 			summaries = append(summaries, fmt.Sprintf("%s: %s", step.Title, out))
 		}
+		stepResults[step.ID] = result
 		_ = m.persistStepRuns(prepared.RunID, stepRuns)
+		if stop {
+			return "completed", strings.Join(summaries, "\n\n"), "", stepRuns
+		}
 	}
 	return "completed", strings.Join(summaries, "\n\n"), "", stepRuns
 }
@@ -108,7 +113,7 @@ func (m *Module) pauseWorkflowForApproval(prepared workflowexec.PreparedRun, ste
 	if err != nil {
 		return nil, err
 	}
-	steps := promptStepDefinitions(prepared.Definition)
+	steps := workflowStepDefinitions(prepared.Definition)
 	approval, err := approvalStateForStep(prepared.Definition, prepared.RunID, prepared.WorkflowID, steps, stepIndex)
 	if err != nil {
 		return nil, err
@@ -145,7 +150,7 @@ func (m *Module) resumeWorkflowAfterApproval(ctx context.Context, runID string) 
 	if !ok {
 		return nil, fmt.Errorf("workflow not found: %s", row.WorkflowID)
 	}
-	steps := promptStepDefinitions(def)
+	steps := workflowStepDefinitions(def)
 	approval, err := parseWorkflowApproval(row.ApprovalJSON)
 	if err != nil {
 		return nil, err
@@ -172,26 +177,23 @@ func (m *Module) resumeWorkflowAfterApproval(ctx context.Context, runID string) 
 	}
 
 	objective := strings.TrimSpace(workflowexec.ComposePrompt(def, parseWorkflowInputValues(row.InputValuesJSON), ""))
-	message := composeStepPrompt(objective, steps[stepIndex], stepIndex+1, len(steps))
-	req := chat.MessageRequest{
-		Message:        message,
+	stepResults := existingStepResults(stepRuns)
+	result, _, execErr := m.executeWorkflowStep(ctx, workflowexec.PreparedRun{
+		RunID:          row.RunID,
+		WorkflowID:     row.WorkflowID,
 		ConversationID: stringPtrValue(row.ConversationID),
-		ToolPolicy:     toolPolicyForDefinition(def),
-	}
-	resp, execErr := m.agent.HandleMessage(ctx, req)
+		InputValues:    parseWorkflowInputValues(row.InputValuesJSON),
+		Definition:     def,
+	}, objective, steps[stepIndex], stepIndex, len(steps), toolPolicyForDefinition(def), stepResults)
 	if execErr != nil {
 		return m.failWorkflowRun(row, stepRuns, runIndex, execErr.Error())
 	}
-	if resp.Response.Status == "error" {
-		errMsg := strings.TrimSpace(resp.Response.AssistantMessage)
-		if errMsg == "" {
-			errMsg = strings.TrimSpace(resp.Response.ErrorMessage)
-		}
-		return m.failWorkflowRun(row, stepRuns, runIndex, errMsg)
-	}
 
-	out := strings.TrimSpace(resp.Response.AssistantMessage)
+	out := strings.TrimSpace(result.Output)
 	markStepRun(stepRuns[runIndex], "completed", out, "")
+	if len(result.Artifacts) > 0 {
+		stepRuns[runIndex]["artifacts"] = result.Artifacts
+	}
 	summary := appendWorkflowSummary(summaryFromRow(row), steps[stepIndex].Title, out)
 	row.StepRunsJSON = mustJSONString(stepRuns, "[]")
 	row.AssistantSummary = strPtrOrNil(summary)
@@ -282,7 +284,7 @@ func (m *Module) loadWorkflowRun(runID string) (storage.WorkflowRunRow, error) {
 	return *row, nil
 }
 
-func requiresStepByStepApproval(def map[string]any, steps []workflowPromptStep) bool {
+func requiresStepByStepApproval(def map[string]any, steps []workflowStep) bool {
 	return approvalModeForDefinition(def) == "step_by_step" && len(steps) > 0
 }
 
@@ -294,7 +296,7 @@ func approvalModeForDefinition(def map[string]any) string {
 	return mode
 }
 
-func approvalStateForStep(def map[string]any, runID, workflowID string, steps []workflowPromptStep, stepIndex int) (workflowApprovalState, error) {
+func approvalStateForStep(def map[string]any, runID, workflowID string, steps []workflowStep, stepIndex int) (workflowApprovalState, error) {
 	if stepIndex < 0 || stepIndex >= len(steps) {
 		return workflowApprovalState{}, fmt.Errorf("invalid step index %d", stepIndex)
 	}
@@ -406,27 +408,23 @@ func stringPtrValue(value *string) string {
 	return strings.TrimSpace(*value)
 }
 
-func promptStepDefinitions(def map[string]any) []workflowPromptStep {
-	raw, ok := def["steps"].([]any)
-	if !ok {
+func workflowStepDefinitions(def map[string]any) []workflowStep {
+	raw := workflowStepItems(def["steps"])
+	if len(raw) == 0 {
 		return nil
 	}
-	steps := make([]workflowPromptStep, 0, len(raw))
+	steps := make([]workflowStep, 0, len(raw))
 	for idx, item := range raw {
 		step, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		kind := stringValue(step, "kind")
-		if kind == "" {
-			kind = "prompt"
+		stepType := strings.ToLower(strings.TrimSpace(stringValue(step, "type")))
+		if stepType == "" {
+			stepType = strings.ToLower(strings.TrimSpace(stringValue(step, "kind")))
 		}
-		if kind != "prompt" {
-			continue
-		}
-		prompt := strings.TrimSpace(stringValue(step, "prompt"))
-		if prompt == "" {
-			continue
+		if stepType == "" {
+			stepType = "prompt"
 		}
 		id := stringValue(step, "id")
 		if id == "" {
@@ -436,12 +434,52 @@ func promptStepDefinitions(def map[string]any) []workflowPromptStep {
 		if title == "" {
 			title = fmt.Sprintf("Step %d", idx+1)
 		}
-		steps = append(steps, workflowPromptStep{ID: id, Title: title, Kind: kind, Prompt: prompt})
+		definition := workflowStep{
+			ID:     id,
+			Title:  title,
+			Type:   stepType,
+			Prompt: strings.TrimSpace(stringValue(step, "prompt")),
+			Action: strings.TrimSpace(stringValue(step, "action")),
+			Args:   step["args"],
+			Value:  step["value"],
+		}
+		if definition.Action == "" {
+			definition.Action = strings.TrimSpace(stringValue(step, "tool"))
+		}
+		switch definition.Type {
+		case "prompt", "llm.generate":
+			if definition.Prompt == "" {
+				continue
+			}
+		case "atlas.tool":
+			if definition.Action == "" {
+				continue
+			}
+		case "return":
+		default:
+			continue
+		}
+		steps = append(steps, definition)
 	}
 	return steps
 }
 
-func composeStepPrompt(objective string, step workflowPromptStep, index, total int) string {
+func workflowStepItems(raw any) []any {
+	switch items := raw.(type) {
+	case []any:
+		return items
+	case []map[string]any:
+		out := make([]any, 0, len(items))
+		for _, item := range items {
+			out = append(out, item)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func composeStepPrompt(objective string, step workflowStep, index, total int) string {
 	parts := []string{
 		fmt.Sprintf("Workflow step %d of %d: %s", index, total, step.Title),
 		step.Prompt,
@@ -450,6 +488,133 @@ func composeStepPrompt(objective string, step workflowPromptStep, index, total i
 		parts = append(parts, "Workflow context:\n"+strings.TrimSpace(objective))
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func (m *Module) executeWorkflowStep(
+	ctx context.Context,
+	prepared workflowexec.PreparedRun,
+	objective string,
+	step workflowStep,
+	index, total int,
+	policy *agent.ToolPolicy,
+	stepResults map[string]workflowStepResult,
+) (workflowStepResult, bool, error) {
+	switch step.Type {
+	case "prompt", "llm.generate":
+		message := composeStepPrompt(resolveString(objective, prepared.InputValues, stepResults), workflowStep{
+			ID:     step.ID,
+			Title:  step.Title,
+			Type:   step.Type,
+			Prompt: resolveString(step.Prompt, prepared.InputValues, stepResults),
+		}, index+1, total)
+		req := chat.MessageRequest{Message: message, ConversationID: prepared.ConversationID, ToolPolicy: policy}
+		resp, execErr := m.agent.HandleMessage(ctx, req)
+		if execErr != nil {
+			return workflowStepResult{}, false, execErr
+		}
+		if resp.Response.Status == "error" {
+			errMsg := strings.TrimSpace(resp.Response.AssistantMessage)
+			if errMsg == "" {
+				errMsg = strings.TrimSpace(resp.Response.ErrorMessage)
+			}
+			return workflowStepResult{}, false, errors.New(strings.TrimSpace(errMsg))
+		}
+		return workflowStepResult{Output: strings.TrimSpace(resp.Response.AssistantMessage)}, false, nil
+	case "atlas.tool":
+		if m.skills == nil {
+			return workflowStepResult{}, false, fmt.Errorf("workflow skills registry is unavailable")
+		}
+		resolvedArgs := resolveValue(step.Args, prepared.InputValues, stepResults)
+		if resolvedArgs == nil {
+			resolvedArgs = map[string]any{}
+		}
+		argsJSON, err := json.Marshal(resolvedArgs)
+		if err != nil {
+			return workflowStepResult{}, false, fmt.Errorf("marshal workflow tool args: %w", err)
+		}
+		result, err := m.skills.Execute(ctx, step.Action, argsJSON)
+		if err != nil {
+			return workflowStepResult{}, false, err
+		}
+		if !result.Success {
+			return workflowStepResult{}, false, errors.New(strings.TrimSpace(result.Summary))
+		}
+		return workflowStepResult{Output: strings.TrimSpace(result.Summary), Artifacts: result.Artifacts}, false, nil
+	case "return":
+		value := resolveValue(step.Value, prepared.InputValues, stepResults)
+		return workflowStepResult{Output: renderReturnValue(value)}, true, nil
+	default:
+		return workflowStepResult{}, false, fmt.Errorf("unsupported workflow step type: %s", step.Type)
+	}
+}
+
+func existingStepResults(stepRuns []map[string]any) map[string]workflowStepResult {
+	out := make(map[string]workflowStepResult, len(stepRuns))
+	for _, run := range stepRuns {
+		stepID := stringValue(run, "stepID")
+		if stepID == "" {
+			continue
+		}
+		result := workflowStepResult{Output: stringValue(run, "output")}
+		if artifacts, ok := run["artifacts"].(map[string]any); ok && len(artifacts) > 0 {
+			result.Artifacts = artifacts
+		}
+		out[stepID] = result
+	}
+	return out
+}
+
+func resolveValue(value any, inputs map[string]string, stepResults map[string]workflowStepResult) any {
+	switch raw := value.(type) {
+	case string:
+		return resolveString(raw, inputs, stepResults)
+	case []any:
+		out := make([]any, 0, len(raw))
+		for _, item := range raw {
+			out = append(out, resolveValue(item, inputs, stepResults))
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(raw))
+		for key, item := range raw {
+			out[key] = resolveValue(item, inputs, stepResults)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func resolveString(value string, inputs map[string]string, stepResults map[string]workflowStepResult) string {
+	if strings.TrimSpace(value) == "" {
+		return value
+	}
+	resolved := value
+	for key, input := range inputs {
+		resolved = strings.ReplaceAll(resolved, "{input."+key+"}", input)
+	}
+	for stepID, result := range stepResults {
+		resolved = strings.ReplaceAll(resolved, "{steps."+stepID+".output}", result.Output)
+		for artifactKey, artifactValue := range result.Artifacts {
+			resolved = strings.ReplaceAll(resolved, "{steps."+stepID+".artifacts."+artifactKey+"}", fmt.Sprint(artifactValue))
+		}
+	}
+	return resolved
+}
+
+func renderReturnValue(value any) string {
+	switch raw := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(raw)
+	default:
+		data, err := json.Marshal(raw)
+		if err != nil {
+			return strings.TrimSpace(fmt.Sprint(raw))
+		}
+		return string(data)
+	}
 }
 
 func stepRunIndex(stepRuns []map[string]any, stepID string) int {

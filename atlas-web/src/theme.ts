@@ -108,7 +108,7 @@ export const THEME_PRESETS: ThemePresetOption[] = [
   },
 ]
 
-const PRESET_TOKENS: Record<ThemePreset, { light: PresetModeTokens; dark: PresetModeTokens }> = {
+export const PRESET_TOKENS: Record<ThemePreset, { light: PresetModeTokens; dark: PresetModeTokens }> = {
   atlas: {
     light: {},
     dark: {},

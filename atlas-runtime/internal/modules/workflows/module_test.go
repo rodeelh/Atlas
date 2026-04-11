@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/features"
 	"atlas-runtime-go/internal/platform"
+	runtimeskills "atlas-runtime-go/internal/skills"
 	"atlas-runtime-go/internal/storage"
 )
 
@@ -197,6 +199,92 @@ func TestModule_RunWorkflowExecutesPromptStepsAndPersistsStepRuns(t *testing.T) 
 	}
 	if len(stepRuns) != 2 || stepRuns[0]["status"] != "completed" || stepRuns[1]["status"] != "completed" {
 		t.Fatalf("expected completed step runs, got %+v", stepRuns)
+	}
+}
+
+func TestModule_RunWorkflowExecutesTypedStepsAndDirectToolCall(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	outputDir := filepath.Join(dir, "exports")
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := runtimeskills.SaveFsRoots(dir, []runtimeskills.FsRoot{{ID: "root-1", Path: outputDir}}); err != nil {
+		t.Fatalf("SaveFsRoots: %v", err)
+	}
+
+	pdfPath := filepath.Join(outputDir, "theme.pdf")
+	if _, err := features.AppendWorkflowDefinition(dir, map[string]any{
+		"id":   "wf-typed",
+		"name": "Typed Theme To PDF",
+		"steps": []map[string]any{
+			{"id": "draft", "title": "Draft", "type": "llm.generate", "prompt": "Write a short brief about {input.theme}."},
+			{"id": "save", "title": "Save PDF", "type": "atlas.tool", "action": "fs.create_pdf", "args": map[string]any{
+				"path":    "{input.path}",
+				"title":   "{input.theme}",
+				"content": "{steps.draft.output}",
+			}},
+			{"id": "done", "title": "Return", "type": "return", "value": "Saved themed PDF to {input.path}"},
+		},
+	}); err != nil {
+		t.Fatalf("AppendWorkflowDefinition: %v", err)
+	}
+
+	stub := &stubAgentRuntime{}
+	stub.response.Response.AssistantMessage = "Atlas productivity systems are compounding well."
+	host := platform.NewHost(stubConfig{}, platform.NewSQLiteStorage(db), stub, platform.NoopContextAssembler{}, platform.NewInProcessBus(8))
+	module := New(dir)
+	module.SetSkillRegistry(runtimeskills.NewRegistry(dir, db, nil))
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	record, err := module.runWorkflowSync(context.Background(), "wf-typed", map[string]string{
+		"theme": "Atlas productivity",
+		"path":  pdfPath,
+	}, "test")
+	if err != nil {
+		t.Fatalf("runWorkflowSync: %v", err)
+	}
+	if record["status"] != "completed" {
+		t.Fatalf("expected completed run, got %+v", record)
+	}
+	if !strings.Contains(record["assistantSummary"].(string), "Saved themed PDF") {
+		t.Fatalf("expected return summary, got %+v", record["assistantSummary"])
+	}
+	if len(stub.requests) != 1 {
+		t.Fatalf("expected one llm.generate request, got %d", len(stub.requests))
+	}
+	if !strings.Contains(stub.requests[0].Message, "Atlas productivity") {
+		t.Fatalf("expected interpolated prompt, got %+v", stub.requests[0])
+	}
+	if _, err := os.Stat(pdfPath); err != nil {
+		t.Fatalf("expected pdf to be written: %v", err)
+	}
+
+	runs, err := db.ListWorkflowRuns("wf-typed", 1)
+	if err != nil {
+		t.Fatalf("ListWorkflowRuns: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected one workflow run, got %+v", runs)
+	}
+	var stepRuns []map[string]any
+	if err := json.Unmarshal([]byte(runs[0].StepRunsJSON), &stepRuns); err != nil {
+		t.Fatalf("decode step runs: %v", err)
+	}
+	if len(stepRuns) != 3 {
+		t.Fatalf("expected three step runs, got %+v", stepRuns)
+	}
+	for _, stepRun := range stepRuns {
+		if stepRun["status"] != "completed" {
+			t.Fatalf("expected completed typed step runs, got %+v", stepRuns)
+		}
 	}
 }
 

@@ -23,6 +23,7 @@ type PreparedRun struct {
 	WorkflowID     string
 	ConversationID string
 	Prompt         string
+	InputValues    map[string]string
 	Definition     map[string]any
 	Record         map[string]any
 	StartedAt      time.Time
@@ -104,6 +105,7 @@ func PrepareRun(store Store, workflowID, runID, conversationID, triggerSource st
 		WorkflowID:     workflowID,
 		ConversationID: conversationID,
 		Prompt:         prompt,
+		InputValues:    inputValues,
 		Definition:     def,
 		Record:         run,
 		StartedAt:      started,
@@ -178,8 +180,8 @@ func stringField(def map[string]any, key string) string {
 }
 
 func promptSteps(def map[string]any) []string {
-	raw, ok := def["steps"].([]any)
-	if !ok {
+	raw := workflowStepItems(def["steps"])
+	if len(raw) == 0 {
 		return nil
 	}
 	var out []string
@@ -207,8 +209,8 @@ func promptSteps(def map[string]any) []string {
 
 // InitialStepRuns builds the persisted step-run placeholders for a workflow definition.
 func InitialStepRuns(def map[string]any) []map[string]any {
-	raw, ok := def["steps"].([]any)
-	if !ok {
+	raw := workflowStepItems(def["steps"])
+	if len(raw) == 0 {
 		return []map[string]any{}
 	}
 	out := make([]map[string]any, 0, len(raw))
@@ -226,17 +228,37 @@ func InitialStepRuns(def map[string]any) []map[string]any {
 			title = fmt.Sprintf("Step %d", idx+1)
 		}
 		status := "pending"
-		if kind := stringField(step, "kind"); kind != "" && kind != "prompt" {
-			status = "skipped"
+		stepType := strings.ToLower(strings.TrimSpace(stringField(step, "type")))
+		if stepType == "" {
+			stepType = strings.ToLower(strings.TrimSpace(stringField(step, "kind")))
+		}
+		if stepType == "" {
+			stepType = "prompt"
 		}
 		out = append(out, map[string]any{
 			"id":     id + "-run",
 			"stepID": id,
 			"title":  title,
+			"type":   stepType,
 			"status": status,
 		})
 	}
 	return out
+}
+
+func workflowStepItems(raw any) []any {
+	switch items := raw.(type) {
+	case []any:
+		return items
+	case []map[string]any:
+		out := make([]any, 0, len(items))
+		for _, item := range items {
+			out = append(out, item)
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func trustScopeInstructions(def map[string]any) string {

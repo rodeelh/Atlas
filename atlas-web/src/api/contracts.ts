@@ -256,6 +256,30 @@ export interface SkillRecord {
   }
 }
 
+export interface ExecutableTarget {
+  type: 'skill' | 'workflow' | 'command' | string
+  ref: string
+}
+
+export interface CapabilityRecord {
+  id: string
+  kind: 'skill' | 'workflow' | 'automation' | string
+  name: string
+  description: string
+  source: string
+  category: string
+  target: ExecutableTarget
+  isEnabled: boolean
+  tags: string[]
+  inputSchema: Record<string, unknown>
+  outputSchema: Record<string, unknown>
+  artifactTypes: string[]
+  requiredCapabilities: string[]
+  requiredSecrets: string[]
+  requiredRoots: string[]
+  metadata: Record<string, unknown>
+}
+
 export interface MemoryItem {
   id: string
   category: string
@@ -358,6 +382,7 @@ export interface GremlinItem {
   isEnabled: boolean
   sourceType: string
   createdAt: string
+  target?: ExecutableTarget
   workflowID?: string
   workflowInputValues?: Record<string, string>
   nextRunAt?: string
@@ -365,6 +390,9 @@ export interface GremlinItem {
   lastRunStatus?: string
   telegramChatID?: number
   communicationDestination?: CommunicationDestination
+  gremlinDescription?: string
+  tags?: string[]
+  lastModifiedAt?: string
 }
 
 export interface AutomationSummary {
@@ -384,6 +412,7 @@ export interface AutomationSummary {
   health: string
   deliveryHealth: string
   destinationLabel?: string
+  target?: ExecutableTarget
 }
 
 export type ForgeProposalStatus = 'pending' | 'installed' | 'enabled' | 'rejected' | 'uninstalled'
@@ -559,6 +588,13 @@ export interface GremlinRun {
   errorMessage?: string
   conversationID?: string
   workflowRunID?: string
+  triggerSource?: string
+  executionStatus?: string
+  deliveryStatus?: string
+  deliveryError?: string
+  durationMs?: number
+  retryCount?: number
+  artifactsJSON?: string
 }
 
 export interface WorkflowTrustScope {

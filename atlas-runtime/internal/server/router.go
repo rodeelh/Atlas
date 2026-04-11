@@ -21,8 +21,6 @@ func BuildRouter(
 	authDomain *domain.AuthDomain,
 	controlDomain *domain.ControlDomain,
 	chatDomain *domain.ChatDomain,
-	approvalsDomain *domain.ApprovalsDomain,
-	commsDomain *domain.CommunicationsDomain,
 	authSvc *auth.Service,
 	runtimeSvc *runtime.Service,
 	remoteEnabled func() bool,
@@ -75,12 +73,6 @@ func BuildRouter(
 		// All other domain routes.
 		controlDomain.Register(protected)
 		chatDomain.Register(protected)
-		if approvalsDomain != nil {
-			approvalsDomain.Register(protected)
-		}
-		if commsDomain != nil {
-			commsDomain.Register(protected)
-		}
 		if host != nil {
 			host.ApplyProtected(protected)
 		}

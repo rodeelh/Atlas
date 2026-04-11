@@ -24,9 +24,25 @@ import (
 // wordRe extracts lowercase alphanumeric tokens from a string.
 var wordRe = regexp.MustCompile(`[a-z0-9]+`)
 
+var tokenAliases = map[string]string{
+	"filed":  "file",
+	"fileds": "files",
+}
+
 // tokenize returns the ordered slice of lowercase word tokens in s.
 func tokenize(s string) []string {
-	return wordRe.FindAllString(strings.ToLower(s), -1)
+	raw := wordRe.FindAllString(strings.ToLower(s), -1)
+	if len(raw) == 0 {
+		return nil
+	}
+	tokens := make([]string, 0, len(raw))
+	for _, token := range raw {
+		if alias, ok := tokenAliases[token]; ok {
+			token = alias
+		}
+		tokens = append(tokens, token)
+	}
+	return tokens
 }
 
 // negationMarkers are tokens that negate the following 1–2 words.
@@ -229,15 +245,23 @@ var intentSignals = map[string]groupSignals{
 	"files": {
 		phrases: []string{
 			"read this file", "read the file", "write to file",
-			"create a file", "list files", "find files", "search in files",
+			"create a file", "create files", "save files", "save file",
+			"create and save files", "list files", "find files", "search in files",
+			"create a pdf", "create pdf", "make a pdf", "create a docx",
+			"make a docx", "create a zip", "zip these files", "save this image",
 			"save to disk", "create a folder", "read the contents of",
 			"what's in this file", "write to disk",
 		},
 		words: []string{
-			"file", "folder", "directory", "disk", "csv", "pdf", "config", "log",
+			"file", "files", "folder", "directory", "disk", "csv", "pdf", "docx", "zip",
+			"png", "jpeg", "jpg", "gif", "config", "log",
 		},
 		pairs: [][2]string{
 			{"read", "file"}, {"write", "file"}, {"create", "file"},
+			{"create", "files"}, {"save", "files"},
+			{"create", "pdf"}, {"make", "pdf"}, {"create", "docx"},
+			{"make", "docx"}, {"create", "zip"}, {"zip", "files"},
+			{"save", "image"},
 			{"delete", "file"}, {"list", "files"}, {"find", "file"},
 			{"save", "file"}, {"create", "folder"}, {"search", "files"},
 			{"read", "folder"}, {"list", "directory"}, {"write", "disk"},

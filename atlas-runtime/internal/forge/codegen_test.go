@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"atlas-runtime-go/internal/features"
 )
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -62,6 +64,64 @@ func makeProposal(t *testing.T, withContract bool) ForgeProposal {
 		SpecJSON:     string(specJSON),
 		PlansJSON:    string(plansJSON),
 		ContractJSON: contractJSON,
+	}
+}
+
+func makeWorkflowProposal(t *testing.T) ForgeProposal {
+	t.Helper()
+
+	spec := ForgeSkillSpec{
+		ID:          "theme-pdf",
+		Name:        "Theme PDF",
+		Description: "Generate themed text and save it as a PDF.",
+		Category:    "productivity",
+		RiskLevel:   "low",
+		Tags:        []string{"pdf", "workflow"},
+		Actions: []ForgeActionSpec{
+			{ID: "draft", Name: "Draft", Description: "Draft themed content.", PermissionLevel: "read"},
+			{ID: "save-pdf", Name: "Save PDF", Description: "Save the PDF.", PermissionLevel: "draft"},
+			{ID: "done", Name: "Done", Description: "Return completion summary.", PermissionLevel: "read"},
+		},
+	}
+	specJSON, _ := json.Marshal(spec)
+
+	plans := []ForgeActionPlan{
+		{
+			ActionID: "draft",
+			Type:     "llm.generate",
+			WorkflowStep: &WorkflowStepPlan{
+				Prompt: "Write a concise brief about {input.theme}.",
+			},
+		},
+		{
+			ActionID: "save-pdf",
+			Type:     "atlas.tool",
+			WorkflowStep: &WorkflowStepPlan{
+				Action: "fs.create_pdf",
+				Args: map[string]any{
+					"path":    "{input.path}",
+					"title":   "{input.theme}",
+					"content": "{steps.draft.output}",
+				},
+			},
+		},
+		{
+			ActionID: "done",
+			Type:     "return",
+			WorkflowStep: &WorkflowStepPlan{
+				Value: "Saved themed PDF to {input.path}",
+			},
+		},
+	}
+	plansJSON, _ := json.Marshal(plans)
+
+	return ForgeProposal{
+		ID:          "prop-workflow-1",
+		SkillID:     "theme-pdf",
+		Name:        "Theme PDF",
+		Description: "Generate themed text and save it as a PDF.",
+		SpecJSON:    string(specJSON),
+		PlansJSON:   string(plansJSON),
 	}
 }
 
@@ -221,6 +281,35 @@ func TestRemoveCustomSkillDir(t *testing.T) {
 	// Second remove must not error.
 	if err := RemoveCustomSkillDir(supportDir, "weather-gov"); err != nil {
 		t.Fatalf("second RemoveCustomSkillDir should be no-op: %v", err)
+	}
+}
+
+func TestInstallProposalArtifacts_InstallsWorkflowBackedProposal(t *testing.T) {
+	supportDir := t.TempDir()
+	proposal := makeWorkflowProposal(t)
+
+	target, err := InstallProposalArtifacts(supportDir, proposal)
+	if err != nil {
+		t.Fatalf("InstallProposalArtifacts: %v", err)
+	}
+	if target == nil || target.Type != "workflow" || target.Ref != "theme-pdf.v1" {
+		t.Fatalf("unexpected install target: %+v", target)
+	}
+
+	raw := features.GetWorkflowDefinition(supportDir, "theme-pdf.v1")
+	if raw == nil {
+		t.Fatal("expected installed workflow definition")
+	}
+	var def map[string]any
+	if err := json.Unmarshal(raw, &def); err != nil {
+		t.Fatalf("decode workflow definition: %v", err)
+	}
+	steps, _ := def["steps"].([]any)
+	if len(steps) != 3 {
+		t.Fatalf("expected 3 workflow steps, got %+v", def["steps"])
+	}
+	if def["forgeSkillID"] != "theme-pdf" {
+		t.Fatalf("expected forgeSkillID metadata, got %+v", def)
 	}
 }
 

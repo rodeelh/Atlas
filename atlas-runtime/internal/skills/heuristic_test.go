@@ -54,6 +54,42 @@ func TestToolDefsForGroupsForMessageNarrowsWeatherGroup(t *testing.T) {
 	}
 }
 
+func TestSelectiveToolDefsIncludesFilesystemForCreateAndSaveFiles(t *testing.T) {
+	registry := NewRegistry(t.TempDir(), nil, nil)
+
+	tools := registry.SelectiveToolDefs("I want Atlas to create and save files for me.")
+	names := toolNames(tools)
+
+	if !hasToolName(tools, "fs__write_file") {
+		t.Fatalf("expected fs.write_file to be selected, got %v", names)
+	}
+	if !hasToolName(tools, "fs__create_directory") {
+		t.Fatalf("expected fs.create_directory to be selected, got %v", names)
+	}
+}
+
+func TestSelectiveToolDefsIncludesFilesystemForCommonTypoFileds(t *testing.T) {
+	registry := NewRegistry(t.TempDir(), nil, nil)
+
+	tools := registry.SelectiveToolDefs("Time to super charge atlas productivity... I want atlas to be able to create and save fileds")
+	names := toolNames(tools)
+
+	if !hasToolName(tools, "fs__write_file") {
+		t.Fatalf("expected fs.write_file to be selected for typo input, got %v", names)
+	}
+}
+
+func TestSelectiveToolDefsIncludesPDFToolForCreatePDFRequest(t *testing.T) {
+	registry := NewRegistry(t.TempDir(), nil, nil)
+
+	tools := registry.SelectiveToolDefs("Create a PDF with today's project summary.")
+	names := toolNames(tools)
+
+	if !hasToolName(tools, "fs__create_pdf") {
+		t.Fatalf("expected fs.create_pdf to be selected, got %v", names)
+	}
+}
+
 func hasToolName(tools []map[string]any, want string) bool {
 	for _, tool := range tools {
 		fn, _ := tool["function"].(map[string]any)

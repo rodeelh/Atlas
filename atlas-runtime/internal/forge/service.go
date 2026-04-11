@@ -22,6 +22,11 @@ type Service struct {
 	supportDir  string
 }
 
+type InstallTarget struct {
+	Type string `json:"type"`
+	Ref  string `json:"ref"`
+}
+
 // NewService returns a ready Forge Service.
 func NewService(supportDir string) *Service {
 	return &Service{supportDir: supportDir}
@@ -149,7 +154,7 @@ func (s *Service) research(ctx context.Context, id string, req ProposeRequest, p
 // BuildInstalledRecord converts a ForgeProposal into a SkillRecord-shaped map
 // suitable for forge-installed.json. The web UI should prefer the live registry
 // view, but this snapshot remains useful for install/uninstall bookkeeping.
-func BuildInstalledRecord(p ForgeProposal, lifecycleState string) map[string]any {
+func BuildInstalledRecord(p ForgeProposal, lifecycleState string, target *InstallTarget) map[string]any {
 	var spec ForgeSkillSpec
 	if err := json.Unmarshal([]byte(p.SpecJSON), &spec); err != nil {
 		spec = ForgeSkillSpec{}
@@ -175,6 +180,11 @@ func BuildInstalledRecord(p ForgeProposal, lifecycleState string) map[string]any
 	if requiredSecrets == nil {
 		requiredSecrets = []string{}
 	}
+	metadata := map[string]any{}
+	if target != nil && strings.TrimSpace(target.Type) != "" {
+		metadata["executorType"] = target.Type
+		metadata["target"] = map[string]any{"type": target.Type, "ref": target.Ref}
+	}
 	return map[string]any{
 		"id": p.SkillID,
 		"manifest": map[string]any{
@@ -190,9 +200,11 @@ func BuildInstalledRecord(p ForgeProposal, lifecycleState string) map[string]any
 			"capabilities":    []string{},
 			"tags":            spec.Tags,
 			"requiredSecrets": requiredSecrets,
+			"metadata":        metadata,
 		},
 		"actions":         actions,
 		"requiredSecrets": requiredSecrets,
+		"target":          metadata["target"],
 	}
 }
 
@@ -205,6 +217,10 @@ func buildResearchPrompt(req ProposeRequest) string {
 	if req.APIURL != "" {
 		sb.WriteString("API base URL: " + req.APIURL + "\n")
 	}
+	sb.WriteString("Important constraints:\n")
+	sb.WriteString("- Do not propose a Forge skill for creating PDFs, DOCX files, ZIP archives, or image files. Atlas already supports those natively with fs.create_pdf, fs.create_docx, fs.create_zip, fs.save_image, and fs.write_binary_file.\n")
+	sb.WriteString("- If a local plan uses python3, it must use the Python standard library only. Do not rely on reportlab, pillow, python-docx, pypdf, requests, or any other third-party dependency.\n")
+	sb.WriteString("- Prefer a real external API integration or a true local app automation workflow. Do not invent custom local file-generation skills for capabilities Atlas already has.\n")
 	sb.WriteString(`
 Return a JSON object with these exact fields:
 {
