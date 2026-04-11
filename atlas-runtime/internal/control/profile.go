@@ -49,6 +49,11 @@ func (s *ProfileService) SetLocation(city, country string) (LocationResponse, er
 }
 
 func (s *ProfileService) DetectLocation() (LocationResponse, error) {
+	// Try CoreLocation (WiFi/GPS) first — much more accurate than IP.
+	// Falls back to IP if the helper is missing, denied, or times out.
+	if err := location.DetectFromCoreLocation(); err == nil {
+		return locationToResponse(location.Get()), nil
+	}
 	if err := location.DetectFromIP(); err != nil {
 		return LocationResponse{}, err
 	}

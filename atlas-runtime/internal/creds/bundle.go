@@ -19,6 +19,7 @@ type Bundle struct {
 	OllamaAPIKey       string            `json:"ollamaAPIKey"`
 	BraveSearchAPIKey  string            `json:"braveSearchAPIKey"`
 	FinnhubAPIKey      string            `json:"finnhubAPIKey"`
+	GoogleMapsAPIKey   string            `json:"googleMapsAPIKey"`
 	TelegramBotToken   string            `json:"telegramBotToken"`
 	DiscordBotToken    string            `json:"discordBotToken"`
 	SlackBotToken      string            `json:"slackBotToken"`
@@ -105,6 +106,8 @@ func Store(provider, key, name string) error {
 		m["braveSearchAPIKey"] = key
 	case "finnhub":
 		m["finnhubAPIKey"] = key
+	case "googlemaps", "googleMaps":
+		m["googleMapsAPIKey"] = key
 	default:
 		// Custom key — stored under customSecrets[name].
 		keyName := name

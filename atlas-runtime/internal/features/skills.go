@@ -143,6 +143,22 @@ func builtInSkills() []SkillRecord {
 		},
 		{
 			Manifest: SkillManifestInfo{
+				ID: "maps", Name: "Maps", Version: "1.0",
+				Description:    "Geocoding, place search, directions, distances, and current location. Uses Nominatim (free) and Google Maps (when key is configured).",
+				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,
+				Category: "information", Capabilities: []string{"maps", "geocoding", "directions"}, Tags: []string{"maps", "location", "navigation"},
+			},
+			Actions: []SkillAction{
+				{ID: "maps.geocode", Name: "Geocode", Description: "Convert an address to coordinates.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "maps.reverse_geocode", Name: "Reverse Geocode", Description: "Convert coordinates to an address.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "maps.search", Name: "Place Search", Description: "Search for places and points of interest.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "maps.directions", Name: "Directions", Description: "Turn-by-turn directions between two locations.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "maps.distance", Name: "Distance", Description: "Distance and travel time between two locations.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "maps.my_location", Name: "My Location", Description: "Current location from IP-based geolocation.", PermissionLevel: "read", IsEnabled: true},
+			},
+		},
+		{
+			Manifest: SkillManifestInfo{
 				ID: "web-research", Name: "Web Research", Version: "1.0",
 				Description:    "Search, fetch, and summarize web sources.",
 				LifecycleState: "enabled", RiskLevel: "low", IsUserVisible: true,
@@ -255,19 +271,15 @@ func builtInSkills() []SkillRecord {
 				Category: "system", Capabilities: []string{"shell_exec", "process_management"}, Tags: []string{"terminal", "shell", "processes"},
 			},
 			Actions: []SkillAction{
-				{ID: "terminal.run_command", Name: "Run Command", Description: "Run a shell command by executable name and argument list. No shell expansion — injection-safe.", PermissionLevel: "execute", IsEnabled: true},
-				{ID: "terminal.run_script", Name: "Run Script", Description: "Execute a multi-line shell script via /bin/sh. Supports pipes and redirects.", PermissionLevel: "execute", IsEnabled: true},
+				{ID: "terminal.run_command", Name: "Run Command", Description: "Run any command by executable and argument list. No shell expansion — each arg is a separate element. Always requires approval.", PermissionLevel: "execute", IsEnabled: true},
+				{ID: "terminal.run_script", Name: "Run Script", Description: "Execute a multi-line shell script via /bin/zsh. Supports pipes, redirects, and zsh syntax.", PermissionLevel: "execute", IsEnabled: true},
 				{ID: "terminal.read_env", Name: "Read Environment", Description: "Read environment variable values by name.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "terminal.list_processes", Name: "List Processes", Description: "List running processes, optionally filtered by name.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "terminal.kill_process", Name: "Kill Process", Description: "Send a signal to a process by PID.", PermissionLevel: "execute", IsEnabled: true},
 				{ID: "terminal.get_working_directory", Name: "Get Working Directory", Description: "Return the runtime's current working directory.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "terminal.which", Name: "Which", Description: "Locate a command on PATH.", PermissionLevel: "read", IsEnabled: true},
-				{ID: "terminal.brew_install", Name: "Brew Install", Description: "Install Homebrew formulae or casks. Always requires approval.", PermissionLevel: "execute", IsEnabled: true},
-				{ID: "terminal.brew_uninstall", Name: "Brew Uninstall", Description: "Uninstall Homebrew formulae or casks. Always requires approval.", PermissionLevel: "execute", IsEnabled: true},
-				{ID: "terminal.brew_upgrade", Name: "Brew Upgrade", Description: "Upgrade Homebrew packages. Always requires approval.", PermissionLevel: "execute", IsEnabled: true},
-				{ID: "terminal.brew_info", Name: "Brew Info", Description: "Get info about a Homebrew package.", PermissionLevel: "read", IsEnabled: true},
-				{ID: "terminal.brew_list", Name: "Brew List", Description: "List installed Homebrew packages.", PermissionLevel: "read", IsEnabled: true},
-				{ID: "terminal.pip_install", Name: "Pip Install", Description: "Install Python packages via pip3. Always requires approval.", PermissionLevel: "execute", IsEnabled: true},
+				{ID: "terminal.run_as_admin", Name: "Run as Admin", Description: "Run a command with administrator privileges via macOS auth dialog.", PermissionLevel: "execute", IsEnabled: true},
+				{ID: "terminal.run_background", Name: "Run in Background", Description: "Start a long-running command asynchronously. Atlas sends a follow-up message when it completes.", PermissionLevel: "execute", IsEnabled: true},
 			},
 		},
 		{

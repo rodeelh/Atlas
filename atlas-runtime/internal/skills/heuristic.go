@@ -92,6 +92,35 @@ var intentSignals = map[string]groupSignals{
 		},
 	},
 
+	// ── maps ─────────────────────────────────────────────────────────────────
+	"maps": {
+		phrases: []string{
+			"get directions", "directions from", "directions to",
+			"how do i get to", "how to get to", "navigate to",
+			"how far is", "how far away", "distance from", "distance to",
+			"find nearby", "places near", "near me", "what's near",
+			"restaurants near", "hotels near", "shops near",
+			"route from", "route to", "route between",
+			"where is", "what's the address", "what is the address",
+			"geocode this", "coordinates for", "reverse geocode",
+			"my location", "current location", "where am i",
+			"map of", "location of",
+		},
+		words: []string{
+			"directions", "navigate", "navigation", "nearby",
+			"route", "geocode", "latitude", "longitude", "coordinates",
+			"maps", "location",
+		},
+		pairs: [][2]string{
+			{"get", "directions"}, {"how", "far"}, {"find", "nearby"},
+			{"near", "me"}, {"distance", "from"}, {"distance", "to"},
+			{"route", "to"}, {"route", "from"}, {"where", "is"},
+			{"my", "location"}, {"current", "location"},
+			{"coordinates", "for"}, {"address", "for"},
+			{"driving", "to"}, {"walking", "to"},
+		},
+	},
+
 	// ── weather ──────────────────────────────────────────────────────────────
 	"weather": {
 		phrases: []string{
@@ -229,15 +258,43 @@ var intentSignals = map[string]groupSignals{
 			"shell command", "run in terminal", "kill this process",
 			"kill the process", "what processes are running",
 			"run applescript", "execute applescript",
+			// package managers & build tools
+			"brew install", "brew uninstall", "brew upgrade", "brew update",
+			"npm install", "npm run", "npm build", "npx ",
+			"pip install", "pip3 install", "pip uninstall",
+			"cargo install", "go install", "make install",
+			"git clone", "git pull", "git push", "git commit",
+			"yarn install", "yarn add", "yarn build",
+			// install/check intent
+			"is installed", "check if installed", "already installed",
+			"not installed", "install it", "install the",
+			// process management
+			"kill the app", "restart the process", "stop the process",
+			// env & path
+			"check my path", "what's in path", "environment variable",
 		},
 		words: []string{
 			"terminal", "bash", "zsh", "applescript",
+			"brew", "homebrew", "npm", "npx", "pip", "pip3",
+			"cargo", "makefile", "dockerfile",
+			"chmod", "chown", "sudo", "daemon",
 		},
 		pairs: [][2]string{
 			{"run", "command"}, {"execute", "command"}, {"run", "script"},
 			{"kill", "process"}, {"list", "processes"}, {"check", "processes"},
 			{"run", "applescript"}, {"execute", "script"}, {"shell", "script"},
 			{"run", "terminal"}, {"terminal", "command"},
+			// install/build/check pairs
+			{"install", "package"}, {"install", "tool"}, {"install", "software"},
+			{"install", "dependency"}, {"install", "dependencies"},
+			{"check", "installed"}, {"is", "installed"}, {"already", "installed"},
+			{"run", "build"}, {"run", "tests"}, {"run", "test"},
+			{"build", "project"}, {"compile", "code"},
+			{"update", "package"}, {"upgrade", "package"},
+			{"check", "version"}, {"get", "version"},
+			// git
+			{"git", "clone"}, {"git", "pull"}, {"git", "push"},
+			{"git", "commit"}, {"git", "status"},
 		},
 	},
 

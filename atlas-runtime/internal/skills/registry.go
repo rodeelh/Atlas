@@ -180,7 +180,6 @@ func NewRegistry(supportDir string, db *storage.DB, browserMgr *browser.Manager)
 	r.registerFilesystem()
 	r.registerSystem()
 	r.registerTerminal()
-	r.registerPackageManagers()
 	r.registerAppleScript()
 	r.registerFinance()
 	r.registerImage()
@@ -191,6 +190,7 @@ func NewRegistry(supportDir string, db *storage.DB, browserMgr *browser.Manager)
 	r.registerBrowser()
 	r.registerMemory()
 	r.registerVoice()
+	r.registerMaps()
 	return r
 }
 
@@ -297,7 +297,7 @@ func (r *Registry) ToolDefsForGroupsForMessage(groups []string, userMessage stri
 }
 
 var capabilityGroupOrder = []string{
-	"meta", "weather", "web", "finance", "office", "media", "mac", "shell",
+	"meta", "weather", "maps", "web", "finance", "office", "media", "mac", "shell",
 	"files", "vault", "browser", "voice", "communication", "creative",
 	"workflow", "automation", "forge", "dashboards", "custom",
 }
@@ -308,6 +308,8 @@ func capabilityGroupDescription(group string) string {
 		return "Atlas runtime and self-status questions."
 	case "weather":
 		return "Current weather, forecasts, and local conditions."
+	case "maps":
+		return "Geocoding, place search, directions, distances, and current location."
 	case "web":
 		return "Search the web, read URLs, and summarize web content."
 	case "finance":
@@ -401,6 +403,8 @@ func toolCapabilityGroup(name string) string {
 	// Scored groups
 	case strings.HasPrefix(name, "weather."):
 		return "weather"
+	case strings.HasPrefix(name, "maps."):
+		return "maps"
 	case strings.HasPrefix(name, "web."), strings.HasPrefix(name, "websearch."):
 		return "web"
 	case strings.HasPrefix(name, "finance."),
@@ -459,6 +463,7 @@ func toolCapabilityGroup(name string) string {
 var groupThresholds = map[string]int{
 	"meta":          1,
 	"weather":       1,
+	"maps":          1,
 	"web":           1,
 	"finance":       1,
 	"office":        1,

@@ -1,4 +1,4 @@
-.PHONY: build build-tui build-web install-web test \
+.PHONY: build build-tui build-web build-location-helper install-web test \
         install uninstall \
         run dev \
         daemon-start daemon-stop daemon-restart daemon-status daemon-logs \
@@ -8,9 +8,10 @@
         tidy clean check bump \
         test-fast test-standard verify-release scorecard benchmark-chat
 
-RUNTIME_DIR  := atlas-runtime
-TUI_DIR      := atlas-tui
-WEB_DIR      := atlas-web
+RUNTIME_DIR         := atlas-runtime
+TUI_DIR             := atlas-tui
+WEB_DIR             := atlas-web
+LOCATION_HELPER_DIR := $(RUNTIME_DIR)/tools/atlas-location
 
 BINARY       := Atlas
 TUI_BINARY   := atlas
@@ -40,8 +41,22 @@ KOKORO_PIP_VERSION ?= 0.4.7
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
-build:
+build: build-location-helper
 	cd $(RUNTIME_DIR) && go build -o $(BINARY) ./cmd/atlas-runtime
+
+build-location-helper:
+	@echo "→ Building GPS location helper..."
+	@if command -v swiftc >/dev/null 2>&1; then \
+		swiftc -O -o $(RUNTIME_DIR)/atlas-location \
+			$(LOCATION_HELPER_DIR)/main.swift 2>&1 && \
+		(codesign --force --sign - \
+			--entitlements $(LOCATION_HELPER_DIR)/location.entitlements \
+			$(RUNTIME_DIR)/atlas-location 2>/dev/null || \
+		codesign --force --sign - $(RUNTIME_DIR)/atlas-location 2>/dev/null || true) && \
+		echo "✓ atlas-location GPS helper built and signed"; \
+	else \
+		echo "→ swiftc not found — GPS location helper skipped (IP fallback will be used)"; \
+	fi
 
 build-tui:
 	cd $(TUI_DIR) && go build -o $(TUI_BINARY) .
@@ -65,6 +80,7 @@ tidy:
 
 clean:
 	rm -f $(RUNTIME_DIR)/$(BINARY)
+	rm -f $(RUNTIME_DIR)/atlas-location
 	rm -f $(TUI_DIR)/$(TUI_BINARY)
 
 # ── Run (dev) ─────────────────────────────────────────────────────────────────
@@ -216,6 +232,10 @@ install: build build-tui build-web download-engine download-voice
 	@echo "→ Installing runtime binary and web assets..."
 	@mkdir -p "$$HOME/Library/Application Support/Atlas"
 	cp $(RUNTIME_DIR)/$(BINARY) "$$HOME/Library/Application Support/Atlas/$(BINARY)"
+	@if [ -f $(RUNTIME_DIR)/atlas-location ]; then \
+		cp $(RUNTIME_DIR)/atlas-location "$$HOME/Library/Application Support/Atlas/atlas-location"; \
+		echo "→ atlas-location GPS helper installed"; \
+	fi
 	rsync -a --delete $(WEB_DIR)/dist/ "$$HOME/Library/Application Support/Atlas/web/"
 	@echo "→ Creating log directory..."
 	@mkdir -p "$$HOME/Library/Logs/Atlas"

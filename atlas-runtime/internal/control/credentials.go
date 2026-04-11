@@ -22,6 +22,7 @@ type APIKeyStatus struct {
 	OpenRouterKeySet  bool              `json:"openRouterKeySet"`
 	LMStudioKeySet    bool              `json:"lmStudioKeySet"`
 	FinnhubKeySet     bool              `json:"finnhubKeySet"`
+	GoogleMapsKeySet  bool              `json:"googleMapsKeySet"`
 	CustomKeys        []string          `json:"customKeys"`
 	CustomKeyLabels   map[string]string `json:"customKeyLabels"`
 }
@@ -53,6 +54,7 @@ func (s *CredentialsService) Status() APIKeyStatus {
 		LMStudioAPIKey     string            `json:"lmStudioAPIKey"`
 		OllamaAPIKey       string            `json:"ollamaAPIKey"`
 		FinnhubAPIKey      string            `json:"finnhubAPIKey"`
+		GoogleMapsAPIKey   string            `json:"googleMapsAPIKey"`
 		CustomSecrets      map[string]string `json:"customSecrets"`
 		CustomSecretLabels map[string]string `json:"customSecretLabels"`
 	}
@@ -71,6 +73,7 @@ func (s *CredentialsService) Status() APIKeyStatus {
 	status.LMStudioKeySet = bundle.LMStudioAPIKey != ""
 	status.OllamaKeySet = bundle.OllamaAPIKey != ""
 	status.FinnhubKeySet = bundle.FinnhubAPIKey != ""
+	status.GoogleMapsKeySet = bundle.GoogleMapsAPIKey != ""
 	for k := range bundle.CustomSecrets {
 		status.CustomKeys = append(status.CustomKeys, k)
 		if lbl, ok := bundle.CustomSecretLabels[k]; ok && lbl != "" {
@@ -115,6 +118,8 @@ func (s *CredentialsService) Store(provider, key, name, label string) error {
 		m["braveSearchAPIKey"] = key
 	case "finnhub":
 		m["finnhubAPIKey"] = key
+	case "googlemaps", "googleMaps":
+		m["googleMapsAPIKey"] = key
 	default:
 		keyName := name
 		if keyName == "" {
