@@ -298,7 +298,14 @@ export function Settings() {
           <ToggleField checked={draft.memoryEnabled} onChange={(v) => update('memoryEnabled', v)} />
         </SettingsRow>
         <SettingsRow label="Memories per turn" sublabel="How many recalled facts are injected as context per request" hint="Higher values give Atlas more long-term context but use more of the model's token budget.">
-          <input class="input input-sm" type="number" min={0} max={20} value={draft.maxRetrievedMemoriesPerTurn} onInput={(e) => update('maxRetrievedMemoriesPerTurn', Number((e.target as HTMLInputElement).value))} />
+          <select class="input" value={draft.maxRetrievedMemoriesPerTurn} onChange={(e) => update('maxRetrievedMemoriesPerTurn', Number((e.target as HTMLSelectElement).value))}>
+            <option value={0}>0 — disabled</option>
+            <option value={2}>2 — minimal</option>
+            <option value={3}>3</option>
+            <option value={4}>4 — default</option>
+            <option value={6}>6 — more context</option>
+            <option value={10}>10 — maximum</option>
+          </select>
         </SettingsRow>
       </SettingsGroup>
 
