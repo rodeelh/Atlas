@@ -11,25 +11,27 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"atlas-runtime-go/internal/logstore"
 )
 
 func (r *Registry) registerTerminal() {
 	r.register(SkillEntry{
 		Def: ToolDef{
 			Name:        "terminal.run_command",
-			Description: "Run a shell command by executable name and argument list. The command is executed directly (no shell), preventing injection. Returns combined stdout+stderr with the exit code.",
+			Description: "Run any command by executable name and argument list. Executed directly (no shell), so each arg is a separate element — no quoting or escaping needed. Returns combined stdout+stderr and exit code. Always requires user approval.",
 			Properties: map[string]ToolParam{
 				"command": {
-					Description: "The executable to run (e.g. 'git', 'ls', 'python3')",
+					Description: "The executable to run (e.g. 'brew', 'git', 'python3', 'curl')",
 					Type:        "string",
 				},
 				"args": {
-					Description: "Arguments to pass to the command — each element is a separate argument, not a shell string",
+					Description: "Arguments — each element is a separate argument (e.g. [\"install\", \"pandoc\"])",
 					Type:        "array",
 					Items:       &ToolParam{Type: "string"},
 				},
 				"workingDir": {
-					Description: "Absolute path to run the command from (optional, defaults to user home directory)",
+					Description: "Absolute working directory (optional, defaults to user home)",
 					Type:        "string",
 				},
 			},
@@ -37,13 +39,13 @@ func (r *Registry) registerTerminal() {
 		},
 		PermLevel:   "execute",
 		ActionClass: ActionClassDestructiveLocal,
-		Fn:          terminalRunCommand,
+		FnResult:    terminalRunCommand,
 	})
 
 	r.register(SkillEntry{
 		Def: ToolDef{
 			Name:        "terminal.run_script",
-			Description: "Execute a multi-line shell script via /bin/sh. Supports pipes, redirects, and shell expansion. Every call requires user approval unless auto_approve is set.",
+			Description: "Execute a multi-line shell script via /bin/zsh. Supports pipes, redirects, loops, and zsh syntax. For tools that need shell initialization (nvm, rbenv, pyenv, conda), prefix the script with 'source ~/.zshrc'. Always requires user approval.",
 			Properties: map[string]ToolParam{
 				"script": {
 					Description: "Shell script to execute (passed to /bin/sh -c)",
@@ -58,7 +60,24 @@ func (r *Registry) registerTerminal() {
 		},
 		PermLevel:   "execute",
 		ActionClass: ActionClassDestructiveLocal, // full shell — highest local risk
-		Fn:          terminalRunScript,
+		FnResult:    terminalRunScript,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "terminal.run_as_admin",
+			Description: "Run a shell command with administrator privileges. Triggers a macOS password prompt for the user to authenticate. Use for commands that require root/sudo (e.g. system-level installs, writing to protected paths). Always requires user approval.",
+			Properties: map[string]ToolParam{
+				"script": {
+					Description: "Shell command or script to run as administrator",
+					Type:        "string",
+				},
+			},
+			Required: []string{"script"},
+		},
+		PermLevel:   "execute",
+		ActionClass: ActionClassDestructiveLocal,
+		Fn:          terminalRunAsAdmin,
 	})
 
 	r.register(SkillEntry{
@@ -118,6 +137,32 @@ func (r *Registry) registerTerminal() {
 
 	r.register(SkillEntry{
 		Def: ToolDef{
+			Name:        "terminal.run_background",
+			Description: "Start a command in the background and return immediately. Atlas will send a follow-up message in this conversation when the command finishes, including exit code and output. Use for long-running operations (builds, downloads, package installs) so the user isn't left waiting. Always requires user approval.",
+			Properties: map[string]ToolParam{
+				"command": {
+					Description: "The executable to run (e.g. 'brew', 'npm', 'git')",
+					Type:        "string",
+				},
+				"args": {
+					Description: "Arguments — each element is a separate argument",
+					Type:        "array",
+					Items:       &ToolParam{Type: "string"},
+				},
+				"workingDir": {
+					Description: "Absolute working directory (optional, defaults to user home)",
+					Type:        "string",
+				},
+			},
+			Required: []string{"command"},
+		},
+		PermLevel:   "execute",
+		ActionClass: ActionClassDestructiveLocal,
+		FnResult:    terminalRunBackground,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
 			Name:        "terminal.get_working_directory",
 			Description: "Returns the current working directory of the Atlas runtime process.",
 			Properties:  map[string]ToolParam{},
@@ -144,105 +189,9 @@ func (r *Registry) registerTerminal() {
 	})
 }
 
-func (r *Registry) registerPackageManagers() {
-	// ── Homebrew ─────────────────────────────────────────────────────────────
-
-	r.register(SkillEntry{
-		Def: ToolDef{
-			Name:        "terminal.brew_install",
-			Description: "Install one or more Homebrew formulae or casks. Always requires user approval. Use cask=true for GUI applications.",
-			Properties: map[string]ToolParam{
-				"packages": {Description: "Package names to install", Type: "array", Items: &ToolParam{Type: "string"}},
-				"cask":     {Description: "Install as a Homebrew cask (GUI apps, fonts, etc.)", Type: "boolean"},
-			},
-			Required: []string{"packages"},
-		},
-		PermLevel:   "execute",
-		ActionClass: ActionClassExternalSideEffect,
-		Fn:          terminalBrewInstall,
-	})
-
-	r.register(SkillEntry{
-		Def: ToolDef{
-			Name:        "terminal.brew_uninstall",
-			Description: "Uninstall one or more Homebrew formulae or casks. Always requires user approval.",
-			Properties: map[string]ToolParam{
-				"packages": {Description: "Package names to uninstall", Type: "array", Items: &ToolParam{Type: "string"}},
-				"cask":     {Description: "Uninstall casks instead of formulae", Type: "boolean"},
-			},
-			Required: []string{"packages"},
-		},
-		PermLevel:   "execute",
-		ActionClass: ActionClassExternalSideEffect,
-		Fn:          terminalBrewUninstall,
-	})
-
-	r.register(SkillEntry{
-		Def: ToolDef{
-			Name:        "terminal.brew_upgrade",
-			Description: "Upgrade Homebrew formulae or casks to their latest versions. Pass an empty packages list to upgrade everything. Always requires user approval.",
-			Properties: map[string]ToolParam{
-				"packages": {Description: "Specific package names to upgrade, or empty to upgrade all", Type: "array", Items: &ToolParam{Type: "string"}},
-				"cask":     {Description: "Upgrade casks instead of formulae", Type: "boolean"},
-			},
-			Required: []string{},
-		},
-		PermLevel:   "execute",
-		ActionClass: ActionClassExternalSideEffect,
-		Fn:          terminalBrewUpgrade,
-	})
-
-	r.register(SkillEntry{
-		Def: ToolDef{
-			Name:        "terminal.brew_info",
-			Description: "Get information about a Homebrew formula or cask — version, dependencies, install status.",
-			Properties: map[string]ToolParam{
-				"package": {Description: "Formula or cask name", Type: "string"},
-			},
-			Required: []string{"package"},
-		},
-		PermLevel: "read",
-		Fn:        terminalBrewInfo,
-	})
-
-	r.register(SkillEntry{
-		Def: ToolDef{
-			Name:        "terminal.brew_list",
-			Description: "List installed Homebrew formulae or casks, optionally filtered by name.",
-			Properties: map[string]ToolParam{
-				"filter": {Description: "Optional substring to filter results", Type: "string"},
-				"cask":   {Description: "List installed casks instead of formulae", Type: "boolean"},
-			},
-			Required: []string{},
-		},
-		PermLevel: "read",
-		Fn:        terminalBrewList,
-	})
-
-	// ── pip ──────────────────────────────────────────────────────────────────
-
-	r.register(SkillEntry{
-		Def: ToolDef{
-			Name:        "terminal.pip_install",
-			Description: "Install Python packages via pip3. Always requires user approval. Optionally upgrade existing packages.",
-			Properties: map[string]ToolParam{
-				"packages": {Description: "Package names to install (e.g. ['weasyprint', 'requests'])", Type: "array", Items: &ToolParam{Type: "string"}},
-				"upgrade":  {Description: "Pass --upgrade to update existing packages", Type: "boolean"},
-			},
-			Required: []string{"packages"},
-		},
-		PermLevel:   "execute",
-		ActionClass: ActionClassExternalSideEffect,
-		Fn:          terminalPipInstall,
-	})
-}
-
 // ── constants & helpers ───────────────────────────────────────────────────────
 
-const terminalMaxOutput = 8 * 1024 // 8 KB
-
-// pkgInstallTimeout allows brew/pip installs to take up to 10 minutes.
-const pkgInstallTimeout = 10 * time.Minute
+const terminalMaxOutput = 32 * 1024 // 32 KB
 
 // terminalBlocklist contains bare binary names that are blocked in run_command.
 // run_script requires explicit user approval on every call, so it is not blocked here.
@@ -281,7 +230,7 @@ func terminalValidateWorkDir(dir string) error {
 	if dir == "" {
 		return nil
 	}
-	if !filepath.IsAbs(dir) {
+	if !strings.HasPrefix(dir, "/") {
 		return fmt.Errorf("workingDir must be an absolute path, got: %q", dir)
 	}
 	info, err := os.Stat(dir)
@@ -313,20 +262,53 @@ func terminalIsSensitiveEnvKey(name string) bool {
 	return false
 }
 
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+// terminalBuildResult constructs a structured ToolResult for terminal commands.
+// label is the human-readable command string (e.g. "brew install pandoc").
+// Success is derived from exitCode — non-zero means failure.
+// Summary contains the full output for the AI model; LogOutcome is a clean
+// one-liner for the activity log that avoids collapsing output into noise.
+func terminalBuildResult(label string, exitCode int, output string) ToolResult {
+	success := exitCode == 0
+
+	// Full output for the model.
+	var summary string
+	if output != "" {
+		summary = fmt.Sprintf("%s\n[exit %d]\n%s", label, exitCode, terminalTruncate(output))
+	} else {
+		summary = fmt.Sprintf("%s — exit %d", label, exitCode)
+	}
+
+	// Clean one-liner for the activity log.
+	status := "ok"
+	if !success {
+		status = fmt.Sprintf("exit %d", exitCode)
+	}
+	logOutcome := fmt.Sprintf("%s → %s", label, status)
+
+	return ToolResult{
+		Success:    success,
+		Summary:    summary,
+		LogOutcome: logOutcome,
+		Artifacts:  map[string]any{"exit_code": exitCode},
+	}
+}
+
 // ── handlers ──────────────────────────────────────────────────────────────────
 
-func terminalRunCommand(ctx context.Context, args json.RawMessage) (string, error) {
+func terminalRunCommand(ctx context.Context, args json.RawMessage) (ToolResult, error) {
 	var p struct {
 		Command    string   `json:"command"`
 		Args       []string `json:"args"`
 		WorkingDir string   `json:"workingDir"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil || p.Command == "" {
-		return "", fmt.Errorf("command is required")
+		return ToolResult{}, fmt.Errorf("command is required")
 	}
 
 	if err := terminalCheckBlocklist(p.Command); err != nil {
-		return "", err
+		return ToolResult{}, err
 	}
 
 	cwd := p.WorkingDir
@@ -334,14 +316,16 @@ func terminalRunCommand(ctx context.Context, args json.RawMessage) (string, erro
 		cwd = terminalDefaultDir()
 	}
 	if err := terminalValidateWorkDir(cwd); err != nil {
-		return "", err
+		return ToolResult{}, err
 	}
 
-	// Cannot use runCmd helper — need to set cmd.Dir.
-	ctx, cancel := context.WithTimeout(ctx, shellTimeout)
+	// Use context.Background() as the parent — the agent loop's toolCtx has a
+	// 30-second deadline which would kill long-running installs/builds. Terminal
+	// commands manage their own timeout independently.
+	runCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, p.Command, p.Args...)
+	cmd := exec.CommandContext(runCtx, p.Command, p.Args...)
 	cmd.Dir = cwd
 	out, err := cmd.CombinedOutput()
 
@@ -350,21 +334,24 @@ func terminalRunCommand(ctx context.Context, args json.RawMessage) (string, erro
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
-			return "", fmt.Errorf("failed to run %q: %w", p.Command, err)
+			return ToolResult{}, fmt.Errorf("failed to run %q: %w", p.Command, err)
 		}
 	}
 
-	result := fmt.Sprintf("[exit %d]\n%s", exitCode, strings.TrimSpace(string(out)))
-	return terminalTruncate(result), nil
+	label := p.Command
+	if len(p.Args) > 0 {
+		label += " " + strings.Join(p.Args, " ")
+	}
+	return terminalBuildResult(label, exitCode, strings.TrimSpace(string(out))), nil
 }
 
-func terminalRunScript(ctx context.Context, args json.RawMessage) (string, error) {
+func terminalRunScript(ctx context.Context, args json.RawMessage) (ToolResult, error) {
 	var p struct {
 		Script     string `json:"script"`
 		WorkingDir string `json:"workingDir"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil || p.Script == "" {
-		return "", fmt.Errorf("script is required")
+		return ToolResult{}, fmt.Errorf("script is required")
 	}
 
 	cwd := p.WorkingDir
@@ -372,14 +359,17 @@ func terminalRunScript(ctx context.Context, args json.RawMessage) (string, error
 		cwd = terminalDefaultDir()
 	}
 	if err := terminalValidateWorkDir(cwd); err != nil {
-		return "", err
+		return ToolResult{}, err
 	}
 
-	// Cannot use runCmd helper — need to set cmd.Dir.
-	ctx, cancel := context.WithTimeout(ctx, shellTimeout)
+	// Use context.Background() — same reasoning as run_command (30s toolCtx cap).
+	runCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", p.Script)
+	// Use /bin/zsh so the user's PATH extensions and shell functions (nvm, rbenv,
+	// pyenv, conda etc.) are available. Source ~/.zshrc explicitly in the script
+	// if those tools need initialization.
+	cmd := exec.CommandContext(runCtx, "/bin/zsh", "-c", p.Script)
 	cmd.Dir = cwd
 	out, err := cmd.CombinedOutput()
 
@@ -388,12 +378,22 @@ func terminalRunScript(ctx context.Context, args json.RawMessage) (string, error
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
-			return "", fmt.Errorf("failed to run script: %w", err)
+			return ToolResult{}, fmt.Errorf("failed to run script: %w", err)
 		}
 	}
 
-	result := fmt.Sprintf("[exit %d]\n%s", exitCode, strings.TrimSpace(string(out)))
-	return terminalTruncate(result), nil
+	// Use the first non-empty line of the script as the log label.
+	label := "script"
+	for _, line := range strings.Split(p.Script, "\n") {
+		if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "#") {
+			if len(t) > 80 {
+				t = t[:80] + "…"
+			}
+			label = t
+			break
+		}
+	}
+	return terminalBuildResult(label, exitCode, strings.TrimSpace(string(out))), nil
 }
 
 func terminalReadEnv(_ context.Context, args json.RawMessage) (string, error) {
@@ -541,171 +541,123 @@ func terminalWhich(ctx context.Context, args json.RawMessage) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// ── package manager handlers ──────────────────────────────────────────────────
-
-func terminalBrewInstall(ctx context.Context, args json.RawMessage) (string, error) {
+func terminalRunAsAdmin(_ context.Context, args json.RawMessage) (string, error) {
 	var p struct {
-		Packages []string `json:"packages"`
-		Cask     bool     `json:"cask"`
+		Script string `json:"script"`
 	}
-	if err := json.Unmarshal(args, &p); err != nil || len(p.Packages) == 0 {
-		return "", fmt.Errorf("packages is required")
+	if err := json.Unmarshal(args, &p); err != nil || strings.TrimSpace(p.Script) == "" {
+		return "", fmt.Errorf("script is required")
 	}
-	brewPath, err := exec.LookPath("brew")
-	if err != nil {
-		return "", fmt.Errorf("Homebrew not found — install it from https://brew.sh first")
-	}
-	cmdArgs := []string{"install"}
-	if p.Cask {
-		cmdArgs = append(cmdArgs, "--cask")
-	}
-	cmdArgs = append(cmdArgs, p.Packages...)
-	ctx, cancel := context.WithTimeout(ctx, pkgInstallTimeout)
+
+	// Escape the script for embedding in an AppleScript string literal.
+	escaped := strings.ReplaceAll(p.Script, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+
+	appleScript := fmt.Sprintf(`do shell script "%s" with administrator privileges`, escaped)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, brewPath, cmdArgs...)
+
+	cmd := exec.CommandContext(ctx, "osascript", "-e", appleScript)
 	out, err := cmd.CombinedOutput()
 	result := terminalTruncate(strings.TrimSpace(string(out)))
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return fmt.Sprintf("[exit %d]\n%s", exitErr.ExitCode(), result), nil
 		}
-		return "", fmt.Errorf("brew install: %w", err)
+		return "", fmt.Errorf("run_as_admin failed: %w", err)
 	}
 	return result, nil
 }
 
-func terminalBrewUninstall(ctx context.Context, args json.RawMessage) (string, error) {
+func terminalRunBackground(ctx context.Context, args json.RawMessage) (ToolResult, error) {
 	var p struct {
-		Packages []string `json:"packages"`
-		Cask     bool     `json:"cask"`
+		Command    string   `json:"command"`
+		Args       []string `json:"args"`
+		WorkingDir string   `json:"workingDir"`
 	}
-	if err := json.Unmarshal(args, &p); err != nil || len(p.Packages) == 0 {
-		return "", fmt.Errorf("packages is required")
+	if err := json.Unmarshal(args, &p); err != nil || p.Command == "" {
+		return ToolResult{}, fmt.Errorf("command is required")
 	}
-	brewPath, err := exec.LookPath("brew")
-	if err != nil {
-		return "", fmt.Errorf("Homebrew not found")
-	}
-	cmdArgs := []string{"uninstall"}
-	if p.Cask {
-		cmdArgs = append(cmdArgs, "--cask")
-	}
-	cmdArgs = append(cmdArgs, p.Packages...)
-	ctx, cancel := context.WithTimeout(ctx, pkgInstallTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, brewPath, cmdArgs...)
-	out, err := cmd.CombinedOutput()
-	result := terminalTruncate(strings.TrimSpace(string(out)))
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Sprintf("[exit %d]\n%s", exitErr.ExitCode(), result), nil
-		}
-		return "", fmt.Errorf("brew uninstall: %w", err)
-	}
-	return result, nil
-}
 
-func terminalBrewUpgrade(ctx context.Context, args json.RawMessage) (string, error) {
-	var p struct {
-		Packages []string `json:"packages"`
-		Cask     bool     `json:"cask"`
+	cwd := p.WorkingDir
+	if cwd == "" {
+		cwd = terminalDefaultDir()
 	}
-	json.Unmarshal(args, &p) //nolint:errcheck
-	brewPath, err := exec.LookPath("brew")
-	if err != nil {
-		return "", fmt.Errorf("Homebrew not found")
+	if err := terminalValidateWorkDir(cwd); err != nil {
+		return ToolResult{}, err
 	}
-	cmdArgs := []string{"upgrade"}
-	if p.Cask {
-		cmdArgs = append(cmdArgs, "--cask")
-	}
-	cmdArgs = append(cmdArgs, p.Packages...)
-	ctx, cancel := context.WithTimeout(ctx, pkgInstallTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, brewPath, cmdArgs...)
-	out, err := cmd.CombinedOutput()
-	result := terminalTruncate(strings.TrimSpace(string(out)))
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Sprintf("[exit %d]\n%s", exitErr.ExitCode(), result), nil
-		}
-		return "", fmt.Errorf("brew upgrade: %w", err)
-	}
-	return result, nil
-}
 
-func terminalBrewInfo(ctx context.Context, args json.RawMessage) (string, error) {
-	var p struct {
-		Package string `json:"package"`
+	label := p.Command
+	if len(p.Args) > 0 {
+		label += " " + strings.Join(p.Args, " ")
 	}
-	if err := json.Unmarshal(args, &p); err != nil || p.Package == "" {
-		return "", fmt.Errorf("package is required")
-	}
-	out, err := runCmd(ctx, "brew", "info", p.Package)
-	if err != nil {
-		return fmt.Sprintf("package not found: %s", p.Package), nil
-	}
-	return terminalTruncate(strings.TrimSpace(out)), nil
-}
 
-func terminalBrewList(ctx context.Context, args json.RawMessage) (string, error) {
-	var p struct {
-		Filter string `json:"filter"`
-		Cask   bool   `json:"cask"`
-	}
-	json.Unmarshal(args, &p) //nolint:errcheck
-	brewArgs := []string{"list"}
-	if p.Cask {
-		brewArgs = append(brewArgs, "--cask")
-	}
-	out, err := runCmd(ctx, "brew", brewArgs...)
-	if err != nil {
-		return "", fmt.Errorf("brew list: %w", err)
-	}
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if p.Filter != "" {
-		filter := strings.ToLower(p.Filter)
-		var filtered []string
-		for _, l := range lines {
-			if strings.Contains(strings.ToLower(l), filter) {
-				filtered = append(filtered, l)
+	// Capture the proactive sender before spawning the goroutine so it is
+	// bound to this conversation even if the context is cancelled later.
+	sender, hasSender := ProactiveSenderFromContext(ctx)
+
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		cmd := exec.CommandContext(bgCtx, p.Command, p.Args...)
+		cmd.Dir = cwd
+		out, err := cmd.CombinedOutput()
+
+		exitCode := 0
+		var execFailed string
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				execFailed = err.Error()
 			}
 		}
-		lines = filtered
-	}
-	return strings.Join(lines, "\n"), nil
-}
 
-func terminalPipInstall(ctx context.Context, args json.RawMessage) (string, error) {
-	var p struct {
-		Packages []string `json:"packages"`
-		Upgrade  bool     `json:"upgrade"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil || len(p.Packages) == 0 {
-		return "", fmt.Errorf("packages is required")
-	}
-	pipPath, err := exec.LookPath("pip3")
-	if err != nil {
-		pipPath, err = exec.LookPath("pip")
-		if err != nil {
-			return "", fmt.Errorf("pip3/pip not found — install Python 3 first")
+		success := exitCode == 0 && execFailed == ""
+
+		// Log the completion to the activity log.
+		outcome := fmt.Sprintf("background: %s → exit %d", label, exitCode)
+		if execFailed != "" {
+			outcome = fmt.Sprintf("background: %s — failed to start: %s", label, execFailed)
 		}
-	}
-	cmdArgs := []string{"install"}
-	if p.Upgrade {
-		cmdArgs = append(cmdArgs, "--upgrade")
-	}
-	cmdArgs = append(cmdArgs, p.Packages...)
-	ctx, cancel := context.WithTimeout(ctx, pkgInstallTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, pipPath, cmdArgs...)
-	out, err := cmd.CombinedOutput()
-	result := terminalTruncate(strings.TrimSpace(string(out)))
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Sprintf("[exit %d]\n%s", exitErr.ExitCode(), result), nil
+		logstore.WriteAction(logstore.ActionLogEntry{
+			ToolName:     "terminal.run_background",
+			ActionClass:  string(ActionClassDestructiveLocal),
+			InputSummary: label,
+			Success:      success,
+			Outcome:      outcome,
+			Errors: func() []string {
+				if execFailed != "" {
+					return []string{execFailed}
+				}
+				if !success {
+					return []string{fmt.Sprintf("exit %d", exitCode)}
+				}
+				return nil
+			}(),
+		})
+
+		// Build the proactive chat message.
+		output := strings.TrimSpace(string(out))
+		var msg string
+		if execFailed != "" {
+			msg = fmt.Sprintf("Background task `%s` failed to start: %s", label, execFailed)
+		} else if output != "" {
+			msg = fmt.Sprintf("Background task `%s` finished.\n\n```\n[exit %d]\n%s\n```", label, exitCode, terminalTruncate(output))
+		} else {
+			msg = fmt.Sprintf("Background task `%s` finished with exit code %d.", label, exitCode)
 		}
-		return "", fmt.Errorf("pip install: %w", err)
-	}
-	return result, nil
+
+		if hasSender {
+			sender(msg)
+		}
+	}()
+
+	return ToolResult{
+		Success:   true,
+		Summary:   fmt.Sprintf("Started in background: %s", label),
+		Artifacts: map[string]any{"status": "running", "command": label},
+	}, nil
 }

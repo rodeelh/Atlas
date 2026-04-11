@@ -63,6 +63,7 @@ func (d *ControlDomain) Register(r chi.Router) {
 	r.Get("/location", d.getLocation)
 	r.Put("/location", d.putLocation)
 	r.Post("/location/detect", d.postLocationDetect)
+	r.Post("/location/coords", d.postLocationCoords)
 	r.Get("/preferences", d.getPreferences)
 	r.Put("/preferences", d.putPreferences)
 	r.Get("/providers/openrouter/models", d.getOpenRouterModels)
@@ -240,6 +241,23 @@ func (d *ControlDomain) postLocationDetect(w http.ResponseWriter, _ *http.Reques
 	loc, err := d.profile.DetectLocation()
 	if err != nil {
 		http.Error(w, "Location detection failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, loc)
+}
+
+func (d *ControlDomain) postLocationCoords(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Latitude  float64 `json:"latitude"`
+		Longitude float64 `json:"longitude"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || (body.Latitude == 0 && body.Longitude == 0) {
+		http.Error(w, "latitude and longitude are required", http.StatusBadRequest)
+		return
+	}
+	loc, err := d.profile.SetLocationFromCoords(body.Latitude, body.Longitude)
+	if err != nil {
+		http.Error(w, "Reverse geocode failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, loc)

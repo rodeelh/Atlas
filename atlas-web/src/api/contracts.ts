@@ -194,6 +194,8 @@ export interface ChatStreamEvent {
   mimeType?: string
   fileSize?: number
   fileToken?: string
+  /** tool_finished — JSON-encoded tool artifacts for rich rendering */
+  result?: string
 }
 
 export interface ApprovalToolCall {

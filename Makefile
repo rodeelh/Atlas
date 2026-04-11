@@ -1,6 +1,6 @@
-.PHONY: build build-tui build-web build-location-helper install-web test \
+.PHONY: build build-web build-tui install-web test \
         install uninstall \
-        run dev \
+        run run-tui dev \
         daemon-start daemon-stop daemon-restart daemon-status daemon-logs \
         download-engine engine-update \
         download-whisper download-whisper-model \
@@ -8,13 +8,11 @@
         tidy clean check bump \
         test-fast test-standard verify-release scorecard benchmark-chat
 
-RUNTIME_DIR         := atlas-runtime
-TUI_DIR             := atlas-tui
-WEB_DIR             := atlas-web
-LOCATION_HELPER_DIR := $(RUNTIME_DIR)/tools/atlas-location
+RUNTIME_DIR  := atlas-runtime
+WEB_DIR      := atlas-web
+TUI_DIR      := atlas-tui
 
 BINARY       := Atlas
-TUI_BINARY   := atlas
 DAEMON_LABEL := Atlas
 PLIST_TMPL   := $(RUNTIME_DIR)/com.atlas.runtime.plist.tmpl
 
@@ -41,25 +39,11 @@ KOKORO_PIP_VERSION ?= 0.4.7
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
-build: build-location-helper
+build:
 	cd $(RUNTIME_DIR) && go build -o $(BINARY) ./cmd/atlas-runtime
 
-build-location-helper:
-	@echo "→ Building GPS location helper..."
-	@if command -v swiftc >/dev/null 2>&1; then \
-		swiftc -O -o $(RUNTIME_DIR)/atlas-location \
-			$(LOCATION_HELPER_DIR)/main.swift 2>&1 && \
-		(codesign --force --sign - \
-			--entitlements $(LOCATION_HELPER_DIR)/location.entitlements \
-			$(RUNTIME_DIR)/atlas-location 2>/dev/null || \
-		codesign --force --sign - $(RUNTIME_DIR)/atlas-location 2>/dev/null || true) && \
-		echo "✓ atlas-location GPS helper built and signed"; \
-	else \
-		echo "→ swiftc not found — GPS location helper skipped (IP fallback will be used)"; \
-	fi
-
 build-tui:
-	cd $(TUI_DIR) && go build -o $(TUI_BINARY) .
+	cd $(TUI_DIR) && go build -o atlas-tui .
 
 build-web:
 	cd $(WEB_DIR) && npm run build
@@ -72,7 +56,6 @@ install-web: build-web
 
 test:
 	cd $(RUNTIME_DIR) && go test ./...
-	cd $(TUI_DIR) && go test ./...
 
 tidy:
 	cd $(RUNTIME_DIR) && go mod tidy
@@ -80,13 +63,15 @@ tidy:
 
 clean:
 	rm -f $(RUNTIME_DIR)/$(BINARY)
-	rm -f $(RUNTIME_DIR)/atlas-location
-	rm -f $(TUI_DIR)/$(TUI_BINARY)
+	rm -f $(TUI_DIR)/atlas-tui
 
 # ── Run (dev) ─────────────────────────────────────────────────────────────────
 
 run: build
 	$(RUNTIME_DIR)/$(BINARY) -web-dir $(WEB_DIR)/dist
+
+run-tui: build-tui
+	$(TUI_DIR)/atlas-tui
 
 dev: build
 	$(RUNTIME_DIR)/$(BINARY) -port 1985 -web-dir $(WEB_DIR)/dist
@@ -225,17 +210,10 @@ engine-update:
 	@rm -f "$$HOME/Library/Application Support/Atlas/engine/"*.dylib
 	@$(MAKE) download-engine LLAMA_VERSION=$(LLAMA_VERSION)
 
-install: build build-tui build-web download-engine download-voice
-	@echo "→ Installing TUI..."
-	@mkdir -p "$$HOME/.local/bin"
-	cp $(TUI_DIR)/$(TUI_BINARY) "$$HOME/.local/bin/$(TUI_BINARY)"
+install: build build-web download-engine download-voice
 	@echo "→ Installing runtime binary and web assets..."
 	@mkdir -p "$$HOME/Library/Application Support/Atlas"
 	cp $(RUNTIME_DIR)/$(BINARY) "$$HOME/Library/Application Support/Atlas/$(BINARY)"
-	@if [ -f $(RUNTIME_DIR)/atlas-location ]; then \
-		cp $(RUNTIME_DIR)/atlas-location "$$HOME/Library/Application Support/Atlas/atlas-location"; \
-		echo "→ atlas-location GPS helper installed"; \
-	fi
 	rsync -a --delete $(WEB_DIR)/dist/ "$$HOME/Library/Application Support/Atlas/web/"
 	@echo "→ Creating log directory..."
 	@mkdir -p "$$HOME/Library/Logs/Atlas"
@@ -257,7 +235,6 @@ uninstall:
 	@echo "→ Removing installed files..."
 	@-rm -f "$$HOME/Library/Application Support/Atlas/$(BINARY)"
 	@-rm -rf "$$HOME/Library/Application Support/Atlas/web"
-	@-rm -f "$$HOME/.local/bin/$(TUI_BINARY)"
 	@echo "✓ Uninstalled (data in ~/Library/Application Support/ProjectAtlas preserved)"
 
 daemon-start:
@@ -278,6 +255,7 @@ daemon-logs:
 
 check:
 	cd $(RUNTIME_DIR) && go fmt ./... && go vet ./...
+	cd $(TUI_DIR) && go fmt ./... && go vet ./...
 
 benchmark-chat:
 	./scripts/benchmark-chat.sh

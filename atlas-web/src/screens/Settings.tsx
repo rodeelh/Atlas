@@ -204,19 +204,42 @@ export function Settings() {
                 title="Detect my location"
                 disabled={locationSaving}
                 style={{ position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)', opacity: 1, pointerEvents: 'auto' }}
-                onClick={async () => {
+                onClick={() => {
                   setLocationError(null)
                   setLocationSaving(true)
-                  try {
-                    const loc = await api.detectLocation()
+                  const finish = async (loc: { city: string; country: string; timezone: string; source: string; updatedAt: string }) => {
                     setLocation(loc)
                     setLocationEdit(loc.city ? loc.city + (loc.country ? ', ' + loc.country : '') : '')
-                    const parts = loc.city ? [loc.city, loc.country].filter(Boolean) : []
-                    if (parts.length) await api.setLocation(parts[0] ?? '', parts[1] ?? '')
-                  } catch (err) {
-                    setLocationError(err instanceof Error ? err.message : 'Failed')
-                  } finally {
-                    setLocationSaving(false)
+                  }
+                  if (navigator.geolocation) {
+                    navigator.geolocation.getCurrentPosition(
+                      async (pos) => {
+                        try {
+                          const loc = await api.setLocationFromCoords(pos.coords.latitude, pos.coords.longitude)
+                          await finish(loc)
+                        } catch (err) {
+                          setLocationError(err instanceof Error ? err.message : 'Failed')
+                        } finally {
+                          setLocationSaving(false)
+                        }
+                      },
+                      async (geoErr) => {
+                        // Permission denied or unavailable — fall back to IP detection
+                        try {
+                          const loc = await api.detectLocation()
+                          await finish(loc)
+                        } catch (err) {
+                          setLocationError(geoErr.message || (err instanceof Error ? err.message : 'Failed'))
+                        } finally {
+                          setLocationSaving(false)
+                        }
+                      },
+                      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+                    )
+                  } else {
+                    api.detectLocation().then(finish).catch((err) => {
+                      setLocationError(err instanceof Error ? err.message : 'Failed')
+                    }).finally(() => setLocationSaving(false))
                   }
                 }}
               >

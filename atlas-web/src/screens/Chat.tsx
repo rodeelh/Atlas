@@ -60,6 +60,22 @@ interface Message {
   linkPreviews?: Record<string, LinkPreview>
   /** Files produced by tools during this assistant turn. */
   fileAttachments?: FileAttachment[]
+  /** Structured map data from maps.* tool calls — rendered as inline map cards. */
+  mapCards?: MapCardData[]
+}
+
+interface MapCardData {
+  type: 'point' | 'directions' | 'places'
+  latitude?: number
+  longitude?: number
+  label?: string
+  origin?: string
+  destination?: string
+  mode?: string
+  distance?: string
+  duration?: string
+  query?: string
+  places?: Array<{ name: string; address: string; latitude: number; longitude: number }>
 }
 
 type ChatProvider = 'openai' | 'anthropic' | 'gemini' | 'openrouter' | 'lm_studio' | 'ollama' | 'atlas_engine' | 'atlas_mlx'
@@ -410,6 +426,120 @@ const FileAttachmentCard = ({ file }: { file: FileAttachment }) => {
   )
 }
 
+// ── Map card ──────────────────────────────────────────────────────────────────
+
+const TRAVEL_MODE_ICONS: Record<string, JSX.Element> = {
+  driving: (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="1" y="3" width="15" height="13" rx="2"/><path d="M16 8h4l3 6v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>
+    </svg>
+  ),
+  walking: (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="5" r="2"/><path d="M5 22l2-8 3 2 2-7h4l-2 4 3 1-3 8"/>
+    </svg>
+  ),
+  bicycling: (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="5.5" cy="17.5" r="3.5"/><circle cx="18.5" cy="17.5" r="3.5"/><path d="M15 6h-3l-2 6 3 1 2-7z"/><path d="M5.5 17.5l6-6 7 6"/>
+    </svg>
+  ),
+  transit: (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="4" y="3" width="16" height="16" rx="2"/><path d="M4 11h16"/><circle cx="8.5" cy="17" r="1.5"/><circle cx="15.5" cy="17" r="1.5"/>
+    </svg>
+  ),
+}
+
+const MapCard = ({ card }: { card: MapCardData }) => {
+  if (card.type === 'point' && card.latitude != null && card.longitude != null) {
+    const delta = 0.008
+    const bbox = `${card.longitude - delta},${card.latitude - delta},${card.longitude + delta},${card.latitude + delta}`
+    const embedUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${card.latitude},${card.longitude}`
+    const openUrl = `https://www.openstreetmap.org/?mlat=${card.latitude}&mlon=${card.longitude}#map=15/${card.latitude}/${card.longitude}`
+    const shortLabel = card.label ? card.label.split(',').slice(0, 2).join(',') : `${card.latitude.toFixed(4)}, ${card.longitude.toFixed(4)}`
+    return (
+      <div class="map-card">
+        <div class="map-card-embed">
+          <iframe
+            src={embedUrl}
+            title="Map"
+            loading="lazy"
+            referrerpolicy="no-referrer"
+          />
+        </div>
+        <div class="map-card-footer">
+          <span class="map-card-label" title={card.label}>{shortLabel}</span>
+          <a href={openUrl} target="_blank" rel="noopener noreferrer" class="map-card-open">
+            Open in Maps
+            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M7 3H3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V9"/><path d="M10 2h4v4"/><path d="M14 2L8 8"/>
+            </svg>
+          </a>
+        </div>
+      </div>
+    )
+  }
+
+  if (card.type === 'places' && card.places && card.places.length > 0) {
+    const first = card.places[0]
+    const delta = 0.012
+    const bbox = `${first.longitude - delta},${first.latitude - delta},${first.longitude + delta},${first.latitude + delta}`
+    const embedUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${first.latitude},${first.longitude}`
+    const searchUrl = `https://www.openstreetmap.org/search?query=${encodeURIComponent(card.query ?? card.places[0].name)}`
+    return (
+      <div class="map-card">
+        <div class="map-card-embed">
+          <iframe src={embedUrl} title="Map" loading="lazy" referrerpolicy="no-referrer" />
+        </div>
+        <div class="map-card-footer">
+          <span class="map-card-label">{card.places.length} place{card.places.length !== 1 ? 's' : ''} found</span>
+          <a href={searchUrl} target="_blank" rel="noopener noreferrer" class="map-card-open">
+            Open in Maps
+            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M7 3H3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V9"/><path d="M10 2h4v4"/><path d="M14 2L8 8"/>
+            </svg>
+          </a>
+        </div>
+      </div>
+    )
+  }
+
+  if (card.type === 'directions' && card.origin && card.destination) {
+    const modeIcon = TRAVEL_MODE_ICONS[card.mode ?? 'driving'] ?? TRAVEL_MODE_ICONS.driving
+    const gmUrl = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(card.origin)}&destination=${encodeURIComponent(card.destination)}&travelmode=${card.mode ?? 'driving'}`
+    return (
+      <div class="map-card map-card-directions">
+        <div class="map-card-directions-body">
+          <div class="map-card-route">
+            <span class="map-card-origin">{card.origin}</span>
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 8h10M9 4l4 4-4 4"/>
+            </svg>
+            <span class="map-card-dest">{card.destination}</span>
+          </div>
+          {(card.distance || card.duration) && (
+            <div class="map-card-meta">
+              <span class="map-card-mode">{modeIcon}</span>
+              {card.distance && <span>{card.distance}</span>}
+              {card.duration && <span class="map-card-dot">·</span>}
+              {card.duration && <span>{card.duration}</span>}
+            </div>
+          )}
+        </div>
+        <a href={gmUrl} target="_blank" rel="noopener noreferrer" class="map-card-open-btn">
+          Open in Google Maps
+          <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M7 3H3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V9"/><path d="M10 2h4v4"/><path d="M14 2L8 8"/>
+          </svg>
+        </a>
+      </div>
+    )
+  }
+
+  return null
+}
+
 // ── Icon components ────────────────────────────────────────────────────────────
 
 const SendIcon = () => (
@@ -515,6 +645,87 @@ const TypingDots = () => (
   </span>
 )
 
+// ── InlineApprovalCard ─────────────────────────────────────────────────────────
+
+function InlineApprovalCard({ toolName, args, loading, onApprove, onDeny }: {
+  toolName: string
+  args: string
+  loading: boolean
+  onApprove: () => void
+  onDeny: () => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  // Pretty-print the args JSON for display
+  let argsDisplay = ''
+  try {
+    const parsed = JSON.parse(args)
+    const keys = Object.keys(parsed)
+    if (keys.length === 0) {
+      argsDisplay = '(no arguments)'
+    } else if (!expanded && keys.length > 0) {
+      // Collapsed: show first 2 key=value pairs on one line
+      argsDisplay = keys.slice(0, 2).map(k => {
+        const v = parsed[k]
+        const str = typeof v === 'string' ? v : JSON.stringify(v)
+        return `${k}: ${str.length > 60 ? str.slice(0, 60) + '…' : str}`
+      }).join('  ·  ') + (keys.length > 2 ? `  +${keys.length - 2} more` : '')
+    } else {
+      argsDisplay = JSON.stringify(parsed, null, 2)
+    }
+  } catch {
+    argsDisplay = args
+  }
+
+  const hasArgs = args && args !== '{}'
+
+  return (
+    <div class="chat-approval-card">
+      <div class="chat-approval-card-header">
+        <svg class="chat-approval-card-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="8" cy="8" r="6.5" />
+          <path d="M8 5v3.5l2 1.5" />
+        </svg>
+        <div class="chat-approval-card-meta">
+          <span class="chat-approval-card-title">Approval required</span>
+          <span class="chat-approval-card-tool">{humanizeToolName(toolName)}</span>
+        </div>
+        {hasArgs && (
+          <button
+            class="chat-approval-card-expand"
+            onClick={() => setExpanded(e => !e)}
+            title={expanded ? 'Collapse' : 'Show arguments'}
+          >
+            {expanded ? 'Hide' : 'Details'}
+          </button>
+        )}
+      </div>
+      {hasArgs && expanded && (
+        <pre class="chat-approval-card-args">{argsDisplay}</pre>
+      )}
+      {hasArgs && !expanded && (
+        <p class="chat-approval-card-args-preview">{argsDisplay}</p>
+      )}
+      <div class="chat-approval-card-actions">
+        <button
+          class="btn btn-sm chat-approval-deny-btn"
+          onClick={onDeny}
+          disabled={loading}
+        >
+          Deny
+        </button>
+        <button
+          class="btn btn-sm chat-approval-approve-btn"
+          onClick={onApprove}
+          disabled={loading}
+        >
+          {loading ? 'Waiting…' : 'Approve'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Chat component ─────────────────────────────────────────────────────────────
 
 export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
@@ -525,7 +736,8 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
   const [messages, setMessages]               = useState<Message[]>(loadMessages)
   const [input, setInput]                     = useState('')
   const [sending, setSending]                 = useState(false)
-  const [approvalBanner, setApprovalBanner]   = useState(false)
+  const [pendingApproval, setPendingApproval] = useState<{ toolCallID: string; toolName: string; args: string } | null>(null)
+  const [approvingAction, setApprovingAction] = useState(false)
   const [error, setError]                     = useState<string | null>(null)
   const [attachments, setAttachments]         = useState<MessageAttachment[]>([])
   const [agentName, setAgentName]             = useState('Atlas')
@@ -1049,7 +1261,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     localStorage.removeItem(STORAGE_MSG_KEY)
     conversationID.current = id
     setError(null)
-    setApprovalBanner(false)
+    setPendingApproval(null)
     setHistoryDropdownVisible(false)
     setAttachments([])
     activeMsgId.current = null
@@ -1480,7 +1692,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     setAttachments([])
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     setError(null)
-    setApprovalBanner(false)
+    setPendingApproval(null)
     setSending(true)
 
     const userContent = pendingAttachments.length > 0
@@ -1567,8 +1779,37 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
           case 'tool_call':
             break
 
-          case 'tool_finished':
+          case 'tool_finished': {
+            if (data.toolName?.startsWith('maps.') && data.result) {
+              try {
+                const artifacts = JSON.parse(data.result) as Record<string, unknown>
+                const mapType = artifacts?.map_type as string | undefined
+                if (mapType) {
+                  const card: MapCardData = {
+                    type: mapType as MapCardData['type'],
+                    latitude: artifacts.latitude as number | undefined,
+                    longitude: artifacts.longitude as number | undefined,
+                    label: artifacts.label as string | undefined,
+                    origin: artifacts.origin as string | undefined,
+                    destination: artifacts.destination as string | undefined,
+                    mode: artifacts.mode as string | undefined,
+                    distance: artifacts.distance as string | undefined,
+                    duration: artifacts.duration as string | undefined,
+                    query: artifacts.query as string | undefined,
+                    places: artifacts.places as MapCardData['places'],
+                  }
+                  const targetId = awaitingResume ? resumedMsgID : assistantMsg.id
+                  if (targetId) {
+                    setMessages(prev => prev.map(m => m.id === targetId
+                      ? { ...m, mapCards: [...(m.mapCards ?? []), card] }
+                      : m
+                    ))
+                  }
+                }
+              } catch { /* malformed JSON — skip */ }
+            }
             break
+          }
 
           case 'file_generated': {
             if (!data.fileToken || !data.filename) break
@@ -1594,7 +1835,11 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
 
           // ── Approval ──────────────────────────────────────────────────────────
           case 'approval_required':
-            setApprovalBanner(true)
+            setPendingApproval({
+              toolCallID: data.toolCallID ?? '',
+              toolName:   data.toolName   ?? '',
+              args:       data.arguments  ?? '{}',
+            })
             break
 
           // ── Legacy token (single-shot full-text delivery) ──────────────────────
@@ -1628,7 +1873,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
             } else if (data.status === 'denied') {
               const targetID = resumedMsgID ?? assistantMsg.id
               setMessages(prev => prev.map(m => m.id === targetID ? { ...m, content: resumedContent || 'The action was denied.', isTyping: false } : m))
-              setApprovalBanner(false); setSending(false); es.close()
+              setPendingApproval(null); setSending(false); es.close()
             } else {
               // Last-resort frontend safety net: if the backend somehow produced no text
               // (backend fixes should have covered this), show a minimal fallback so the
@@ -1666,7 +1911,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
               if (data.status === 'completed' && !isActiveRef.current) {
                 onUnreadReplyRef.current?.()
               }
-              setApprovalBanner(false); setSending(false); es.close()
+              setPendingApproval(null); setApprovingAction(false); setSending(false); es.close()
             }
             break
 
@@ -1749,7 +1994,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     conversationID.current = id
     setMessages([])
     setError(null)
-    setApprovalBanner(false)
+    setPendingApproval(null)
     setAttachments([])
     speechSessionRef.current?.stop()
     speechSessionRef.current = null
@@ -2001,6 +2246,13 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                           ? <TypingDots />
                           : null
                     }
+                    {msg.mapCards && msg.mapCards.length > 0 && (
+                      <div class="map-card-list">
+                        {msg.mapCards.map((card, i) => (
+                          <MapCard key={i} card={card} />
+                        ))}
+                      </div>
+                    )}
                     {msg.fileAttachments && msg.fileAttachments.length > 0 && (
                       <div class="file-attachment-list">
                         {msg.fileAttachments.map(f => (
@@ -2046,14 +2298,29 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
 
 
 
-          {approvalBanner && (
-            <div class="chat-approval-banner">
-              <span class="chat-approval-text">⚠ Waiting for your approval before continuing.</span>
-              <a href="#approvals" onClick={(e) => { e.preventDefault(); setApprovalBanner(false); window.location.hash = 'approvals' }}
-                class="btn btn-sm" style={{ color: 'var(--yellow)', borderColor: 'rgba(245,158,11,0.35)' }}>
-                Review
-              </a>
-            </div>
+          {pendingApproval && (
+            <InlineApprovalCard
+              toolName={pendingApproval.toolName}
+              args={pendingApproval.args}
+              loading={approvingAction}
+              onApprove={async () => {
+                setApprovingAction(true)
+                try {
+                  await api.approve(pendingApproval.toolCallID)
+                } catch {
+                  setApprovingAction(false)
+                }
+              }}
+              onDeny={async () => {
+                setApprovingAction(true)
+                try {
+                  await api.deny(pendingApproval.toolCallID)
+                } catch {
+                  setPendingApproval(null)
+                  setApprovingAction(false)
+                }
+              }}
+            />
           )}
 
           <ErrorBanner error={error} onDismiss={() => setError(null)} />

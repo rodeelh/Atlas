@@ -10,17 +10,11 @@
 package location
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -150,118 +144,6 @@ func DetectFromIP() error {
 	logstore.Write("info",
 		fmt.Sprintf("Location detected: %s, %s (%s)", info.City, info.Country, info.Timezone),
 		map[string]string{"source": "ip"},
-	)
-	return nil
-}
-
-// DetectFromCoreLocation runs the atlas-location helper binary (installed
-// alongside the Atlas daemon) to get a precise WiFi/GPS fix via macOS
-// CoreLocation. On success it reverse-geocodes the coordinates via Nominatim,
-// updates the in-memory cache and GoRuntimeConfig, and returns nil.
-//
-// Returns an error if the helper binary is not found, location permission is
-// denied, or the request times out — the caller should fall back to DetectFromIP.
-func DetectFromCoreLocation() error {
-	execPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("corelocation: executable path: %w", err)
-	}
-	helperPath := filepath.Join(filepath.Dir(execPath), "atlas-location")
-	if _, statErr := os.Stat(helperPath); os.IsNotExist(statErr) {
-		return fmt.Errorf("corelocation: helper not installed")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 13*time.Second)
-	defer cancel()
-
-	out, err := exec.CommandContext(ctx, helperPath).Output()
-	if err != nil {
-		return fmt.Errorf("corelocation: helper error: %w", err)
-	}
-
-	var gps struct {
-		Latitude  float64 `json:"latitude"`
-		Longitude float64 `json:"longitude"`
-		Accuracy  float64 `json:"accuracy"`
-		Error     string  `json:"error"`
-	}
-	if err := json.Unmarshal(bytes.TrimSpace(out), &gps); err != nil {
-		return fmt.Errorf("corelocation: parse: %w", err)
-	}
-	if gps.Error != "" {
-		return fmt.Errorf("corelocation: %s", gps.Error)
-	}
-
-	// Reverse-geocode coordinates → city/country/timezone via Nominatim.
-	reverseURL := fmt.Sprintf(
-		"https://nominatim.openstreetmap.org/reverse?lat=%.6f&lon=%.6f&format=json&addressdetails=1",
-		gps.Latitude, gps.Longitude,
-	)
-	client := &http.Client{Timeout: 8 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "GET", reverseURL, nil)
-	if err != nil {
-		return fmt.Errorf("corelocation: reverse geocode request: %w", err)
-	}
-	req.Header.Set("User-Agent", "ProjectAtlas/1.0")
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("corelocation: reverse geocode: %w", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-
-	var geo struct {
-		Address struct {
-			City       string `json:"city"`
-			Town       string `json:"town"`
-			Village    string `json:"village"`
-			State      string `json:"state"`
-			Country    string `json:"country"`
-			CountryCode string `json:"country_code"`
-		} `json:"address"`
-	}
-	if err := json.Unmarshal(body, &geo); err != nil || geo.Address.Country == "" {
-		return fmt.Errorf("corelocation: reverse geocode parse failed")
-	}
-
-	city := geo.Address.City
-	if city == "" {
-		city = geo.Address.Town
-	}
-	if city == "" {
-		city = geo.Address.Village
-	}
-	if city == "" {
-		city = geo.Address.State
-	}
-
-	// Best-effort timezone lookup via Open-Meteo geocoding.
-	timezone := ""
-	if geoInfo, tzErr := geocodeCity(city, geo.Address.Country); tzErr == nil {
-		timezone = geoInfo.timezone
-	}
-
-	accuracyNote := ""
-	if gps.Accuracy > 0 {
-		accuracyNote = fmt.Sprintf(" (±%.0fm)", gps.Accuracy)
-	}
-
-	info := Info{
-		City:      city,
-		Country:   geo.Address.Country,
-		Timezone:  timezone,
-		Latitude:  gps.Latitude,
-		Longitude: gps.Longitude,
-		Source:    "gps",
-		UpdatedAt: time.Now(),
-	}
-	Set(info)
-	persist(info)
-	preferences.InferFromCountry(strings.ToUpper(geo.Address.CountryCode))
-	logstore.Write("info",
-		fmt.Sprintf("Location detected via CoreLocation: %s, %s (%.6f, %.6f)%s",
-			city, geo.Address.Country, gps.Latitude, gps.Longitude, accuracyNote),
-		map[string]string{"source": "gps"},
 	)
 	return nil
 }

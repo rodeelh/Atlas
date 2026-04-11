@@ -45,6 +45,9 @@ type EmitEvent struct {
 	MimeType  string
 	FileSize  int64
 	FileToken string
+
+	// tool_finished — JSON-encoded tool artifacts for frontend rich rendering.
+	Result string
 }
 
 // OAIMessage is an OpenAI chat message.
@@ -395,6 +398,10 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		var canRun []OAIToolCall
 		var blocked []toolPolicyBlock
 		for _, tc := range sr.ToolCalls {
+			// Normalise the tool name once here so every downstream consumer
+			// (approval check, execution, SSE emission, log) sees the canonical
+			// dot-separated form regardless of which provider returned the call.
+			tc.Function.Name = l.Skills.Normalise(tc.Function.Name)
 			if block, ok := l.blockedByToolPolicy(cfg.ToolPolicy, tc); ok {
 				blocked = append(blocked, block)
 				continue
@@ -466,7 +473,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		for _, tc := range canRun {
 			l.BC.Emit(convID, EmitEvent{
 				Type:       "tool_started",
-				ToolName:   tc.Function.Name,
+				ToolName:   l.Skills.Normalise(tc.Function.Name),
 				ToolCallID: tc.ID,
 				ConvID:     convID,
 			})
@@ -510,7 +517,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 
 			// Structured action log entry.
 			entry := logstore.ActionLogEntry{
-				ToolName:     tc.Function.Name,
+				ToolName:     l.Skills.Normalise(tc.Function.Name),
 				ActionClass:  actionClass,
 				ConvID:       shortConv,
 				InputSummary: redactedArgs,
@@ -531,7 +538,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 
 				l.BC.Emit(convID, EmitEvent{
 					Type:       "tool_failed",
-					ToolName:   tc.Function.Name,
+					ToolName:   l.Skills.Normalise(tc.Function.Name),
 					ToolCallID: tc.ID,
 					ConvID:     convID,
 					Error:      r.execErr.Error(),
@@ -544,11 +551,18 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 				})
 			} else {
 				logstore.WriteAction(entry)
+				artJSON := ""
+				if len(r.result.Artifacts) > 0 {
+					if b, merr := json.Marshal(r.result.Artifacts); merr == nil {
+						artJSON = string(b)
+					}
+				}
 				l.BC.Emit(convID, EmitEvent{
 					Type:       "tool_finished",
-					ToolName:   tc.Function.Name,
+					ToolName:   l.Skills.Normalise(tc.Function.Name),
 					ToolCallID: tc.ID,
 					ConvID:     convID,
+					Result:     artJSON,
 				})
 				// Emit file_generated for each local file artifact produced by the tool.
 				// Scan both structured Artifacts map and the free-text Summary so that
@@ -575,7 +589,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 					l.BC.Emit(convID, EmitEvent{
 						Type:      "file_generated",
 						ConvID:    convID,
-						ToolName:  tc.Function.Name,
+						ToolName:  l.Skills.Normalise(tc.Function.Name),
 						Filename:  filepath.Base(filePath),
 						MimeType:  MimeTypeForPath(filePath),
 						FileSize:  size,

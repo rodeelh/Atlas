@@ -376,6 +376,7 @@ export const api = {
   location: () => get<{ city: string; country: string; timezone: string; latitude: number; longitude: number; source: string; updatedAt: string }>('/location'),
   setLocation: (city: string, country: string) => put<{ city: string; country: string; timezone: string; source: string; updatedAt: string }>('/location', { city, country }),
   detectLocation: () => post<{ city: string; country: string; timezone: string; source: string; updatedAt: string }>('/location/detect', {}),
+  setLocationFromCoords: (latitude: number, longitude: number) => post<{ city: string; country: string; timezone: string; source: string; updatedAt: string }>('/location/coords', { latitude, longitude }),
 
   // Preferences
   preferences: () => get<{ temperatureUnit: string; currency: string; unitSystem: string }>('/preferences'),

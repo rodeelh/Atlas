@@ -178,6 +178,22 @@ func (s *Service) CancelTurn(convID string) {
 	}
 }
 
+// SendProactive persists an assistant message to the database and streams it
+// as SSE events to any currently connected listeners for convID.
+// Unlike a regular turn it does NOT call broadcaster.Finish, so the persistent
+// push channel stays open and can receive further proactive deliveries.
+func (s *Service) SendProactive(convID, text string) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	msgID := newUUID()
+	if err := s.db.SaveMessage(msgID, convID, "assistant", text, now); err != nil {
+		logstore.Write("warn", "SendProactive: failed to save message",
+			map[string]string{"conv": convID, "error": err.Error()})
+	}
+	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_started", ConversationID: convID})
+	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_delta", Content: text, ConversationID: convID})
+	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_done", ConversationID: convID})
+}
+
 // SetRouterEngineManager wires in the tool-router Engine LM manager so the chat
 // service can auto-start the router when tool selection mode is "llm".
 func (s *Service) SetRouterEngineManager(e EngineAutoStarter) {
@@ -221,6 +237,7 @@ func (be *broadcasterEmitter) Emit(convID string, e agent.EmitEvent) {
 		MimeType:       e.MimeType,
 		FileSize:       e.FileSize,
 		FileToken:      e.FileToken,
+		Result:         e.Result,
 	})
 }
 
@@ -750,6 +767,13 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	sb.WriteString("- To save content as a PDF file, always call fs.create_pdf. Never use fs.write_file with a .pdf path.\n")
 	sb.WriteString("- To save content as a Word document, always call fs.create_docx. Never use fs.write_file with a .docx path.\n")
 	sb.WriteString(fmt.Sprintf("- Default directory for generated, received, and sent files: %s — use this path unless the user specifies otherwise.\n", config.FilesDir()))
+	sb.WriteString("- When a task requires running a shell command — installing software, running scripts, checking versions, moving files, git operations, anything — use terminal.run_command or terminal.run_script. Do not describe what the user should run; run it yourself.\n")
+	sb.WriteString("- terminal.run_command: single commands with no shell features. Pass each argument as a separate element in args (e.g. command=\"brew\" args=[\"install\",\"pandoc\"]).\n")
+	sb.WriteString("- terminal.run_script: multi-step operations that need pipes, loops, conditionals, or chained commands.\n")
+	sb.WriteString("- Always call terminal.which first to check if a tool is installed before attempting to install it.\n")
+	sb.WriteString("- Never instruct the user to open a terminal or run a command manually when terminal skills are available.\n")
+	sb.WriteString("- Use terminal.run_as_admin for commands that need root/sudo (e.g. writing to /usr/local, system config changes). It triggers a macOS password dialog.\n")
+	sb.WriteString("- For long-running operations (builds, downloads, installs that take minutes), use terminal.run_background. The task runs asynchronously and you will automatically send a follow-up message when it finishes — you do not need to poll or wait. Tell the user you've started it in the background.\n")
 	sb.WriteString("</tool_rules>")
 
 	// ── Volatile suffix (changes per-turn, busts cache from here) ──────────
@@ -1530,6 +1554,11 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		agentCancel()
 		s.turnCancels.Delete(convID)
 	}()
+	// Inject proactive sender so skills can deliver follow-up messages to this
+	// conversation asynchronously (e.g. terminal.run_background completion).
+	agentCtx = skills.WithProactiveSender(agentCtx, func(text string) {
+		s.SendProactive(convID, text)
+	})
 	turnStart := time.Now()
 	result := agentLoop.Run(agentCtx, loopCfg, oaiMessages, convID)
 

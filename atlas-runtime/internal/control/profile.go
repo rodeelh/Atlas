@@ -1,6 +1,7 @@
 package control
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -49,11 +50,6 @@ func (s *ProfileService) SetLocation(city, country string) (LocationResponse, er
 }
 
 func (s *ProfileService) DetectLocation() (LocationResponse, error) {
-	// Try CoreLocation (WiFi/GPS) first — much more accurate than IP.
-	// Falls back to IP if the helper is missing, denied, or times out.
-	if err := location.DetectFromCoreLocation(); err == nil {
-		return locationToResponse(location.Get()), nil
-	}
 	if err := location.DetectFromIP(); err != nil {
 		return LocationResponse{}, err
 	}
@@ -86,6 +82,62 @@ func (s *ProfileService) UpdatePreferences(tempUnit, currency, unitSystem string
 		Currency:        p.Currency,
 		UnitSystem:      p.UnitSystem,
 	}
+}
+
+// SetLocationFromCoords reverse-geocodes browser-supplied GPS coordinates
+// via Nominatim, then stores the result exactly like DetectFromCoreLocation.
+func (s *ProfileService) SetLocationFromCoords(lat, lon float64) (LocationResponse, error) {
+	reverseURL := fmt.Sprintf(
+		"https://nominatim.openstreetmap.org/reverse?lat=%.6f&lon=%.6f&format=json&addressdetails=1",
+		lat, lon,
+	)
+	client := &http.Client{Timeout: 8 * time.Second}
+	req, err := http.NewRequest("GET", reverseURL, nil)
+	if err != nil {
+		return LocationResponse{}, fmt.Errorf("reverse geocode request: %w", err)
+	}
+	req.Header.Set("User-Agent", "ProjectAtlas/1.0")
+	resp, err := client.Do(req)
+	if err != nil {
+		return LocationResponse{}, fmt.Errorf("reverse geocode: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var geo struct {
+		Address struct {
+			City        string `json:"city"`
+			Town        string `json:"town"`
+			Village     string `json:"village"`
+			State       string `json:"state"`
+			Country     string `json:"country"`
+			CountryCode string `json:"country_code"`
+		} `json:"address"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&geo); err != nil || geo.Address.Country == "" {
+		return LocationResponse{}, fmt.Errorf("reverse geocode parse failed")
+	}
+
+	city := geo.Address.City
+	if city == "" {
+		city = geo.Address.Town
+	}
+	if city == "" {
+		city = geo.Address.Village
+	}
+	if city == "" {
+		city = geo.Address.State
+	}
+
+	if err := location.SetManual(city, geo.Address.Country); err != nil {
+		return LocationResponse{}, err
+	}
+	// Override source to "gps" since coordinates came from the browser's GPS.
+	loc := location.Get()
+	loc.Source = "gps"
+	loc.Latitude = lat
+	loc.Longitude = lon
+	location.Set(loc)
+	return locationToResponse(loc), nil
 }
 
 func (s *ProfileService) FetchLinkPreview(rawURL string) (LinkPreviewResult, error) {

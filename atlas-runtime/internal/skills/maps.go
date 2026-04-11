@@ -1,16 +1,12 @@
 package skills
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -147,41 +143,32 @@ func (r *Registry) registerMaps() {
 
 // ── maps.geocode ──────────────────────────────────────────────────────────────
 
-func mapsGeocode(ctx context.Context, args json.RawMessage) (string, error) {
-	var p struct {
-		Address string `json:"address"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil || p.Address == "" {
-		return "", fmt.Errorf("address is required")
-	}
+type mapsGeoPoint struct {
+	DisplayName string
+	Lat, Lon    float64
+}
 
-	u := nominatimBase + "/search?q=" + url.QueryEscape(p.Address) + "&format=json&limit=3&addressdetails=1"
+func mapsGeocodePoints(ctx context.Context, address string) ([]mapsGeoPoint, error) {
+	u := nominatimBase + "/search?q=" + url.QueryEscape(address) + "&format=json&limit=3&addressdetails=1"
 	data, err := mapsHTTPGet(ctx, u, mapsUserAgent)
 	if err != nil {
-		return "", fmt.Errorf("geocoding failed: %w", err)
+		return nil, fmt.Errorf("geocoding failed: %w", err)
 	}
-
-	var results []struct {
+	var raw []struct {
 		DisplayName string `json:"display_name"`
 		Lat         string `json:"lat"`
 		Lon         string `json:"lon"`
-		Type        string `json:"type"`
 	}
-	if err := json.Unmarshal(data, &results); err != nil {
-		return "", fmt.Errorf("geocoding parse failed: %w", err)
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("geocoding parse failed: %w", err)
 	}
-	if len(results) == 0 {
-		return fmt.Sprintf("No results found for: %s", p.Address), nil
-	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Geocoding results for \"%s\":\n\n", p.Address))
-	for i, r := range results {
+	pts := make([]mapsGeoPoint, 0, len(raw))
+	for _, r := range raw {
 		lat, _ := strconv.ParseFloat(r.Lat, 64)
 		lon, _ := strconv.ParseFloat(r.Lon, 64)
-		sb.WriteString(fmt.Sprintf("%d. %s\n   Coordinates: %.6f, %.6f\n\n", i+1, r.DisplayName, lat, lon))
+		pts = append(pts, mapsGeoPoint{DisplayName: r.DisplayName, Lat: lat, Lon: lon})
 	}
-	return strings.TrimRight(sb.String(), "\n"), nil
+	return pts, nil
 }
 
 // ── maps.reverse_geocode ──────────────────────────────────────────────────────
@@ -216,13 +203,13 @@ func mapsReverseGeocode(ctx context.Context, args json.RawMessage) (string, erro
 
 // ── maps.search ───────────────────────────────────────────────────────────────
 
-func mapsSearch(ctx context.Context, args json.RawMessage) (string, error) {
+func mapsSearch(ctx context.Context, args json.RawMessage) (string, []mapsPlace, error) {
 	var p struct {
 		Query string `json:"query"`
 		Max   int    `json:"max"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil || p.Query == "" {
-		return "", fmt.Errorf("query is required")
+		return "", nil, fmt.Errorf("query is required")
 	}
 	if p.Max <= 0 {
 		p.Max = 5
@@ -238,11 +225,18 @@ func mapsSearch(ctx context.Context, args json.RawMessage) (string, error) {
 	return mapsSearchNominatim(ctx, p.Query, p.Max)
 }
 
-func mapsSearchGoogle(ctx context.Context, query string, max int, apiKey string) (string, error) {
+type mapsPlace struct {
+	Name    string
+	Address string
+	Lat     float64
+	Lon     float64
+}
+
+func mapsSearchGoogle(ctx context.Context, query string, max int, apiKey string) (string, []mapsPlace, error) {
 	u := googleMapsBase + "/place/textsearch/json?query=" + url.QueryEscape(query) + "&key=" + url.QueryEscape(apiKey)
 	data, err := mapsHTTPGet(ctx, u, "")
 	if err != nil {
-		return "", fmt.Errorf("places search failed: %w", err)
+		return "", nil, fmt.Errorf("places search failed: %w", err)
 	}
 
 	var result struct {
@@ -255,19 +249,25 @@ func mapsSearchGoogle(ctx context.Context, query string, max int, apiKey string)
 			OpeningHours     *struct {
 				OpenNow bool `json:"open_now"`
 			} `json:"opening_hours"`
+			Geometry struct {
+				Location struct {
+					Lat float64 `json:"lat"`
+					Lng float64 `json:"lng"`
+				} `json:"location"`
+			} `json:"geometry"`
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
-		return "", fmt.Errorf("places search parse failed: %w", err)
+		return "", nil, fmt.Errorf("places search parse failed: %w", err)
 	}
 	if result.Status == "REQUEST_DENIED" || result.Status == "INVALID_REQUEST" {
-		return "", fmt.Errorf("places search error: %s — check Google Maps API key in Settings → Credentials", result.Status)
+		return "", nil, fmt.Errorf("places search error: %s — check Google Maps API key in Settings → Credentials", result.Status)
 	}
 	if result.Status != "OK" && result.Status != "ZERO_RESULTS" {
-		return "", fmt.Errorf("places search error: %s", result.Status)
+		return "", nil, fmt.Errorf("places search error: %s", result.Status)
 	}
 	if len(result.Results) == 0 {
-		return fmt.Sprintf("No places found for: %s", query), nil
+		return fmt.Sprintf("No places found for: %s", query), nil, nil
 	}
 
 	count := len(result.Results)
@@ -276,6 +276,7 @@ func mapsSearchGoogle(ctx context.Context, query string, max int, apiKey string)
 	}
 
 	var sb strings.Builder
+	var places []mapsPlace
 	sb.WriteString(fmt.Sprintf("Places matching \"%s\":\n\n", query))
 	for i := 0; i < count; i++ {
 		r := result.Results[i]
@@ -292,16 +293,22 @@ func mapsSearchGoogle(ctx context.Context, query string, max int, apiKey string)
 			}
 		}
 		sb.WriteString("\n")
+		places = append(places, mapsPlace{
+			Name:    r.Name,
+			Address: r.FormattedAddress,
+			Lat:     r.Geometry.Location.Lat,
+			Lon:     r.Geometry.Location.Lng,
+		})
 	}
-	return strings.TrimRight(sb.String(), "\n"), nil
+	return strings.TrimRight(sb.String(), "\n"), places, nil
 }
 
-func mapsSearchNominatim(ctx context.Context, query string, max int) (string, error) {
+func mapsSearchNominatim(ctx context.Context, query string, max int) (string, []mapsPlace, error) {
 	u := nominatimBase + "/search?q=" + url.QueryEscape(query) +
 		"&format=json&limit=" + strconv.Itoa(max) + "&addressdetails=1&extratags=1"
 	data, err := mapsHTTPGet(ctx, u, mapsUserAgent)
 	if err != nil {
-		return "", fmt.Errorf("place search failed: %w", err)
+		return "", nil, fmt.Errorf("place search failed: %w", err)
 	}
 
 	var results []struct {
@@ -312,13 +319,14 @@ func mapsSearchNominatim(ctx context.Context, query string, max int) (string, er
 		Extratags   map[string]string `json:"extratags"`
 	}
 	if err := json.Unmarshal(data, &results); err != nil {
-		return "", fmt.Errorf("place search parse failed: %w", err)
+		return "", nil, fmt.Errorf("place search parse failed: %w", err)
 	}
 	if len(results) == 0 {
-		return fmt.Sprintf("No places found for: %s", query), nil
+		return fmt.Sprintf("No places found for: %s", query), nil, nil
 	}
 
 	var sb strings.Builder
+	var places []mapsPlace
 	sb.WriteString(fmt.Sprintf("Places matching \"%s\" (via OpenStreetMap):\n\n", query))
 	for i, r := range results {
 		lat, _ := strconv.ParseFloat(r.Lat, 64)
@@ -332,8 +340,9 @@ func mapsSearchNominatim(ctx context.Context, query string, max int) (string, er
 			sb.WriteString(fmt.Sprintf("   Phone: %s\n", phone))
 		}
 		sb.WriteString("\n")
+		places = append(places, mapsPlace{Name: r.DisplayName, Address: r.DisplayName, Lat: lat, Lon: lon})
 	}
-	return strings.TrimRight(sb.String(), "\n"), nil
+	return strings.TrimRight(sb.String(), "\n"), places, nil
 }
 
 // ── maps.directions ───────────────────────────────────────────────────────────
@@ -374,12 +383,20 @@ func mapsDirections(ctx context.Context, args json.RawMessage) (string, error) {
 			Legs    []struct {
 				StartAddress string `json:"start_address"`
 				EndAddress   string `json:"end_address"`
-				Distance     struct{ Text string `json:"text"` } `json:"distance"`
-				Duration     struct{ Text string `json:"text"` } `json:"duration"`
-				Steps        []struct {
-					HTMLInstructions string                       `json:"html_instructions"`
-					Distance         struct{ Text string `json:"text"` } `json:"distance"`
-					Duration         struct{ Text string `json:"text"` } `json:"duration"`
+				Distance     struct {
+					Text string `json:"text"`
+				} `json:"distance"`
+				Duration struct {
+					Text string `json:"text"`
+				} `json:"duration"`
+				Steps []struct {
+					HTMLInstructions string `json:"html_instructions"`
+					Distance         struct {
+						Text string `json:"text"`
+					} `json:"distance"`
+					Duration struct {
+						Text string `json:"text"`
+					} `json:"duration"`
 				} `json:"steps"`
 			} `json:"legs"`
 		} `json:"routes"`
@@ -451,9 +468,13 @@ func mapsDistance(ctx context.Context, args json.RawMessage) (string, error) {
 		DestinationAddresses []string `json:"destination_addresses"`
 		Rows                 []struct {
 			Elements []struct {
-				Status   string                       `json:"status"`
-				Distance struct{ Text string `json:"text"` } `json:"distance"`
-				Duration struct{ Text string `json:"text"` } `json:"duration"`
+				Status   string `json:"status"`
+				Distance struct {
+					Text string `json:"text"`
+				} `json:"distance"`
+				Duration struct {
+					Text string `json:"text"`
+				} `json:"duration"`
 			} `json:"elements"`
 		} `json:"rows"`
 	}
@@ -487,18 +508,12 @@ func mapsDistance(ctx context.Context, args json.RawMessage) (string, error) {
 
 // ── maps.my_location ──────────────────────────────────────────────────────────
 
-func mapsMyLocation(ctx context.Context, _ json.RawMessage) (string, error) {
-	// Try CoreLocation helper first — WiFi/GPS positioning, much more accurate.
-	if result, err := coreLocationFetch(ctx); err == nil {
-		return result, nil
-	}
-
-	// Fall back to IP-based geolocation.
+func mapsMyLocation(_ context.Context, _ json.RawMessage) (string, error) {
 	loc := location.Get()
 	if location.ShouldRefresh() {
 		if err := location.DetectFromIP(); err != nil {
 			if loc.City == "" {
-				return "", fmt.Errorf("location not available — set it manually in Settings → General, or try again: %w", err)
+				return "", fmt.Errorf("location not available — set it in Settings → General: %w", err)
 			}
 			// Use stale cache rather than failing.
 		} else {
@@ -507,7 +522,7 @@ func mapsMyLocation(ctx context.Context, _ json.RawMessage) (string, error) {
 	}
 
 	if loc.City == "" {
-		return "Location not yet resolved. Set it in Settings → General or wait for auto-detection.", nil
+		return "Location not yet resolved. Set it in Settings → General.", nil
 	}
 
 	var sb strings.Builder
@@ -518,114 +533,50 @@ func mapsMyLocation(ctx context.Context, _ json.RawMessage) (string, error) {
 	if loc.Timezone != "" {
 		sb.WriteString(fmt.Sprintf("Timezone: %s\n", loc.Timezone))
 	}
-	sb.WriteString("Source: IP-based geolocation (city-level accuracy)")
+	source := loc.Source
+	if source == "" {
+		source = "ip"
+	}
+	sb.WriteString(fmt.Sprintf("Source: %s", source))
 	return sb.String(), nil
 }
 
-// coreLocationFetch runs the atlas-location helper binary (installed alongside
-// the Atlas daemon) which uses macOS CoreLocation for WiFi/GPS positioning.
-// Returns an error if the helper is not installed or the request fails — the
-// caller falls back to IP geolocation in that case.
-func coreLocationFetch(ctx context.Context) (string, error) {
-	execPath, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	helperPath := filepath.Join(filepath.Dir(execPath), "atlas-location")
-	if _, err := os.Stat(helperPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("atlas-location helper not installed")
-	}
-
-	fetchCtx, cancel := context.WithTimeout(ctx, 13*time.Second)
-	defer cancel()
-
-	out, err := exec.CommandContext(fetchCtx, helperPath).Output()
-	if err != nil {
-		return "", fmt.Errorf("atlas-location: %w", err)
-	}
-
-	var gpsResult struct {
-		Latitude  float64 `json:"latitude"`
-		Longitude float64 `json:"longitude"`
-		Accuracy  float64 `json:"accuracy"`
-		Altitude  float64 `json:"altitude"`
-		Error     string  `json:"error"`
-	}
-	if err := json.Unmarshal(bytes.TrimSpace(out), &gpsResult); err != nil {
-		return "", fmt.Errorf("atlas-location parse: %w", err)
-	}
-	if gpsResult.Error != "" {
-		return "", fmt.Errorf("atlas-location: %s", gpsResult.Error)
-	}
-
-	// Reverse-geocode to get a human-readable address.
-	var addr struct {
-		DisplayName string `json:"display_name"`
-		Address     struct {
-			City    string `json:"city"`
-			Town    string `json:"town"`
-			Village string `json:"village"`
-			Country string `json:"country"`
-		} `json:"address"`
-	}
-	reverseURL := fmt.Sprintf("%s/reverse?lat=%.6f&lon=%.6f&format=json&addressdetails=1",
-		nominatimBase, gpsResult.Latitude, gpsResult.Longitude)
-	if data, geoErr := mapsHTTPGet(ctx, reverseURL, mapsUserAgent); geoErr == nil {
-		_ = json.Unmarshal(data, &addr)
-	}
-
-	// Update the in-memory location cache with the precise coordinates so
-	// weather and other location-aware skills benefit automatically.
-	if addr.Address.Country != "" {
-		city := addr.Address.City
-		if city == "" {
-			city = addr.Address.Town
-		}
-		if city == "" {
-			city = addr.Address.Village
-		}
-		existing := location.Get()
-		location.Set(location.Info{
-			City:      city,
-			Country:   addr.Address.Country,
-			Timezone:  existing.Timezone,
-			Latitude:  gpsResult.Latitude,
-			Longitude: gpsResult.Longitude,
-			Source:    "gps",
-			UpdatedAt: time.Now(),
-		})
-	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Coordinates: %.6f, %.6f\n", gpsResult.Latitude, gpsResult.Longitude))
-	if gpsResult.Accuracy > 0 {
-		sb.WriteString(fmt.Sprintf("Accuracy: ±%.0f meters\n", gpsResult.Accuracy))
-	}
-	if addr.DisplayName != "" {
-		sb.WriteString(fmt.Sprintf("Address: %s\n", addr.DisplayName))
-	}
-	sb.WriteString("Source: CoreLocation (WiFi/GPS positioning)")
-	return sb.String(), nil
-}
-
-// ── FnResult wrappers — concise LogOutcome for the activity log ───────────────
+// ── FnResult wrappers ─────────────────────────────────────────────────────────
 //
-// These wrappers call the string-returning skill functions and set LogOutcome
-// to a one-liner so the activity log doesn't show the full multi-line output.
+// Each wrapper calls the inner skill function and sets:
+//   - LogOutcome: a concise one-liner for the activity log
+//   - Artifacts:  structured map data consumed by the frontend for rich rendering
 
 func mapsGeocodeResult(ctx context.Context, args json.RawMessage) (ToolResult, error) {
 	var p struct {
 		Address string `json:"address"`
 	}
 	_ = json.Unmarshal(args, &p)
-	s, err := mapsGeocode(ctx, args)
+
+	pts, err := mapsGeocodePoints(ctx, p.Address)
 	if err != nil {
 		return ToolResult{Success: false, Summary: err.Error()}, err
 	}
+	if len(pts) == 0 {
+		s := fmt.Sprintf("No results found for: %s", p.Address)
+		return ToolResult{Success: true, Summary: s, LogOutcome: s}, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Geocoding results for \"%s\":\n\n", p.Address))
+	for i, pt := range pts {
+		sb.WriteString(fmt.Sprintf("%d. %s\n   Coordinates: %.6f, %.6f\n\n", i+1, pt.DisplayName, pt.Lat, pt.Lon))
+	}
 	return ToolResult{
 		Success:    true,
-		Summary:    s,
+		Summary:    strings.TrimRight(sb.String(), "\n"),
 		LogOutcome: fmt.Sprintf("Geocoded: %q", p.Address),
+		Artifacts: map[string]any{
+			"map_type":  "point",
+			"latitude":  pts[0].Lat,
+			"longitude": pts[0].Lon,
+			"label":     pts[0].DisplayName,
+		},
 	}, nil
 }
 
@@ -643,23 +594,46 @@ func mapsReverseGeocodeResult(ctx context.Context, args json.RawMessage) (ToolRe
 		Success:    true,
 		Summary:    s,
 		LogOutcome: fmt.Sprintf("Reverse geocoded: (%.4f, %.4f)", p.Latitude, p.Longitude),
+		Artifacts: map[string]any{
+			"map_type":  "point",
+			"latitude":  p.Latitude,
+			"longitude": p.Longitude,
+			"label":     s,
+		},
 	}, nil
 }
 
 func mapsSearchResult(ctx context.Context, args json.RawMessage) (ToolResult, error) {
 	var p struct {
 		Query string `json:"query"`
-		Max   int    `json:"max"`
 	}
 	_ = json.Unmarshal(args, &p)
-	s, err := mapsSearch(ctx, args)
+	s, places, err := mapsSearch(ctx, args)
 	if err != nil {
 		return ToolResult{Success: false, Summary: err.Error()}, err
+	}
+	var artifacts map[string]any
+	if len(places) > 0 {
+		placesData := make([]map[string]any, 0, len(places))
+		for _, pl := range places {
+			placesData = append(placesData, map[string]any{
+				"name":      pl.Name,
+				"address":   pl.Address,
+				"latitude":  pl.Lat,
+				"longitude": pl.Lon,
+			})
+		}
+		artifacts = map[string]any{
+			"map_type": "places",
+			"query":    p.Query,
+			"places":   placesData,
+		}
 	}
 	return ToolResult{
 		Success:    true,
 		Summary:    s,
 		LogOutcome: fmt.Sprintf("Place search: %q", p.Query),
+		Artifacts:  artifacts,
 	}, nil
 }
 
@@ -677,19 +651,33 @@ func mapsDirectionsResult(ctx context.Context, args json.RawMessage) (ToolResult
 	if err != nil {
 		return ToolResult{Success: false, Summary: err.Error()}, err
 	}
-	// Extract distance + duration from the first line of the result for the log.
 	logLine := fmt.Sprintf("Directions: %s → %s (%s)", p.Origin, p.Destination, p.Mode)
-	for _, line := range strings.SplitN(s, "\n", 3) {
+	var distText, durText string
+	for _, line := range strings.SplitN(s, "\n", 4) {
 		if strings.HasPrefix(line, "Mode:") {
 			logLine = fmt.Sprintf("Directions: %s → %s | %s", p.Origin, p.Destination,
 				strings.TrimPrefix(line, "Mode: "))
-			break
+		}
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Distance:") {
+			distText = strings.TrimPrefix(line, "Distance: ")
+		}
+		if strings.HasPrefix(line, "Duration:") {
+			durText = strings.TrimPrefix(line, "Duration: ")
 		}
 	}
 	return ToolResult{
 		Success:    true,
 		Summary:    s,
 		LogOutcome: logLine,
+		Artifacts: map[string]any{
+			"map_type":    "directions",
+			"origin":      p.Origin,
+			"destination": p.Destination,
+			"mode":        p.Mode,
+			"distance":    distText,
+			"duration":    durText,
+		},
 	}, nil
 }
 
@@ -707,7 +695,6 @@ func mapsDistanceResult(ctx context.Context, args json.RawMessage) (ToolResult, 
 	if err != nil {
 		return ToolResult{Success: false, Summary: err.Error()}, err
 	}
-	// Extract the distance/duration values from the result lines for the log.
 	logLine := fmt.Sprintf("Distance: %s → %s (%s)", p.Origin, p.Destination, p.Mode)
 	var distText, durText string
 	for _, line := range strings.Split(s, "\n") {
@@ -723,11 +710,7 @@ func mapsDistanceResult(ctx context.Context, args json.RawMessage) (ToolResult, 
 		logLine = fmt.Sprintf("Distance: %s → %s: %s, %s (%s)",
 			p.Origin, p.Destination, distText, durText, p.Mode)
 	}
-	return ToolResult{
-		Success:    true,
-		Summary:    s,
-		LogOutcome: logLine,
-	}, nil
+	return ToolResult{Success: true, Summary: s, LogOutcome: logLine}, nil
 }
 
 func mapsMyLocationResult(ctx context.Context, args json.RawMessage) (ToolResult, error) {
@@ -735,7 +718,6 @@ func mapsMyLocationResult(ctx context.Context, args json.RawMessage) (ToolResult
 	if err != nil {
 		return ToolResult{Success: false, Summary: err.Error()}, err
 	}
-	// Extract city/source for a compact log line.
 	logLine := "Location fetched"
 	for _, line := range strings.Split(s, "\n") {
 		if strings.HasPrefix(line, "Current location:") || strings.HasPrefix(line, "Coordinates:") {
@@ -743,9 +725,20 @@ func mapsMyLocationResult(ctx context.Context, args json.RawMessage) (ToolResult
 			break
 		}
 	}
+	loc := location.Get()
+	var artifacts map[string]any
+	if loc.Latitude != 0 || loc.Longitude != 0 {
+		artifacts = map[string]any{
+			"map_type":  "point",
+			"latitude":  loc.Latitude,
+			"longitude": loc.Longitude,
+			"label":     fmt.Sprintf("%s, %s", loc.City, loc.Country),
+		}
+	}
 	return ToolResult{
 		Success:    true,
 		Summary:    s,
 		LogOutcome: logLine,
+		Artifacts:  artifacts,
 	}, nil
 }

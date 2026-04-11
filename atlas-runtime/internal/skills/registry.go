@@ -730,6 +730,10 @@ func (r *Registry) Canonicalize(actionID string) string {
 	return r.normalise(actionID)
 }
 
+// Normalise is the exported form of normalise — converts a model-returned tool
+// name (e.g. "maps__my_location") to the canonical registry key ("maps.my_location").
+func (r *Registry) Normalise(actionID string) string { return r.normalise(actionID) }
+
 // normalise converts an actionID arriving from the AI (which uses oaiName encoding)
 // back to the internal dot-separated form used as registry keys.
 func (r *Registry) normalise(actionID string) string {

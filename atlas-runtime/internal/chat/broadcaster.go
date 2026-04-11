@@ -29,6 +29,9 @@ type SSEEvent struct {
 	MimeType  string `json:"mimeType,omitempty"`
 	FileSize  int64  `json:"fileSize,omitempty"`
 	FileToken string `json:"fileToken,omitempty"`
+
+	// tool_finished — JSON-encoded tool artifacts for frontend rich rendering.
+	Result string `json:"result,omitempty"`
 }
 
 // Encoded returns the event serialised as an SSE data line.
