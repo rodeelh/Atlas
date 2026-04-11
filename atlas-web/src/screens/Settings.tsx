@@ -167,36 +167,66 @@ export function Settings() {
           <input class="input" value={draft.personaName} onInput={(e) => update('personaName', (e.target as HTMLInputElement).value)} />
         </SettingsRow>
         <SettingsRow label="Location" sublabel="Leave blank to auto-detect from IP">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '100%' }}>
-            <input
-              class="input"
-              placeholder={locationSaving ? 'Detecting…' : 'City, Country'}
-              value={locationEdit}
-              disabled={locationSaving}
-              onInput={(e) => setLocationEdit((e.target as HTMLInputElement).value)}
-              onBlur={async (e) => {
-                const val = e.currentTarget.value.trim()
-                setLocationError(null)
-                setLocationSaving(true)
-                try {
-                  if (!val) {
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{ position: 'relative', width: '240px', maxWidth: '100%' }}>
+              <input
+                class="input"
+                placeholder={locationSaving ? 'Detecting…' : 'City, Country'}
+                value={locationEdit}
+                disabled={locationSaving}
+                style={{ paddingRight: '34px', width: '100%', boxSizing: 'border-box' }}
+                onInput={(e) => setLocationEdit((e.target as HTMLInputElement).value)}
+                onBlur={async (e) => {
+                  const val = e.currentTarget.value.trim()
+                  setLocationError(null)
+                  setLocationSaving(true)
+                  try {
+                    if (!val) {
+                      const loc = await api.detectLocation()
+                      setLocation(loc)
+                      setLocationEdit(loc.city ? loc.city + (loc.country ? ', ' + loc.country : '') : '')
+                    } else {
+                      const parts = val.split(',').map((s: string) => s.trim())
+                      const city = parts[0] ?? ''
+                      const country = parts.slice(1).join(', ').trim()
+                      const loc = await api.setLocation(city, country)
+                      setLocation(loc)
+                    }
+                  } catch (err) {
+                    setLocationError(err instanceof Error ? err.message : 'Failed')
+                  } finally {
+                    setLocationSaving(false)
+                  }
+                }}
+              />
+              <button
+                class="chat-copy-btn"
+                title="Detect my location"
+                disabled={locationSaving}
+                style={{ position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)', opacity: 1, pointerEvents: 'auto' }}
+                onClick={async () => {
+                  setLocationError(null)
+                  setLocationSaving(true)
+                  try {
                     const loc = await api.detectLocation()
                     setLocation(loc)
                     setLocationEdit(loc.city ? loc.city + (loc.country ? ', ' + loc.country : '') : '')
-                  } else {
-                    const parts = val.split(',').map((s: string) => s.trim())
-                    const city = parts[0] ?? ''
-                    const country = parts.slice(1).join(', ').trim()
-                    const loc = await api.setLocation(city, country)
-                    setLocation(loc)
+                    const parts = loc.city ? [loc.city, loc.country].filter(Boolean) : []
+                    if (parts.length) await api.setLocation(parts[0] ?? '', parts[1] ?? '')
+                  } catch (err) {
+                    setLocationError(err instanceof Error ? err.message : 'Failed')
+                  } finally {
+                    setLocationSaving(false)
                   }
-                } catch (err) {
-                  setLocationError(err instanceof Error ? err.message : 'Failed')
-                } finally {
-                  setLocationSaving(false)
-                }
-              }}
-            />
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="3"/>
+                  <path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
+                  <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" style={{ display: 'none' }}/>
+                </svg>
+              </button>
+            </div>
             {locationError && <div style={{ fontSize: '12px', color: 'var(--theme-text-danger, #e05252)' }}>{locationError}</div>}
           </div>
         </SettingsRow>
@@ -302,6 +332,7 @@ export function Settings() {
             </span>
             <button
               class="btn btn-sm btn-danger"
+              title="Clear all"
               disabled={storageCleaning || !storageStats || storageStats.fileCount === 0}
               onClick={async () => {
                 if (!storageStats || storageStats.fileCount === 0) return
@@ -318,7 +349,16 @@ export function Settings() {
                 }
               }}
             >
-              {storageCleaning ? 'Clearing…' : 'Clear all'}
+              {storageCleaning ? (
+                <span class="spinner spinner-sm" style={{ borderTopColor: 'currentColor', borderColor: 'rgba(255,255,255,0.2)' }} />
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style={{ display: 'block' }}>
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                  <path d="M10 11v6M14 11v6"/>
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                </svg>
+              )}
             </button>
           </div>
         </SettingsRow>
@@ -344,7 +384,7 @@ export function Settings() {
           mobileSplit
         >
           <button class="btn btn-sm" onClick={restartAtlas} disabled={restartPhase === 'restarting' || !canRestartLocally}>
-            {restartPhase === 'restarting' ? 'Restarting…' : 'Restart Atlas'}
+            {restartPhase === 'restarting' ? 'Restarting…' : 'Restart'}
           </button>
         </SettingsRow>
       </SettingsGroup>
