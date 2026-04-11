@@ -2,11 +2,10 @@ package skills
 
 // forge_skill.go — forge.orchestration.propose with full 8-gate validation pipeline.
 //
-// This file intentionally does NOT import atlas-runtime-go/internal/forge to
-// avoid an import cycle (agent → skills → forge → agent). Forge persistence
-// is injected at startup via Registry.SetForgePersistFn. The Forge types used
-// here (forgeSpec, forgePlan, etc.) are local mirrors of forge.ForgeSkillSpec
-// and friends — structurally identical, kept in sync manually.
+// Forge persistence is injected at startup via Registry.SetForgePersistFn so the
+// skills package never imports internal/forge directly (which would create an
+// import cycle through agent). Shared types come from internal/forge/forgetypes,
+// a zero-dependency leaf package that both sides can import safely.
 
 import (
 	"context"
@@ -21,6 +20,7 @@ import (
 
 	"atlas-runtime-go/internal/creds"
 	"atlas-runtime-go/internal/customskills"
+	"atlas-runtime-go/internal/forge/forgetypes"
 	"atlas-runtime-go/internal/validate"
 )
 
@@ -36,86 +36,6 @@ var forgeAllowedPythonStdlibImports = map[string]bool{
 }
 
 var forgePythonImportRe = regexp.MustCompile(`(?m)^\s*(?:from\s+([A-Za-z0-9_\.]+)\s+import|import\s+([A-Za-z0-9_\. ,]+))`)
-
-// ── Local type mirrors ────────────────────────────────────────────────────────
-// These match forge.ForgeSkillSpec / ForgeActionPlan / HTTPRequestPlan /
-// APIResearchContract exactly. Keep in sync with forge/types.go.
-
-type forgeSpec struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Category    string            `json:"category"`
-	RiskLevel   string            `json:"riskLevel"`
-	Tags        []string          `json:"tags"`
-	Actions     []forgeActionSpec `json:"actions"`
-}
-
-type forgeActionSpec struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	Description     string `json:"description"`
-	PermissionLevel string `json:"permissionLevel"`
-	ActionClass     string `json:"actionClass,omitempty"`
-}
-
-type forgePlan struct {
-	ActionID     string             `json:"actionID"`
-	Type         string             `json:"type"`
-	HTTPRequest  *forgeHTTPRequest  `json:"httpRequest"`
-	LocalPlan    *forgeLocalPlan    `json:"localPlan"`
-	WorkflowStep *forgeWorkflowStep `json:"workflowStep"`
-}
-
-type forgeLocalPlan struct {
-	Interpreter string `json:"interpreter"`
-	Script      string `json:"script"`
-}
-
-type forgeWorkflowStep struct {
-	Title  string         `json:"title,omitempty"`
-	Prompt string         `json:"prompt,omitempty"`
-	Action string         `json:"action,omitempty"`
-	Args   map[string]any `json:"args,omitempty"`
-	Value  any            `json:"value,omitempty"`
-}
-
-type forgeHTTPRequest struct {
-	Method                string            `json:"method"`
-	URL                   string            `json:"url"`
-	Headers               map[string]string `json:"headers"`
-	Query                 map[string]string `json:"query"`
-	AuthType              string            `json:"authType"`
-	AuthSecretKey         string            `json:"authSecretKey"`
-	AuthHeaderName        string            `json:"authHeaderName"`
-	AuthQueryParamName    string            `json:"authQueryParamName"`
-	OAuth2TokenURL        string            `json:"oauth2TokenURL"`
-	OAuth2ClientIDKey     string            `json:"oauth2ClientIDKey"`
-	OAuth2ClientSecretKey string            `json:"oauth2ClientSecretKey"`
-	OAuth2Scope           string            `json:"oauth2Scope"`
-	BodyFields            map[string]string `json:"bodyFields"`
-	StaticBodyFields      map[string]string `json:"staticBodyFields"`
-	SecretHeader          string            `json:"secretHeader"`
-}
-
-type forgeContract struct {
-	ProviderName           string            `json:"providerName"`
-	DocsURL                string            `json:"docsURL"`
-	DocsQuality            string            `json:"docsQuality"`
-	BaseURL                string            `json:"baseURL"`
-	Endpoint               string            `json:"endpoint"`
-	Method                 string            `json:"method"`
-	AuthType               string            `json:"authType"`
-	RequiredParams         []string          `json:"requiredParams"`
-	OptionalParams         []string          `json:"optionalParams"`
-	ParamLocations         map[string]string `json:"paramLocations"`
-	ExampleRequest         string            `json:"exampleRequest"`
-	ExampleResponse        string            `json:"exampleResponse"`
-	ExpectedResponseFields []string          `json:"expectedResponseFields"`
-	MappingConfidence      string            `json:"mappingConfidence"`
-	ValidationStatus       string            `json:"validationStatus"`
-	Notes                  string            `json:"notes"`
-}
 
 // ── Registration ──────────────────────────────────────────────────────────────
 
@@ -244,11 +164,11 @@ func (r *Registry) forgeOrchestrationPropose(ctx context.Context, args json.RawM
 	}
 
 	// Decode spec and plans for gate evaluation.
-	var spec forgeSpec
+	var spec forgetypes.ForgeSkillSpec
 	if err := json.Unmarshal([]byte(p.SpecJSON), &spec); err != nil {
 		return fmt.Sprintf("Could not decode spec_json as ForgeSkillSpec: %v. Ensure spec_json is well-formed JSON.", err), nil
 	}
-	var plans []forgePlan
+	var plans []forgetypes.ForgeActionPlan
 	if err := json.Unmarshal([]byte(p.PlansJSON), &plans); err != nil {
 		return fmt.Sprintf("Could not decode plans_json as []ForgeActionPlan: %v. Ensure plans_json is a well-formed JSON array.", err), nil
 	}
@@ -279,7 +199,7 @@ func (r *Registry) forgeOrchestrationPropose(ctx context.Context, args json.RawM
 				"Set kind to 'composed', 'transform', 'workflow', or 'local' if this is not an HTTP API skill.", nil
 		}
 
-		var contract forgeContract
+		var contract forgetypes.APIResearchContract
 		if err := json.Unmarshal([]byte(p.ContractJSON), &contract); err != nil {
 			return fmt.Sprintf("Could not decode contract_json as APIResearchContract: %v. "+
 				"Ensure contract_json is a valid JSON object with providerName, docsQuality, "+
@@ -370,7 +290,7 @@ The proposal is pending your review. Open the Skills → Forge panel to inspect,
 
 // forgeValidateContract checks gates 1–6 against the APIResearchContract.
 // Returns a refusal message on failure, or "" on pass.
-func forgeValidateContract(c forgeContract) string {
+func forgeValidateContract(c forgetypes.APIResearchContract) string {
 	// Gate 1: docsQuality >= medium.
 	switch c.DocsQuality {
 	case "medium", "high":
@@ -416,7 +336,7 @@ func forgeValidateContract(c forgeContract) string {
 
 // forgeValidatePlansAuth checks Gate 7 — each plan's authType has all required
 // companion fields for runtime injection.
-func forgeValidatePlansAuth(plans []forgePlan) string {
+func forgeValidatePlansAuth(plans []forgetypes.ForgeActionPlan) string {
 	for _, plan := range plans {
 		h := plan.HTTPRequest
 		if h == nil {
@@ -447,7 +367,7 @@ func forgeValidatePlansAuth(plans []forgePlan) string {
 // forgeValidateCredentials checks Gate 8 — all referenced Keychain secrets exist.
 // Keys may be standalone Keychain items OR custom keys stored inside the Atlas
 // credential bundle (com.projectatlas.credentials → customSecrets).
-func forgeValidateCredentials(plans []forgePlan) string {
+func forgeValidateCredentials(plans []forgetypes.ForgeActionPlan) string {
 	// Read the credential bundle once so we can check custom keys.
 	bundle, _ := creds.Read()
 
@@ -516,9 +436,9 @@ func forgeReadKeychain(service string) string {
 
 // forgeValidateAPI runs a live pre-validation against the primary GET plan via
 // the validate.Gate pipeline.
-func (r *Registry) forgeValidateAPI(ctx context.Context, contract forgeContract, plans []forgePlan) string {
+func (r *Registry) forgeValidateAPI(ctx context.Context, contract forgetypes.APIResearchContract, plans []forgetypes.ForgeActionPlan) string {
 	// Find the first GET-capable plan.
-	var primary *forgeHTTPRequest
+	var primary *forgetypes.HTTPRequestPlan
 	for i := range plans {
 		h := plans[i].HTTPRequest
 		if h != nil && strings.ToUpper(h.Method) == "GET" {
@@ -575,7 +495,7 @@ var slugRe = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // forgeValidateSpec checks the spec structure for all skill kinds.
 // Phase 1: enum validation, format validation, and no-orphan cross-check with plans.
-func forgeValidateSpec(spec forgeSpec, plans []forgePlan) string {
+func forgeValidateSpec(spec forgetypes.ForgeSkillSpec, plans []forgetypes.ForgeActionPlan) string {
 	var issues []string
 
 	// ── Skill ID ──────────────────────────────────────────────────────────────
@@ -676,29 +596,11 @@ func forgeValidateSpec(spec forgeSpec, plans []forgePlan) string {
 	return "Forge spec validation failed:\n" + strings.Join(bullets, "\n") + "\nFix these issues and call forge.orchestration.propose again."
 }
 
-// fabricatedDomains is a blocklist of hostnames that indicate a made-up or placeholder URL.
-// Any plan URL whose host appears here is rejected at proposal time.
-var fabricatedDomains = map[string]bool{
-	"example.com":     true,
-	"example.org":     true,
-	"example.net":     true,
-	"localhost":       true,
-	"placeholder.com": true,
-	"your-api.com":    true,
-	"yourdomain.com":  true,
-	"sample.com":      true,
-	"test.com":        true,
-	"fake.com":        true,
-	"api.example.com": true,
-	"local-skill":     true,
-	"local-api.com":   true,
-}
-
 // forgeValidatePlanURLs checks that every HTTP plan URL is well-formed and
 // does not use a placeholder/example domain.
 // Phase 2: catches malformed and fabricated URLs before they reach codegen.
 // Local-type plans are skipped — they have no URL.
-func forgeValidatePlanURLs(plans []forgePlan) string {
+func forgeValidatePlanURLs(plans []forgetypes.ForgeActionPlan) string {
 	placeholderRe := regexp.MustCompile(`\{[^}]+\}`)
 	for _, plan := range plans {
 		if plan.Type == "local" {
@@ -717,7 +619,7 @@ func forgeValidatePlanURLs(plans []forgePlan) string {
 				plan.ActionID, h.URL)
 		}
 		// Reject placeholder/example/fabricated domains.
-		if fabricatedDomains[strings.ToLower(u.Hostname())] {
+		if forgetypes.PlaceholderDomains[strings.ToLower(u.Hostname())] {
 			return fmt.Sprintf(
 				"Forge refused: plan %q uses the placeholder domain %q. "+
 					"Provide the real API base URL — do not use example.com or other stand-in domains.",
@@ -741,7 +643,7 @@ func baseDomain(host string) string {
 // registrable base domain as the contract's baseURL. Subdomains are allowed —
 // e.g. plan "api.foo.com" passes when contract says "foo.com" or "auth.foo.com".
 // This prevents entirely fabricated hostnames while permitting multi-subdomain APIs.
-func forgeValidatePlanHostnames(plans []forgePlan, contractBaseURL string) string {
+func forgeValidatePlanHostnames(plans []forgetypes.ForgeActionPlan, contractBaseURL string) string {
 	if strings.TrimSpace(contractBaseURL) == "" {
 		return ""
 	}
@@ -778,7 +680,7 @@ func forgeValidatePlanHostnames(plans []forgePlan, contractBaseURL string) strin
 
 // forgeValidateLocalPlans validates all local-type plans: each must specify a
 // supported interpreter and a non-empty script body.
-func forgeValidateLocalPlans(plans []forgePlan) string {
+func forgeValidateLocalPlans(plans []forgetypes.ForgeActionPlan) string {
 	validInterpreters := map[string]bool{
 		"osascript": true, "bash": true, "sh": true, "python3": true,
 	}
@@ -804,7 +706,7 @@ func forgeValidateLocalPlans(plans []forgePlan) string {
 	return ""
 }
 
-func forgeValidateWorkflowPlans(plans []forgePlan) string {
+func forgeValidateWorkflowPlans(plans []forgetypes.ForgeActionPlan) string {
 	for _, plan := range plans {
 		switch plan.Type {
 		case "http":

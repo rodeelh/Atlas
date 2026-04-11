@@ -169,37 +169,39 @@ func (m *Module) installProposal(w http.ResponseWriter, id string, enable bool) 
 	}
 
 	record := forgesvc.BuildInstalledRecord(*proposal, status, target)
-	if err := forgesvc.SaveInstalled(m.supportDir, record); err != nil {
+
+	// rollbackArtifacts removes disk artifacts and de-registers the skill from the
+	// in-memory registry. Called on any failure after in-memory registration succeeds.
+	rollbackArtifacts := func() {
 		if target != nil && target.Type == "custom_skill" {
 			_ = forgesvc.RemoveCustomSkillDir(m.supportDir, proposal.SkillID)
-		}
-		if target != nil && target.Type == "workflow" {
+			m.unregisterInstalledActions(record)
+		} else if target != nil && target.Type == "workflow" {
 			_ = forgesvc.RemoveWorkflowInstall(m.supportDir, target.Ref)
+			m.unregisterInstalledActions(record)
 		}
+	}
+
+	if err := forgesvc.SaveInstalled(m.supportDir, record); err != nil {
+		rollbackArtifacts()
 		writeError(w, http.StatusInternalServerError, "failed to save installed skill: "+err.Error())
 		return
 	}
 
 	updatedProposal, err := forgesvc.UpdateProposalStatus(m.supportDir, id, status)
 	if err != nil {
-		_, _ = forgesvc.DeleteInstalled(m.supportDir, proposal.SkillID)
-		if target != nil && target.Type == "custom_skill" {
-			_ = forgesvc.RemoveCustomSkillDir(m.supportDir, proposal.SkillID)
+		if _, delErr := forgesvc.DeleteInstalled(m.supportDir, proposal.SkillID); delErr != nil {
+			logstore.Write("warn", "forge/install: rollback DeleteInstalled failed: "+delErr.Error(), nil)
 		}
-		if target != nil && target.Type == "workflow" {
-			_ = forgesvc.RemoveWorkflowInstall(m.supportDir, target.Ref)
-		}
+		rollbackArtifacts()
 		writeError(w, http.StatusInternalServerError, "failed to update proposal status: "+err.Error())
 		return
 	}
 	if updatedProposal == nil {
-		_, _ = forgesvc.DeleteInstalled(m.supportDir, proposal.SkillID)
-		if target != nil && target.Type == "custom_skill" {
-			_ = forgesvc.RemoveCustomSkillDir(m.supportDir, proposal.SkillID)
+		if _, delErr := forgesvc.DeleteInstalled(m.supportDir, proposal.SkillID); delErr != nil {
+			logstore.Write("warn", "forge/install: rollback DeleteInstalled failed: "+delErr.Error(), nil)
 		}
-		if target != nil && target.Type == "workflow" {
-			_ = forgesvc.RemoveWorkflowInstall(m.supportDir, target.Ref)
-		}
+		rollbackArtifacts()
 		writeError(w, http.StatusNotFound, "proposal not found: "+id)
 		return
 	}

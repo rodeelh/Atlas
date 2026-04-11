@@ -3,14 +3,16 @@ package skills
 import (
 	"strings"
 	"testing"
+
+	"atlas-runtime-go/internal/forge/forgetypes"
 )
 
 func TestForgeValidateLocalPlansRejectsThirdPartyPythonDependency(t *testing.T) {
-	plans := []forgePlan{
+	plans := []forgetypes.ForgeActionPlan{
 		{
 			ActionID: "make-pdf",
 			Type:     "local",
-			LocalPlan: &forgeLocalPlan{
+			LocalPlan: &forgetypes.LocalPlan{
 				Interpreter: "python3",
 				Script:      "from reportlab.pdfgen import canvas\nprint('hi')",
 			},
@@ -24,11 +26,11 @@ func TestForgeValidateLocalPlansRejectsThirdPartyPythonDependency(t *testing.T) 
 }
 
 func TestForgeValidateLocalPlansRejectsBuiltInFileGenerationTasks(t *testing.T) {
-	plans := []forgePlan{
+	plans := []forgetypes.ForgeActionPlan{
 		{
 			ActionID: "make-pdf",
 			Type:     "local",
-			LocalPlan: &forgeLocalPlan{
+			LocalPlan: &forgetypes.LocalPlan{
 				Interpreter: "bash",
 				Script:      "echo 'create pdf report.pdf'",
 			},

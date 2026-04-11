@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"atlas-runtime-go/internal/forge/forgetypes"
 	"atlas-runtime-go/internal/logstore"
 )
 
@@ -44,14 +45,6 @@ func (s *Service) GetResearching() []ResearchingItem {
 	return out
 }
 
-// proposePlaceholderDomains is a blocklist of domains that indicate a fabricated URL.
-// This mirrors the list in forge_skill.go — both paths must reject the same domains.
-var proposePlaceholderDomains = []string{
-	"example.com", "example.org", "example.net", "localhost",
-	"placeholder.com", "your-api.com", "yourdomain.com", "sample.com",
-	"test.com", "fake.com", "api.example.com", "local-skill", "local-api.com",
-}
-
 // validateProposalAPIURL returns a non-empty error string if rawURL uses a
 // placeholder/example domain or is otherwise unsuitable as a real API base URL.
 func validateProposalAPIURL(rawURL string) string {
@@ -63,10 +56,8 @@ func validateProposalAPIURL(rawURL string) string {
 		return fmt.Sprintf("invalid API URL %q: %v", rawURL, err)
 	}
 	host := strings.ToLower(u.Hostname())
-	for _, ph := range proposePlaceholderDomains {
-		if host == ph {
-			return fmt.Sprintf("domain %q is a placeholder — provide the real API base URL", host)
-		}
+	if forgetypes.PlaceholderDomains[host] {
+		return fmt.Sprintf("domain %q is a placeholder — provide the real API base URL", host)
 	}
 	return ""
 }
@@ -112,11 +103,9 @@ func (s *Service) Propose(ctx context.Context, req ProposeRequest, provider AIPr
 
 	// Gate: validate AI-returned domains — reject if the model fabricated placeholder hostnames.
 	for _, domain := range proposal.Domains {
-		for _, ph := range proposePlaceholderDomains {
-			if strings.EqualFold(strings.ToLower(domain), ph) {
-				return ForgeProposal{}, fmt.Errorf(
-					"forge: AI returned placeholder domain %q — provide a real API URL and try again", domain)
-			}
+		if forgetypes.PlaceholderDomains[strings.ToLower(domain)] {
+			return ForgeProposal{}, fmt.Errorf(
+				"forge: AI returned placeholder domain %q — provide a real API URL and try again", domain)
 		}
 	}
 
