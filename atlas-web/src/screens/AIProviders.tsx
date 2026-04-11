@@ -742,26 +742,8 @@ export function AIProviders() {
 
       <SettingsGroup title="Advanced">
         <details class="ai-provider-advanced-panel">
-          <summary>Behavior and memory</summary>
+          <summary>Inference & tools</summary>
           <div class="ai-provider-advanced-panel-body">
-            <div class="ai-provider-mini-section-label">Safety</div>
-            <SettingsRow
-              label="Action safety"
-              sublabel="Choose when Atlas should stop and ask before taking action"
-              fieldId="ai-provider-action-safety"
-            >
-              <select
-                id="ai-provider-action-safety"
-                class="input"
-                value={draft.actionSafetyMode}
-                onChange={(e) => update('actionSafetyMode', (e.target as HTMLSelectElement).value)}
-              >
-                {ACTION_SAFETY_OPTIONS.map((option) => (
-                  <option key={option} value={option}>{SAFETY_LABELS[option]}</option>
-                ))}
-              </select>
-            </SettingsRow>
-
             <div class="ai-provider-mini-section-label">Inference & Tools</div>
             <SettingsRow
               label="Tool selection"
@@ -838,13 +820,6 @@ export function AIProviders() {
               </>
             )}
 
-            <div class="ai-provider-mini-section-label">Memory</div>
-            <SettingsRow label="Memory enabled" sublabel="Extract and persist facts from conversations" mobileSplit>
-              <ToggleField checked={draft.memoryEnabled} onChange={(value) => update('memoryEnabled', value)} />
-            </SettingsRow>
-            <SettingsRow label="Max per turn" sublabel="Memories injected as context per request" fieldId="ai-provider-memory-max">
-              <input id="ai-provider-memory-max" class="input input-sm" type="number" min={0} max={20} value={draft.maxRetrievedMemoriesPerTurn} onInput={(e) => update('maxRetrievedMemoriesPerTurn', Number((e.target as HTMLInputElement).value))} />
-            </SettingsRow>
           </div>
         </details>
       </SettingsGroup>

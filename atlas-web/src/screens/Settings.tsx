@@ -252,6 +252,26 @@ export function Settings() {
         />
       </SettingsGroup>
 
+      <SettingsGroup title="Behavior">
+        <SettingsRow label="Action safety" sublabel="When Atlas should stop and ask before taking action">
+          <select
+            class="input"
+            value={draft.actionSafetyMode}
+            onChange={(e) => update('actionSafetyMode', (e.target as HTMLSelectElement).value)}
+          >
+            <option value="always_ask_before_actions">Ask every time</option>
+            <option value="ask_only_for_risky_actions">Ask for risky actions</option>
+            <option value="more_autonomous">Auto-approve actions</option>
+          </select>
+        </SettingsRow>
+        <SettingsRow label="Memory" sublabel="Extract and persist facts from conversations" mobileSplit>
+          <ToggleField checked={draft.memoryEnabled} onChange={(v) => update('memoryEnabled', v)} />
+        </SettingsRow>
+        <SettingsRow label="Memories per turn" sublabel="How many recalled facts are injected as context per request" hint="Higher values give Atlas more long-term context but use more of the model's token budget.">
+          <input class="input input-sm" type="number" min={0} max={20} value={draft.maxRetrievedMemoriesPerTurn} onInput={(e) => update('maxRetrievedMemoriesPerTurn', Number((e.target as HTMLInputElement).value))} />
+        </SettingsRow>
+      </SettingsGroup>
+
       <SettingsGroup title="Local Storage">
         <div class="settings-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '8px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
