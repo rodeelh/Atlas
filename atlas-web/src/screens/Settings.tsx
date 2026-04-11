@@ -305,6 +305,17 @@ export function Settings() {
       </SettingsGroup>
 
       <SettingsGroup title="System">
+        <SettingsRow label="Runtime port" sublabel="Port the Atlas daemon listens on. Requires restart to take effect." hint={'Default: 1984\nChange this if another service is using port 1984.'}>
+          <input
+            class="input"
+            type="number"
+            min="1024"
+            max="65535"
+            style={{ width: '90px' }}
+            value={draft.runtimePort}
+            onInput={(e) => update('runtimePort', parseInt((e.target as HTMLInputElement).value, 10) || draft.runtimePort)}
+          />
+        </SettingsRow>
         <SettingsRow
           label="Restart Atlas"
           sublabel={canRestartLocally
