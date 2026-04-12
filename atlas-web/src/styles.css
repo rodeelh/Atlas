@@ -2290,6 +2290,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 .chat-messages {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -3247,92 +3248,81 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 }
 
 .chat-approval-card {
-  align-self: stretch;
-  padding: 14px 16px 12px;
-  background:
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--yellow-dim) 88%, white 12%),
-      var(--yellow-dim));
-  border: 1px solid rgba(245,158,11,0.22);
-  border-radius: 14px;
+  container-type: inline-size;
+  margin: 0 auto;
+  width: 70%;
+  max-width: 600px;
+  min-width: 250px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   box-shadow: 0 10px 24px rgba(0,0,0,0.06);
 }
 
-.chat-approval-card-header {
+.chat-approval-card-row {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
 }
+
+.chat-approval-card-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
 
 .chat-approval-card-icon {
   flex-shrink: 0;
-  color: var(--yellow);
+  color: var(--accent);
   opacity: 0.85;
 }
 
 .chat-approval-card-meta {
-  flex: 1;
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .chat-approval-card-title {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--yellow);
-  opacity: 0.75;
+  color: var(--accent);
+  opacity: 0.7;
 }
 
 .chat-approval-card-tool {
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--yellow);
-  white-space: nowrap;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.chat-approval-card-expand {
-  flex-shrink: 0;
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--yellow);
-  opacity: 0.7;
-  padding: 2px 6px;
-  border-radius: 6px;
-  transition: opacity 0.15s, background 0.15s;
-}
-
-.chat-approval-card-expand:hover {
-  opacity: 1;
-  background: rgba(245,158,11,0.12);
-}
-
-.chat-approval-card-args-preview {
-  margin: 0;
-  font-size: 12px;
-  color: color-mix(in srgb, var(--yellow) 80%, var(--fg));
-  line-height: 1.5;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.chat-approval-details-btn {
+  color: var(--fg-muted);
+  border-color: rgba(255,255,255,0.12);
 }
 
 .chat-approval-card-args {
   margin: 0;
   font-size: 11.5px;
   font-family: var(--font-mono, ui-monospace, monospace);
-  color: color-mix(in srgb, var(--yellow) 80%, var(--fg));
+  color: var(--text-2);
   background: rgba(0,0,0,0.08);
   border-radius: 8px;
   padding: 8px 10px;
@@ -3343,12 +3333,6 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   line-height: 1.55;
 }
 
-.chat-approval-card-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: flex-end;
-}
 
 .chat-approval-deny-btn {
   color: var(--fg-muted);
@@ -3362,13 +3346,25 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 }
 
 .chat-approval-approve-btn {
-  color: var(--yellow);
-  border-color: rgba(245,158,11,0.35);
-  background: rgba(245,158,11,0.1);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .chat-approval-approve-btn:hover:not(:disabled) {
-  background: rgba(245,158,11,0.2);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+@container (max-width: 380px) {
+  .chat-approval-card-row {
+    flex-wrap: wrap;
+  }
+
+  .chat-approval-card-controls {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-end;
+  }
 }
 
 .chat-approval-approve-btn:disabled,
@@ -3749,10 +3745,12 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   color: var(--theme-text-primary);
 }
 
+
 @media (max-width: 760px) {
   .chat-thread {
     padding: 22px 20px calc(152px + env(safe-area-inset-bottom, 0px));
   }
+
 
   .chat-composer {
     padding: 6px 16px calc(12px + env(safe-area-inset-bottom, 0px));
@@ -9827,4 +9825,750 @@ select.field-input {
   align-items: center;
   justify-content: center;
   height: 100%;
+}
+
+/* ── Team HQ ─────────────────────────────────────────────── */
+
+.team-screen {
+  gap: 18px;
+}
+
+.team-header-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* ── Atlas Station card ──────────────────────────────────── */
+
+.team-atlas-card {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  background:
+    radial-gradient(ellipse at 92% 8%,  color-mix(in srgb, var(--accent) 22%, transparent) 0%, transparent 52%),
+    radial-gradient(ellipse at 8%  92%, color-mix(in srgb, var(--accent) 10%, transparent) 0%, transparent 46%),
+    linear-gradient(160deg, color-mix(in srgb, var(--surface-2) 78%, transparent), var(--surface));
+}
+
+/* Dot grid — mask animates to create a drifting pool of lit dots */
+.team-atlas-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--accent) 45%, transparent) 1px, transparent 1px);
+  background-size: 26px 26px;
+  -webkit-mask-image: radial-gradient(ellipse 48% 55% at 50% 50%, black 0%, transparent 100%);
+  mask-image:         radial-gradient(ellipse 48% 55% at 50% 50%, black 0%, transparent 100%);
+  -webkit-mask-size: 200% 200%;
+  mask-size:         200% 200%;
+  pointer-events: none;
+  z-index: 1;
+  animation: team-dot-drift 10s ease-in-out infinite;
+}
+
+@keyframes team-dot-drift {
+  0%   { -webkit-mask-position: 20% 20%; mask-position: 20% 20%; }
+  25%  { -webkit-mask-position: 75% 10%; mask-position: 75% 10%; }
+  50%  { -webkit-mask-position: 80% 75%; mask-position: 80% 75%; }
+  75%  { -webkit-mask-position: 20% 80%; mask-position: 20% 80%; }
+  100% { -webkit-mask-position: 20% 20%; mask-position: 20% 20%; }
+}
+
+.team-atlas-meta {
+  position: relative;
+  z-index: 1;
+}
+
+.team-section-label {
+  margin-bottom: 10px;
+  color: var(--theme-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.team-atlas-name-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.team-atlas-name-row h2 {
+  font-size: 28px;
+  line-height: 1.05;
+}
+
+.team-atlas-name-with-dot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.team-live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--green);
+  animation: team-live-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes team-live-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 50%, transparent); }
+  50%       { opacity: 0.65; box-shadow: 0 0 0 5px color-mix(in srgb, var(--green) 0%, transparent); }
+}
+
+.team-atlas-meta p {
+  color: var(--theme-text-secondary);
+}
+
+/* ── KPI row ─────────────────────────────────────────────── */
+
+.team-kpi-row {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.team-kpi {
+  padding: 14px 12px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  border: 1px solid var(--border);
+}
+
+.team-kpi-value {
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.team-kpi-label {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--theme-text-secondary);
+}
+
+.team-kpi-blue {
+  background: color-mix(in srgb, var(--blue, var(--accent)) 10%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--blue, var(--accent)) 28%, var(--border));
+}
+
+.team-kpi-amber {
+  background: color-mix(in srgb, var(--yellow) 10%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--yellow) 30%, var(--border));
+}
+
+/* ── Suggested Actions (bottom of Atlas card) ────────────── */
+
+.team-suggestions-section {
+  position: relative;
+  z-index: 1;
+  padding-top: 16px;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+}
+
+.team-suggestions-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--theme-text-secondary);
+  margin-bottom: 10px;
+}
+
+.team-suggestions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.team-suggestion-item {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
+}
+
+.team-suggestion-text {
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.team-suggestion-meta {
+  font-size: 12px;
+  color: var(--theme-text-secondary);
+  margin-top: 2px;
+}
+
+/* ── Blocked Items contextual strip ─────────────────────── */
+
+.team-blocked-strip {
+  padding: 16px 20px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--yellow) 32%, var(--border));
+  background: color-mix(in srgb, var(--yellow) 5%, var(--surface));
+}
+
+.team-blocked-strip-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--theme-text-secondary);
+  margin-bottom: 12px;
+}
+
+.team-blocked-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.team-blocked-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--theme-surface-soft);
+  border: 1px solid var(--border);
+}
+
+.team-action-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.team-action-meta {
+  font-size: 13px;
+  color: var(--theme-text-secondary);
+  margin-top: 2px;
+}
+
+/* ── Shared panel body ───────────────────────────────────── */
+
+.team-panel-body {
+  padding: 18px;
+}
+
+/* ── Agent Stations ─────────────────────────────────────── */
+
+.team-agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 340px));
+  gap: 16px;
+}
+
+.team-agent-card-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+.team-agent-card {
+  text-align: left;
+  padding: 18px;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 88%, transparent), color-mix(in srgb, var(--surface) 96%, transparent));
+  color: inherit;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.team-agent-card.expanded {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom-color: transparent;
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.team-agent-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.team-agent-name {
+  font-weight: 600;
+}
+
+.team-agent-role {
+  font-size: 13px;
+  color: var(--theme-text-secondary);
+  margin-top: 2px;
+}
+
+.team-agent-mission {
+  margin: 12px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--theme-text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.team-agent-meta-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: auto;
+  margin-bottom: 14px;
+  font-size: 12px;
+  color: var(--theme-text-secondary);
+}
+
+.team-agent-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.team-agent-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.team-agent-details-btn {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--theme-text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.team-agent-details-btn:hover {
+  color: var(--theme-text-primary);
+  background: var(--theme-surface-soft);
+}
+
+/* ── Agent drawer ────────────────────────────────────────── */
+
+.team-agent-drawer {
+  padding: 20px;
+  border-radius: 0 0 18px 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-top: none;
+  background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
+}
+
+.team-detail-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.team-drawer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.team-drawer-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--theme-text-secondary);
+}
+
+.team-mini-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.team-mini-task-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--theme-surface-soft);
+  border: 1px solid var(--border);
+}
+
+.team-mini-task-goal {
+  font-size: 13px;
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-token-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.team-token {
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  color: var(--theme-text-primary);
+  font-size: 12px;
+}
+
+.team-token-muted {
+  background: var(--theme-surface-soft);
+  border-color: var(--border);
+}
+
+/* ── Delegated Tasks ─────────────────────────────────────── */
+
+.team-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.team-task-item-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+.team-task-row {
+  appearance: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--theme-surface-soft);
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 140ms ease;
+}
+
+.team-task-row.expanded {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom-color: transparent;
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+}
+
+.team-task-row-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.team-task-row-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.team-task-title {
+  font-weight: 600;
+  white-space: pre-wrap;
+}
+
+.team-task-meta {
+  font-size: 13px;
+  color: var(--theme-text-secondary);
+  margin-top: 2px;
+}
+
+/* ── Task drawer ─────────────────────────────────────────── */
+
+.team-task-drawer {
+  padding: 20px;
+  border-radius: 0 0 14px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-top: none;
+  background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.team-task-drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.team-detail-note {
+  font-size: 13px;
+  color: var(--theme-text-secondary);
+}
+
+.team-detail-copy {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--theme-text-secondary);
+}
+
+.team-task-error {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  color: var(--danger-btn-text);
+  font-size: 13px;
+}
+
+/* ── Step timeline ───────────────────────────────────────── */
+
+.team-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.team-step-item {
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--theme-surface-soft);
+}
+
+.team-step-meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--theme-text-secondary);
+  margin-bottom: 6px;
+}
+
+.team-step-tool {
+  margin: 6px 0;
+  color: var(--theme-text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.team-step-content {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--theme-text-primary);
+  white-space: pre-wrap;
+}
+
+.team-step-content-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.team-step-expand-btn {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 4px 0 0;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+  opacity: 0.8;
+  transition: opacity 120ms ease;
+}
+
+.team-step-expand-btn:hover {
+  opacity: 1;
+}
+
+/* ── Recent Activity ─────────────────────────────────────── */
+
+.team-event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.team-event-pagination {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.team-event-pagination > span {
+  flex: 1;
+}
+
+.team-show-more-btn {
+  flex: 1;
+  appearance: none;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--theme-text-secondary);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.team-show-more-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  color: var(--theme-text-primary);
+  background: var(--theme-surface-soft);
+}
+
+.team-event-item {
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--theme-surface-soft);
+}
+
+.team-event-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.team-event-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.team-event-time,
+.team-event-meta {
+  font-size: 12px;
+  color: var(--theme-text-secondary);
+}
+
+.team-event-meta {
+  margin-top: 3px;
+}
+
+.team-event-detail {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--theme-text-primary);
+}
+
+.team-event-good {
+  border-color: color-mix(in srgb, var(--green) 32%, var(--border));
+}
+
+.team-event-warning {
+  border-color: color-mix(in srgb, var(--yellow) 34%, var(--border));
+}
+
+.team-event-danger {
+  border-color: color-mix(in srgb, var(--red) 32%, var(--border));
+}
+
+/* ── Empty states ─────────────────────────────────────────── */
+
+.team-empty-state {
+  min-height: 250px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 28px;
+}
+
+.team-empty-state h3 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.team-empty-state p {
+  max-width: 420px;
+  color: var(--theme-text-secondary);
+  line-height: 1.6;
+}
+
+.team-empty-orb {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: radial-gradient(circle at 35% 35%, color-mix(in srgb, var(--accent) 90%, white), color-mix(in srgb, var(--accent) 24%, transparent) 65%);
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.team-empty-inline {
+  font-size: 13px;
+  color: var(--theme-text-secondary);
+  line-height: 1.5;
+}
+
+.team-empty-inline-card {
+  min-height: 140px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 18%, var(--border));
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
+
+.team-empty-inline-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--theme-text-primary);
+}
+
+
+/* ── Responsive ───────────────────────────────────────────── */
+
+@media (max-width: 720px) {
+  .team-atlas-card {
+    padding: 18px;
+  }
+
+  .team-kpi-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .team-header-actions,
+  .team-agent-actions,
+  .team-agent-card-footer {
+    flex-wrap: wrap;
+  }
+
+  .team-agent-grid {
+    grid-template-columns: 1fr;
+  }
 }
