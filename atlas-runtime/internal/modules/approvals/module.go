@@ -41,7 +41,10 @@ type approvalJSON struct {
 	ID                      string           `json:"id"`
 	Status                  string           `json:"status"`
 	Source                  string           `json:"source,omitempty"` // "agent" (default, omitted) or "thought"
+	AgentID                 *string          `json:"agentID,omitempty"`
 	ConversationID          *string          `json:"conversationID,omitempty"`
+	CreatedAt               string           `json:"createdAt"`
+	ResolvedAt              *string          `json:"resolvedAt,omitempty"`
 	DeferredExecutionID     *string          `json:"deferredExecutionID,omitempty"`
 	DeferredExecutionStatus *string          `json:"deferredExecutionStatus,omitempty"`
 	LastError               *string          `json:"lastError,omitempty"`
@@ -307,11 +310,19 @@ func rowToApproval(r storage.DeferredExecRow) approvalJSON {
 		source = "thought"
 	}
 
+	var resolvedAt *string
+	if approvalStatus != "pending" && r.UpdatedAt != "" {
+		resolvedAt = &r.UpdatedAt
+	}
+
 	return approvalJSON{
 		ID:                      r.ApprovalID,
 		Status:                  approvalStatus,
 		Source:                  source,
+		AgentID:                 r.AgentID,
 		ConversationID:          r.ConversationID,
+		CreatedAt:               r.CreatedAt,
+		ResolvedAt:              resolvedAt,
 		DeferredExecutionID:     &r.DeferredID,
 		DeferredExecutionStatus: &deferredStatus,
 		LastError:               r.LastError,

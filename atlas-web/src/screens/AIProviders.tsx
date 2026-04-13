@@ -538,14 +538,6 @@ export function AIProviders() {
           <details class="ai-provider-advanced-panel">
             <summary>Advanced cloud options</summary>
             <div class="ai-provider-advanced-panel-body">
-              <SettingsRow
-                label="API key"
-                sublabel="Stored in Keychain and used for live requests"
-                mobileSplit
-                status={<span class={`badge ${cloudKeyConfigured ? 'badge-green' : 'badge-red'}`} style={BADGE_STYLE}>{cloudKeyConfigured ? 'Configured' : 'Not configured'}</span>}
-              >
-                <button class="btn btn-sm" onClick={goToCredentials}>{cloudKeyConfigured ? 'Change key' : 'Configure key'}</button>
-              </SettingsRow>
               <ModelSelectRow
                 label="Speed-optimized model"
                 fieldId="ai-provider-cloud-fast-model"
@@ -556,6 +548,14 @@ export function AIProviders() {
                 options={cloudModels?.availableModels ?? []}
                 optionFormatter={(model) => model.displayName}
               />
+              <SettingsRow
+                label="API key"
+                sublabel="Stored in Keychain and used for live requests"
+                mobileSplit
+                status={<span class={`badge ${cloudKeyConfigured ? 'badge-green' : 'badge-red'}`} style={BADGE_STYLE}>{cloudKeyConfigured ? 'Configured' : 'Not configured'}</span>}
+              >
+                <button class="btn btn-sm" onClick={goToCredentials}>{cloudKeyConfigured ? 'Change key' : 'Configure key'}</button>
+              </SettingsRow>
             </div>
           </details>
         </SettingsGroup>
@@ -631,14 +631,6 @@ export function AIProviders() {
           <details class="ai-provider-advanced-panel">
             <summary>Advanced hybrid options</summary>
             <div class="ai-provider-advanced-panel-body">
-              <SettingsRow
-                label="API key"
-                sublabel="Stored in Keychain and used for live requests"
-                mobileSplit
-                status={<span class={`badge ${cloudKeyConfigured ? 'badge-green' : 'badge-red'}`} style={BADGE_STYLE}>{cloudKeyConfigured ? 'Configured' : 'Not configured'}</span>}
-              >
-                <button class="btn btn-sm" onClick={goToCredentials}>{cloudKeyConfigured ? 'Change key' : 'Configure key'}</button>
-              </SettingsRow>
               {localBackendSupportsHeavyBackgroundToggle(hybridBackend) && (
                 <SettingsRow
                   label="Use local for memory and reflection"
@@ -655,6 +647,14 @@ export function AIProviders() {
                   />
                 </SettingsRow>
               )}
+              <SettingsRow
+                label="API key"
+                sublabel="Stored in Keychain and used for live requests"
+                mobileSplit
+                status={<span class={`badge ${cloudKeyConfigured ? 'badge-green' : 'badge-red'}`} style={BADGE_STYLE}>{cloudKeyConfigured ? 'Configured' : 'Not configured'}</span>}
+              >
+                <button class="btn btn-sm" onClick={goToCredentials}>{cloudKeyConfigured ? 'Change key' : 'Configure key'}</button>
+              </SettingsRow>
             </div>
           </details>
         </SettingsGroup>

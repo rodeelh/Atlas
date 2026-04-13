@@ -212,8 +212,11 @@ func callAINonStreaming(
 	default: // openai, gemini, lm_studio, ollama
 		msg, reason, usage, err = callOpenAICompatNonStreaming(ctx, p, messages, tools)
 	}
-	if err == nil && NonAgenticUsageHook != nil && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
-		NonAgenticUsageHook(ctx, p, usage)
+	if err == nil && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
+		AddSessionTokens(usage.InputTokens, usage.OutputTokens)
+		if NonAgenticUsageHook != nil {
+			NonAgenticUsageHook(ctx, p, usage)
+		}
 	}
 	return msg, reason, usage, err
 }

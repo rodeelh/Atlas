@@ -16,6 +16,7 @@ import { APIKeys } from './screens/APIKeys'
 import { Theme } from './screens/Theme'
 import { Docs } from './screens/Docs'
 import { LocalLM } from './screens/LocalLM'
+import { Team } from './screens/Team'
 import { Usage } from './screens/Usage'
 import { Onboarding } from './screens/Onboarding'
 import { Toaster } from './components/Toaster'
@@ -34,6 +35,7 @@ type Screen =
   | 'automations'
   | 'workflows'
   | 'dashboards'
+  | 'team'
   | 'activity'
   | 'settings'
   | 'ai-providers'
@@ -46,6 +48,7 @@ type Screen =
 const VALID_SCREENS: Screen[] = [
   'chat', 'onboarding', 'communications', 'approvals', 'skills', 'forge', 'mind',
   'automations', 'workflows', 'dashboards', 'activity', 'settings', 'ai-providers', 'api-keys', 'theme',
+  'team',
   'local-lm', 'usage',
   'docs',
 ]
@@ -127,26 +130,31 @@ const Icon = {
   ),
   communications: (
     <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M14 4.5A1.5 1.5 0 0 0 12.5 3h-9A1.5 1.5 0 0 0 2 4.5v5A1.5 1.5 0 0 0 3.5 11H6l2 2 2-2h2.5A1.5 1.5 0 0 0 14 9.5z" />
-      <path d="M5 6.5h6M5 8.5h4" />
+      <path d="M6 2.5h5.5A1.5 1.5 0 0 1 13 4v3.5A1.5 1.5 0 0 1 11.5 9H9l-2 2V9H6A1.5 1.5 0 0 1 4.5 7.5V4A1.5 1.5 0 0 1 6 2.5z" />
+      <path d="M4.5 6H3A1.5 1.5 0 0 0 1.5 7.5V11l2-1.5h1" />
     </svg>
   ),
   automations: (
     <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="8" cy="8" r="3" />
-      <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.1 3.1l1.4 1.4M11.5 11.5l1.4 1.4M12.9 3.1l-1.4 1.4M4.5 11.5l-1.4 1.4" />
+      <path d="M9.5 1.5L5 8.5h3.5L6.5 14.5l6-8H9L9.5 1.5z" />
     </svg>
   ),
   workflows: (
     <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="2" y="2.5" width="12" height="11" rx="2" />
-      <path d="M5 5.5h6M5 8h6M5 10.5h3" />
+      <circle cx="8" cy="2" r="1.25" fill="currentColor" stroke="none" />
+      <path d="M8 3.25v2.5" />
+      <path d="M8 5.75L3 9M8 5.75V9M8 5.75l5 3.25" />
+      <path d="M3 9v3.5M8 9v3.5M13 9v3.5" />
+      <circle cx="3" cy="13.75" r="1.25" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="13.75" r="1.25" fill="currentColor" stroke="none" />
+      <circle cx="13" cy="13.75" r="1.25" fill="currentColor" stroke="none" />
     </svg>
   ),
   forge: (
     <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M3 13h10M5 13V8.5L8 4l3 4.5V13" />
-      <path d="M6.5 13v-3h3v3" />
+      <rect x="2.5" y="2" width="11" height="7" rx="1.5" />
+      <path d="M8 9v4" />
+      <path d="M6.5 12.5h3" />
     </svg>
   ),
   skills: (
@@ -162,7 +170,12 @@ const Icon = {
   ),
   activity: (
     <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="1,9 4,5 7,8 10,3 15,7" />
+      <circle cx="3" cy="4.5" r="0.75" fill="currentColor" stroke="none" />
+      <path d="M5.5 4.5h8" />
+      <circle cx="3" cy="8" r="0.75" fill="currentColor" stroke="none" />
+      <path d="M5.5 8h8" />
+      <circle cx="3" cy="11.5" r="0.75" fill="currentColor" stroke="none" />
+      <path d="M5.5 11.5h5" />
     </svg>
   ),
   apiKeys: (
@@ -187,11 +200,8 @@ const Icon = {
   ),
   theme: (
     <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="8" cy="8" r="6.5" />
-      <circle cx="5" cy="6.5" r="0.8" fill="currentColor" stroke="none" />
-      <circle cx="10.5" cy="5.5" r="0.8" fill="currentColor" stroke="none" />
-      <circle cx="11.5" cy="10" r="0.8" fill="currentColor" stroke="none" />
-      <circle cx="5.5" cy="11" r="0.8" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="8" r="6" />
+      <path d="M8 2a6 6 0 0 0 0 12V2z" fill="currentColor" stroke="none" />
     </svg>
   ),
   controlCenter: (
@@ -207,9 +217,8 @@ const Icon = {
   ),
   atlasEngine: (
     <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="2" y="5" width="12" height="7" rx="1.5" />
-      <path d="M5 5V3.5a3 3 0 0 1 6 0V5" />
-      <circle cx="8" cy="8.5" r="1.5" />
+      <rect x="4.5" y="4.5" width="7" height="7" rx="1" />
+      <path d="M6.5 4.5V3M9.5 4.5V3M6.5 11.5V13M9.5 11.5V13M4.5 6.5H3M4.5 9.5H3M11.5 6.5H13M11.5 9.5H13" />
     </svg>
   ),
   atlasMLX: (
@@ -271,6 +280,14 @@ const Icon = {
       <rect x="2" y="9" width="5" height="5" rx="0.7" />
     </svg>
   ),
+  team: (
+    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="5" cy="5" r="2" />
+      <circle cx="11.25" cy="5.5" r="1.75" />
+      <path d="M2.5 12c.5-2.1 2.1-3.3 4.5-3.3S11 9.9 11.5 12" />
+      <path d="M9.5 11.75c.4-1.4 1.45-2.2 2.95-2.2 1.05 0 1.9.4 2.55 1.2" />
+    </svg>
+  ),
 }
 
 const SCREEN_LABELS: Partial<Record<Screen, string>> = {
@@ -284,6 +301,7 @@ const SCREEN_LABELS: Partial<Record<Screen, string>> = {
   automations: 'Automations',
   workflows: 'Workflows',
   dashboards: 'Dashboards',
+  team: 'Team HQ',
   activity: 'Activity',
   settings: 'General',
   'ai-providers': 'AI Providers',
@@ -308,8 +326,9 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'automations', icon: Icon.automations, label: 'Automations' },
       { id: 'workflows',   icon: Icon.workflows,   label: 'Workflows' },
-      { id: 'dashboards',  icon: Icon.dashboards,  label: 'Dashboards' },
+      { id: 'team',        icon: Icon.team,        label: 'Team HQ' },
       { id: 'approvals',   icon: Icon.approvals,   label: 'Approvals' },
+      { id: 'dashboards',  icon: Icon.dashboards,  label: 'Dashboards' },
       { id: 'usage',       icon: Icon.usage,       label: 'Usage' },
     ],
   },
@@ -332,8 +351,8 @@ const NAV_GROUPS: NavGroup[] = [
       { id: 'settings',        icon: Icon.settings,        label: 'General' },
       { id: 'ai-providers',    icon: Icon.aiProviders,     label: 'AI Providers' },
       { id: 'api-keys',        icon: Icon.apiKeys,         label: 'Credentials' },
-      { id: 'theme',           icon: Icon.theme,           label: 'Appearance' },
       { id: 'communications',  icon: Icon.communications,  label: 'Communications' },
+      { id: 'theme',           icon: Icon.theme,           label: 'Appearance' },
       { id: 'activity',        icon: Icon.activity,        label: 'Activity' },
     ],
   },
@@ -801,6 +820,7 @@ export function App() {
         {screen === 'automations' && <Automations />}
         {screen === 'workflows'   && <Workflows />}
         {screen === 'dashboards'  && <Dashboards />}
+        {screen === 'team'        && <Team />}
         {screen === 'mind'        && <Mind />}
         {screen === 'activity'    && <Activity />}
         {screen === 'settings'    && <Settings />}

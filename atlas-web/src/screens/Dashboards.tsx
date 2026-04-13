@@ -17,6 +17,8 @@ import {
   type DashboardWidgetData,
 } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
+import { PageSpinner } from '../components/PageSpinner'
+import { EmptyState } from '../components/EmptyState'
 import { WidgetRenderer } from './DashboardWidgets'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 
@@ -500,7 +502,7 @@ export function Dashboards(): JSX.Element {
       />
 
       {error && <p class="error-banner">{error}</p>}
-      {loading && <p class="empty-state">Loading dashboards…</p>}
+      {loading && <PageSpinner />}
 
       {!loading && items.length > 0 && (
         <div class="dashboard-list">
@@ -524,11 +526,11 @@ export function Dashboards(): JSX.Element {
       )}
 
       {!loading && items.length === 0 && (
-        <div class="empty-state">
-          <DashboardIcon />
-          <h3>No dashboards yet</h3>
-          <p>Ask Atlas in chat — try “make me a dashboard showing my last 7 days of token spend” — or pick a starter:</p>
-        </div>
+        <EmptyState
+          icon={<DashboardIcon />}
+          title={'No dashboards yet'}
+          body={'Ask Atlas in chat or pick a starter template below to get started.'}
+        />
       )}
 
       {!loading && templates.length > 0 && (

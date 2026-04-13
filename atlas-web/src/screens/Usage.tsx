@@ -57,6 +57,20 @@ function providerBadgeClass(provider: string): string {
   }
 }
 
+function providerDotColor(provider: string): string {
+  switch (provider) {
+    case 'openai':       return '#4caf87'
+    case 'anthropic':    return '#e8a838'
+    case 'gemini':       return '#5b8ee6'
+    case 'openrouter':   return '#5b8ee6'
+    case 'atlas_engine': return '#7c6fe0'
+    case 'atlas_mlx':    return '#7c6fe0'
+    case 'lm_studio':    return '#7c6fe0'
+    case 'ollama':       return '#7c6fe0'
+    default:             return 'var(--text-3)'
+  }
+}
+
 /* ── Event source helpers ────────────────────────────────────────────────── */
 
 type EventSource = 'chat' | 'agent' | 'system'
@@ -268,6 +282,7 @@ export function Usage() {
   const [pendingClear, setPendingClear] = useState(false)
   const [{ sortKey, sortDir }, setSortState] = useState(() => readPersistedUsageSort())
   const [isMobile, setIsMobile]   = useState(() => window.innerWidth <= 480)
+  const [showMinorModels, setShowMinorModels] = useState(false)
 
   const handleSort = (key: SortKey) => {
     if (key === sortKey) {
@@ -569,45 +584,28 @@ export function Usage() {
                     </div>
                   ))}
                 </>
-              ) : (
-                <>
-                  {/* Column headers */}
-                  <div class="row" style={{ paddingTop: '8px', paddingBottom: '8px', background: 'none' }}>
-                    <div style={{ flex: '0 0 96px', ...thStyle('provider', 'left') }} onClick={() => handleSort('provider')}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Provider{sortArrow('provider')}</span>
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0, ...thStyle('model', 'left') }} onClick={() => handleSort('model')}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Model{sortArrow('model')}</span>
-                    </div>
-                    <div style={{ flex: '0 0 52px', ...thStyle('turnCount') }} onClick={() => handleSort('turnCount')}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Calls{sortArrow('turnCount')}</span>
-                    </div>
-                    <div style={{ flex: '0 0 64px', ...thStyle('inputTokens') }} onClick={() => handleSort('inputTokens')}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Input{sortArrow('inputTokens')}</span>
-                    </div>
-                    <div style={{ flex: '0 0 64px', ...thStyle('outputTokens') }} onClick={() => handleSort('outputTokens')}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Output{sortArrow('outputTokens')}</span>
-                    </div>
-                    <div style={{ flex: '0 0 76px', ...thStyle('tokensPerTurn') }} onClick={() => handleSort('tokensPerTurn')}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Tok/Call{sortArrow('tokensPerTurn')}</span>
-                    </div>
-                    <div style={{ flex: '0 0 72px', ...thStyle('totalCostUSD') }} onClick={() => handleSort('totalCostUSD')}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Cost{sortArrow('totalCostUSD')}</span>
-                    </div>
-                    <div style={{ flex: '0 0 80px', ...thStyle('avgCostPerTurn') }} onClick={() => handleSort('avgCostPerTurn')}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Avg/Call{sortArrow('avgCostPerTurn')}</span>
-                    </div>
-                  </div>
+              ) : (() => {
+                  const MINOR_THRESHOLD = 50
+                  const primary = sorted.filter(m => m.turnCount >= MINOR_THRESHOLD)
+                  const minor   = sorted.filter(m => m.turnCount < MINOR_THRESHOLD)
+                  const hasMajor = primary.length > 0
+                  const visibleRows = hasMajor ? primary : sorted
+                  const totals = sorted.reduce((acc, m) => ({
+                    turnCount:    acc.turnCount    + m.turnCount,
+                    inputTokens:  acc.inputTokens  + m.inputTokens,
+                    outputTokens: acc.outputTokens + m.outputTokens,
+                    totalTokens:  acc.totalTokens  + m.totalTokens,
+                    totalCostUSD: acc.totalCostUSD + m.totalCostUSD,
+                  }), { turnCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCostUSD: 0 })
 
-                  {sorted.map((m, i) => (
-                    <div class="row" key={i}>
-                      <div style={{ flex: '0 0 96px' }}>
-                        <span class={providerBadgeClass(m.provider)}>
-                          {providerLabel(m.provider)}
-                        </span>
+                  const ModelRow = ({ m, i }: { m: typeof sorted[0]; i: number }) => (
+                    <div class="row" key={i} style={{ background: i % 2 === 1 ? 'var(--row-alt)' : undefined }}>
+                      <div style={{ flex: '0 0 96px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: providerDotColor(m.provider), flexShrink: 0, display: 'inline-block' }} />
+                        <span style={{ fontSize: '12px', color: 'var(--theme-text-primary)', whiteSpace: 'nowrap' }}>{providerLabel(m.provider)}</span>
                       </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <span class="skill-name" style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 400 }}>
+                      <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                        <span class="skill-name" style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 400, display: 'block', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }} title={formatUsageModelName(m.provider, m.model)}>
                           {formatUsageModelName(m.provider, m.model)}
                         </span>
                       </div>
@@ -627,20 +625,102 @@ export function Usage() {
                       </div>
                       <div style={{ flex: '0 0 72px', textAlign: 'right' }}>
                         {m.totalCostUSD === 0
-                          ? <span class="stat-note" title="Local model — no cost">—</span>
+                          ? <span class="stat-note">Free</span>
                           : <span class="stat-value">{fmtCost(m.totalCostUSD)}</span>
                         }
                       </div>
                       <div style={{ flex: '0 0 80px', textAlign: 'right' }}>
                         {m.totalCostUSD === 0 || m.turnCount === 0
-                          ? <span class="stat-note" title="Local model — no cost">—</span>
+                          ? <span class="stat-note">Free</span>
                           : <span class="stat-value">{fmtCost(m.totalCostUSD / m.turnCount)}</span>
                         }
                       </div>
                     </div>
-                  ))}
-                </>
-              )}
+                  )
+
+                  return (
+                    <>
+                      {/* Scrollable area: headers + rows */}
+                      <div style={{ maxHeight: '480px', overflowY: 'auto' }}>
+                        {/* Column headers */}
+                        <div class="row" style={{ paddingTop: '8px', paddingBottom: '8px', background: 'var(--surface-2)', position: 'sticky', top: 0, zIndex: 1 }}>
+                          <div style={{ flex: '0 0 96px', ...thStyle('provider', 'left') }} onClick={() => handleSort('provider')}>
+                            <span class="stat-label" style={{ marginBottom: 0 }}>Provider{sortArrow('provider')}</span>
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0, ...thStyle('model', 'left') }} onClick={() => handleSort('model')}>
+                            <span class="stat-label" style={{ marginBottom: 0 }}>Model{sortArrow('model')}</span>
+                          </div>
+                          <div style={{ flex: '0 0 52px', ...thStyle('turnCount') }} onClick={() => handleSort('turnCount')}>
+                            <span class="stat-label" style={{ marginBottom: 0 }}>Calls{sortArrow('turnCount')}</span>
+                          </div>
+                          <div style={{ flex: '0 0 64px', ...thStyle('inputTokens') }} onClick={() => handleSort('inputTokens')}>
+                            <span class="stat-label" style={{ marginBottom: 0 }}>Input{sortArrow('inputTokens')}</span>
+                          </div>
+                          <div style={{ flex: '0 0 64px', ...thStyle('outputTokens') }} onClick={() => handleSort('outputTokens')}>
+                            <span class="stat-label" style={{ marginBottom: 0 }}>Output{sortArrow('outputTokens')}</span>
+                          </div>
+                          <div style={{ flex: '0 0 76px', ...thStyle('tokensPerTurn') }} onClick={() => handleSort('tokensPerTurn')}>
+                            <span class="stat-label" style={{ marginBottom: 0 }}>Tok/Call{sortArrow('tokensPerTurn')}</span>
+                          </div>
+                          <div style={{ flex: '0 0 72px', ...thStyle('totalCostUSD') }} onClick={() => handleSort('totalCostUSD')}>
+                            <span class="stat-label" style={{ marginBottom: 0 }}>Cost{sortArrow('totalCostUSD')}</span>
+                          </div>
+                          <div style={{ flex: '0 0 80px', ...thStyle('avgCostPerTurn') }} onClick={() => handleSort('avgCostPerTurn')}>
+                            <span class="stat-label" style={{ marginBottom: 0 }}>Avg/Call{sortArrow('avgCostPerTurn')}</span>
+                          </div>
+                        </div>
+
+                        {visibleRows.map((m, i) => <ModelRow key={i} m={m} i={i} />)}
+
+                        {showMinorModels && hasMajor && minor.map((m, i) => <ModelRow key={`minor-${i}`} m={m} i={i} />)}
+                      </div>
+
+                      {/* Totals footer — pinned outside scroll container */}
+                      <div class="row" style={{ paddingTop: '8px', paddingBottom: '8px', borderTop: '1px solid var(--theme-border-subtle)', background: 'var(--surface-2)' }}>
+                        <div style={{ flex: '0 0 96px' }} />
+                        <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                          <span class="stat-label" style={{ marginBottom: 0, display: 'block', whiteSpace: 'nowrap' }}>Total</span>
+                        </div>
+                        <div style={{ flex: '0 0 52px', textAlign: 'right' }}>
+                          <span class="stat-note">{totals.turnCount}</span>
+                        </div>
+                        <div style={{ flex: '0 0 64px', textAlign: 'right' }}>
+                          <span class="stat-note">{fmtTokens(totals.inputTokens)}</span>
+                        </div>
+                        <div style={{ flex: '0 0 64px', textAlign: 'right' }}>
+                          <span class="stat-note">{fmtTokens(totals.outputTokens)}</span>
+                        </div>
+                        <div style={{ flex: '0 0 76px', textAlign: 'right' }}>
+                          <span class="stat-note">
+                            {totals.turnCount > 0 ? fmtTokens(Math.round(totals.totalTokens / totals.turnCount)) : '—'}
+                          </span>
+                        </div>
+                        <div style={{ flex: '0 0 72px', textAlign: 'right' }}>
+                          <span class="stat-note">{fmtCost(totals.totalCostUSD)}</span>
+                        </div>
+                        <div style={{ flex: '0 0 80px', textAlign: 'right' }}>
+                          <span class="stat-note">
+                            {totals.turnCount > 0 ? fmtCost(totals.totalCostUSD / totals.turnCount) : '—'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Minor models expand/collapse — below totals */}
+                      {hasMajor && minor.length > 0 && (
+                        <div
+                          class="row"
+                          style={{ cursor: 'pointer', opacity: 0.6, justifyContent: 'center' }}
+                          onClick={() => setShowMinorModels(v => !v)}
+                        >
+                          <span class="stat-label" style={{ marginBottom: 0, fontSize: '11px' }}>
+                            {showMinorModels ? '▲ Hide' : '▼ Show'} {minor.length} model{minor.length !== 1 ? 's' : ''} with &lt;{MINOR_THRESHOLD} calls
+                          </span>
+                        </div>
+                      )}
+                    </>
+                  )
+                })()
+              }
             </>
           )
         })()}

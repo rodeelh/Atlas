@@ -272,7 +272,7 @@ export function Settings() {
         )}
       </SettingsGroup>
 
-      <SettingsGroup title="Access">
+      <SettingsGroup title="Remote Access">
         <RemoteAccessSection
           enabled={draft.remoteAccessEnabled}
           tailscaleEnabled={draft.tailscaleEnabled}

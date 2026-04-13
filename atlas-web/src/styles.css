@@ -98,6 +98,7 @@
   --surface-2:      #181818;
   --surface-3:      #222222;
   --hover:          rgba(255,255,255,0.04);
+  --row-alt:        rgba(255,255,255,0.022);
   --active-bg:      rgba(255,255,255,0.06);
 
   --border:         rgba(255,255,255,0.07);
@@ -204,6 +205,7 @@
   --surface-2:      #ffffff;
   --surface-3:      #e7e2da;
   --hover:          rgba(0,0,0,0.055);
+  --row-alt:        rgba(0,0,0,0.022);
   --active-bg:      rgba(0,0,0,0.085);
 
   --border:         rgba(32,24,16,0.12);
@@ -5943,18 +5945,18 @@ input[type=number] { -moz-appearance: textfield; }
   width: 18px;
   height: 18px;
   border-radius: 4px;
-  border: 1.5px solid var(--border-strong);
+  border: 1.5px solid var(--theme-border-strong);
   background: transparent;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text);
+  color: var(--theme-text-primary);
   transition: background 0.1s, border-color 0.1s;
   padding: 0;
 }
 .approval-check:hover:not(:disabled) {
-  border-color: var(--text-2);
+  border-color: var(--theme-text-secondary);
 }
 .approval-check.checked {
   background: var(--accent);
@@ -5988,7 +5990,7 @@ input[type=number] { -moz-appearance: textfield; }
 .forge-installed-wrap,
 .forge-research-wrap,
 .forge-history-wrap {
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  border-bottom: 1px solid var(--theme-border-subtle);
 }
 
 .approval-row-wrap:last-child,
@@ -6101,33 +6103,38 @@ input[type=number] { -moz-appearance: textfield; }
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--section-label-size);
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.6px;
   text-transform: uppercase;
-  color: var(--text-3);
+  color: var(--theme-text-muted);
   padding: 0;
+  transition: color 0.12s;
 }
 .approvals-section-toggle:hover {
-  color: var(--text-2);
+  color: var(--theme-text-secondary);
+}
+
+.approvals-empty-state {
+  flex: 1 0 auto;
 }
 
 .approval-title {
   font-weight: 600;
   font-size: 14px;
-  color: var(--text);
+  color: var(--theme-text-primary);
 }
 
 .approval-tool-label {
   font-size: 12px;
-  color: var(--text-3);
+  color: var(--theme-text-muted);
   margin-top: 4px;
   font-family: var(--font-mono);
 }
 
 .approval-timestamp {
   font-size: 11.5px;
-  color: var(--text-3);
+  color: var(--theme-text-muted);
   margin-top: 3px;
 }
 
@@ -6142,13 +6149,13 @@ input[type=number] { -moz-appearance: textfield; }
 .diff-viewer {
   margin-top: 10px;
   border-radius: 10px;
-  background: color-mix(in srgb, var(--surface-2) 92%, transparent);
+  background: color-mix(in srgb, var(--theme-surface-card) 80%, transparent);
   overflow-x: auto;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.55;
   padding: 6px 0;
-  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  border: 1px solid var(--theme-border-subtle);
 }
 
 .diff-line {
@@ -6168,15 +6175,15 @@ input[type=number] { -moz-appearance: textfield; }
 .args-block {
   margin-top: 10px;
   padding: 12px 14px;
-  background: color-mix(in srgb, var(--surface-2) 92%, transparent);
+  background: color-mix(in srgb, var(--theme-surface-card) 80%, transparent);
   border-radius: 12px;
   font-size: 13px;
   font-family: var(--font-mono);
-  color: var(--text-2);
+  color: var(--theme-text-secondary);
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-all;
-  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  border: 1px solid var(--theme-border-subtle);
 }
 
 /* ─── Automation cards ──────────────────────────────────── */
@@ -9440,19 +9447,23 @@ select.field-input {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 14px 16px;
+  padding: 14px 18px;
   text-align: left;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  background: var(--theme-surface-card);
+  border: 1px solid color-mix(in srgb, var(--theme-border-subtle) 45%, transparent);
+  border-radius: 14px;
   cursor: pointer;
   color: var(--text);
-  transition: background 120ms ease, border-color 120ms ease;
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  box-shadow: var(--theme-shadow-card);
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 
 .dashboard-list-card:hover {
-  background: var(--surface-3);
-  border-color: var(--border-2);
+  background: color-mix(in srgb, var(--theme-surface-card) 85%, var(--hover));
+  border-color: color-mix(in srgb, var(--theme-border-subtle) 70%, transparent);
+  box-shadow: var(--theme-shadow-card), 0 2px 8px rgba(0,0,0,0.08);
 }
 
 .dashboard-list-card:disabled {
@@ -9468,8 +9479,9 @@ select.field-input {
   width: 44px;
   height: 44px;
   border-radius: var(--radius);
-  background: var(--accent-dim);
-  color: var(--accent);
+  background: var(--theme-surface-card);
+  border: 1px solid var(--theme-border-subtle);
+  color: var(--theme-text-secondary);
 }
 
 .dashboard-list-meta {
@@ -9500,11 +9512,12 @@ select.field-input {
 }
 
 .dashboard-templates-title {
-  font-size: 0.85rem;
+  font-size: var(--section-label-size);
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-2);
-  margin-bottom: 8px;
+  letter-spacing: 0.6px;
+  color: var(--theme-text-muted);
+  margin-bottom: 10px;
 }
 
 /* Detail view grid */
@@ -9522,12 +9535,15 @@ select.field-input {
 .dashboard-widget-card {
   display: flex;
   flex-direction: column;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  background: var(--theme-surface-card);
+  border: 1px solid color-mix(in srgb, var(--theme-border-subtle) 45%, transparent);
+  border-radius: 14px;
   overflow: hidden;
   min-height: 0;
   position: relative;
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  box-shadow: var(--theme-shadow-card);
   transition: box-shadow 0.15s;
 }
 
@@ -9603,12 +9619,12 @@ select.field-input {
 
 /* edit mode banner */
 .dw-edit-banner {
-  font-size: 0.78rem;
-  color: var(--text-2);
-  background: var(--accent, #6366f1)11;
-  border: 1px solid var(--accent, #6366f1)33;
+  font-size: 0.8rem;
+  color: var(--blue);
+  background: var(--blue-dim);
+  border: 1px solid color-mix(in srgb, var(--blue) 25%, transparent);
   border-radius: var(--radius);
-  padding: 6px 12px;
+  padding: 8px 14px;
   margin: 8px 0 0;
 }
 

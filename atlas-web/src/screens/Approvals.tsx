@@ -129,8 +129,11 @@ function lastName(path: string): string {
   return parts[parts.length - 1] ?? path
 }
 
-function timeAgo(iso: string): string {
-  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+function timeAgo(iso: string | undefined): string {
+  if (!iso) return ''
+  const ms = new Date(iso).getTime()
+  if (isNaN(ms)) return ''
+  const s = Math.floor((Date.now() - ms) / 1000)
   if (s < 60)    return `${s}s ago`
   if (s < 3600)  return `${Math.floor(s / 60)}m ago`
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`
@@ -167,18 +170,19 @@ function ApprovalRow({ approval: a, selected, acting, onSelect, onApprove, onDen
       <div class="approval-row">
 
         {/* Selection checkbox — only for actionable */}
-        <div class="approval-check-col">
-          <button
-            class={`approval-check${selected ? ' checked' : ''}`}
-            onClick={onSelect}
-            disabled={!actionable}
-            title={actionable ? (selected ? 'Deselect' : 'Select') : undefined}
-          >
-            {selected
-              ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><polyline points="1.5,5 4,7.5 8.5,2.5" /></svg>
-              : null}
-          </button>
-        </div>
+        {actionable && (
+          <div class="approval-check-col">
+            <button
+              class={`approval-check${selected ? ' checked' : ''}`}
+              onClick={onSelect}
+              title={selected ? 'Deselect' : 'Select'}
+            >
+              {selected
+                ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><polyline points="1.5,5 4,7.5 8.5,2.5" /></svg>
+                : null}
+            </button>
+          </div>
+        )}
 
         {/* Main content */}
         <div class="approval-row-body">
@@ -358,11 +362,12 @@ export function Approvals({ onBadgeChange, onApproved }: Props) {
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
 
-      {visible.length === 0 && (
+      {pendingItems.length === 0 && (
         <EmptyState
           icon={<svg viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="13" /><path d="M12 18l4 4 8-8" /></svg>}
           title="All clear"
           body="When Atlas needs your approval for an action, it will appear here."
+          class="approvals-empty-state"
         />
       )}
 
@@ -429,13 +434,11 @@ export function Approvals({ onBadgeChange, onApproved }: Props) {
 
       {/* Resolved section — collapsible, collapsed by default */}
       {resolvedItems.length > 0 && (
-        <div style={{ marginTop: pendingItems.length > 0 ? '8px' : '0' }}>
-          <div class="section-label approvals-section-head">
+        <div style={{ marginTop: '16px' }}>
+          <div class="section-label approvals-section-head" style={{ marginBottom: resolvedExpanded ? '8px' : '0' }}>
             <button class="approvals-section-toggle" onClick={() => setResolvedExpanded(v => !v)}>
-              <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-                {resolvedExpanded
-                  ? <polyline points="1,7.5 5.5,3 10,7.5" />
-                  : <polyline points="1,3.5 5.5,8 10,3.5" />}
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" style={{ transition: 'transform 0.15s', transform: resolvedExpanded ? 'rotate(0deg)' : 'rotate(90deg)' }}>
+                <polyline points="1,7 5,3 9,7" />
               </svg>
               Resolved · {resolvedItems.length}
             </button>
@@ -446,7 +449,7 @@ export function Approvals({ onBadgeChange, onApproved }: Props) {
             )}
           </div>
           {resolvedExpanded && (
-            <div class="card approvals-list-card">
+            <div class="card approvals-list-card" style={{ opacity: 0.8 }}>
               {resolvedItems.map((a, i) => (
                 <ApprovalRow
                   key={a.id}
