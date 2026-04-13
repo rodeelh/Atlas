@@ -1,12 +1,12 @@
 # Atlas Architecture
 
-**Last updated: 2026-04-08** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md) · Internal modules: [`docs/internal-modules.md`](internal-modules.md) · Agent boundary: [`docs/agent-boundary.md`](agent-boundary.md) · Migration verification: [`docs/migration-verification.md`](migration-verification.md) · Manual smoke: [`docs/manual-smoke-checklist.md`](manual-smoke-checklist.md)
+**Last updated: 2026-04-12** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md) · Internal modules: [`docs/internal-modules.md`](internal-modules.md) · Agent boundary: [`docs/agent-boundary.md`](agent-boundary.md) · Migration verification: [`docs/migration-verification.md`](migration-verification.md) · Manual smoke: [`docs/manual-smoke-checklist.md`](manual-smoke-checklist.md) · Teams spec: [`docs/teams-v1-implementation-spec.md`](teams-v1-implementation-spec.md)
 
-Atlas is a local AI operator. A Go binary runs as a launchd daemon (`Atlas`), serves a web UI, and connects to any supported AI provider. A Bubbletea TUI (`atlas`) provides a terminal interface. No Swift required.
+Atlas is a local AI operator. A Go binary runs as a launchd daemon (`Atlas`), serves a web UI, and connects to any supported AI provider. No Swift required.
 
 Note: the package currently named `internal/chat` is architecturally the Atlas **Agent** subsystem. See [`docs/agent-boundary.md`](agent-boundary.md).
 
-Future delegated multi-agent work should follow this rule:
+Atlas Teams V1 is implemented. The architectural rule that governs it:
 **Agent owns delegation decisions. Teams owns delegated execution.**
 
 ---
@@ -80,7 +80,12 @@ Atlas/
 │       │   ├── usage/                  # Private module — usage reporting routes
 │       │   ├── apivalidation/          # Private module — API validation history routes
 │       │   ├── mind/                   # Private module — mind-thoughts HTTP surface (/mind/*)
-│       │   └── dashboards/             # Private module — dashboard CRUD + widget data resolution
+│       │   ├── dashboards/             # Private module — dashboard CRUD + widget data resolution
+│       │   └── agents/                 # Private module — Atlas Teams V1: DB-first agent registry, delegation engine, task orchestration
+│       │       ├── module.go           #   Routes, DB-first CRUD, Team HQ snapshot, approval/cancel, sync/export, trigger coordinator
+│       │       ├── agent_actions.go    #   team.*/agent.* skills — delegate (single/sequence), create/update/delete/enable/disable
+│       │       ├── prompt.go           #   composeWorkerPrompt — three-layer prompt (identity→assignment→context→contract)
+│       │       └── agents_file.go      #   AGENTS.md parse/render — used by POST /agents/sync and GET /agents/export only
 │       ├── platform/
 │       │   ├── host.go                 # Private module host + route mounts
 │       │   ├── module.go               # Internal module contract
@@ -152,13 +157,6 @@ Atlas/
 │           ├── audit.go                # api-validation-history.json
 │           └── gate.go                 # Gate.Run — 3-phase validation
 │
-├── atlas-tui/                          # Bubbletea TUI — terminal interface
-│   ├── main.go                         # Entry point — loads config, starts Bubbletea
-│   ├── config/                         # Config load/save (~/.config/atlas-tui/config.json)
-│   ├── client/                         # HTTP client for the runtime API
-│   ├── ui/                             # Bubbletea models and views
-│   └── onboarding/                     # First-run onboarding flow
-│
 └── atlas-web/                          # Preact + TypeScript web UI
     └── src/
         ├── screens/                    # Chat, Forge, Skills, Approvals,
@@ -187,14 +185,14 @@ Atlas/
    ├── /approvals, /…   Approvals       Approval queue, action-policies
    ├── /communications  Comms           Telegram / Discord / WhatsApp platform management
    └── /skills, /forge, Modules         Private module-backed feature surfaces
-       /automations, …
+       /automations, /team, …
             │
             ├── internal/agent      ← OpenAI / Anthropic / Gemini / LM Studio
             ├── internal/skills     ← 16 built-in skill groups, 90+ actions + custom skills
             ├── internal/customskills ← manifest types + filesystem scanning (leaf pkg)
             ├── internal/browser    ← Headless Chrome via go-rod
             ├── internal/platform   ← Private host, module registry, event bus, scoped storage
-            ├── internal/modules    ← First-party feature modules
+            ├── internal/modules    ← First-party feature modules (incl. teams/)
             ├── internal/forge      ← Forge research pipeline
             ├── internal/validate   ← API validation gate
             ├── internal/mind       ← MIND.md reflection + SKILLS.md learning
@@ -675,10 +673,15 @@ All endpoints return `409 Conflict` when `ThoughtsEnabled: false`.
 | `messages` | All messages (user + assistant + tool) |
 | `memories` | Extracted long-term memories (with `valid_until` for contradiction; `memories_fts` FTS5 index for BM25 recall) |
 | `gremlin_runs` | Automation run records |
-| `deferred_executions` | Pending approval tool calls |
+| `deferred_executions` | Pending approval tool calls; `agent_id` column (nullable) identifies sub-agent requester |
 | `web_sessions` | HMAC session tokens |
 | `browser_sessions` | Per-host browser cookie snapshots (7-day expiry); `session_name` column for multi-account |
 | `mind_telemetry` | Mind-thoughts event log — nap outcomes, auto-executes, engagement signals, greetings |
+| `agent_definitions` | Atlas Teams — parsed AGENTS.md records, one row per team member |
+| `agent_runtime` | Atlas Teams — live agent state: status, currentTaskID, lastActiveAt |
+| `team_tasks` | Atlas Teams — delegated task records with status and result |
+| `team_task_steps` | Atlas Teams — sub-agent message log per task (system/user/assistant/tool) |
+| `team_events` | Atlas Teams — activity log powering Team HQ activity rail |
 
 **JSON files** — `~/Library/Application Support/ProjectAtlas/`
 
@@ -690,6 +693,7 @@ All endpoints return `409 Conflict` when `ThoughtsEnabled: false`.
 | `SKILLS.md` | Skills-layer memory — learned routines appended by `internal/mind` skills learner + dream Phase 3 |
 | `DIARY.md` | Per-day diary entries (max 3/day) — written by `diary.record` skill and reflection pipeline |
 | `dream-state.json` | Last successful dream cycle timestamp — used for catch-up detection at startup |
+| `AGENTS.md` | Atlas Teams — canonical team member definitions; synced to `agent_definitions` table on startup and file change |
 | `GREMLINS.md` | Legacy/import-export automation definitions; SQLite is canonical for module-owned automation definitions |
 | `workflow-definitions.json` | Legacy/import workflow definitions; SQLite is canonical |
 | `workflow-runs.json` | Legacy workflow run records; SQLite is canonical |
@@ -722,11 +726,144 @@ All endpoints return `409 Conflict` when `ThoughtsEnabled: false`.
 
 ---
 
-## 12. Deferred (V1.0)
+## 12. Atlas Teams
+
+Atlas Teams is the delegated multi-agent capability for V1.0. See [`PLAN.md`](../PLAN.md) for the full product specification and milestone roadmap. See [`docs/agent-boundary.md`](agent-boundary.md) for the architectural boundary and delegation mechanism.
+
+**Core rule:** Agent owns delegation decisions. Teams owns delegated execution.
+
+### How team management and delegation work
+
+```
+Explicit "create an agent" request
+    │
+    └── planner prefers team-control over workflow/automation creation
+              │
+              ▼
+         Atlas calls team.create / team.update / team.delete / team.enable ...
+              │
+              ▼
+         Teams module rewrites canonical AGENTS.md + syncs DB/runtime state
+              │
+              └── Team HQ reads the updated snapshot through /team APIs
+
+Delegation request
+    │
+    └── Atlas calls team.delegate (standard skill call)
+              │
+              ▼
+         Teams module FnResult closure
+              │
+              ▼
+         TeamOrchestrator.Delegate()
+              ├── load AgentDefinitionRecord from DB (synced from AGENTS.md)
+              ├── build filtered tool slice (allowedSkills prefixes only)
+              ├── build sub-agent system prompt (role + mission + goal)
+              ├── loop.Run() directly with NoopEmitter
+              │       (NOT via AgentRuntime.HandleMessage — avoids chat.Service pipeline)
+              ├── persist TeamTask + TeamTaskStep records
+              ├── emit task/activity events
+              └── return ToolResult → back to Atlas's loop as tool call result
+```
+
+### AGENTS.md canonical file
+
+`~/Library/Application Support/ProjectAtlas/AGENTS.md` is the source of truth for team member definitions. Structured runtime persistence (`AgentDefinitionRecord`, `AgentRuntimeRecord`) holds operational state. The UI reads runtime snapshots, not the file directly.
+
+File format:
+```markdown
+# Atlas Team
+
+## Atlas
+(Atlas's own station — always present)
+
+## Team Members
+
+### Scout
+- ID: scout
+- Role: Research Specialist
+- Mission: Gather facts, references, and external context
+- Style: concise and factual
+- Allowed Skills: web., websearch., fs.read_file, fs.search
+- Allowed Tool Classes: read
+- Autonomy: assistive
+- Activation: atlas_in_task_assist
+- Enabled: yes
+```
+
+### Runtime components
+
+| Component | File | Purpose |
+|---|---|---|
+| `TeamsModule` | `internal/modules/teams/module.go` | `/team` routes, Team HQ snapshot, AGENTS sync, watcher lifecycle, runtime state transitions |
+| `TeamActions` | `internal/modules/teams/agent_actions.go` | Registers `team.*` management and delegation skills, runs delegated sub-agent work |
+| `AgentsFile` | `internal/modules/teams/agents_file.go` | Canonical AGENTS.md parse/write helpers used for sync and edits |
+| `Storage layer` | `internal/storage/db.go` | AgentDefinitionRecord + AgentRuntimeRecord + TeamTask + TeamTaskStep + TeamEvent persistence |
+| `Platform interface` | `internal/platform/storage.go` | Teams-facing storage contracts used by the module |
+
+### Storage tables (added in M1 + M4)
+
+| Table | Purpose |
+|---|---|
+| `agent_definitions` | Parsed AGENTS.md records — one row per team member |
+| `agent_runtime` | Live agent state: status, currentTaskID, lastActiveAt |
+| `team_tasks` | Delegated task records with status + result |
+| `team_task_steps` | Sub-agent message log (system/user/assistant/tool per task) |
+| `team_events` | Activity log — powers Team HQ activity rail |
+
+`deferred_executions` has an additive nullable `agent_id` column (M4) so approval records can identify which sub-agent requested an action.
+
+### Forge integration
+
+No direct module coupling. Forge-installed skills surface in the global skills registry automatically. When creating or editing a team member, `allowedSkills` can reference any registered skill ID including Forge-generated ones. The Teams module subscribes to `forge.skill.installed` EventBus events to surface new skills in the Team HQ activity rail.
+
+### HTTP routes
+
+```
+GET    /team                          — full Team HQ snapshot (Atlas node + agents + activity)
+GET    /team/agents                   — list all agent definitions
+GET    /team/agents/:id               — single agent with runtime state
+POST   /team/agents                   — create agent
+PUT    /team/agents/:id               — update agent definition
+DELETE /team/agents/:id               — delete agent definition
+POST   /team/agents/:id/enable        — enable agent
+POST   /team/agents/:id/disable       — disable agent
+POST   /team/agents/:id/pause         — pause agent
+POST   /team/agents/:id/resume        — resume agent
+GET    /team/tasks                    — list task records
+GET    /team/tasks/:id                — task detail + steps
+POST   /team/tasks/:id/cancel         — cancel in-progress task
+GET    /team/events                   — activity event log
+POST   /team/sync                     — re-sync AGENTS.md → DB
+```
+
+### Agent-facing team skills
+
+Atlas sees team management as a first-class skill group rather than falling back to workflow or automation creation for explicit team-member requests.
+
+```
+team.list
+team.get
+team.create
+team.update
+team.delete
+team.enable
+team.disable
+team.pause
+team.resume
+team.delegate
+```
+
+---
+
+## 13. Deferred (V1.0)
 
 | Feature | Status |
 |---------|--------|
-| Multi-agent supervisor | Not built — single-agent loop handles all turns |
+| Per-agent provider override | Deferred to Teams M5 — all sub-agents use Atlas's global provider config in M4 |
+| Parallel squad execution | Deferred to Teams M5 — requires resolving `turnCancels` single-turn-per-conv constraint |
+| Sub-agent SSE streaming | Deferred to Teams M5 — sub-agents use NoopEmitter in M4; TeamEmitter planned for M5 |
+| Full approval UI for sub-agents | Deferred to Teams M5 — agent_id stored in M4 but approval surface shows agent identity in M5 |
 | Custom skill live-reload | Daemon restart required after install or remove |
 | Custom skill ZIP/URL install | Local path only; URL download deferred |
 | Custom skill vault credential injection | Skills read credentials from env; direct vault injection deferred |

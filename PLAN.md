@@ -288,62 +288,34 @@
 - Build-review chain
 - Morning workspace check
 
-### Runtime Architecture
+### Runtime Architecture (implemented)
 
-#### Five layers
-1. `AGENTS.md` definition layer
-2. team sync layer
-3. orchestration layer
-4. persistence/runtime state layer
-5. snapshot/API layer
+#### Persistence model
+- SQLite is the authoritative source for agent definitions and runtime state.
+- `AGENTS.md` is export-only. It is no longer read on startup except for a one-time migration import if the DB is empty on first upgrade.
 
-#### Core runtime components
-- `TeamDefinitionStore`
-- `TeamDefinitionSyncEngine`
-- `TeamOrchestrator`
-- `TeamRuntimeStore`
-- `TeamSnapshotAssembler`
+#### Implemented persistent entities
+- `agent_definitions` — agent definition rows (id, name, role, mission, skills, autonomy, etc.)
+- `agent_runtime` — per-agent runtime status (idle/working/paused/needs_review)
+- `agent_tasks` — delegated task rows with full V1 structured payload (title, objective, scope JSON, success criteria JSON, expected output JSON, mode, pattern)
+- `agent_task_steps` — per-step conversation records (system/user/assistant/tool roles)
+- `agent_events` — team event log (task started/completed/failed/approved/rejected)
+- `agent_metrics` — per-agent task completion and tool call counters
 
-#### Storage model
-- File-based:
-  - `AGENTS.md`
-- Structured persistence:
-  - SQLite/runtime storage, likely alongside `atlas.sqlite3`
+#### Key implementation files
+| File | Role |
+|---|---|
+| `internal/modules/agents/module.go` | Routes, DB-first CRUD, Team HQ snapshot, approval/cancel, sync/export, trigger coordinator |
+| `internal/modules/agents/agent_actions.go` | `team.*`/`agent.*` skills — delegate (single/sequence), CRUD, enable/disable/pause/resume |
+| `internal/modules/agents/prompt.go` | `composeWorkerPrompt` — four-section layered prompt with five template contracts |
+| `internal/modules/agents/agents_file.go` | AGENTS.md parse/render — used only by `POST /agents/sync` and `GET /agents/export` |
 
-#### Suggested persistent entities
-- `AgentDefinitionRecord`
-- `AgentRuntimeRecord`
-- `TeamTaskRecord`
-- `TeamTaskStepRecord`
-- `TeamEventRecord`
-- `AgentMetricsRecord`
-
-#### `AGENTS.md` sync pipeline
-- On startup:
-  1. load `AGENTS.md`
-  2. parse definitions
-  3. validate
-  4. sync to `AgentDefinitionRecord`
-  5. ensure `AgentRuntimeRecord` exists
-- On file change:
-  1. detect change
-  2. reparse
-  3. diff against stored definitions
-  4. apply updates
-  5. emit team events
-- On UI/chat edits:
-  1. write updated `AGENTS.md`
-  2. trigger sync
-  3. return updated snapshot
-
-### `AGENTS.md` Canonical Role
-- `AGENTS.md` is the canonical team-definition file.
-- Structured runtime persistence holds all operational state.
-- UI reads runtime snapshots, not the file directly.
-- Atlas remains fully functional without `AGENTS.md`.
-
-#### Recommended path
-- `/Users/ralhassan/Library/Application Support/ProjectAtlas/AGENTS.md`
+### `AGENTS.md` Role (updated)
+- `AGENTS.md` is now export-only.
+- SQLite is the canonical team-definition store.
+- `GET /agents/export` renders current DB state as AGENTS.md format.
+- `POST /agents/sync` does an explicit on-demand import from AGENTS.md into the DB.
+- On first startup after upgrade, if the DB is empty and AGENTS.md exists, it is imported once automatically.
 
 ### `AGENTS.md` Format
 - Structured markdown with one section per agent.
@@ -386,6 +358,7 @@
 - `GET /team/agents/:id`
 - `POST /team/agents`
 - `PUT /team/agents/:id`
+- `DELETE /team/agents/:id`
 - `POST /team/agents/:id/pause`
 - `POST /team/agents/:id/resume`
 - `POST /team/agents/:id/disable`
@@ -399,66 +372,55 @@
 
 ### Implementation Roadmap
 
-#### Milestone 1: Foundations
-- `AGENTS.md` file support
-- parser and writer
-- sync engine
-- structured persistence for definitions and runtime state
+#### ✅ Milestone 1: Foundations — COMPLETE
+- AGENTS.md file support, parser and writer
+- sync engine (`POST /agents/sync`)
+- structured persistence for definitions and runtime state (SQLite)
 
-#### Milestone 2: Team HQ Skeleton
-- Team HQ route/screen
-- Atlas station
-- empty state
-- team member stations
-- agent detail shell
-- `/team` and `/team/agents` APIs
+#### ✅ Milestone 2: Team HQ Skeleton — COMPLETE
+- `GET /agents/hq` Team HQ snapshot route
+- Atlas station, agent stations, activity rail, blocked items, suggested actions
+- `GET /agents`, `GET /agents/{id}`, `GET /agents/tasks`, `GET /agents/events`
 
-#### Milestone 3: Creation and Editing
-- create team member flow
-- template picker
-- edit agent flow
-- enable/disable/pause/resume
-- chat-based creation/edit commands
+#### ✅ Milestone 3: Creation and Editing — COMPLETE
+- DB-first create/update/delete via `POST /agents`, `PUT /agents/{id}`, `DELETE /agents/{id}`
+- enable/disable/pause/resume routes and skills
+- `agent.create`, `agent.update`, `agent.delete` chat skills
+- `GET /agents/export` — renders DB state as AGENTS.md (export-only)
 
-#### Milestone 4: Single-Agent Delegation
-- `TeamTask` and `TeamTaskStep` persistence
-- single-agent assignment
-- Atlas-mediated delegation
-- output and activity history
+#### ✅ Milestone 4: Single-Agent Delegation — COMPLETE
+- `team.delegate` with `DelegationPlan` / `DelegationTaskSpec` structured input
+- `sync_assist` (blocking) and `async_assignment` (fire-and-forget with pre-generated task ID)
+- per-agent provider override (`providerType`, `model`)
+- four-section layered worker prompt (`composeWorkerPrompt`) with five template contracts
+- full approval flow: `POST /agents/tasks/{id}/approve`, `POST /agents/tasks/{id}/reject`
+- task cancel: `POST /agents/tasks/{id}/cancel`
+- `agent_task_steps` for sub-agent conversation records (not in `conversations` table)
+- zero changes to `internal/agent/loop.go` or `internal/chat/service.go`
 
-#### Milestone 5: Sequential Team Workflows
-- sequential orchestration mode
-- bounded multi-step tasks
-- Scout → Builder → Reviewer handoff
-- activity rail improvements
+#### ✅ Milestone 5: Sequential Team Workflows — COMPLETE
+- `sequence` pattern in `team.delegate` — preserves full `DelegationTaskSpec` metadata per step
+- step-to-step output passing (prior summary injected into next step's task instruction)
+- per-agent provider override applied per step
+- structured task payload (title, objective, scope, success criteria, expected output) stored in DB
+- Team HQ V1 projection: BlockingKind/BlockingDetail surfaced, status normalization at read time
 
-#### Milestone 6: Bounded Autonomy
-- trigger coordinator
-- bounded autonomy rules
-- trigger event storage
-- cooldowns/deduping
-- first autonomous scenarios for Monitor and Reviewer
+#### ✅ Milestone 6: Bounded Autonomy — COMPLETE
+- `triggerCoordinator` with cooldown atomicity
+- bounded autonomy rules (on_demand / assistive / supervised)
+- trigger event storage (`trigger_events`, `trigger_cooldowns`)
+- `GET /agents/triggers`, `POST /agents/triggers/evaluate`
 
-#### Milestone 7: Metrics and Polish
-- productivity/activity metrics
-- richer detail views
-- suggested actions
-- workshop visual polish
-- token/cost efficiency tuning
+#### ✅ Milestone 7: DB-First Migration + Cleanup — COMPLETE (Teams V1)
+- DB is now the authoritative source — AGENTS.md is export-only
+- one-time import guard on startup
+- stale comment removal, converter round-trip tests
+- parallel delegation rejects at validation time with clear error
+- multi-pending approval behavior made explicit and correct in `resumeDelegatedTask`
 
-### MVP Recommendation
-- Milestone 1
-- Milestone 2
-- Milestone 3
-- Milestone 4
-- part of Milestone 5
-
-This yields:
-- persistent team members
-- Team HQ
-- creation/editing
-- single-agent delegation
-- one simple sequential team flow
+#### ⏳ Remaining / Future
+- **Parallel delegation** — `pattern: "parallel"` defined in types, rejected at validation. Not yet implemented.
+- **Metrics and polish** — richer detail views, suggested actions, workshop visual polish, token/cost efficiency tuning
 
 ### Risks
 - Overbuilding the runtime before the first useful experience

@@ -1,6 +1,6 @@
 # Atlas Agent Boundary
 
-**Last updated: 2026-04-05**
+**Last updated: 2026-04-12**
 
 This document defines the architectural boundary for the Atlas `Agent` subsystem.
 
@@ -160,32 +160,65 @@ It is the central intent orchestration layer for Atlas.
 
 ## Teams Principle
 
-Future delegated multi-agent work in Atlas will follow this rule:
+Atlas Teams V1 is implemented. The architectural rule that governs it:
 
 **Agent owns delegation decisions. Teams owns delegated execution.**
 
-This rule is architectural, not optional.
+This rule is implemented and must not be violated by future changes.
 
 That means:
 - Agent decides whether work should be delegated
-- Agent defines the goal, scope, and success criteria
+- Agent defines the goal, scope, and success criteria (via `DelegationPlan` / `DelegationTaskSpec`)
 - Agent remains accountable for the final outcome returned to the user
-- Teams creates and manages subordinate workers or subagents
-- Teams tracks delegated task state and gathers results
-- Teams reports completed work back to Agent
+- Teams validates feasibility, persists delegated tasks, runs workers, and tracks state
+- Teams reports completed work back to Agent as a standard tool call result
 
-This rule must not be inverted.
-
-In particular:
+This rule must not be inverted:
 - Teams must not become the top-level decision maker
 - Agent must not absorb the worker-management system
 
-The reason is simple:
-- Agent is the orchestration core of Atlas
-- Teams is the delegated execution system used by Agent
+### Team Management Boundary
 
-If Atlas adds subagents, minions, or parallel worker systems in the future,
-they should be designed around this principle.
+Agent may call:
+- `team.list`, `team.get` — inspect roster
+- `team.delegate` — delegate a task (single/sequence patterns)
+- `agent.create`, `agent.update`, `agent.delete`, `agent.enable`, `agent.disable`, `agent.pause`, `agent.resume` — manage team members
+
+Teams owns how those operations write to the SQLite `agent_definitions` table, initialize runtime state, and update task/event records. AGENTS.md is no longer in the write path — it is export-only.
+
+Explicit requests like "create an agent" or "add a teammate" must resolve to team management, not silently fall back to workflow or automation creation.
+
+### Delegation Mechanism (implemented)
+
+1. Atlas (the Agent) decides a task is suitable for a specialist — this decision is made inside the agent loop, not by any external trigger.
+2. Atlas calls `team.delegate` with a `DelegationPlan` — a structured input containing pattern (`single`/`sequence`), execution mode (`sync_assist`/`async_assignment`), and per-task specs (agent ID, title, objective, scope, success criteria, expected output).
+3. `team.delegate` is registered by `modules/agents` via `skillsReg.RegisterExternal()` during `Register()`.
+4. The skill handler validates the plan, resolves agent definitions from SQLite, and calls `delegateTask()` per step.
+5. `delegateTask()` runs the sub-agent via `agent.Loop.Run()` directly — **not** via `AgentRuntime.HandleMessage()`.
+6. For `async_assignment`, the task ID is pre-generated before the goroutine spawns, so it can be returned in the immediate tool result.
+7. For `sequence`, each step calls `specToDelegateArgs()` to preserve the full `DelegationTaskSpec` metadata (scope, success criteria, expected output) — not flattened to a bare task string.
+8. The sub-agent result comes back as a standard `ToolResult` in Atlas's conversation.
+9. Atlas interprets the result and presents it to the user.
+
+**Why `AgentRuntime.HandleMessage()` must not be used for sub-agents:**
+- `HandleMessage` routes through `chat.Service`: conversation persistence, SSE broadcasting, memory extraction, MIND reflection.
+- None of those must happen for sub-agent work.
+- Sub-agent messages are stored in `agent_task_steps`, not the `conversations` table.
+
+**Import rule:**
+The agents module imports `internal/agent` directly for `agent.Loop`, `agent.LoopConfig`, `agent.OAIMessage`. Same pattern as the Forge module.
+
+**Tool filtering:**
+Sub-agents receive a pre-filtered `*skills.Registry` built from the agent's `allowedSkills` patterns via `subRegistryFor()`. The model only sees its permitted tools.
+
+**Worker prompt:**
+`composeWorkerPrompt(def, task)` in `prompt.go` builds a four-section prompt:
+- `## Identity` — template role contract + member name/role/mission/style
+- `## Assignment` — title/objective (or goal fallback), scope, success criteria, expected output
+- `## Context` — prior results and artifacts (omitted when empty)
+- `## Execution contract` — template-specific rules that sub-agents must not pass on to their own sub-calls
+
+Five template roles are defined: `scout`, `builder`, `reviewer`, `operator`, `monitor` (and `""` for default).
 
 ---
 
