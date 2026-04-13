@@ -130,7 +130,11 @@ type Service struct {
 
 // NewService returns a ready chat Service.
 func NewService(db *storage.DB, cfgStore *config.Store, bc *Broadcaster, reg *skills.Registry) *Service {
-	return &Service{db: db, cfgStore: cfgStore, broadcaster: bc, registry: reg, summaryCache: make(map[string]conversationSummary)}
+	s := &Service{db: db, cfgStore: cfgStore, broadcaster: bc, registry: reg, summaryCache: make(map[string]conversationSummary)}
+	// Wire the async follow-up sender so async_assignment goroutines (agents module)
+	// can push task-completion messages back to the originating conversation.
+	AsyncFollowUpSender = s.SendProactive
+	return s
 }
 
 // SetEngineManager wires in the primary Engine LM manager so the chat service
@@ -514,6 +518,7 @@ func detectTurnMode(userMessage string) turnMode {
 	for _, marker := range []string{
 		"open ", "create ", "write ", "update ", "change ", "edit ", "fix ", "delete ", "remove ",
 		"install ", "run ", "deploy ", "send ", "save ", "patch ",
+		"agent", "team member",
 	} {
 		if strings.Contains(lower, marker) {
 			return turnModeExecution
@@ -536,13 +541,13 @@ func responseContractBlock(mode turnMode) string {
 	case turnModeChat:
 		return "Mode: chat\n- Be warm and natural.\n- Keep replies short unless the user asks for depth.\n- Avoid unnecessary tool use for casual conversation."
 	case turnModeResearch:
-		return "Mode: research\n- Answer the question first.\n- Prefer primary or official sources when they exist.\n- Briefly state the basis or confidence after the answer.\n- Keep research summaries tight and avoid dumping raw source text."
+		return "Mode: research\n- Answer the question first.\n- Prefer primary or official sources when they exist.\n- Briefly state the basis or confidence after the answer.\n- Keep research summaries tight and avoid dumping raw source text.\n- Use exact outcome language: do not say agent/team member, workflow, or automation unless that exact thing was actually created, updated, or run.\n- Never attribute research or findings to a team specialist unless team.delegate was called and returned a result this turn."
 	case turnModeExecution:
-		return "Mode: execution\n- State what you changed or checked.\n- If blocked, name the blocker and the best next step.\n- Prefer decisive action over extended planning when the path is clear."
+		return "Mode: execution\n- State what you changed or checked.\n- If blocked, name the blocker and the best next step.\n- Prefer decisive action over extended planning when the path is clear.\n- Use exact outcome language: call workflows workflows, automations automations, and AGENTS team members agents; do not claim one was created when you actually used another control surface.\n- Never attribute work to a team specialist unless team.delegate was called and returned a result this turn."
 	case turnModeAutomation:
-		return "Mode: automation\n- Prefer idempotent actions: update or upsert before creating duplicates.\n- Confirm the resulting schedule, destination, and enabled state in the answer.\n- Preserve existing user intent unless they explicitly ask to replace it."
+		return "Mode: automation\n- Prefer idempotent actions: update or upsert before creating duplicates.\n- Confirm the resulting schedule, destination, and enabled state in the answer.\n- Use exact outcome language: if you created or updated an automation, say automation; only say agent/team member when you actually used agent.create to write an AGENTS.md team definition.\n- An 'agent' and an 'automation' are different things: use agent.create for agent requests, automation.create for recurring scheduled tasks. Never fulfill an agent request as an automation.\n- Preserve existing user intent unless they explicitly ask to replace it."
 	default:
-		return "Mode: factual\n- Lead with the direct answer.\n- Keep wording compact and avoid filler.\n- Mention uncertainty only when it matters."
+		return "Mode: factual\n- Lead with the direct answer.\n- Keep wording compact and avoid filler.\n- Mention uncertainty only when it matters.\n- Use exact outcome language when referring to Atlas control surfaces."
 	}
 }
 
@@ -567,6 +572,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 
 	// Load optional blocks.
 	skillsBlock := mind.SkillsContext(userMessage, supportDir)
+	teamBlock := agentRosterContext(supportDir)
 	diary := ""
 	if shouldInjectDiary(userMessage) {
 		diary = features.DiaryContext(supportDir, 2)
@@ -619,11 +625,12 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	credsCost := len([]rune(credsBlock)) + 35
 	memCost := len([]rune(memText)) + 50 // \n\n<recalled_memories>\n...
 	skillsCost := len([]rune(skillsBlock)) + 40
+	teamCost := len([]rune(teamBlock)) + 35 // \n\n<team_roster>\n...
 	diaryCost := len([]rune(diary)) + 35
 	toolNotesCost := len([]rune(toolNotesBlock)) + 40 // \n\n<tool_notes>\n...
 	contractCost := len([]rune(contractBlock)) + 45
 
-	total := identityCost + credsCost + memCost + skillsCost + diaryCost + toolNotesCost + contractCost + capabilityPolicyCost
+	total := identityCost + credsCost + memCost + skillsCost + teamCost + diaryCost + toolNotesCost + contractCost + capabilityPolicyCost
 
 	// Trim from lowest priority up until we're within budget.
 	// creds block is never trimmed — it's small and critical for tool use.
@@ -648,12 +655,19 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	if total > budget && toolNotesBlock != "" {
 		toolNotesBlock = ""
 		toolNotesCost = 0
+		total = identityCost + credsCost + memCost + skillsCost + teamCost + diaryCost + contractCost + capabilityPolicyCost
+	}
+
+	// Trim team roster next — drop it only when very tight on budget.
+	if total > budget && teamBlock != "" {
+		teamBlock = ""
+		teamCost = 0
 		total = identityCost + credsCost + memCost + skillsCost + diaryCost + contractCost + capabilityPolicyCost
 	}
 
 	// Trim skills next.
 	if total > budget && skillsBlock != "" {
-		allowed := budget - (identityCost + credsCost + memCost + diaryCost + contractCost + capabilityPolicyCost)
+		allowed := budget - (identityCost + credsCost + memCost + teamCost + diaryCost + contractCost + capabilityPolicyCost)
 		if allowed < 100 {
 			skillsBlock = ""
 			skillsCost = 0
@@ -664,7 +678,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 				skillsCost = allowed + 40
 			}
 		}
-		total = identityCost + credsCost + memCost + skillsCost + diaryCost + contractCost + capabilityPolicyCost
+		total = identityCost + credsCost + memCost + skillsCost + teamCost + diaryCost + contractCost + capabilityPolicyCost
 	}
 
 	// Trim memories last (reduce count, don't truncate content mid-sentence).
@@ -677,7 +691,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 			}
 			memText = mb.String()
 			memCost = len([]rune(memText)) + 50
-			total = identityCost + credsCost + memCost + skillsCost + diaryCost + contractCost + capabilityPolicyCost
+			total = identityCost + credsCost + memCost + skillsCost + teamCost + diaryCost + contractCost + capabilityPolicyCost
 		}
 	}
 
@@ -694,12 +708,13 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	//   1. atlas_identity  — MIND.md selective sections + persona/user name
 	//   2. user_credentials — Keychain secrets (rarely changes)
 	//   3. user_context    — location, timezone, prefs (changes on location update)
+	//   4. team_roster     — enabled AGENTS.md members (changes only on team edits)
 	//
 	// Volatile (changes per-turn):
-	//   4. skills_context  — base + keyword-matched routines
-	//   5. recent_diary    — last 3 days (changes once/day)
-	//   6. tool_notes      — tool_learning memories (changes on extraction)
-	//   7. recalled_memories — BM25-scored, different each turn
+	//   5. skills_context  — base + keyword-matched routines
+	//   6. recent_diary    — last 3 days (changes once/day)
+	//   7. tool_notes      — tool_learning memories (changes on extraction)
+	//   8. recalled_memories — BM25-scored, different each turn
 	var sb strings.Builder
 	sb.Grow(total + 100)
 
@@ -749,6 +764,12 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 		}
 		sb.WriteString("\nWhen the user asks about weather, time, currency, or anything location-specific without specifying a place, use the above context.")
 		sb.WriteString("\n</user_context>")
+	}
+
+	if teamBlock != "" {
+		sb.WriteString("\n\n<team_roster>\n")
+		sb.WriteString(teamBlock)
+		sb.WriteString("\n</team_roster>")
 	}
 
 	if contractBlock != "" {
@@ -1559,6 +1580,9 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 	agentCtx = skills.WithProactiveSender(agentCtx, func(text string) {
 		s.SendProactive(convID, text)
 	})
+	// Inject originating convID so async_assignment tasks can push completion
+	// notifications back to this conversation when they finish.
+	agentCtx = WithOriginConvID(agentCtx, convID)
 	turnStart := time.Now()
 	result := agentLoop.Run(agentCtx, loopCfg, oaiMessages, convID)
 

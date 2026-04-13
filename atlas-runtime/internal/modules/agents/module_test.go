@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -1393,6 +1395,196 @@ func TestValidateDelegationPlan_ParallelRejectedEarly(t *testing.T) {
 	}
 }
 
+// TestTeamDelegate_SequenceSimpleSteps verifies that a sequence plan where
+// each step is expressed in simple {agentId, task} form (without explicit
+// objective/title) is normalized by teamDelegate() before validation so it
+// succeeds instead of failing with "objective required" (Phase C1).
+func TestTeamDelegate_SequenceSimpleSteps(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	host := platform.NewHost(
+		stubConfig{},
+		platform.NewSQLiteStorage(db),
+		stubAgentRuntime{},
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(8),
+	)
+	module := New(dir)
+	registry := skills.NewRegistry(dir, db, nil)
+	module.SetSkillRegistry(registry)
+	module.SetDatabase(db)
+
+	var captured []delegateArgs
+	module.delegateFn = func(_ context.Context, def storage.AgentDefinitionRow, args delegateArgs) (delegatedRun, error) {
+		captured = append(captured, args)
+		now := "2026-04-12T10:00:00Z"
+		return delegatedRun{
+			Task: storage.AgentTaskRow{
+				TaskID:        "task-" + def.ID,
+				AgentID:       def.ID,
+				Status:        "completed",
+				Goal:          args.Task,
+				RequestedBy:   "atlas",
+				ResultSummary: strPtr("done by " + def.ID),
+				StartedAt:     now, FinishedAt: strPtr(now),
+				CreatedAt: now, UpdatedAt: now,
+			},
+		}, nil
+	}
+
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	now := "2026-04-12T10:00:00Z"
+	for _, id := range []string{"scout", "builder"} {
+		if err := db.SaveAgentDefinition(storage.AgentDefinitionRow{
+			ID:                id,
+			Name:              strings.Title(id),
+			Role:              id + " role",
+			Mission:           id + " mission",
+			AllowedSkillsJSON: `["websearch"]`,
+			Autonomy:          "assistive",
+			IsEnabled:         true,
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		}); err != nil {
+			t.Fatalf("SaveAgentDefinition(%s): %v", id, err)
+		}
+	}
+
+	// Simple sequence: each step uses only agentId + task (no explicit objective/title).
+	// Before C1 this would fail validation because Objective is required.
+	planJSON := `{
+		"pattern": "sequence",
+		"executionMode": "sync_assist",
+		"tasks": [
+			{"agentId": "scout", "task": "Research pricing for Plan A"},
+			{"agentId": "builder", "task": "Compile a pricing report from scout's findings"}
+		]
+	}`
+
+	result, err := registry.Execute(context.Background(), "team.delegate", json.RawMessage(planJSON))
+	if err != nil {
+		t.Fatalf("team.delegate (simple sequence): %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("team.delegate (simple sequence) failed: %+v", result)
+	}
+
+	if len(captured) != 2 {
+		t.Fatalf("expected 2 delegations, got %d", len(captured))
+	}
+
+	// Objective and Title should have been normalized from the "task" alias.
+	if captured[0].AgentID != "scout" {
+		t.Errorf("step 1 AgentID: got %q, want scout", captured[0].AgentID)
+	}
+	if captured[0].Objective != "Research pricing for Plan A" {
+		t.Errorf("step 1 Objective not normalized from task: got %q", captured[0].Objective)
+	}
+	if captured[0].Title != "Research pricing for Plan A" {
+		t.Errorf("step 1 Title not normalized from task: got %q", captured[0].Title)
+	}
+	if captured[1].AgentID != "builder" {
+		t.Errorf("step 2 AgentID: got %q, want builder", captured[1].AgentID)
+	}
+	if captured[1].Objective != "Compile a pricing report from scout's findings" {
+		t.Errorf("step 2 Objective not normalized from task: got %q", captured[1].Objective)
+	}
+}
+
+// TestTeamDelegate_SequenceSimpleSteps_ExplicitObjectiveNotOverwritten verifies
+// that when a step already has an explicit Objective, the C1 normalization pass
+// does not overwrite it with the Task alias value.
+func TestTeamDelegate_SequenceSimpleSteps_ExplicitObjectiveNotOverwritten(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	host := platform.NewHost(
+		stubConfig{},
+		platform.NewSQLiteStorage(db),
+		stubAgentRuntime{},
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(8),
+	)
+	module := New(dir)
+	registry := skills.NewRegistry(dir, db, nil)
+	module.SetSkillRegistry(registry)
+	module.SetDatabase(db)
+
+	var captured []delegateArgs
+	module.delegateFn = func(_ context.Context, def storage.AgentDefinitionRow, args delegateArgs) (delegatedRun, error) {
+		captured = append(captured, args)
+		now := "2026-04-12T10:00:00Z"
+		return delegatedRun{
+			Task: storage.AgentTaskRow{
+				TaskID:        "task-" + def.ID,
+				AgentID:       def.ID,
+				Status:        "completed",
+				Goal:          args.Task,
+				RequestedBy:   "atlas",
+				ResultSummary: strPtr("done"),
+				StartedAt:     now, FinishedAt: strPtr(now),
+				CreatedAt: now, UpdatedAt: now,
+			},
+		}, nil
+	}
+
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	now := "2026-04-12T10:00:00Z"
+	if err := db.SaveAgentDefinition(storage.AgentDefinitionRow{
+		ID: "scout", Name: "Scout", Role: "researcher", Mission: "research",
+		AllowedSkillsJSON: `["websearch"]`, Autonomy: "assistive",
+		IsEnabled: true, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("SaveAgentDefinition: %v", err)
+	}
+
+	// Step has both task alias AND explicit objective — objective must win.
+	planJSON := `{
+		"pattern": "single",
+		"tasks": [
+			{
+				"agentId": "scout",
+				"task": "alias value — should be ignored",
+				"objective": "Explicit objective that must be preserved",
+				"title": "Explicit title"
+			}
+		]
+	}`
+
+	result, err := registry.Execute(context.Background(), "team.delegate", json.RawMessage(planJSON))
+	if err != nil {
+		t.Fatalf("team.delegate: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("team.delegate failed: %+v", result)
+	}
+
+	if len(captured) != 1 {
+		t.Fatalf("expected 1 delegation, got %d", len(captured))
+	}
+	if captured[0].Objective != "Explicit objective that must be preserved" {
+		t.Errorf("Objective was overwritten; got %q", captured[0].Objective)
+	}
+	if captured[0].Title != "Explicit title" {
+		t.Errorf("Title was overwritten; got %q", captured[0].Title)
+	}
+}
+
 // TestTeamDelegate_SequencePreservesV1Metadata verifies that a sequence
 // plan's DelegationTaskSpec metadata (title, objective, scope, success criteria,
 // expected output) is passed through to delegateArgs for each step — not
@@ -1529,5 +1721,392 @@ func TestTeamDelegate_SequencePreservesV1Metadata(t *testing.T) {
 	// Prior output from scout must be injected into the task instruction.
 	if !strings.Contains(step2.Task, "Step done by scout") {
 		t.Errorf("step 2 Task should contain prior-step output, got: %q", step2.Task)
+	}
+}
+
+// ─── M1: syncFromFile removal ────────────────────────────────────────────────
+
+// TestDelegateTask_DBOnlyAgentSurvivesDelegation verifies that an agent created
+// via the DB-only path (not in AGENTS.md) is NOT deleted when delegateTask runs.
+// This tests the M1 fix: syncFromFile was previously called inside delegateTask,
+// which deleted any DB-only agent not present in AGENTS.md.
+func TestDelegateTask_DBOnlyAgentSurvivesDelegation(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	host := platform.NewHost(
+		stubConfig{},
+		platform.NewSQLiteStorage(db),
+		stubAgentRuntime{},
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(8),
+	)
+	module := New(dir)
+	registry := skills.NewRegistry(dir, db, nil)
+	module.SetSkillRegistry(registry)
+	module.SetDatabase(db)
+
+	// Stub delegateFn so we don't need a real AI provider.
+	module.delegateFn = func(_ context.Context, def storage.AgentDefinitionRow, args delegateArgs) (delegatedRun, error) {
+		now := "2026-04-13T10:00:00Z"
+		return delegatedRun{Task: storage.AgentTaskRow{
+			TaskID: "t1", AgentID: def.ID, Status: "completed",
+			Goal: args.Task, StartedAt: now, CreatedAt: now, UpdatedAt: now,
+		}}, nil
+	}
+
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	now := "2026-04-13T10:00:00Z"
+	// Seed scout (will be "in AGENTS.md" conceptually — the delegate target).
+	if err := db.SaveAgentDefinition(storage.AgentDefinitionRow{
+		ID: "scout", Name: "Scout", Role: "Research Specialist",
+		Mission: "Find facts", AllowedSkillsJSON: `["websearch"]`,
+		Autonomy: "assistive", IsEnabled: true, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("SaveAgentDefinition(scout): %v", err)
+	}
+	// Seed a DB-only agent (not in AGENTS.md — would have been deleted by old syncFromFile).
+	if err := db.SaveAgentDefinition(storage.AgentDefinitionRow{
+		ID: "db-only-agent", Name: "DB Only", Role: "Custom",
+		Mission: "Created via API", AllowedSkillsJSON: `["websearch"]`,
+		Autonomy: "on_demand", IsEnabled: true, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("SaveAgentDefinition(db-only-agent): %v", err)
+	}
+
+	// Trigger delegation to scout (this previously called syncFromFile which
+	// would delete db-only-agent since it's not in AGENTS.md).
+	planJSON := `{"agentID": "scout", "task": "Research AI frameworks"}`
+	result, err := registry.Execute(context.Background(), "team.delegate", json.RawMessage(planJSON))
+	if err != nil {
+		t.Fatalf("team.delegate: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("team.delegate failed: %+v", result)
+	}
+
+	// DB-only agent must still exist after delegation.
+	row, err := db.GetAgentDefinition("db-only-agent")
+	if err != nil {
+		t.Fatalf("GetAgentDefinition(db-only-agent): %v", err)
+	}
+	if row == nil {
+		t.Fatal("db-only-agent was deleted during delegation — M1 regression: syncFromFile still runs in delegateTask")
+	}
+}
+
+// ─── M2: async follow-up delivery ────────────────────────────────────────────
+
+// TestAsyncFollowUpText_CompletedWithSummary verifies the follow-up message
+// format when a task completes with a result summary.
+func TestAsyncFollowUpText_CompletedWithSummary(t *testing.T) {
+	summary := "Found 5 matching libraries."
+	run := delegatedRun{Task: storage.AgentTaskRow{
+		TaskID: "t1", AgentID: "scout", Status: "completed",
+		ResultSummary: strPtr(summary),
+	}}
+	msg := asyncFollowUpText("Scout", "t1", run, nil)
+	if !strings.Contains(msg, "Scout") {
+		t.Errorf("expected agent name in follow-up, got: %q", msg)
+	}
+	if !strings.Contains(msg, summary) {
+		t.Errorf("expected result summary in follow-up, got: %q", msg)
+	}
+}
+
+// TestAsyncFollowUpText_CompletedNoSummary verifies the follow-up message
+// format when a task completes without a result summary.
+func TestAsyncFollowUpText_CompletedNoSummary(t *testing.T) {
+	run := delegatedRun{Task: storage.AgentTaskRow{
+		TaskID: "t2", AgentID: "builder", Status: "completed",
+	}}
+	msg := asyncFollowUpText("Builder", "t2", run, nil)
+	if !strings.Contains(msg, "Builder") {
+		t.Errorf("expected agent name in follow-up, got: %q", msg)
+	}
+	if !strings.Contains(msg, "t2") {
+		t.Errorf("expected task ID in follow-up, got: %q", msg)
+	}
+}
+
+// TestAsyncFollowUpText_Error verifies the follow-up message includes the error.
+func TestAsyncFollowUpText_Error(t *testing.T) {
+	run := delegatedRun{}
+	msg := asyncFollowUpText("Scout", "t3", run, fmt.Errorf("connection timeout"))
+	if !strings.Contains(msg, "connection timeout") {
+		t.Errorf("expected error message in follow-up, got: %q", msg)
+	}
+}
+
+// TestAsyncAssignment_SendsFollowUp verifies that when async_assignment completes,
+// AsyncFollowUpSender is called exactly once with the originating convID.
+func TestAsyncAssignment_SendsFollowUp(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	host := platform.NewHost(
+		stubConfig{},
+		platform.NewSQLiteStorage(db),
+		stubAgentRuntime{},
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(8),
+	)
+	module := New(dir)
+	registry := skills.NewRegistry(dir, db, nil)
+	module.SetSkillRegistry(registry)
+	module.SetDatabase(db)
+
+	done := make(chan struct{})
+	var followUpConv, followUpText string
+	oldSender := chat.AsyncFollowUpSender
+	chat.AsyncFollowUpSender = func(convID, text string) {
+		followUpConv = convID
+		followUpText = text
+		close(done)
+	}
+	defer func() { chat.AsyncFollowUpSender = oldSender }()
+
+	module.delegateFn = func(_ context.Context, def storage.AgentDefinitionRow, args delegateArgs) (delegatedRun, error) {
+		now := "2026-04-13T10:00:00Z"
+		return delegatedRun{Task: storage.AgentTaskRow{
+			TaskID: args.TaskID, AgentID: def.ID, Status: "completed",
+			ResultSummary: strPtr("Research complete."),
+			StartedAt: now, CreatedAt: now, UpdatedAt: now,
+		}}, nil
+	}
+
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	now := "2026-04-13T10:00:00Z"
+	if err := db.SaveAgentDefinition(storage.AgentDefinitionRow{
+		ID: "scout", Name: "Scout", Role: "Research Specialist",
+		Mission: "Find facts", AllowedSkillsJSON: `["websearch"]`,
+		Autonomy: "assistive", IsEnabled: true, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("SaveAgentDefinition: %v", err)
+	}
+
+	// Inject origin convID via context (as HandleMessage does).
+	ctx := chat.WithOriginConvID(context.Background(), "conv-atlas-123")
+
+	planJSON := `{"agentID": "scout", "task": "Research AI trends", "executionMode": "async_assignment"}`
+	result, err := registry.Execute(ctx, "team.delegate", json.RawMessage(planJSON))
+	if err != nil {
+		t.Fatalf("team.delegate (async): %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("team.delegate (async) failed: %+v", result)
+	}
+
+	// Wait for goroutine to fire (with timeout).
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		t.Fatal("follow-up sender never called within 3 seconds")
+	}
+
+	if followUpConv != "conv-atlas-123" {
+		t.Errorf("follow-up sent to wrong convID: got %q, want conv-atlas-123", followUpConv)
+	}
+	if !strings.Contains(followUpText, "Scout") {
+		t.Errorf("expected agent name in follow-up text, got: %q", followUpText)
+	}
+	if !strings.Contains(followUpText, "Research complete.") {
+		t.Errorf("expected result summary in follow-up text, got: %q", followUpText)
+	}
+}
+
+// TestSyncAssignment_NoFollowUp verifies that sync_assist tasks do NOT trigger
+// AsyncFollowUpSender (follow-up is only for async_assignment).
+func TestSyncAssignment_NoFollowUp(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	host := platform.NewHost(
+		stubConfig{},
+		platform.NewSQLiteStorage(db),
+		stubAgentRuntime{},
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(8),
+	)
+	module := New(dir)
+	registry := skills.NewRegistry(dir, db, nil)
+	module.SetSkillRegistry(registry)
+	module.SetDatabase(db)
+
+	senderCalled := false
+	oldSender := chat.AsyncFollowUpSender
+	chat.AsyncFollowUpSender = func(convID, text string) { senderCalled = true }
+	defer func() { chat.AsyncFollowUpSender = oldSender }()
+
+	module.delegateFn = func(_ context.Context, def storage.AgentDefinitionRow, args delegateArgs) (delegatedRun, error) {
+		now := "2026-04-13T10:00:00Z"
+		return delegatedRun{Task: storage.AgentTaskRow{
+			TaskID: "t-sync", AgentID: def.ID, Status: "completed",
+			StartedAt: now, CreatedAt: now, UpdatedAt: now,
+		}}, nil
+	}
+
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	now := "2026-04-13T10:00:00Z"
+	if err := db.SaveAgentDefinition(storage.AgentDefinitionRow{
+		ID: "scout", Name: "Scout", Role: "Research Specialist",
+		Mission: "Find facts", AllowedSkillsJSON: `["websearch"]`,
+		Autonomy: "assistive", IsEnabled: true, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("SaveAgentDefinition: %v", err)
+	}
+
+	ctx := chat.WithOriginConvID(context.Background(), "conv-atlas-sync")
+	planJSON := `{"agentID": "scout", "task": "Research AI trends", "executionMode": "sync_assist"}`
+	result, err := registry.Execute(ctx, "team.delegate", json.RawMessage(planJSON))
+	if err != nil {
+		t.Fatalf("team.delegate (sync): %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("team.delegate (sync) failed: %+v", result)
+	}
+
+	if senderCalled {
+		t.Error("AsyncFollowUpSender should NOT be called for sync_assist tasks")
+	}
+}
+
+// ─── S1: TemplateRole population ─────────────────────────────────────────────
+
+// TestTemplateRoleFromRole_KnownRoles verifies the role → template role mapping.
+func TestTemplateRoleFromRole_KnownRoles(t *testing.T) {
+	cases := []struct {
+		role string
+		want string
+	}{
+		{"Scout", "scout"},
+		{"Research Specialist", "scout"},
+		{"investigator", "scout"},
+		{"Builder", "builder"},
+		{"Build Engineer", "builder"},
+		{"developer", "builder"},
+		{"Reviewer", "reviewer"},
+		{"QA Engineer", "reviewer"},
+		{"quality analyst", "reviewer"},
+		{"Operator", "operator"},
+		{"executor", "operator"},
+		{"Monitor", "monitor"},
+		{"Watcher", "monitor"},
+		{"observer", "monitor"},
+		{"Custom Role", ""},   // unknown → empty string → generic contract
+		{"", ""},              // empty → generic contract
+	}
+	for _, tc := range cases {
+		got := templateRoleFromRole(tc.role)
+		if got != tc.want {
+			t.Errorf("templateRoleFromRole(%q) = %q, want %q", tc.role, got, tc.want)
+		}
+	}
+}
+
+// TestFileDefToRow_PopulatesTemplateRole verifies that fileDefToRow derives
+// TemplateRole from the Role field so workers get role-specific prompt contracts.
+func TestFileDefToRow_PopulatesTemplateRole(t *testing.T) {
+	cases := []struct {
+		role string
+		want string
+	}{
+		{"Research Specialist", "scout"},
+		{"Build Engineer", "builder"},
+		{"Reviewer", "reviewer"},
+		{"Operator", "operator"},
+		{"Monitor", "monitor"},
+		{"Custom", ""},
+	}
+	for _, tc := range cases {
+		def := agentDefinition{
+			ID:      "agent-" + tc.role,
+			Name:    tc.role,
+			Role:    tc.role,
+			Mission: "do stuff",
+			Autonomy: "on_demand",
+			AllowedSkills: []string{"websearch"},
+		}
+		now := "2026-04-13T10:00:00Z"
+		row := fileDefToRow(def, now, now)
+		if row.TemplateRole != tc.want {
+			t.Errorf("fileDefToRow(role=%q).TemplateRole = %q, want %q", tc.role, row.TemplateRole, tc.want)
+		}
+	}
+}
+
+// TestAgentCreate_SetsTemplateRole verifies that agent.create sets TemplateRole
+// in the DB row so composeWorkerPrompt gets the correct template contract.
+func TestAgentCreate_SetsTemplateRole(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	host := platform.NewHost(
+		stubConfig{},
+		platform.NewSQLiteStorage(db),
+		stubAgentRuntime{},
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(8),
+	)
+	module := New(dir)
+	registry := skills.NewRegistry(dir, db, nil)
+	module.SetSkillRegistry(registry)
+	module.SetDatabase(db)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	createJSON := `{
+		"id": "new-scout",
+		"name": "New Scout",
+		"role": "Research Specialist",
+		"mission": "Find things",
+		"allowedSkills": ["websearch"],
+		"autonomy": "assistive"
+	}`
+	result, err := registry.Execute(context.Background(), "agent.create", json.RawMessage(createJSON))
+	if err != nil {
+		t.Fatalf("agent.create: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("agent.create failed: %+v", result)
+	}
+
+	row, err := db.GetAgentDefinition("new-scout")
+	if err != nil {
+		t.Fatalf("GetAgentDefinition: %v", err)
+	}
+	if row == nil {
+		t.Fatal("agent not found after create")
+	}
+	if row.TemplateRole != "scout" {
+		t.Errorf("expected TemplateRole=scout after create with role=Research Specialist, got %q", row.TemplateRole)
 	}
 }

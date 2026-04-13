@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"atlas-runtime-go/internal/agent"
+	"atlas-runtime-go/internal/chat"
 	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/platform"
 	"atlas-runtime-go/internal/skills"
@@ -174,8 +175,13 @@ func (m *Module) registerAgentActions() {
 			fn:       m.agentResume,
 		},
 		{
+			// Deprecated: use team.delegate(pattern="sequence", tasks=[...]) instead.
+			// agent.sequence is kept for backward compatibility with existing callers and
+			// automation definitions. It is hidden from model-facing descriptions to avoid
+			// confusing the model with two parallel sequence surfaces. The handler remains
+			// fully functional; only the description signals non-preference.
 			name:        "agent.sequence",
-			description: "Run a sequential chain of delegated tasks across multiple Atlas team members. Each step receives the previous agent's result as context.",
+			description: "Deprecated — use team.delegate with pattern=sequence instead. Kept for backward compatibility only.",
 			properties: map[string]skills.ToolParam{
 				"agents": {Type: "array", Description: "Ordered list of delegation steps, each with agentID and task.", Items: &skills.ToolParam{Type: "string"}},
 				"goal":   {Type: "string", Description: "Overall goal for the sequence."},
@@ -221,31 +227,39 @@ func (m *Module) registerAgentActions() {
 			fn:       m.agentGet, // same handler — alias
 		},
 		{
-			// Phase 4: team.delegate accepts a structured DelegationPlan.
-			// Backward compat: also accepts flat {agentID, task, goal} args.
+			// Canonical delegation skill. Supports three invocation styles:
+			//   1. Flat single:   agentID + task  (simplest — preferred for quick delegation)
+			//   2. Simple sequence: pattern=sequence, tasks=[{agentId,task},{agentId,task}]
+			//   3. Structured plan: tasks with full DelegationTaskSpec fields
+			// agent.sequence is deprecated; always use this skill for delegation.
 			name: "team.delegate",
-			description: "Delegate one or more tasks to Atlas team members using a structured plan. " +
-				"For a single task use pattern=single with one entry in tasks[]. " +
-				"For sequential delegation use pattern=sequence with tasks in order. " +
-				"Alternatively, pass agentID+task directly for simple single delegation (backward compat).",
+			description: "Delegate work to one or more Atlas team specialists. " +
+				"Simple single: pass agentID + task. " +
+				"Sequence: if you plan to call team.delegate twice where step 2 depends on step 1's output " +
+				"(e.g. research → draft, draft → review, gather → summarize), " +
+				"submit BOTH steps as ONE call with pattern=\"sequence\" and tasks=[{agentId,task},{agentId,task}] " +
+				"instead of making two separate calls. The sequence pattern chains output automatically. " +
+				"Default executionMode is sync_assist (result returned in this turn). " +
+				"Use async_assignment only for background tasks the user wants to track separately.",
 			properties: map[string]skills.ToolParam{
-				"mode":    {Type: "string", Description: "Atlas operating mode: specialist_assist (default) or team_lead."},
-				"pattern": {Type: "string", Description: "Delegation pattern: single (default), sequence, or parallel."},
-				"executionMode": {Type: "string", Description: "sync_assist (wait for result, default) or async_assignment (fire and forget)."},
+				"pattern": {Type: "string", Description: "single (default) or sequence. Use sequence when step 2 depends on step 1's output."},
+				"executionMode": {Type: "string", Description: "sync_assist (default, wait for result) or async_assignment (fire and forget, returns taskID)."},
+				"mode":    {Type: "string", Description: "specialist_assist (default) or team_lead."},
 				"tasks": {
-					Type:        "array",
-					Description: "Ordered list of task specs. Each spec has: agentId (required), title, objective (required), scope, successCriteria, inputContext, expectedOutput.",
-					Items:       &skills.ToolParam{Type: "object"},
+					Type: "array",
+					Description: "For sequence: ordered steps as [{agentId,task},{agentId,task}]. " +
+						"Each step needs agentId and task at minimum; objective, title, scope, successCriteria, inputContext, expectedOutput are optional.",
+					Items: &skills.ToolParam{Type: "object"},
 				},
-				// Flat backward-compat fields:
-				"agentID": {Type: "string", Description: "Shortcut: exact team member ID for simple single delegation (use instead of tasks[])."},
-				"task":    {Type: "string", Description: "Shortcut: task description for simple single delegation."},
-				"goal":    {Type: "string", Description: "Shortcut: optional framing for simple single delegation."},
+				// Flat single delegation shortcut:
+				"agentID": {Type: "string", Description: "For simple single delegation: exact team member ID (use instead of tasks[])."},
+				"task":    {Type: "string", Description: "For simple single delegation: the task description."},
+				"goal":    {Type: "string", Description: "For simple single delegation: optional framing or outcome goal."},
 			},
 			required: []string{},
 			perm:     "execute",
 			class:    skills.ActionClassLocalWrite,
-			fn:       m.teamDelegate, // Phase 4 handler with plan validation
+			fn:       m.teamDelegate,
 		},
 	} {
 		m.skills.RegisterExternal(skills.SkillEntry{
@@ -346,7 +360,6 @@ func (m *Module) agentCreate(_ context.Context, args json.RawMessage) (skills.To
 			return skills.ToolResult{}, fmt.Errorf("allowedSkills %v match no registered skills — check the patterns", def.AllowedSkills)
 		}
 	}
-	// Phase 8: DB-first — write directly to the database.
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	existing, _ := m.store.GetAgentDefinition(def.ID)
 	if existing != nil {
@@ -376,7 +389,6 @@ func (m *Module) agentUpdate(_ context.Context, args json.RawMessage) (skills.To
 	if p.ID == "" {
 		return skills.ToolResult{}, fmt.Errorf("id is required")
 	}
-	// Phase 8: DB-first — load from DB, merge, write back to DB.
 	existingRow, err := m.store.GetAgentDefinition(p.ID)
 	if err != nil {
 		return skills.ToolResult{}, fmt.Errorf("failed to load team member: %w", err)
@@ -435,7 +447,6 @@ func (m *Module) agentDelete(_ context.Context, args json.RawMessage) (skills.To
 	if p.ID == "" {
 		return skills.ToolResult{}, fmt.Errorf("id is required")
 	}
-	// Phase 8: DB-first — verify existence, then delete from DB.
 	existingRow, err := m.store.GetAgentDefinition(p.ID)
 	if err != nil {
 		return skills.ToolResult{}, fmt.Errorf("failed to load team member: %w", err)
@@ -697,6 +708,22 @@ func (m *Module) teamDelegate(ctx context.Context, args json.RawMessage) (skills
 		Tasks:         input.Tasks,
 	}
 
+	// ── C1: Normalize simple sequence steps ──────────────────────────────────
+	// When the model sends {agentId, task} in a sequence tasks array (simple form),
+	// the "task" field is a wire alias. Promote it to Objective (and Title when
+	// Title is also empty) so validateDelegationPlan does not reject the spec.
+	for i := range plan.Tasks {
+		t := strings.TrimSpace(plan.Tasks[i].Task)
+		if t != "" {
+			if strings.TrimSpace(plan.Tasks[i].Objective) == "" {
+				plan.Tasks[i].Objective = t
+			}
+			if strings.TrimSpace(plan.Tasks[i].Title) == "" {
+				plan.Tasks[i].Title = t
+			}
+		}
+	}
+
 	// ── Validate ──────────────────────────────────────────────────────────────
 	if err := validateDelegationPlan(plan); err != nil {
 		return skills.ToolResult{}, fmt.Errorf("plan validation failed: %w", err)
@@ -740,8 +767,14 @@ func (m *Module) teamDelegate(ctx context.Context, args json.RawMessage) (skills
 			taskID := newID("teamtask")
 			dArgs.TaskID = taskID
 			defCopy := *def
+			// Capture the originating Atlas conversation ID before the goroutine
+			// so async completion can push a follow-up to the right conversation.
+			originConvID := chat.OriginConvIDFromCtx(ctx)
 			go func() {
-				_, _ = delegate(context.Background(), defCopy, dArgs)
+				run, err := delegate(context.Background(), defCopy, dArgs)
+				if originConvID != "" && chat.AsyncFollowUpSender != nil {
+					chat.AsyncFollowUpSender(originConvID, asyncFollowUpText(defCopy.Name, taskID, run, err))
+				}
 			}()
 			return skills.OKResult(
 				fmt.Sprintf("Task assigned to %s asynchronously. Poll GET /agents/tasks/%s for status.", def.Name, taskID),
@@ -927,13 +960,6 @@ type delegatedRun struct {
 }
 
 func (m *Module) delegateTask(ctx context.Context, def storage.AgentDefinitionRow, params delegateArgs) (delegatedRun, error) {
-	// Sync this agent's definition from AGENTS.md before starting the task to
-	// avoid stale permissions and the create-then-immediately-delegate race.
-	if _, err := m.syncFromFile(ctx); err != nil {
-		logstore.Write("warn", "agent: pre-delegation sync failed: "+err.Error(), nil)
-		// Non-fatal: proceed with whatever is in the DB.
-	}
-
 	// Guard: refuse to start a new task if the agent is already busy.
 	if rt, err := m.store.GetAgentRuntime(def.ID); err == nil && rt != nil {
 		if rt.Status == "busy" {
@@ -1607,4 +1633,17 @@ func safeString(v *string) string {
 		return ""
 	}
 	return *v
+}
+
+// asyncFollowUpText builds the follow-up message delivered to the originating
+// Atlas conversation when an async_assignment task completes.
+func asyncFollowUpText(agentName, taskID string, run delegatedRun, err error) string {
+	if err != nil {
+		return fmt.Sprintf("%s finished (task %s) but encountered an error: %s", agentName, taskID, err.Error())
+	}
+	status := run.Task.Status
+	if summary := safeString(run.Task.ResultSummary); strings.TrimSpace(summary) != "" {
+		return fmt.Sprintf("%s finished: %s", agentName, strings.TrimSpace(summary))
+	}
+	return fmt.Sprintf("%s finished (task %s, status: %s).", agentName, taskID, status)
 }

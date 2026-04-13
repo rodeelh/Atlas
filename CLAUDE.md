@@ -362,17 +362,18 @@ Some skills expose the same action under two names. Aliases are transparent to c
 - Mutating routes (POST create/install/reject/pin/access/widgets/execute) return 501 — **deferred to V1.0 rewrite**.
 
 **Agents (Teams V1 — DB-first)**
-- SQLite is the authoritative source for agent definitions. AGENTS.md is export-only (`GET /agents/export`). One-time import from AGENTS.md on first startup if DB is empty.
+- SQLite is the authoritative source for agent definitions. AGENTS.md is export-only (`GET /agents/export`). One-time import from AGENTS.md on first startup if DB is empty (`Start()` guard). `syncFromFile` is NOT called during delegation — DB is the sole authority at task execution time.
 - `allowedSkills` entries must be bare-prefix canonical form: `["fs", "terminal", "websearch"]`. See the Skill Naming conventions above.
 - Canonical skill names: `team.list`, `team.get`, `team.delegate` for read/delegation; `agent.create`, `agent.update`, `agent.delete`, `agent.enable`, `agent.disable`, `agent.pause`, `agent.resume`, `agent.sequence`, `agent.assign` for management. `agent.list` and `agent.get` were removed in Teams V1.
 - HTTP routes are under `/agents`: `/agents`, `/agents/{id}`, `/agents/hq`, `/agents/tasks`, `/agents/tasks/{id}`, `/agents/events`, `/agents/sync`, `/agents/export`, `/agents/triggers`.
 - `team.delegate` accepts a structured `DelegationPlan` with `pattern` (`single`/`sequence`), `executionMode` (`sync_assist`/`async_assignment`), and per-task specs. Backward-compat flat `{agentID, task}` is still accepted.
 - `pattern: "parallel"` is defined in types but rejected at validation time with a clear error — not yet implemented.
-- `async_assignment` pre-generates the task ID before spawning the goroutine so the caller can return it immediately.
+- `async_assignment` pre-generates the task ID before spawning the goroutine so the caller can return it immediately. On completion, the goroutine calls `chat.AsyncFollowUpSender` with the originating Atlas `convID` (injected via `chat.WithOriginConvID` in `HandleMessage`) to push a completion message to the chat.
 - Sequence delegation preserves full `DelegationTaskSpec` metadata per step — not flattened to a bare task string.
-- Worker prompts are built by `composeWorkerPrompt()` in `prompt.go`: four sections (Identity, Assignment, Context, Execution contract) with five template role contracts.
+- Worker prompts are built by `composeWorkerPrompt()` in `prompt.go`: four sections (Identity, Assignment, Context, Execution contract) with five template role contracts. `TemplateRole` is now populated on all create/update/sync paths via `templateRoleFromRole()` in `module.go` — all workers get role-specific prompt contracts.
 - Task delegation runs in a goroutine (async) or blocks (sync). Poll `GET /agents/tasks/{id}` for async status.
-- `normalizeSkillPattern` in `agents_file.go` and `MatchesAnyPattern` in `registry.go` must agree — if you change one, update both and their tests.
+- `normalizeSkillPattern` in `defs.go` and `MatchesAnyPattern` in `registry.go` must agree — if you change one, update both and their tests.
+- Shared type/helper definitions live in `defs.go` (agentDefinition, normalizeDefinition, validateDefinition, slugID, etc.). `agents_file.go` handles only AGENTS.md parse/render I/O.
 
 **Communications**
 - `GET /communications`, `GET /communications/channels`, `PUT /communications/platforms/:platform`, `POST /communications/platforms/:platform/validate`.

@@ -58,8 +58,6 @@ func (m *Module) Register(host platform.Host) error {
 	m.cfg = host.Config()
 	host.MountProtected(m.registerRoutes)
 	// Wire the DB-backed roster into the chat system prompt.
-	// Phase 2: rosterContextFromDB() replaces the AGENTS.md file read.
-	// The output format is identical — this is a hot-path improvement only.
 	chat.RosterReader = func(_ string) string {
 		return m.rosterContextFromDB()
 	}
@@ -69,32 +67,60 @@ func (m *Module) Register(host platform.Host) error {
 // rosterContextFromDB builds the team roster block for system-prompt injection
 // by querying the DB directly. Called on every Atlas turn via chat.RosterReader.
 // Errors are silently swallowed — a missing roster is non-fatal.
+//
+// Design: the block frames the team as an execution surface, not admin
+// documentation. It tells Atlas when and how to delegate, not just which CRUD
+// verbs exist. Kept compact to protect the system-prompt budget.
 func (m *Module) rosterContextFromDB() string {
 	defs, err := m.store.ListEnabledAgentDefinitions()
 	if err != nil || len(defs) == 0 {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("You have a team of specialists. Always use the exact team member ID shown below.\n")
-	sb.WriteString("Key operations: team.list (list), team.get (inspect), team.delegate (run a task), agent.create (create), agent.update (update), agent.delete (delete).\n")
-	sb.WriteString("To delete a team member: call agent.delete with their exact id.\n\n")
+
+	// ── Delegation policy header ──────────────────────────────────────────────
+	// Tells Atlas that the team is an execution resource and gives it clear rules
+	// for when to delegate vs stay solo. Kept to a tight paragraph so it does not
+	// dominate the budget.
+	sb.WriteString("You have a team of specialists available for delegated work.\n")
+	sb.WriteString("DELEGATION RULES:\n")
+	sb.WriteString("- Delegate when a request maps clearly to a specialist's activation hints and they have assistive or bounded_autonomous autonomy.\n")
+	sb.WriteString("- Stay solo for: quick factual answers, casual conversation, simple single-tool tasks, automations, workflows, or anything the user did not imply needs specialist depth.\n")
+	sb.WriteString("- Do NOT proactively activate on_demand members — only use them when the user explicitly requests it.\n")
+	sb.WriteString("- Default execution mode for proactive delegation: sync_assist (wait for the result and integrate it into your answer).\n")
+	sb.WriteString("- Use async_assignment only when the user wants background work with its own lifecycle.\n")
+	sb.WriteString("- Use pattern=sequence when step B depends on step A's output (e.g. research → draft, draft → review).\n")
+	sb.WriteString("- You remain the primary agent and final narrator. Integrate specialist results into your own answer.\n")
+	sb.WriteString("- Never claim a specialist did work unless team.delegate was called and returned a result this turn.\n")
+	sb.WriteString("\n")
+
+	// ── Delegation invocation guide ───────────────────────────────────────────
+	sb.WriteString("To delegate: team.delegate(agentID=\"<id>\", task=\"<what to do>\")  — simplest form.\n")
+	sb.WriteString("Sequence:    team.delegate(pattern=\"sequence\", tasks=[{agentId,task},{agentId,task}])\n")
+	sb.WriteString("\n")
+
+	// ── Team members ──────────────────────────────────────────────────────────
+	sb.WriteString("Team members (use exact id):\n")
 	for _, d := range defs {
 		line := fmt.Sprintf("- id:%s | %s | %s", d.ID, d.Name, d.Role)
 		if d.Activation != "" {
-			line += fmt.Sprintf(" | activate: %s", d.Activation)
+			line += fmt.Sprintf(" | activate when: %s", d.Activation)
 		}
 		line += fmt.Sprintf(" | autonomy: %s", d.Autonomy)
 		sb.WriteString(line + "\n")
 	}
-	return strings.TrimRight(sb.String(), "\n")
+
+	// ── Management verbs (secondary) ─────────────────────────────────────────
+	sb.WriteString("Manage: agent.create, agent.update, agent.delete, agent.enable, agent.disable.")
+
+	return sb.String()
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	// Phase 8: one-time import guard.
-	// AGENTS.md is now a legacy input format. If the DB has no agent definitions
-	// and AGENTS.md exists, import it once so existing deployments migrate
-	// automatically. After the first successful import the file is no longer
-	// read on startup — the DB is the authoritative source.
+	// One-time import guard: if the DB has no agent definitions and AGENTS.md
+	// exists, import it once so existing deployments migrate automatically.
+	// After the first successful import the file is no longer read on startup —
+	// the DB is the authoritative source.
 	existing, _ := m.store.ListAgentDefinitions()
 	if len(existing) == 0 {
 		if _, err := m.syncFromFile(context.Background()); err != nil && !os.IsNotExist(err) {
@@ -179,8 +205,6 @@ func (m *Module) registerRoutes(r chi.Router) {
 	r.Post("/agents/{id}/disable", m.disableAgent)
 	r.Post("/agents/{id}/pause", m.pauseAgent)
 	r.Post("/agents/{id}/resume", m.resumeAgent)
-	r.Post("/agents/sync", m.syncAgents)
-	r.Get("/agents/export", m.exportAgents) // Phase 8: render DB state as AGENTS.md
 	r.Get("/agents/triggers", m.listTriggers)
 	r.Post("/agents/triggers/evaluate", m.evaluateTriggerHTTP)
 }
@@ -685,7 +709,6 @@ func (m *Module) createAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// Phase 8: DB-first — write directly to the database.
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if existingDef, _ := m.store.GetAgentDefinition(def.ID); existingDef != nil {
 		writeError(w, http.StatusConflict, "agent id already exists: "+def.ID)
@@ -712,7 +735,6 @@ func (m *Module) createAgent(w http.ResponseWriter, r *http.Request) {
 
 func (m *Module) updateAgent(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	// Phase 8: DB-first — load from DB, merge patch, write back.
 	existingRow, err := m.store.GetAgentDefinition(id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load agent: "+err.Error())
@@ -755,7 +777,6 @@ func (m *Module) updateAgent(w http.ResponseWriter, r *http.Request) {
 
 func (m *Module) deleteAgent(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	// Phase 8: DB-first — verify existence, delete from DB.
 	existingRow, err := m.store.GetAgentDefinition(id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load agent: "+err.Error())
@@ -790,7 +811,6 @@ func (m *Module) disableAgent(w http.ResponseWriter, r *http.Request) {
 
 func (m *Module) setEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
 	id := chi.URLParam(r, "id")
-	// Phase 8: DB-first — load from DB, flip enabled flag, write back.
 	existingRow, err := m.store.GetAgentDefinition(id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load agent: "+err.Error())
@@ -950,22 +970,7 @@ func (m *Module) syncFromFile(ctx context.Context) (syncResponse, error) {
 		if existing, ok := defMap[def.ID]; ok && strings.TrimSpace(existing.CreatedAt) != "" {
 			createdAt = existing.CreatedAt
 		}
-		defRow := storage.AgentDefinitionRow{
-			ID:                     def.ID,
-			Name:                   def.Name,
-			Role:                   def.Role,
-			Mission:                def.Mission,
-			Style:                  def.Style,
-			AllowedSkillsJSON:      mustJSON(def.AllowedSkills),
-			AllowedToolClassesJSON: mustJSON(def.AllowedToolClasses),
-			Autonomy:               def.Autonomy,
-			Activation:             def.Activation,
-			ProviderType:           def.ProviderType,
-			Model:                  def.Model,
-			IsEnabled:              def.Enabled,
-			CreatedAt:              createdAt,
-			UpdatedAt:              now,
-		}
+		defRow := fileDefToRow(def, createdAt, now)
 		if err := m.store.SaveAgentDefinition(defRow); err != nil {
 			return syncResponse{}, err
 		}
@@ -1017,70 +1022,6 @@ func (m *Module) syncFromFile(ctx context.Context) (syncResponse, error) {
 	}, nil
 }
 
-func (m *Module) upsertDefinitionInFile(def agentDefinition, replace bool) error {
-	agentsFileMu.Lock()
-	path := agentsFilePath(m.supportDir)
-	var defs []agentDefinition
-	if existing, err := readAgentsFileNoLock(path); err == nil {
-		defs = existing
-	} else if !os.IsNotExist(err) {
-		agentsFileMu.Unlock()
-		return err
-	}
-
-	found := false
-	for i, existing := range defs {
-		if existing.ID != def.ID {
-			continue
-		}
-		if !replace {
-			agentsFileMu.Unlock()
-			return fmt.Errorf("agent id already exists: %s", def.ID)
-		}
-		defs[i] = normalizeDefinition(def)
-		found = true
-	}
-	if !found {
-		defs = append(defs, normalizeDefinition(def))
-	}
-	writeErr := writeAgentsFile(path, defs)
-	agentsFileMu.Unlock() // release before syncFromFile which also reads the file
-	if writeErr != nil {
-		return writeErr
-	}
-	_, err := m.syncFromFile(context.Background())
-	return err
-}
-
-func (m *Module) deleteDefinitionFromFile(id string) error {
-	agentsFileMu.Lock()
-	path := agentsFilePath(m.supportDir)
-	defs, err := readAgentsFileNoLock(path)
-	if err != nil {
-		agentsFileMu.Unlock()
-		return err
-	}
-	next := make([]agentDefinition, 0, len(defs))
-	found := false
-	for _, def := range defs {
-		if def.ID == id {
-			found = true
-			continue
-		}
-		next = append(next, def)
-	}
-	if !found {
-		agentsFileMu.Unlock()
-		return fmt.Errorf("agent not found: %s", id)
-	}
-	writeErr := writeAgentsFile(path, next)
-	agentsFileMu.Unlock() // release before syncFromFile which also reads the file
-	if writeErr != nil {
-		return writeErr
-	}
-	_, err = m.syncFromFile(context.Background())
-	return err
-}
 
 func (m *Module) listJoinedAgents() ([]agentJSON, error) {
 	defs, err := m.store.ListAgentDefinitions()
@@ -1335,15 +1276,36 @@ func rowToFileDef(row storage.AgentDefinitionRow) agentDefinition {
 	}
 }
 
+// templateRoleFromRole maps the free-text legacy role string to the canonical
+// V1 template role enum. Matching is case-insensitive and keyword-based.
+// More specific role keywords (qa, review, monitor) are checked before generic
+// ones (build, develop) to avoid false positives like "QA Engineer" → builder.
+// Returns "" for unrecognized roles (falls back to generic contract in prompt.go).
+func templateRoleFromRole(role string) string {
+	r := strings.ToLower(strings.TrimSpace(role))
+	switch {
+	case strings.HasPrefix(r, "scout") || strings.Contains(r, "research") || strings.Contains(r, "investigat"):
+		return "scout"
+	case strings.HasPrefix(r, "reviewer") || strings.Contains(r, "review") || strings.Contains(r, "qa") || strings.Contains(r, "quality"):
+		return "reviewer"
+	case strings.HasPrefix(r, "monitor") || strings.Contains(r, "monitor") || strings.Contains(r, "watch") || strings.Contains(r, "observ"):
+		return "monitor"
+	case strings.HasPrefix(r, "operator") || strings.Contains(r, "operat") || strings.Contains(r, "execut"):
+		return "operator"
+	case strings.HasPrefix(r, "builder") || strings.Contains(r, "build") || strings.Contains(r, "develop") || strings.Contains(r, "engineer"):
+		return "builder"
+	}
+	return ""
+}
+
 // fileDefToRow converts an agentDefinition to a storage.AgentDefinitionRow.
-// The TemplateRole and PersonaStyle fields of the row are not touched by the
-// file-based definition format; callers that need to set them must do so after
-// calling this function.
+// TemplateRole is derived from the Role field via templateRoleFromRole.
 func fileDefToRow(def agentDefinition, createdAt, updatedAt string) storage.AgentDefinitionRow {
 	return storage.AgentDefinitionRow{
 		ID:                     def.ID,
 		Name:                   def.Name,
 		Role:                   def.Role,
+		TemplateRole:           templateRoleFromRole(def.Role),
 		Mission:                def.Mission,
 		Style:                  def.Style,
 		AllowedSkillsJSON:      mustJSON(def.AllowedSkills),
