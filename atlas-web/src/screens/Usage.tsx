@@ -57,6 +57,39 @@ function providerBadgeClass(provider: string): string {
   }
 }
 
+/* ── Event source helpers ────────────────────────────────────────────────── */
+
+type EventSource = 'chat' | 'agent' | 'system'
+
+function eventSource(conversationId: string): EventSource {
+  if (!conversationId) return 'system'
+  if (conversationId.startsWith('task-')) return 'agent'
+  return 'chat'
+}
+
+function sourceBadgeClass(src: EventSource): string {
+  switch (src) {
+    case 'chat':   return 'badge badge-green'
+    case 'agent':  return 'badge badge-yellow'
+    case 'system': return 'badge badge-blue'
+  }
+}
+
+function sourceLabel(src: EventSource): string {
+  switch (src) {
+    case 'chat':   return 'Chat'
+    case 'agent':  return 'Agent'
+    case 'system': return 'System'
+  }
+}
+
+// Returns a short ID for display: conv prefix for chat, task ID for agents, empty for system
+function sourceId(conversationId: string): string {
+  const src = eventSource(conversationId)
+  if (src === 'system') return ''
+  return conversationId.slice(0, 8)
+}
+
 function formatUsageModelName(provider: string, model: string): string {
   const formatted = formatProviderModelName(provider, model)
   if (provider === 'atlas_engine') {
@@ -227,6 +260,7 @@ export function Usage() {
   const [summary, setSummary]     = useState<TokenUsageSummary | null>(null)
   const [events, setEvents]       = useState<TokenUsageEvent[]>([])
   const [eventsOpen, setEventsOpen] = useState(false)
+  const [sourceFilter, setSourceFilter] = useState<EventSource | 'all'>('all')
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState<string | null>(null)
   const [clearing, setClearing]     = useState(false)
@@ -341,13 +375,13 @@ export function Usage() {
                   <div class="stat-note">estimated</div>
                 </div>
                 <div class="stat-cell">
-                  <div class="stat-label">Avg Cost / Turn</div>
+                  <div class="stat-label">Avg Cost / Event</div>
                   <div class="stat-value">
                     {summary && summary.turnCount > 0
                       ? fmtCost(summary.totalCostUSD / summary.turnCount)
                       : '—'}
                   </div>
-                  <div class="stat-note">per agent call</div>
+                  <div class="stat-note">per LLM call</div>
                 </div>
                 <div class="stat-cell">
                   <div class="stat-label">Daily Avg Cost</div>
@@ -359,9 +393,9 @@ export function Usage() {
                   <div class="stat-note">on active days</div>
                 </div>
                 <div class="stat-cell">
-                  <div class="stat-label">Turns</div>
+                  <div class="stat-label">Events</div>
                   <div class="stat-value">{summary ? String(summary.turnCount) : '—'}</div>
-                  <div class="stat-note">agent calls</div>
+                  <div class="stat-note">chat, agent & background</div>
                 </div>
                 {/* Row 2 — tokens */}
                 <div class="stat-cell">
@@ -382,7 +416,7 @@ export function Usage() {
                   <div class="stat-note">completion</div>
                 </div>
                 <div class="stat-cell">
-                  <div class="stat-label">Avg Tokens / Turn</div>
+                  <div class="stat-label">Avg Tokens / Event</div>
                   <div class="stat-value">
                     {summary && summary.turnCount > 0
                       ? fmtTokens(Math.round(summary.totalTokens / summary.turnCount))
@@ -471,10 +505,10 @@ export function Usage() {
                     {[
                       ['provider', 'Provider'],
                       ['model', 'Model'],
-                      ['turnCount', 'Turns'],
+                      ['turnCount', 'Calls'],
                       ['inputTokens', 'Input'],
                       ['outputTokens', 'Output'],
-                      ['tokensPerTurn', 'Tok/Turn'],
+                      ['tokensPerTurn', 'Tok/Call'],
                       ['totalCostUSD', 'Cost'],
                     ].map(([key, label]) => (
                       <button
@@ -501,7 +535,7 @@ export function Usage() {
 
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '10px 16px' }}>
                           <div>
-                            <div class="stat-label" style={{ marginBottom: 2 }}>Turns</div>
+                            <div class="stat-label" style={{ marginBottom: 2 }}>Calls</div>
                             <div class="stat-value">{m.turnCount}</div>
                           </div>
                           <div>
@@ -525,7 +559,7 @@ export function Usage() {
                             </div>
                           </div>
                           <div style={{ gridColumn: '1 / -1' }}>
-                            <div class="stat-label" style={{ marginBottom: 2 }}>Avg / Turn</div>
+                            <div class="stat-label" style={{ marginBottom: 2 }}>Avg / Call</div>
                             {m.totalCostUSD === 0 || m.turnCount === 0
                               ? <div class="stat-note">—</div>
                               : <div class="stat-value">{fmtCost(m.totalCostUSD / m.turnCount)}</div>}
@@ -546,7 +580,7 @@ export function Usage() {
                       <span class="stat-label" style={{ marginBottom: 0 }}>Model{sortArrow('model')}</span>
                     </div>
                     <div style={{ flex: '0 0 52px', ...thStyle('turnCount') }} onClick={() => handleSort('turnCount')}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Turns{sortArrow('turnCount')}</span>
+                      <span class="stat-label" style={{ marginBottom: 0 }}>Calls{sortArrow('turnCount')}</span>
                     </div>
                     <div style={{ flex: '0 0 64px', ...thStyle('inputTokens') }} onClick={() => handleSort('inputTokens')}>
                       <span class="stat-label" style={{ marginBottom: 0 }}>Input{sortArrow('inputTokens')}</span>
@@ -555,13 +589,13 @@ export function Usage() {
                       <span class="stat-label" style={{ marginBottom: 0 }}>Output{sortArrow('outputTokens')}</span>
                     </div>
                     <div style={{ flex: '0 0 76px', ...thStyle('tokensPerTurn') }} onClick={() => handleSort('tokensPerTurn')}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Tok/Turn{sortArrow('tokensPerTurn')}</span>
+                      <span class="stat-label" style={{ marginBottom: 0 }}>Tok/Call{sortArrow('tokensPerTurn')}</span>
                     </div>
                     <div style={{ flex: '0 0 72px', ...thStyle('totalCostUSD') }} onClick={() => handleSort('totalCostUSD')}>
                       <span class="stat-label" style={{ marginBottom: 0 }}>Cost{sortArrow('totalCostUSD')}</span>
                     </div>
                     <div style={{ flex: '0 0 80px', ...thStyle('avgCostPerTurn') }} onClick={() => handleSort('avgCostPerTurn')}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Avg/Turn{sortArrow('avgCostPerTurn')}</span>
+                      <span class="stat-label" style={{ marginBottom: 0 }}>Avg/Call{sortArrow('avgCostPerTurn')}</span>
                     </div>
                   </div>
 
@@ -599,7 +633,7 @@ export function Usage() {
                       </div>
                       <div style={{ flex: '0 0 80px', textAlign: 'right' }}>
                         {m.totalCostUSD === 0 || m.turnCount === 0
-                          ? <span class="stat-note">—</span>
+                          ? <span class="stat-note" title="Local model — no cost">—</span>
                           : <span class="stat-value">{fmtCost(m.totalCostUSD / m.turnCount)}</span>
                         }
                       </div>
@@ -625,31 +659,54 @@ export function Usage() {
 
       {eventsOpen && (
         <div class="card">
-          {events.length === 0 ? (
-            <div class="empty-state" style={{ padding: '32px 0', minHeight: 'unset' }}>
-              <p>No events recorded yet</p>
-            </div>
-          ) : (
-            <>
-              {isMobile ? (
-                events.map(e => (
+          {/* Source filter tabs */}
+          <div style={{ display: 'flex', gap: 6, padding: '12px 16px 0', flexWrap: 'wrap' }}>
+            {(['all', 'chat', 'agent', 'system'] as const).map(src => (
+              <button
+                key={src}
+                class={`log-filter-tab${sourceFilter === src ? ' active' : ''}`}
+                onClick={() => setSourceFilter(src)}
+              >
+                {src === 'all' ? 'All' : sourceLabel(src as EventSource)}
+              </button>
+            ))}
+          </div>
+
+          {(() => {
+            const filtered = sourceFilter === 'all'
+              ? events
+              : events.filter(e => eventSource(e.conversationId) === sourceFilter)
+
+            if (filtered.length === 0) {
+              return (
+                <div class="empty-state" style={{ padding: '32px 0', minHeight: 'unset' }}>
+                  <p>{events.length === 0 ? 'No events recorded yet' : 'No events for this filter'}</p>
+                </div>
+              )
+            }
+
+            return isMobile ? (
+              filtered.map(e => {
+                const src = eventSource(e.conversationId)
+                const id  = sourceId(e.conversationId)
+                return (
                   <div class="row" key={e.id} style={{ display: 'block', paddingTop: 14, paddingBottom: 14 }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                          <span class={providerBadgeClass(e.provider)}>
-                            {providerLabel(e.provider)}
-                          </span>
+                          <span class={sourceBadgeClass(src)}>{sourceLabel(src)}</span>
+                          <span class={providerBadgeClass(e.provider)}>{providerLabel(e.provider)}</span>
                           <span class="skill-meta">{fmtDate(e.recordedAt)}</span>
                         </div>
                         <span style={{ fontFamily: 'monospace', fontSize: '11px', color: 'var(--theme-text-secondary)', lineHeight: 1.5, wordBreak: 'break-word' }}>
                           {formatUsageModelName(e.provider, e.model)}
                         </span>
-                        <span style={{ fontFamily: 'monospace', fontSize: '11px', color: 'var(--theme-text-muted)' }}>
-                          conv {e.conversationId.slice(0, 8)}
-                        </span>
+                        {id && (
+                          <span style={{ fontFamily: 'monospace', fontSize: '11px', color: 'var(--theme-text-muted)' }}>
+                            {src === 'agent' ? 'task' : 'conv'} {id}
+                          </span>
+                        )}
                       </div>
-
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px 12px' }}>
                         <div>
                           <div class="stat-label" style={{ marginBottom: 2 }}>In</div>
@@ -668,42 +725,52 @@ export function Usage() {
                       </div>
                     </div>
                   </div>
-                ))
-              ) : (
-                <>
-                  {/* Column header */}
-                  <div class="row" style={{ paddingTop: '8px', paddingBottom: '8px', background: 'none', cursor: 'default' }}>
-                    <div style={{ flex: '1 1 120px' }}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Time</span>
-                    </div>
-                    <div style={{ flex: '0 0 64px' }}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Conv</span>
-                    </div>
-                    <div style={{ flex: '0 0 88px' }}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Provider</span>
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Model</span>
-                    </div>
-                    <div style={{ flex: '0 0 52px', textAlign: 'right' }}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>In</span>
-                    </div>
-                    <div style={{ flex: '0 0 52px', textAlign: 'right' }}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Out</span>
-                    </div>
-                    <div style={{ flex: '0 0 64px', textAlign: 'right' }}>
-                      <span class="stat-label" style={{ marginBottom: 0 }}>Cost</span>
-                    </div>
+                )
+              })
+            ) : (
+              <>
+                {/* Column header */}
+                <div class="row" style={{ paddingTop: '8px', paddingBottom: '8px', background: 'none', cursor: 'default' }}>
+                  <div style={{ flex: '1 1 120px' }}>
+                    <span class="stat-label" style={{ marginBottom: 0 }}>Time</span>
                   </div>
+                  <div style={{ flex: '0 0 68px' }}>
+                    <span class="stat-label" style={{ marginBottom: 0 }}>Source</span>
+                  </div>
+                  <div style={{ flex: '0 0 60px' }}>
+                    <span class="stat-label" style={{ marginBottom: 0 }}>ID</span>
+                  </div>
+                  <div style={{ flex: '0 0 88px' }}>
+                    <span class="stat-label" style={{ marginBottom: 0 }}>Provider</span>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <span class="stat-label" style={{ marginBottom: 0 }}>Model</span>
+                  </div>
+                  <div style={{ flex: '0 0 52px', textAlign: 'right' }}>
+                    <span class="stat-label" style={{ marginBottom: 0 }}>In</span>
+                  </div>
+                  <div style={{ flex: '0 0 52px', textAlign: 'right' }}>
+                    <span class="stat-label" style={{ marginBottom: 0 }}>Out</span>
+                  </div>
+                  <div style={{ flex: '0 0 64px', textAlign: 'right' }}>
+                    <span class="stat-label" style={{ marginBottom: 0 }}>Cost</span>
+                  </div>
+                </div>
 
-                  {events.map(e => (
+                {filtered.map(e => {
+                  const src = eventSource(e.conversationId)
+                  const id  = sourceId(e.conversationId)
+                  return (
                     <div class="row" key={e.id}>
                       <div style={{ flex: '1 1 120px' }}>
                         <span class="skill-meta">{fmtDate(e.recordedAt)}</span>
                       </div>
-                      <div style={{ flex: '0 0 64px' }}>
-                        <span style={{ fontFamily: 'monospace', fontSize: '11px', color: 'var(--theme-text-secondary)' }}>
-                          {e.conversationId.slice(0, 8)}
+                      <div style={{ flex: '0 0 68px' }}>
+                        <span class={sourceBadgeClass(src)}>{sourceLabel(src)}</span>
+                      </div>
+                      <div style={{ flex: '0 0 60px' }}>
+                        <span style={{ fontFamily: 'monospace', fontSize: '11px', color: 'var(--theme-text-muted)' }}>
+                          {id || '—'}
                         </span>
                       </div>
                       <div style={{ flex: '0 0 88px' }}>
@@ -729,11 +796,11 @@ export function Usage() {
                         }
                       </div>
                     </div>
-                  ))}
-                </>
-              )}
-            </>
-          )}
+                  )
+                })}
+              </>
+            )
+          })()}
         </div>
       )}
 

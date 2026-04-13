@@ -111,6 +111,7 @@ type RunResult struct {
 	ToolCallSummaries   []string // tool names called during this turn (all iterations)
 	ToolResultSummaries []string // short result summaries, one per tool call
 	GeneratedFiles      []string // absolute local file paths emitted as file_generated events
+	IterationsUsed      int      // number of real loop iterations consumed (excludes tool upgrades / compaction retries)
 }
 
 // requestToolsName is the internal action ID for the lazy-mode meta-tool.
@@ -148,7 +149,7 @@ func RequestToolsDef() map[string]any {
 							"enum": []string{
 								"weather", "web", "finance", "office", "media", "mac", "shell",
 								"files", "vault", "browser", "voice", "communication", "creative",
-								"workflow", "automation", "forge", "dashboards", "meta",
+								"workflow", "automation", "forge", "dashboards", "meta", "team",
 							},
 						},
 						"description": "Optional categories to request instead of the full broad list.",
@@ -166,6 +167,9 @@ type LoopConfig struct {
 	MaxIterations int
 	SupportDir    string
 	ConvID        string
+	// AgentID identifies the delegated sub-agent for deferred approval records.
+	// Empty for normal Atlas chat turns.
+	AgentID string
 	// DryRun enables dry-run mode: non-read skill actions are simulated without
 	// applying side effects. The AI receives a structured result describing what
 	// would have happened. Read-class actions execute normally.
@@ -197,6 +201,10 @@ type Loop struct {
 	Skills *skills.Registry
 	BC     Emitter
 	DB     *storage.DB
+	// OnUsage is called once per Run() with the accumulated token usage and the
+	// provider that was used. Fires on all exit paths (complete, error, approval).
+	// Nil is safe — the field is optional.
+	OnUsage func(ctx context.Context, provider ProviderConfig, usage TokenUsage)
 }
 
 // deferralState captures the full messages array + assistant tool_calls
@@ -301,9 +309,20 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		allGeneratedFiles  []string
 		toolUpgradeStage   int  // lazy mode: 0 meta only, 1 short list, 2 broad/category list
 		compacted          bool // overflow recovery: compact at most once per turn
+		itersUsed          int  // real iterations consumed (excludes tool upgrades / compaction retries)
 	)
 
+	// Fire OnUsage on every exit path so callers never have to remember to record.
+	if l.OnUsage != nil {
+		defer func() {
+			if totalUsage.InputTokens > 0 || totalUsage.OutputTokens > 0 {
+				l.OnUsage(ctx, cfg.Provider, totalUsage)
+			}
+		}()
+	}
+
 	for i := 0; i < maxIter; i++ {
+		itersUsed++
 		// Single streaming call — detects tool calls and emits text in one pass.
 		sr, err := streamWithToolDetection(ctx, cfg.Provider, messages, tools, convID, l.BC)
 		if err != nil {
@@ -313,15 +332,15 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 				before := len(messages)
 				messages = compactMessages(messages)
 				compacted = true
+				itersUsed-- // compaction retry doesn't count as a real iteration
 				logstore.Write("warn",
-					fmt.Sprintf("Agent: context overflow — compacted %d→%d messages, retrying (conv %s)",
-						before, len(messages), shortConv),
+					fmt.Sprintf("Agent: context overflow — compacted %d→%d messages", before, len(messages)),
 					map[string]string{"conv": shortConv})
 				i-- // don't count compaction as an iteration
 				continue
 			}
 			logstore.Write("error", "Agent error: "+err.Error(), map[string]string{"conv": shortConv})
-			return RunResult{Status: "error", Error: err, TotalUsage: totalUsage}
+			return RunResult{Status: "error", Error: err, TotalUsage: totalUsage, IterationsUsed: itersUsed}
 		}
 		totalUsage.InputTokens += sr.Usage.InputTokens
 		totalUsage.OutputTokens += sr.Usage.OutputTokens
@@ -351,6 +370,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 				ToolCallSummaries:   allToolSummaries,
 				ToolResultSummaries: allResultSummaries,
 				GeneratedFiles:      allGeneratedFiles,
+				IterationsUsed:      itersUsed,
 			}
 		}
 
@@ -366,9 +386,8 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 			toolUpgradeStage = stage
 
 			logstore.Write("info",
-				fmt.Sprintf("Smart tool upgrade: %d tools selected (stage=%d, conv %s, msg: %.60q)",
-					len(tools), toolUpgradeStage, shortConv, cfg.UserMessage),
-				map[string]string{"conv": shortConv, "mode": "smart", "stage": fmt.Sprintf("%d", toolUpgradeStage), "tools": fmt.Sprintf("%d", len(tools))})
+				fmt.Sprintf("Smart tools: %d selected (stage %d)", len(tools), toolUpgradeStage),
+				map[string]string{"conv": shortConv, "mode": "smart", "stage": fmt.Sprintf("%d", toolUpgradeStage), "tools": fmt.Sprintf("%d", len(tools)), "msg": fmt.Sprintf("%.80s", cfg.UserMessage)})
 
 			// Protocol: the assistant message must contain the tool_call,
 			// and we must send a tool result before the next model turn.
@@ -383,8 +402,9 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 				ToolCallID: tc.ID,
 				Name:       requestToolsName,
 			})
-			i--      // tool upgrade doesn't count as an iteration
-			continue // re-enter loop with updated tools
+			itersUsed-- // tool upgrade doesn't count as a real iteration
+			i--         // tool upgrade doesn't count as an iteration
+			continue    // re-enter loop with updated tools
 		}
 
 		// Tool calls.
@@ -425,7 +445,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 					Error:      block.Reason,
 				})
 			}
-			pendingApprovals, deferErr := l.deferToolCalls(ctx, needApproval, messages, convID, cfg.SupportDir)
+			pendingApprovals, deferErr := l.deferToolCalls(ctx, cfg, needApproval, messages, convID, cfg.SupportDir)
 			if deferErr != nil {
 				return RunResult{Status: "error", Error: deferErr, TotalUsage: totalUsage}
 			}
@@ -443,7 +463,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 					Arguments:  pa.Arguments,
 				})
 			}
-			return RunResult{Status: "pendingApproval", PendingApprovals: pendingApprovals, TotalUsage: totalUsage}
+			return RunResult{Status: "pendingApproval", PendingApprovals: pendingApprovals, TotalUsage: totalUsage, IterationsUsed: itersUsed}
 		}
 
 		// All tool calls can run without approval.
@@ -618,6 +638,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		ToolCallSummaries:   allToolSummaries,
 		ToolResultSummaries: allResultSummaries,
 		GeneratedFiles:      allGeneratedFiles,
+		IterationsUsed:      itersUsed,
 	}
 }
 
@@ -701,6 +722,7 @@ func buildErrorContent(actionID string, execErr error, result skills.ToolResult)
 // deferToolCalls saves tool calls as deferred_executions in the DB.
 func (l *Loop) deferToolCalls(
 	ctx context.Context,
+	cfg LoopConfig,
 	toolCalls []OAIToolCall,
 	messages []OAIMessage,
 	convID string,
@@ -735,6 +757,7 @@ func (l *Loop) deferToolCalls(
 		row := storage.DeferredExecRow{
 			DeferredID:          deferredID,
 			SourceType:          "agent_loop",
+			AgentID:             strPtrOrNil(cfg.AgentID),
 			ActionID:            &actionID,
 			ToolCallID:          tc.ID,
 			NormalizedInputJSON: string(stateJSON),
@@ -842,6 +865,13 @@ func sanitizeLogOutcome(r skills.ToolResult) string {
 	return s
 }
 
+func strPtrOrNil(v string) *string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return &v
+}
+
 // ── Tool execution helper ─────────────────────────────────────────────────────
 
 // toolExecResult holds the outcome of a single tool call.
@@ -947,13 +977,7 @@ func appendRequestToolsDef(tools []map[string]any) []map[string]any {
 }
 
 func hasAllowedToolPrefix(actionID string, prefixes []string) bool {
-	for _, prefix := range prefixes {
-		prefix = strings.TrimSpace(prefix)
-		if prefix != "" && strings.HasPrefix(actionID, prefix) {
-			return true
-		}
-	}
-	return false
+	return skills.MatchesAnyPattern(actionID, prefixes)
 }
 
 func isCoreTool(actionID string) bool {

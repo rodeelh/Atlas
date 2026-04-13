@@ -67,6 +67,8 @@ const SKILL_CATEGORY_LABELS: Record<string, string> = {
   memory:      'Memory',
   atlas:       'Atlas',
   info:        'Atlas',
+  team:        'Team',
+  agent:       'Agent',
 }
 
 function formatLogMessage(message: string): string {

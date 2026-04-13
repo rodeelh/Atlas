@@ -24,6 +24,12 @@ type TokenUsage struct {
 	CachedInputTokens int
 }
 
+// NonAgenticUsageHook is called after every non-agentic LLM call (memory
+// extraction, reflection, forge research, classifier, etc.) with the provider
+// config and token counts. Set once at startup by the usage-tracking wiring.
+// Nil is safe — the field is optional.
+var NonAgenticUsageHook func(ctx context.Context, provider ProviderConfig, usage TokenUsage)
+
 type MLXRequestOptions struct {
 	Temperature        float64
 	TopP               float64
@@ -196,12 +202,20 @@ func callAINonStreaming(
 	messages []OAIMessage,
 	tools []map[string]any,
 ) (OAIMessage, string, TokenUsage, error) {
+	var msg OAIMessage
+	var reason string
+	var usage TokenUsage
+	var err error
 	switch p.Type {
 	case ProviderAnthropic:
-		return callAnthropicNonStreaming(ctx, p, messages, tools)
+		msg, reason, usage, err = callAnthropicNonStreaming(ctx, p, messages, tools)
 	default: // openai, gemini, lm_studio, ollama
-		return callOpenAICompatNonStreaming(ctx, p, messages, tools)
+		msg, reason, usage, err = callOpenAICompatNonStreaming(ctx, p, messages, tools)
 	}
+	if err == nil && NonAgenticUsageHook != nil && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
+		NonAgenticUsageHook(ctx, p, usage)
+	}
+	return msg, reason, usage, err
 }
 
 // ── Streaming with tool detection (agent loop) ────────────────────────────────

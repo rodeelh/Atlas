@@ -3989,12 +3989,47 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   justify-content: flex-end;
 }
 
+/* ── AI Provider Setup Card — inspired by Team HQ Atlas station ── */
 .ai-provider-setup-card {
+  position: relative;
+  overflow: hidden;
   padding: 18px 20px 20px;
   margin-bottom: 18px;
-  border: 1px solid var(--theme-border-subtle);
-  background: var(--surface-elevated, var(--surface));
-  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--theme-border-subtle));
+  background:
+    radial-gradient(ellipse at 92% 8%,  color-mix(in srgb, var(--accent) 22%, transparent) 0%, transparent 55%),
+    radial-gradient(ellipse at 10% 88%, color-mix(in srgb, var(--accent) 10%, transparent) 0%, transparent 42%),
+    linear-gradient(155deg, color-mix(in srgb, var(--surface-elevated, var(--surface)) 80%, transparent), var(--surface));
+}
+
+/* Drifting dot constellation — same grid spec as team-atlas-card, unique animation */
+.ai-provider-setup-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--accent) 45%, transparent) 1px, transparent 1px);
+  background-size: 26px 26px;
+  -webkit-mask-image: radial-gradient(ellipse 48% 55% at 50% 50%, black 0%, transparent 100%);
+  mask-image:         radial-gradient(ellipse 48% 55% at 50% 50%, black 0%, transparent 100%);
+  -webkit-mask-size: 200% 200%;
+  mask-size:         200% 200%;
+  pointer-events: none;
+  z-index: 0;
+  animation: ai-dot-drift 16s ease-in-out infinite;
+}
+
+@keyframes ai-setup-border-pulse {
+  0%, 100% { box-shadow: none; }
+  50%       { box-shadow: 0 0 20px 0 color-mix(in srgb, var(--accent) 14%, transparent); }
+}
+
+/* Slow centered orbit — distinct from team-dot-drift's wide corner sweep */
+@keyframes ai-dot-drift {
+  0%   { -webkit-mask-position: 50% 45%; mask-position: 50% 45%; }
+  25%  { -webkit-mask-position: 62% 55%; mask-position: 62% 55%; }
+  50%  { -webkit-mask-position: 50% 62%; mask-position: 50% 62%; }
+  75%  { -webkit-mask-position: 38% 52%; mask-position: 38% 52%; }
+  100% { -webkit-mask-position: 50% 45%; mask-position: 50% 45%; }
 }
 
 .ai-provider-summary-block {
@@ -4060,6 +4095,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   border-color: color-mix(in srgb, var(--accent) 52%, var(--theme-border-subtle));
   background: color-mix(in srgb, var(--accent) 8%, var(--theme-surface-card));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+  animation: ai-setup-border-pulse 5s ease-in-out infinite;
 }
 
 .ai-mode-card-title {
@@ -5758,7 +5794,9 @@ input[type=number] { -moz-appearance: textfield; }
   color: var(--text);
   flex: 1;
   min-width: 0;
-  word-break: break-word;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: 13px;
 }
 
@@ -9830,7 +9868,13 @@ select.field-input {
 /* ── Team HQ ─────────────────────────────────────────────── */
 
 .team-screen {
+  position: relative;
+  isolation: isolate;
   gap: 18px;
+}
+
+.team-screen-modal-open {
+  overflow: hidden;
 }
 
 .team-header-actions {
@@ -9846,8 +9890,8 @@ select.field-input {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 24px;
+  gap: 14px;
+  padding: 20px;
   border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
   background:
     radial-gradient(ellipse at 92% 8%,  color-mix(in srgb, var(--accent) 22%, transparent) 0%, transparent 52%),
@@ -9885,7 +9929,7 @@ select.field-input {
 }
 
 .team-section-label {
-  margin-bottom: 10px;
+  margin-bottom: 6px;
   color: var(--theme-text-secondary);
   font-size: 11px;
   font-weight: 600;
@@ -9898,12 +9942,12 @@ select.field-input {
   gap: 12px;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .team-atlas-name-row h2 {
-  font-size: 28px;
-  line-height: 1.05;
+  font-size: 22px;
+  line-height: 1.1;
 }
 
 .team-atlas-name-with-dot {
@@ -9937,24 +9981,24 @@ select.field-input {
   z-index: 1;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .team-kpi {
-  padding: 14px 12px;
-  border-radius: 16px;
+  padding: 10px 12px;
+  border-radius: 12px;
   background: color-mix(in srgb, var(--surface-2) 72%, transparent);
   border: 1px solid var(--border);
 }
 
 .team-kpi-value {
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 600;
 }
 
 .team-kpi-label {
-  margin-top: 4px;
-  font-size: 12px;
+  margin-top: 2px;
+  font-size: 11px;
   color: var(--theme-text-secondary);
 }
 
@@ -10069,7 +10113,7 @@ select.field-input {
 
 .team-agent-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 340px));
+  grid-template-columns: repeat(auto-fill, minmax(max(260px, calc((100% - 32px) / 3)), 1fr));
   gap: 16px;
 }
 
@@ -10482,6 +10526,13 @@ select.field-input {
   color: var(--theme-text-primary);
 }
 
+.team-event-detail-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .team-event-good {
   border-color: color-mix(in srgb, var(--green) 32%, var(--border));
 }
@@ -10518,13 +10569,111 @@ select.field-input {
   line-height: 1.6;
 }
 
-.team-empty-orb {
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
-  background: radial-gradient(circle at 35% 35%, color-mix(in srgb, var(--accent) 90%, white), color-mix(in srgb, var(--accent) 24%, transparent) 65%);
-  box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 8%, transparent);
+.team-empty-icon {
+  color: var(--accent);
+  margin-bottom: 8px;
 }
+
+/*
+ * Circle ring — faint orbit track + 5 arc flashes, one per edge, CW order.
+ * c = 2π×22 ≈ 138.23. Each arc = 23px (c/5 trimmed 2.3px each end so it
+ * falls between node centers rather than sitting on them).
+ * scaleX(-1) on each arc element reverses the SVG circle's CCW path to CW
+ * so the dashoffsets land on the correct N→N+1 arc segment.
+ * Dashoffsets (CW path from 9 o'clock after scaleX(-1)):
+ *   N1=34.56  N2=62.21  N3=89.86  N4=117.51  N5=6.93 (≈7.06)
+ *   spark-1 (N1→N2): -(34.56+2.3)=-36.86   spark-2 (N2→N3): -64.51
+ *   spark-3 (N3→N4): -92.16                 spark-4 (N4→N5): -119.81
+ *   spark-5 (N5→N1): -9.23 (7.06+2.3≈9.36)
+ */
+
+.team-orbit-track {
+  stroke: currentColor;
+  stroke-width: 1;
+  fill: none;
+  opacity: 0.1;
+}
+
+.team-edge-spark {
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+  stroke-linecap: round;
+  opacity: 0;
+}
+
+.team-spark-1 { animation: team-spark-f1 4s linear infinite; }
+.team-spark-2 { animation: team-spark-f2 4s linear infinite; }
+.team-spark-3 { animation: team-spark-f3 4s linear infinite; }
+.team-spark-4 { animation: team-spark-f4 4s linear infinite; }
+.team-spark-5 { animation: team-spark-f5 4s linear infinite; }
+
+/*
+ * Arc fires immediately with the source node, holds, then fades as the
+ * destination node begins its pre-ramp — creating a visible handoff.
+ * Window is 20% per arc; rise 0→3%, hold 3→15%, fade 15→20%.
+ */
+@keyframes team-spark-f1 { 0%{opacity:0} 3%{opacity:1} 15%{opacity:1} 20%,100%{opacity:0} }
+@keyframes team-spark-f2 { 0%,20%{opacity:0} 23%{opacity:1} 35%{opacity:1} 40%,100%{opacity:0} }
+@keyframes team-spark-f3 { 0%,40%{opacity:0} 43%{opacity:1} 55%{opacity:1} 60%,100%{opacity:0} }
+@keyframes team-spark-f4 { 0%,60%{opacity:0} 63%{opacity:1} 75%{opacity:1} 80%,100%{opacity:0} }
+@keyframes team-spark-f5 { 0%,80%{opacity:0} 83%{opacity:1} 95%{opacity:1} 100%{opacity:0} }
+
+
+.team-node-dot {
+  opacity: 0.35;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/*
+ * Destination node pre-ramp starts as the incoming arc begins to fade (~15%
+ * into its window), so arc dims and node brightens simultaneously — handoff.
+ * Source node (already bright from its own recv) is still lit when arc appears.
+ * N1 peaks at 0%/100%; 95–100% ramp ensures seamless loop.
+ */
+@keyframes team-recv-1 {
+  0%        { opacity: 1;    transform: scale(1.5); }
+  7%        { opacity: 0.6;  transform: scale(1.1); }
+  12%, 95%  { opacity: 0.35; transform: scale(1); }
+  98%       { opacity: 0.7;  transform: scale(1.2); }
+  100%      { opacity: 1;    transform: scale(1.5); }
+}
+@keyframes team-recv-2 {
+  0%, 14%   { opacity: 0.35; transform: scale(1); }
+  18%       { opacity: 0.7;  transform: scale(1.2); }
+  20%       { opacity: 1;    transform: scale(1.5); }
+  27%       { opacity: 0.6;  transform: scale(1.1); }
+  32%, 100% { opacity: 0.35; transform: scale(1); }
+}
+@keyframes team-recv-3 {
+  0%, 34%   { opacity: 0.35; transform: scale(1); }
+  38%       { opacity: 0.7;  transform: scale(1.2); }
+  40%       { opacity: 1;    transform: scale(1.5); }
+  47%       { opacity: 0.6;  transform: scale(1.1); }
+  52%, 100% { opacity: 0.35; transform: scale(1); }
+}
+@keyframes team-recv-4 {
+  0%, 54%   { opacity: 0.35; transform: scale(1); }
+  58%       { opacity: 0.7;  transform: scale(1.2); }
+  60%       { opacity: 1;    transform: scale(1.5); }
+  67%       { opacity: 0.6;  transform: scale(1.1); }
+  72%, 100% { opacity: 0.35; transform: scale(1); }
+}
+@keyframes team-recv-5 {
+  0%, 74%   { opacity: 0.35; transform: scale(1); }
+  78%       { opacity: 0.7;  transform: scale(1.2); }
+  80%       { opacity: 1;    transform: scale(1.5); }
+  87%       { opacity: 0.6;  transform: scale(1.1); }
+  92%, 100% { opacity: 0.35; transform: scale(1); }
+}
+
+/* Arcs now CW: N1 sends → N2, N3, N4, N5 receive at 20%, 40%, 60%, 80%; N1 again at 100%/0%. */
+.team-node-1 { animation: team-recv-1 4s linear infinite; }
+.team-node-2 { animation: team-recv-2 4s linear infinite; }
+.team-node-3 { animation: team-recv-3 4s linear infinite; }
+.team-node-4 { animation: team-recv-4 4s linear infinite; }
+.team-node-5 { animation: team-recv-5 4s linear infinite; }
 
 .team-empty-inline {
   font-size: 13px;
@@ -10571,4 +10720,587 @@ select.field-input {
   .team-agent-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ─── Team: Template Modal ───────────────────────────────────────────────── */
+
+.team-modal-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(14px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+
+.team-modal {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 92% 8%, color-mix(in srgb, var(--accent) 20%, transparent) 0%, transparent 54%),
+    linear-gradient(160deg, color-mix(in srgb, var(--surface-2) 82%, transparent), color-mix(in srgb, var(--surface) 96%, transparent));
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.4);
+  border-radius: 24px;
+  padding: 26px;
+  max-width: 1080px;
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.team-modal::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--accent) 45%, transparent) 1px, transparent 1px);
+  background-size: 26px 26px;
+  opacity: 0.38;
+  -webkit-mask-image: radial-gradient(ellipse 64% 58% at 50% 38%, black 0%, transparent 100%);
+  mask-image: radial-gradient(ellipse 64% 58% at 50% 38%, black 0%, transparent 100%);
+  pointer-events: none;
+}
+
+.team-modal-header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
+}
+
+.team-modal-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.team-modal-header h3 {
+  font-size: 34px;
+  font-weight: 600;
+  margin: 0;
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+}
+
+.team-modal-close {
+  appearance: none;
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  color: var(--theme-text-secondary);
+  font-size: 16px;
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  transition: background 150ms, border-color 150ms, color 150ms;
+}
+
+.team-modal-close:hover {
+  background: color-mix(in srgb, var(--surface-2) 88%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  color: var(--theme-text-primary);
+}
+
+.team-modal-subtitle {
+  max-width: 700px;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--theme-text-secondary);
+  margin: 0;
+}
+
+.team-modal-body {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 18px;
+  align-items: stretch;
+}
+
+.team-template-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+  background: color-mix(in srgb, var(--surface-2) 68%, transparent);
+}
+
+.team-template-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.team-template-picker-item {
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.team-template-picker-item:hover {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+}
+
+.team-template-picker-item.active {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+  transform: translateY(-1px);
+}
+
+.team-template-picker-name {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.team-template-picker-role {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--theme-text-secondary);
+}
+
+.team-template-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  align-items: stretch;
+}
+
+.team-template-card {
+  position: relative;
+  flex: 0 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 88%, transparent), color-mix(in srgb, var(--surface) 96%, transparent));
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 24px;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+  width: 100%;
+}
+
+.team-template-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 92%, transparent), color-mix(in srgb, var(--surface) 98%, transparent));
+}
+
+.team-template-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.team-template-name {
+  font-size: 22px;
+  font-weight: 600;
+  margin-bottom: 2px;
+  line-height: 1.05;
+}
+
+.team-template-role {
+  font-size: 13px;
+  color: var(--theme-text-secondary);
+  margin-bottom: 0;
+}
+
+.team-template-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
+  color: var(--theme-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.team-template-mission {
+  font-size: 13px;
+  color: var(--theme-text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.team-template-style {
+  padding: 16px 18px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+  background: color-mix(in srgb, var(--surface-2) 58%, transparent);
+  color: var(--theme-text-primary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.team-template-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.team-modal-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.team-template-action-row {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.team-modal-sidebar-card {
+  flex: 1 1 auto;
+  padding: 24px 26px;
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+  background: color-mix(in srgb, var(--surface-2) 68%, transparent);
+}
+
+.team-modal-sidebar-card h4 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.team-modal-sidebar-card p {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--theme-text-secondary);
+}
+
+.team-template-card .team-template-footer {
+  margin-top: 2px;
+}
+
+.team-modal-note-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.team-modal-note-list li {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--theme-text-secondary);
+}
+
+.team-modal-note-list strong {
+  color: var(--theme-text-primary);
+}
+
+@media (max-width: 900px) {
+  .team-modal-overlay {
+    padding: 14px;
+  }
+
+  .team-modal {
+    padding: 20px;
+    border-radius: 20px;
+  }
+
+  .team-modal-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .team-modal-header h3 {
+    font-size: 28px;
+  }
+
+  .team-modal-close {
+    align-self: flex-end;
+  }
+
+  .team-modal-body,
+  .team-template-picker-list,
+  .team-template-action-row {
+    grid-template-columns: 1fr;
+  }
+
+  .team-modal-body {
+    grid-template-columns: 1fr;
+  }
+
+  .team-template-action-row {
+    display: grid;
+    margin-top: 0;
+  }
+
+  .team-template-picker {
+    align-self: auto;
+  }
+
+  .team-template-picker-list {
+    padding-right: 0;
+  }
+
+}
+
+/* ─── Team: Assign Task Form ─────────────────────────────────────────────── */
+
+.team-assign-form {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  padding: 14px;
+}
+
+.team-assign-form-title {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 10px;
+  color: var(--text-secondary);
+}
+
+.team-assign-textarea {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text-primary);
+  resize: vertical;
+  margin-bottom: 8px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.team-assign-input {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.team-assign-textarea:focus,
+.team-assign-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.team-assign-form-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ─── Team: Metrics chips ────────────────────────────────────────────────── */
+
+.team-metrics-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.team-metric-chip {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  text-align: center;
+  min-width: 72px;
+}
+
+.team-metric-chip-muted .team-metric-value {
+  color: var(--text-secondary);
+}
+
+.team-metric-value {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.team-metric-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+/* ─── Team: Provider badge ───────────────────────────────────────────────── */
+
+.team-provider-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 11px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+
+/* ─── Team: Success rate bar ─────────────────────────────────────────────── */
+
+.team-success-rate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.team-success-rate-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  width: 80px;
+}
+
+.team-success-rate-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-secondary);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.team-success-rate-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 300ms ease;
+}
+
+.team-success-rate-pct {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  width: 32px;
+  text-align: right;
+}
+
+/* ─── Team: Autonomy trigger list ────────────────────────────────────────── */
+
+.team-trigger-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.team-trigger-item {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.team-trigger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.team-trigger-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.team-trigger-type {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.team-trigger-agent {
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.team-trigger-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.team-trigger-time {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.team-trigger-instruction {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* ─── Team: Approval block ───────────────────────────────────────────────── */
+
+.team-approval-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.team-approval-context {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.team-approval-agent-badge {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.team-approval-label {
+  color: var(--text-secondary);
 }

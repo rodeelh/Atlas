@@ -754,7 +754,7 @@ func (m *Module) teamDelegate(ctx context.Context, args json.RawMessage) (skills
 		const window = 30 * time.Second
 		if prev, ok := m.lastSingleDelegateAt.Load("single"); ok {
 			if now.Sub(prev.(time.Time)) < window {
-				logstore.Write("debug", "sequence opportunity detected: second single-pattern team.delegate within 30s — consider pattern=sequence if step 2 depends on step 1", map[string]string{
+				logstore.Write("debug", "Team: sequence opportunity — two single-pattern delegates within 30s", map[string]string{
 					"pattern": "single",
 					"agent":   plan.Tasks[0].AgentID,
 				})
@@ -1082,10 +1082,15 @@ func (m *Module) delegateTask(ctx context.Context, def storage.AgentDefinitionRo
 	_ = recorder.append("system", "system", systemPrompt, nil, nil)
 	_ = recorder.append("user", "user", params.Task, nil, nil)
 
+	taskConvID := convID
+	taskProvider := provider
 	loop := agent.Loop{
 		Skills: subRegistry,
 		BC:     recorder,
 		DB:     m.db,
+		OnUsage: func(ctx context.Context, p agent.ProviderConfig, usage agent.TokenUsage) {
+			m.recordTokenUsage(taskConvID, taskProvider, usage)
+		},
 	}
 	tools := subRegistry.ToolDefinitions()
 	result := loop.Run(runCtx, agent.LoopConfig{
@@ -1345,10 +1350,15 @@ func (m *Module) resumeDelegatedTask(ctx context.Context, def storage.AgentDefin
 	}
 	_ = recorder.append("tool", "tool_resume_result", toolResult, &targetTC.Function.Name, &toolCallID)
 
+	resumeConvID := convID
+	resumeProvider := provider
 	loop := agent.Loop{
 		Skills: subRegistry,
 		BC:     recorder,
 		DB:     m.db,
+		OnUsage: func(ctx context.Context, p agent.ProviderConfig, usage agent.TokenUsage) {
+			m.recordTokenUsage(resumeConvID, resumeProvider, usage)
+		},
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	m.taskCancels.Store(taskRow.TaskID, cancel)
@@ -1650,6 +1660,33 @@ func newID(prefix string) string {
 
 func strPtr(v string) *string {
 	return &v
+}
+
+// recordTokenUsage persists one token usage event for a delegated agent run.
+// Non-fatal — failures are logged and silently swallowed.
+func (m *Module) recordTokenUsage(convID string, provider agent.ProviderConfig, usage agent.TokenUsage) {
+	if m.db == nil {
+		return
+	}
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
+		return
+	}
+	inputCost, outputCost, known := storage.ComputeCost(
+		string(provider.Type), provider.Model,
+		usage.InputTokens, usage.OutputTokens,
+	)
+	if !known {
+		logstore.Write("warn",
+			fmt.Sprintf("agent token usage: unknown pricing for model %q — cost recorded as $0", provider.Model),
+			map[string]string{"provider": string(provider.Type)})
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	id := newID("tu")
+	if err := m.db.RecordTokenUsage(id, convID, string(provider.Type), provider.Model,
+		usage.InputTokens, usage.OutputTokens, inputCost, outputCost, now,
+	); err != nil {
+		logstore.Write("warn", "agent token usage: failed to persist: "+err.Error(), nil)
+	}
 }
 
 func safeString(v *string) string {

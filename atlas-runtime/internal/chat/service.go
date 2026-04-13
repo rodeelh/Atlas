@@ -134,6 +134,11 @@ func NewService(db *storage.DB, cfgStore *config.Store, bc *Broadcaster, reg *sk
 	// Wire the async follow-up sender so async_assignment goroutines (agents module)
 	// can push task-completion messages back to the originating conversation.
 	AsyncFollowUpSender = s.SendProactive
+	// Wire the non-agentic usage hook so memory extraction, reflection, forge
+	// research, and other direct LLM calls are tracked alongside chat turns.
+	agent.NonAgenticUsageHook = func(ctx context.Context, provider agent.ProviderConfig, usage agent.TokenUsage) {
+		s.recordTokenUsage("", provider, usage)
+	}
 	return s
 }
 
@@ -1544,10 +1549,15 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		ToolPolicy:    req.ToolPolicy,
 	}
 
+	loopConvID := convID
+	loopProvider := provider
 	agentLoop := &agent.Loop{
 		Skills: s.registry,
 		BC:     &broadcasterEmitter{bc: s.broadcaster},
 		DB:     s.db,
+		OnUsage: func(ctx context.Context, p agent.ProviderConfig, usage agent.TokenUsage) {
+			s.recordTokenUsage(loopConvID, loopProvider, usage)
+		},
 	}
 
 	toolCount := len(selectedTools)
@@ -1585,9 +1595,6 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 	agentCtx = WithOriginConvID(agentCtx, convID)
 	turnStart := time.Now()
 	result := agentLoop.Run(agentCtx, loopCfg, oaiMessages, convID)
-
-	// Record token usage for this turn.
-	s.recordTokenUsage(convID, provider, result.TotalUsage)
 
 	// Reset idle timers after each turn so the active model isn't ejected mid-session.
 	switch provider.Type {
@@ -2071,10 +2078,15 @@ func (s *Service) Resume(toolCallID string, approved bool) {
 		ConvID:        convID,
 	}
 
+	resumeConvID := convID
+	resumeProvider := provider
 	agentLoop := &agent.Loop{
 		Skills: s.registry,
 		BC:     &broadcasterEmitter{bc: s.broadcaster},
 		DB:     s.db,
+		OnUsage: func(ctx context.Context, p agent.ProviderConfig, usage agent.TokenUsage) {
+			s.recordTokenUsage(resumeConvID, resumeProvider, usage)
+		},
 	}
 
 	// Emit assistant_started so the web UI opens a new bubble for the resumed turn.
@@ -2085,9 +2097,6 @@ func (s *Service) Resume(toolCallID string, approved bool) {
 
 	resumeStart := time.Now()
 	result := agentLoop.Run(ctx, loopCfg, messages, convID)
-
-	// Record token usage for this resumed turn.
-	s.recordTokenUsage(convID, provider, result.TotalUsage)
 
 	if result.Status == "complete" && result.FinalText != "" {
 		replyAt := time.Now().UTC().Format(time.RFC3339Nano)

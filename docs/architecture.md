@@ -682,6 +682,7 @@ All endpoints return `409 Conflict` when `ThoughtsEnabled: false`.
 | `team_tasks` | Atlas Teams — delegated task records with status and result |
 | `team_task_steps` | Atlas Teams — sub-agent message log per task (system/user/assistant/tool) |
 | `team_events` | Atlas Teams — activity log powering Team HQ activity rail |
+| `token_usage` | Token consumption and cost per LLM call — covers chat turns, delegated agent runs, and background system calls (memory extraction, reflection, forge research, classifier) |
 
 **JSON files** — `~/Library/Application Support/ProjectAtlas/`
 
