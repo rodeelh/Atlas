@@ -233,14 +233,18 @@ func (m *Module) registerAgentActions() {
 			//   3. Structured plan: tasks with full DelegationTaskSpec fields
 			// agent.sequence is deprecated; always use this skill for delegation.
 			name: "team.delegate",
-			description: "Delegate work to one or more Atlas team specialists. " +
-				"Simple single: pass agentID + task. " +
-				"Sequence: if you plan to call team.delegate twice where step 2 depends on step 1's output " +
-				"(e.g. research → draft, draft → review, gather → summarize), " +
-				"submit BOTH steps as ONE call with pattern=\"sequence\" and tasks=[{agentId,task},{agentId,task}] " +
-				"instead of making two separate calls. The sequence pattern chains output automatically. " +
-				"Default executionMode is sync_assist (result returned in this turn). " +
-				"Use async_assignment only for background tasks the user wants to track separately.",
+			description: "Delegate work to one or more Atlas team specialists.\n\n" +
+				"SINGLE STEP: team.delegate(agentID=\"scout\", task=\"Research X\")\n\n" +
+				"MULTI-STEP (preferred when steps are dependent): When the task requires more than one specialist " +
+				"and step 2 depends on step 1's output, submit ALL steps in a single call using pattern=\"sequence\". " +
+				"Do not make multiple separate team.delegate calls in the same turn when the steps are known in advance.\n\n" +
+				"Example sequence:\n" +
+				"team.delegate(pattern=\"sequence\", tasks=[{agentId:\"scout\", task:\"Research top Go HTTP frameworks\"}, " +
+				"{agentId:\"builder\", task:\"Build a comparison table from the research\"}])\n\n" +
+				"Avoid:\n" +
+				"- Calling team.delegate twice in the same turn for dependent steps\n" +
+				"- Performing step 1, then deciding step 2 separately when both are already known\n\n" +
+				"executionMode: sync_assist (default, result returned this turn) or async_assignment (background, returns taskID).",
 			properties: map[string]skills.ToolParam{
 				"pattern": {Type: "string", Description: "single (default) or sequence. Use sequence when step 2 depends on step 1's output."},
 				"executionMode": {Type: "string", Description: "sync_assist (default, wait for result) or async_assignment (fire and forget, returns taskID)."},
@@ -740,6 +744,26 @@ func (m *Module) teamDelegate(ctx context.Context, args json.RawMessage) (skills
 	delegate := m.delegateFn
 	if delegate == nil {
 		delegate = m.delegateTask
+	}
+
+	// ── D5: sequence opportunity logging (debug only, no behavior change) ────
+	// When two single-pattern calls occur within 30 seconds, the model is likely
+	// making back-to-back delegations that could have been one sequence call.
+	if plan.Pattern == "single" {
+		now := time.Now()
+		const window = 30 * time.Second
+		if prev, ok := m.lastSingleDelegateAt.Load("single"); ok {
+			if now.Sub(prev.(time.Time)) < window {
+				logstore.Write("debug", "sequence opportunity detected: second single-pattern team.delegate within 30s — consider pattern=sequence if step 2 depends on step 1", map[string]string{
+					"pattern": "single",
+					"agent":   plan.Tasks[0].AgentID,
+				})
+			}
+		}
+		m.lastSingleDelegateAt.Store("single", now)
+	} else {
+		// Non-single call resets the window.
+		m.lastSingleDelegateAt.Delete("single")
 	}
 
 	// ── Route by pattern ──────────────────────────────────────────────────────

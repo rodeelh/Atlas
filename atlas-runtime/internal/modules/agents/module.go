@@ -34,8 +34,12 @@ type Module struct {
 	db               *storage.DB
 	delegateFn       func(context.Context, storage.AgentDefinitionRow, delegateArgs) (delegatedRun, error)
 	resumeDelegateFn func(context.Context, storage.AgentDefinitionRow, storage.AgentTaskRow, string, bool) (delegatedRun, error)
-	taskCancels      sync.Map
-	coordinator      *triggerCoordinator
+	taskCancels          sync.Map
+	coordinator          *triggerCoordinator
+	// lastSingleDelegateAt tracks the most recent single-pattern team.delegate call
+	// time. Used only for debug logging — logs a "sequence opportunity" when two
+	// single-pattern calls occur within the same turn window (≤30s). No behavior change.
+	lastSingleDelegateAt sync.Map // key: "single", value: time.Time
 }
 
 func New(supportDir string) *Module {
@@ -89,7 +93,7 @@ func (m *Module) rosterContextFromDB() string {
 	sb.WriteString("- Do NOT proactively activate on_demand members — only use them when the user explicitly requests it.\n")
 	sb.WriteString("- Default execution mode for proactive delegation: sync_assist (wait for the result and integrate it into your answer).\n")
 	sb.WriteString("- Use async_assignment only when the user wants background work with its own lifecycle.\n")
-	sb.WriteString("- Use pattern=sequence when step B depends on step A's output (e.g. research → draft, draft → review).\n")
+	sb.WriteString("- Use pattern=sequence when step B depends on step A's output (e.g. research → draft, draft → review). If you already know multiple steps are required, prefer a single team.delegate call with pattern=\"sequence\" over making two separate calls.\n")
 	sb.WriteString("- You remain the primary agent and final narrator. Integrate specialist results into your own answer.\n")
 	sb.WriteString("- Never claim a specialist did work unless team.delegate was called and returned a result this turn.\n")
 	sb.WriteString("\n")

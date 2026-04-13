@@ -2110,3 +2110,125 @@ func TestAgentCreate_SetsTemplateRole(t *testing.T) {
 		t.Errorf("expected TemplateRole=scout after create with role=Research Specialist, got %q", row.TemplateRole)
 	}
 }
+
+// ─── D1/D2/D3: sequence guidance in tool description ─────────────────────────
+
+// TestTeamDelegate_ToolDescription_SequenceGuidance verifies that the team.delegate
+// tool description contains the sequence preference framing, the canonical example,
+// and the anti-pattern guidance. These are the prompt-level signals that nudge the
+// model toward pattern=sequence for multi-step dependent work.
+func TestTeamDelegate_ToolDescription_SequenceGuidance(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	host := platform.NewHost(
+		stubConfig{},
+		platform.NewSQLiteStorage(db),
+		stubAgentRuntime{},
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(8),
+	)
+	module := New(dir)
+	registry := skills.NewRegistry(dir, db, nil)
+	module.SetSkillRegistry(registry)
+	module.SetDatabase(db)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	// Retrieve the tool definition for team.delegate.
+	// The registry aliases team.* → agent.* (publicByAction), so ToolDefinitions()
+	// returns the tool with name "agent__delegate" (OAI wire encoding of "agent.delegate").
+	var delegateDesc string
+	for _, def := range registry.ToolDefinitions() {
+		fn, _ := def["function"].(map[string]any)
+		name, _ := fn["name"].(string)
+		if name == "agent__delegate" || name == "agent.delegate" ||
+			name == "team__delegate" || name == "team.delegate" {
+			delegateDesc, _ = fn["description"].(string)
+			break
+		}
+	}
+	if delegateDesc == "" {
+		t.Fatal("team.delegate tool definition not found in registry")
+	}
+
+	// D1: sequence framed as preferred path for multi-step work.
+	mustContain := []struct {
+		label string
+		text  string
+	}{
+		{"D1: multi-step preferred framing", "requires more than one specialist"},
+		{"D1: single-call instruction",      "submit ALL steps in a single call"},
+		{"D1: avoid separate calls",         "not make multiple separate team.delegate calls"},
+		{"D2: canonical example agentId",    "agentId"},
+		{"D2: canonical example pattern",    "pattern="},
+		{"D3: anti-pattern calling twice",   "Calling team.delegate twice"},
+		{"D3: anti-pattern step 2 separate", "step 2 separately"},
+	}
+	for _, tc := range mustContain {
+		if !strings.Contains(delegateDesc, tc.text) {
+			t.Errorf("%s: description does not contain %q\ndescription:\n%s", tc.label, tc.text, delegateDesc)
+		}
+	}
+}
+
+// TestTeamDelegate_SingleDelegation_Unaffected verifies that single-agent
+// delegation still works correctly after the description change (no regression).
+func TestTeamDelegate_SingleDelegation_Unaffected(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	host := platform.NewHost(
+		stubConfig{},
+		platform.NewSQLiteStorage(db),
+		stubAgentRuntime{},
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(8),
+	)
+	module := New(dir)
+	registry := skills.NewRegistry(dir, db, nil)
+	module.SetSkillRegistry(registry)
+	module.SetDatabase(db)
+
+	called := false
+	module.delegateFn = func(_ context.Context, def storage.AgentDefinitionRow, args delegateArgs) (delegatedRun, error) {
+		called = true
+		now := "2026-04-13T10:00:00Z"
+		return delegatedRun{Task: storage.AgentTaskRow{
+			TaskID: "t1", AgentID: def.ID, Status: "completed",
+			StartedAt: now, CreatedAt: now, UpdatedAt: now,
+		}}, nil
+	}
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	now := "2026-04-13T10:00:00Z"
+	if err := db.SaveAgentDefinition(storage.AgentDefinitionRow{
+		ID: "scout", Name: "Scout", Role: "Research Specialist",
+		Mission: "Find facts", AllowedSkillsJSON: `["websearch"]`,
+		Autonomy: "assistive", IsEnabled: true, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("SaveAgentDefinition: %v", err)
+	}
+
+	result, err := registry.Execute(context.Background(), "team.delegate", json.RawMessage(`{"agentID":"scout","task":"Quick research task"}`))
+	if err != nil {
+		t.Fatalf("team.delegate (single): %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("team.delegate (single) failed: %+v", result)
+	}
+	if !called {
+		t.Error("delegateFn should have been called for single delegation")
+	}
+}
