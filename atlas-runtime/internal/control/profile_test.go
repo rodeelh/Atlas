@@ -36,3 +36,23 @@ func TestExtractHTMLTitleReadsTitleTag(t *testing.T) {
 		t.Fatalf("unexpected title: %q", got)
 	}
 }
+
+func TestValidateExternalPreviewURLRejectsPrivateHosts(t *testing.T) {
+	tests := []string{
+		"http://127.0.0.1:8080",
+		"http://localhost:8080",
+		"http://10.0.0.5",
+		"http://169.254.169.254/latest/meta-data",
+	}
+	for _, rawURL := range tests {
+		if err := validateExternalPreviewURL(rawURL); err == nil {
+			t.Fatalf("expected %q to be rejected", rawURL)
+		}
+	}
+}
+
+func TestValidateExternalPreviewURLAllowsPublicHost(t *testing.T) {
+	if err := validateExternalPreviewURL("https://example.com/path"); err != nil {
+		t.Fatalf("expected public URL to pass validation: %v", err)
+	}
+}

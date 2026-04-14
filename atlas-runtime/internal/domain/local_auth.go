@@ -50,16 +50,29 @@ func NewLocalAuthDomain(authSvc *auth.Service, localAuth *auth.LocalAuthService)
 //   - Credential management routes (list, delete, PIN replace) require a valid
 //     local session enforced in-handler via requireLocalSession.
 func (d *LocalAuthDomain) RegisterPublic(r chi.Router) {
-	r.Get("/auth/local/status", d.handleStatus)
-	r.Post("/auth/local/webauthn/register/begin", d.handleWebAuthnRegisterBegin)
-	r.Post("/auth/local/webauthn/register/finish", d.handleWebAuthnRegisterFinish)
-	r.Post("/auth/local/webauthn/authenticate/begin", d.handleWebAuthnAuthBegin)
-	r.Post("/auth/local/webauthn/authenticate/finish", d.handleWebAuthnAuthFinish)
-	r.Post("/auth/local/pin/setup", d.handlePINSetup)
-	r.Post("/auth/local/pin/verify", d.handlePINVerify)
-	r.Get("/auth/local/credentials", d.handleListCredentials)
-	r.Delete("/auth/local/credentials/{id}", d.handleDeleteCredential)
-	r.Post("/auth/local/logout", d.handleLogout)
+	r.Group(func(local chi.Router) {
+		local.Use(d.requireLoopbackRequest)
+		local.Get("/auth/local/status", d.handleStatus)
+		local.Post("/auth/local/webauthn/register/begin", d.handleWebAuthnRegisterBegin)
+		local.Post("/auth/local/webauthn/register/finish", d.handleWebAuthnRegisterFinish)
+		local.Post("/auth/local/webauthn/authenticate/begin", d.handleWebAuthnAuthBegin)
+		local.Post("/auth/local/webauthn/authenticate/finish", d.handleWebAuthnAuthFinish)
+		local.Post("/auth/local/pin/setup", d.handlePINSetup)
+		local.Post("/auth/local/pin/verify", d.handlePINVerify)
+		local.Get("/auth/local/credentials", d.handleListCredentials)
+		local.Delete("/auth/local/credentials/{id}", d.handleDeleteCredential)
+		local.Post("/auth/local/logout", d.handleLogout)
+	})
+}
+
+func (d *LocalAuthDomain) requireLoopbackRequest(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !auth.IsLocalRequest(r) {
+			writeError(w, http.StatusForbidden, "Local authentication endpoints are only available on this Mac.")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requireLocalSession checks for a valid local session on the request.

@@ -1,9 +1,12 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -142,11 +145,19 @@ func (s *ProfileService) SetLocationFromCoords(lat, lon float64) (LocationRespon
 
 func (s *ProfileService) FetchLinkPreview(rawURL string) (LinkPreviewResult, error) {
 	result := LinkPreviewResult{URL: rawURL}
+	if err := validateExternalPreviewURL(rawURL); err != nil {
+		return result, err
+	}
+	transport := previewHTTPTransport()
 	client := &http.Client{
 		Timeout: 8 * time.Second,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return fmt.Errorf("too many redirects")
+			}
+			if err := validateExternalPreviewURL(req.URL.String()); err != nil {
+				return err
 			}
 			return nil
 		},
@@ -175,6 +186,78 @@ func (s *ProfileService) FetchLinkPreview(rawURL string) (LinkPreviewResult, err
 	}
 	result.ImageURL = extractHTMLMeta(html, "og:image")
 	return result, nil
+}
+
+func validateExternalPreviewURL(rawURL string) error {
+	if strings.TrimSpace(rawURL) == "" {
+		return fmt.Errorf("link preview url is required")
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid link preview url: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("link preview url scheme must be http or https")
+	}
+	host := strings.TrimSpace(u.Hostname())
+	if host == "" {
+		return fmt.Errorf("link preview url host is required")
+	}
+	lower := strings.ToLower(host)
+	if lower == "localhost" || lower == "localhost.localdomain" || strings.HasSuffix(lower, ".local") {
+		return fmt.Errorf("link preview url host must be public")
+	}
+	addrs, err := net.LookupIP(host)
+	if err != nil {
+		if ip := net.ParseIP(host); ip != nil {
+			addrs = []net.IP{ip}
+		} else {
+			return fmt.Errorf("link preview host lookup failed: %w", err)
+		}
+	}
+	for _, ip := range addrs {
+		if isUnsafePreviewIP(ip) {
+			return fmt.Errorf("link preview url host resolves to a non-public address")
+		}
+	}
+	return nil
+}
+
+func isUnsafePreviewIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+		return true
+	}
+	return false
+}
+
+func previewHTTPTransport() *http.Transport {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		base = &http.Transport{}
+	}
+	transport := base.Clone()
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		for _, ip := range ips {
+			if isUnsafePreviewIP(ip.IP) {
+				return nil, fmt.Errorf("link preview target resolves to a non-public address")
+			}
+		}
+		return dialer.DialContext(ctx, network, net.JoinHostPort(host, port))
+	}
+	return transport
 }
 
 func locationToResponse(loc location.Info) LocationResponse {
