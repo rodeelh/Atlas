@@ -472,16 +472,10 @@ export function Team() {
           <p>{snapshot?.atlas.role ?? 'Coordinator'}</p>
         </div>
         <div class="team-kpi-row">
-          <TeamKPI label="Agents" value={String(snapshot?.agents.length ?? 0)} />
+          <TeamKPI label="Agents"  value={String(snapshot?.agents.length ?? 0)} />
           <TeamKPI label="Running" value={String(runningTasks)} tone={runningTasks > 0 ? 'blue' : undefined} />
           <TeamKPI label="Blocked" value={String(blockedItems.length)} tone={blockedItems.length > 0 ? 'amber' : undefined} />
           <TeamKPI label="Activity" value={String(events.length)} />
-          {(() => { const k = snapshot?.kpis; return k && (k.totalTasksCompleted + k.totalTasksFailed) > 0 })() && (
-            <>
-              <TeamKPI label="Tasks Done" value={String(snapshot?.kpis?.totalTasksCompleted ?? 0)} tone="blue" />
-              <TeamKPI label="Tool Calls" value={String(snapshot?.kpis?.totalToolCalls ?? 0)} />
-            </>
-          )}
         </div>
 
         {/* Suggested Actions — only rendered when non-empty */}
@@ -536,7 +530,13 @@ export function Team() {
                 const agentTasks = tasks.filter((t) => t.agentID === agent.id).slice(0, 4)
                 return (
                   <div key={agent.id} class="team-agent-card-wrap">
-                    <div class={`team-agent-card${isExpanded ? ' expanded' : ''}`}>
+                    <div class={`team-agent-card${isExpanded ? ' expanded' : ''}${assignAgentID === agent.id ? ' assigning' : ''}`}>
+                      <button
+                        class="team-agent-delete-btn"
+                        disabled={!!acting[`delete:${agent.id}`] || agent.runtime.status === 'working' || agent.runtime.status === 'busy'}
+                        onClick={() => setAgentPendingDelete(agent)}
+                        aria-label={`Delete ${agent.name}`}
+                      >✕</button>
                       <div class="team-agent-card-top">
                         <div>
                           <div class="team-agent-name">{agent.name}</div>
@@ -551,17 +551,17 @@ export function Team() {
                         <span>{formatRelative(agent.runtime.lastActiveAt ?? agent.runtime.updatedAt)}</span>
                       </div>
                       <div class="team-agent-card-footer">
-                        <div class="team-agent-actions">
+                        <div class="team-agent-actions-left">
                           <button
-                            class="btn btn-sm"
-                            disabled={!!acting[busyKey]}
-                            onClick={() => void runAction(
-                              busyKey,
-                              () => agent.enabled ? api.disableTeamAgent(agent.id) : api.enableTeamAgent(agent.id),
-                              agent.enabled ? `${agent.name} disabled` : `${agent.name} enabled`,
-                            )}
+                            class="btn btn-sm btn-primary"
+                            disabled={!agent.enabled || agent.runtime.status === 'working' || agent.runtime.status === 'busy'}
+                            onClick={() => {
+                              const opening = assignAgentID !== agent.id
+                              setAssignAgentID(opening ? agent.id : null)
+                              if (opening) setExpandedAgentID(null)
+                            }}
                           >
-                            {agent.enabled ? 'Disable' : 'Enable'}
+                            Assign
                           </button>
                           <button
                             class="btn btn-sm"
@@ -576,22 +576,23 @@ export function Team() {
                           </button>
                           <button
                             class="btn btn-sm"
-                            disabled={!agent.enabled || agent.runtime.status === 'working' || agent.runtime.status === 'busy'}
-                            onClick={() => setAssignAgentID(assignAgentID === agent.id ? null : agent.id)}
+                            disabled={!!acting[busyKey]}
+                            onClick={() => void runAction(
+                              busyKey,
+                              () => agent.enabled ? api.disableTeamAgent(agent.id) : api.enableTeamAgent(agent.id),
+                              agent.enabled ? `${agent.name} disabled` : `${agent.name} enabled`,
+                            )}
                           >
-                            Assign Task
-                          </button>
-                          <button
-                            class="btn btn-sm"
-                            disabled={!!acting[`delete:${agent.id}`] || agent.runtime.status === 'working' || agent.runtime.status === 'busy'}
-                            onClick={() => setAgentPendingDelete(agent)}
-                          >
-                            Delete
+                            {agent.enabled ? 'Disable' : 'Enable'}
                           </button>
                         </div>
                         <button
-                          class="team-agent-details-btn"
-                          onClick={() => setExpandedAgentID(isExpanded ? null : agent.id)}
+                          class="btn btn-sm"
+                          onClick={() => {
+                            const opening = !isExpanded
+                            setExpandedAgentID(opening ? agent.id : null)
+                            if (opening) { setAssignAgentID(null); setAssignTaskText(''); setAssignGoal('') }
+                          }}
                           aria-expanded={isExpanded}
                         >
                           Details <ChevronIcon open={isExpanded} />

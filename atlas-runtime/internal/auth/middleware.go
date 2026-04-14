@@ -17,17 +17,17 @@ func init() {
 }
 
 // RequireSession is a chi middleware that enforces the Atlas session model:
-//   - Requests from localhost — bypass auth (native macOS app AND local browsers).
+//   - Requests from localhost require a valid local session (WebAuthn / PIN).
+//     If no credentials are configured yet, the request is passed through so the
+//     web UI can render the setup flow. If credentials are configured but the session
+//     is missing or expired, the request returns 401.
 //   - Requests from a Tailscale IP when tailscaleEnabled() — bypass auth entirely.
-//     Tailscale's cryptographic device identity is the trust mechanism; no Atlas token needed.
-//   - All other remote requests (LAN) require an Atlas remote session via /auth/remote-gate.
+//     Tailscale's cryptographic device identity is the trust mechanism.
+//   - All other remote requests (LAN) require an Atlas remote session (API key + PIN).
 //
 // NOTE: browsers omit the Origin header on same-origin GET requests but SEND it
-// on POST requests (even same-origin). Previously this bypass only fired when
-// Origin was empty, which silently broke every POST from a localhost browser
-// after its bootstrap cookie expired. We now bypass on any localhost-hosted
-// request whose Origin is either empty or also localhost. Remote LAN requests
-// still fall through to session validation because their Host is non-local.
+// on POST requests (even same-origin). We check both empty and localhost Origin
+// values to handle both cases correctly.
 func RequireSession(svc *Service, tailscaleEnabled func() bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -42,11 +42,22 @@ func RequireSession(svc *Service, tailscaleEnabled func() bool) func(http.Handle
 				return
 			}
 
-			// Native client or same-origin local browser — bypass auth.
-			// Accepts: empty Origin (native URLSession / browser GET) OR
-			// an Origin that is itself a localhost URL (browser POST).
+			// Local machine requests require a valid local session.
+			// If no credentials are configured yet, pass through so the web UI can
+			// render the setup flow (GET /auth/local/status drives this decision).
 			if isLocalReq && (origin == "" || isLocalhostOrigin(origin)) {
-				next.ServeHTTP(w, r)
+				if !svc.HasLocalCredentials() {
+					// Not yet configured — let the web UI show the setup screen.
+					next.ServeHTTP(w, r)
+					return
+				}
+				sessionID := SessionIDFromCookie(r.Header.Get("Cookie"))
+				if svc.ValidateLocalSession(sessionID) {
+					next.ServeHTTP(w, r)
+					return
+				}
+				writeError(w, http.StatusUnauthorized,
+					"Local authentication required. Open Atlas in your browser to sign in.")
 				return
 			}
 

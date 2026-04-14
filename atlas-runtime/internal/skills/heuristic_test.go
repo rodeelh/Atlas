@@ -3,6 +3,8 @@ package skills
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -87,6 +89,213 @@ func TestSelectiveToolDefsIncludesPDFToolForCreatePDFRequest(t *testing.T) {
 
 	if !hasToolName(tools, "fs__create_pdf") {
 		t.Fatalf("expected fs.create_pdf to be selected, got %v", names)
+	}
+}
+
+func TestSelectiveToolDefsIncludesTeamToolsForAgentManagementRequest(t *testing.T) {
+	registry := NewRegistry(t.TempDir(), nil, nil)
+	registry.RegisterExternal(SkillEntry{
+		Def: ToolDef{
+			Name:        "team.list",
+			Description: "List Atlas agents.",
+			Properties:  map[string]ToolParam{},
+		},
+		ActionClass: ActionClassRead,
+		FnResult: func(context.Context, json.RawMessage) (ToolResult, error) {
+			return OKResult("ok", nil), nil
+		},
+	})
+
+	tools := registry.SelectiveToolDefs("Delete all agents.")
+	names := toolNames(tools)
+
+	if !hasToolName(tools, "agent__list") {
+		t.Fatalf("expected agent.list public tool to be selected, got %v", names)
+	}
+}
+
+func TestRegistryNormaliseResolvesAgentAliasToTeamAction(t *testing.T) {
+	registry := NewRegistry(t.TempDir(), nil, nil)
+	registry.RegisterExternal(SkillEntry{
+		Def: ToolDef{
+			Name:        "team.create",
+			Description: "Create Atlas agents.",
+			Properties:  map[string]ToolParam{},
+		},
+		ActionClass: ActionClassLocalWrite,
+		FnResult: func(context.Context, json.RawMessage) (ToolResult, error) {
+			return OKResult("ok", nil), nil
+		},
+	})
+	registry.registerActionAlias("team.create", "agent.create")
+
+	if got := registry.Normalise("agent.create"); got != "team.create" {
+		t.Fatalf("Normalise(agent.create)=%q want team.create", got)
+	}
+
+	tools := registry.ToolDefinitions()
+	if !hasToolName(tools, "agent__create") {
+		t.Fatalf("expected public alias tool name agent__create, got %v", toolNames(tools))
+	}
+}
+
+func TestSelectiveToolDefsIncludesCustomSkillViaDeclaredRoutingContract(t *testing.T) {
+	supportDir := t.TempDir()
+	skillDir := filepath.Join(supportDir, "skills", "ticket-helper")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manifest := `{
+		"id":"ticket-helper",
+		"name":"Ticket Helper",
+		"description":"Manage support tickets.",
+		"category":"productivity",
+		"routing":{
+			"capability_group":"tickets",
+			"description":"Support ticket management and cleanup.",
+			"phrases":["close stale tickets"],
+			"words":["tickets"],
+			"pairs":[["close","tickets"]],
+			"threshold":1
+		},
+		"actions":[
+			{
+				"name":"close_stale",
+				"description":"Close stale tickets.",
+				"permission_level":"execute"
+			}
+		]
+	}`
+	if err := os.WriteFile(filepath.Join(skillDir, "skill.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("Write skill.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "run"), []byte("#!/bin/sh\nprintf '{\"success\":true,\"output\":\"ok\"}\\n'\n"), 0o755); err != nil {
+		t.Fatalf("Write run: %v", err)
+	}
+
+	registry := NewRegistry(supportDir, nil, nil)
+	registry.LoadCustomSkills(supportDir)
+
+	tools := registry.SelectiveToolDefs("Please close stale tickets.")
+	names := toolNames(tools)
+
+	if !hasToolName(tools, "ticket-helper__close_stale") {
+		t.Fatalf("expected custom routed skill to be selected, got %v", names)
+	}
+}
+
+// ─── Phase B1: team work-routing heuristic ───────────────────────────────────
+
+// TestSelectiveToolDefs_TeamWorkRoutingPhrases verifies that work-routing
+// phrases ("use a specialist", "ask scout", "have the team", etc.) activate
+// the "team" group and expose team tools (Phase B1).
+//
+// Note: team.delegate is registered with canonical name "team.delegate" but
+// the registry creates a public alias "agent.delegate" for it (OAI wire:
+// "agent__delegate"). That is the name to check in SelectiveToolDefs output.
+func TestSelectiveToolDefs_TeamWorkRoutingPhrases(t *testing.T) {
+	phrases := []string{
+		"use a specialist for this",
+		"have a specialist handle it",
+		"ask a specialist to do this",
+		"use the team",
+		"have the team review this",
+		"delegate this",
+		"send this to my team",
+		"let scout handle the research",
+		"ask scout to find pricing data",
+		"have scout look into this",
+		"use the reviewer",
+		"ask the reviewer to check",
+		"let a teammate take this",
+	}
+	for _, phrase := range phrases {
+		t.Run(phrase, func(t *testing.T) {
+			reg := NewRegistry(t.TempDir(), nil, nil)
+			reg.RegisterExternal(SkillEntry{
+				Def: ToolDef{
+					Name:        "team.delegate",
+					Description: "Delegate work to a team specialist.",
+					Properties:  map[string]ToolParam{},
+				},
+				ActionClass: ActionClassLocalWrite,
+				FnResult: func(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+					return OKResult("ok", nil), nil
+				},
+			})
+			tools := reg.SelectiveToolDefs(phrase)
+			// team.delegate's public OAI name is agent__delegate (alias registered by registry.register).
+			if !hasToolName(tools, "agent__delegate") {
+				t.Errorf("phrase %q: expected team.delegate (agent__delegate) in tool set, got %v", phrase, toolNames(tools))
+			}
+		})
+	}
+}
+
+// TestSelectiveToolDefs_TeamControlPhrasesStillWork verifies that existing
+// team-control phrases (e.g. "show my team", "list agents") still activate
+// the "team" group (regression guard for B1 — must not break existing signals).
+// Uses team.list (team.* namespace) which the routing contract maps to "team".
+func TestSelectiveToolDefs_TeamControlPhrasesStillWork(t *testing.T) {
+	phrases := []string{
+		"list my agents",
+		"list all agents",
+		"manage team members",
+	}
+	for _, phrase := range phrases {
+		t.Run(phrase, func(t *testing.T) {
+			reg := NewRegistry(t.TempDir(), nil, nil)
+			reg.RegisterExternal(SkillEntry{
+				Def: ToolDef{
+					Name:        "team.list",
+					Description: "List all team members.",
+					Properties:  map[string]ToolParam{},
+				},
+				ActionClass: ActionClassRead,
+				FnResult: func(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+					return OKResult("ok", nil), nil
+				},
+			})
+			tools := reg.SelectiveToolDefs(phrase)
+			// team.list's public OAI alias is agent__list.
+			if !hasToolName(tools, "agent__list") {
+				t.Errorf("phrase %q: expected team.list (agent__list) in tool set, got %v", phrase, toolNames(tools))
+			}
+		})
+	}
+}
+
+// TestSelectiveToolDefs_TeamFalsePositivesControlled verifies that generic
+// work vocabulary that should NOT activate team tools does not do so.
+// The B1 signals require explicit specialist/team/delegate framing.
+func TestSelectiveToolDefs_TeamFalsePositivesControlled(t *testing.T) {
+	phrases := []string{
+		"what is the weather today",
+		"search the web for golang tutorials",
+		"read my files",
+		"help me write an email",
+		"what time is it",
+	}
+	for _, phrase := range phrases {
+		t.Run(phrase, func(t *testing.T) {
+			reg := NewRegistry(t.TempDir(), nil, nil)
+			reg.RegisterExternal(SkillEntry{
+				Def: ToolDef{
+					Name:        "team.delegate",
+					Description: "Delegate work to a team specialist.",
+					Properties:  map[string]ToolParam{},
+				},
+				ActionClass: ActionClassLocalWrite,
+				FnResult: func(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+					return OKResult("ok", nil), nil
+				},
+			})
+			tools := reg.SelectiveToolDefs(phrase)
+			// team.delegate's public OAI name is agent__delegate — check that too.
+			if hasToolName(tools, "agent__delegate") {
+				t.Errorf("phrase %q: team.delegate (agent__delegate) should NOT be in tool set for generic phrase, got %v", phrase, toolNames(tools))
+			}
+		})
 	}
 }
 

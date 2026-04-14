@@ -28,6 +28,7 @@ import (
 func (r *Registry) LoadCustomSkills(supportDir string) {
 	manifests := customskills.ListManifests(supportDir)
 	for _, manifest := range manifests {
+		r.registerCustomRouting(manifest)
 		runPath := filepath.Join(manifest.SkillDir, "run")
 		count := 0
 		for _, action := range manifest.Actions {
@@ -50,6 +51,7 @@ func (r *Registry) ReloadCustomSkill(supportDir, skillID string) {
 		if manifest.ID != skillID {
 			continue
 		}
+		r.registerCustomRouting(manifest)
 		runPath := filepath.Join(manifest.SkillDir, "run")
 		for _, action := range manifest.Actions {
 			r.registerCustomAction(manifest, action, manifest.SkillDir, runPath)
@@ -67,6 +69,9 @@ func (r *Registry) ReloadCustomSkill(supportDir, skillID string) {
 func (r *Registry) registerCustomAction(manifest customskills.CustomSkillManifest, action customskills.CustomSkillAction, skillDir, runPath string) {
 	actionID := manifest.ID + "." + action.Name
 	ac := parseActionClass(action.ActionClass, action.PermLevel)
+	if manifest.Routing != nil && strings.TrimSpace(manifest.Routing.CapabilityGroup) != "" {
+		r.groupByAction[actionID] = strings.ToLower(strings.TrimSpace(manifest.Routing.CapabilityGroup))
+	}
 
 	def := ToolDef{
 		Name:        actionID,
@@ -96,6 +101,50 @@ func (r *Registry) registerCustomAction(manifest customskills.CustomSkillManifes
 			return callCustomSkill(ctx, runPath, skillDir, actionName, args)
 		},
 	})
+}
+
+func (r *Registry) registerCustomRouting(manifest customskills.CustomSkillManifest) {
+	if manifest.Routing == nil {
+		return
+	}
+	group := strings.ToLower(strings.TrimSpace(manifest.Routing.CapabilityGroup))
+	if group == "" {
+		return
+	}
+	if desc := strings.TrimSpace(manifest.Routing.Description); desc != "" {
+		r.groupDescs[group] = desc
+	}
+	merged := r.groupSignals[group]
+	merged.phrases = append(merged.phrases, manifest.Routing.Phrases...)
+	merged.words = append(merged.words, manifest.Routing.Words...)
+	for _, pair := range manifest.Routing.Pairs {
+		if len(pair) != 2 {
+			continue
+		}
+		merged.pairs = append(merged.pairs, [2]string{strings.ToLower(strings.TrimSpace(pair[0])), strings.ToLower(strings.TrimSpace(pair[1]))})
+	}
+	r.groupSignals[group] = merged
+	if manifest.Routing.Threshold > 0 {
+		current, ok := r.groupThreshold[group]
+		if !ok || manifest.Routing.Threshold < current {
+			r.groupThreshold[group] = manifest.Routing.Threshold
+		}
+	}
+}
+
+func (r *Registry) scoreGroups(message string) map[string]int {
+	signals := make(map[string]groupSignals, len(intentSignals)+len(r.groupSignals))
+	for group, sig := range intentSignals {
+		signals[group] = sig
+	}
+	for group, sig := range r.groupSignals {
+		merged := signals[group]
+		merged.phrases = append(merged.phrases, sig.phrases...)
+		merged.words = append(merged.words, sig.words...)
+		merged.pairs = append(merged.pairs, sig.pairs...)
+		signals[group] = merged
+	}
+	return scoreGroupsWithSignals(message, signals)
 }
 
 // parseActionClass converts the action_class string from skill.json to an ActionClass constant.

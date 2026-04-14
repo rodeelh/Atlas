@@ -10,7 +10,6 @@ It handles chat, memory, automations, skills, approvals, browser control, Telegr
 Project Atlas/
 ├── Atlas/
 │   ├── atlas-runtime/      ← Go runtime (port 1984)
-│   ├── atlas-tui/          ← Bubbletea terminal client
 │   ├── atlas-web/          ← Preact + TypeScript web UI
 │   └── docs/               ← Architecture and API reference
 ├── archive/

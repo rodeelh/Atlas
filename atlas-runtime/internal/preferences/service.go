@@ -83,12 +83,18 @@ func UnitSystem() string {
 	mu.RLock()
 	defer mu.RUnlock()
 	if current.UnitSystem == "" {
+		// Last-resort fallback — LoadFromConfig should have resolved this from
+		// the OS locale, but if not, default to metric (international standard).
 		return "metric"
 	}
 	return current.UnitSystem
 }
 
 // LoadFromConfig reads persisted preferences from GoRuntimeConfig into memory.
+// If no persisted preferences are found, it falls back to the macOS system
+// locale (AppleMeasurementUnits / AppleTemperatureUnit) so that the correct
+// unit system is available immediately, before the async IP-geolocation
+// inference has had a chance to run.
 func LoadFromConfig() {
 	cfg := config.LoadGoConfig()
 	p := Prefs{
@@ -112,6 +118,21 @@ func LoadFromConfig() {
 		}
 		if kp.Initialized {
 			p.Initialized = true
+		}
+	}
+	// If any measurement fields are still unresolved, read the macOS system
+	// locale. This gives the correct default from the very first request,
+	// without waiting for the async IP-geolocation call. We deliberately do
+	// NOT set p.Initialized here so that the subsequent country-based
+	// inference (InferFromCountry, called after DetectFromIP) can still
+	// refine the values if the OS locale and physical location differ.
+	if p.UnitSystem == "" || p.TemperatureUnit == "" {
+		osUnit, osTemp := inferFromOSLocale()
+		if p.UnitSystem == "" {
+			p.UnitSystem = osUnit
+		}
+		if p.TemperatureUnit == "" {
+			p.TemperatureUnit = osTemp
 		}
 	}
 	mu.Lock()
@@ -190,6 +211,115 @@ func saveToKeychain(p Prefs) error {
 	}
 	_, err = execSecurity("add-generic-password", "-U", "-s", "com.projectatlas.preferences", "-a", "locale", "-w", string(data))
 	return err
+}
+
+// inferFromOSLocale reads macOS system preferences to determine the user's
+// preferred unit system and temperature unit. It returns empty strings when
+// the values cannot be determined (non-macOS, permission denied, etc.).
+//
+// Lookup order:
+//  1. AppleMeasurementUnits / AppleTemperatureUnit — written only when the
+//     user has explicitly overridden their locale default (e.g. a US user
+//     switching to metric). Values: "Inches"/"Centimeters", "Fahrenheit"/"Celsius".
+//  2. AppleLocale (e.g. "en_US", "ar_SA") — always present; the country code
+//     suffix determines the conventional unit system for that locale.
+//
+// We deliberately do NOT set Initialized=true so that a subsequent
+// InferFromCountry call (after IP geolocation) can still refine the values.
+func inferFromOSLocale() (unitSystem, tempUnit string) {
+	// 1. Explicit overrides (only written when user changes from locale default).
+	if out, err := execCommand("defaults", "read", "NSGlobalDomain", "AppleMeasurementUnits"); err == nil {
+		switch strings.TrimSpace(out) {
+		case "Inches":
+			unitSystem = "imperial"
+		case "Centimeters":
+			unitSystem = "metric"
+		}
+	}
+	if out, err := execCommand("defaults", "read", "NSGlobalDomain", "AppleTemperatureUnit"); err == nil {
+		switch strings.TrimSpace(out) {
+		case "Fahrenheit":
+			tempUnit = "fahrenheit"
+		case "Celsius":
+			tempUnit = "celsius"
+		}
+	}
+
+	// 2. Fall back to locale if still unresolved.  AppleLocale is virtually
+	//    always present (set during macOS setup).  Format: "language_COUNTRY".
+	if unitSystem == "" || tempUnit == "" {
+		if locale, err := execCommand("defaults", "read", "NSGlobalDomain", "AppleLocale"); err == nil {
+			localeUnit, localeTempUnit := unitSystemFromLocale(strings.TrimSpace(locale))
+			if unitSystem == "" {
+				unitSystem = localeUnit
+			}
+			if tempUnit == "" {
+				tempUnit = localeTempUnit
+			}
+		}
+	}
+	return
+}
+
+// unitSystemFromLocale derives the conventional unit system and temperature
+// unit from an Apple locale string (e.g. "en_US", "ar_SA", "en_GB").
+// The country suffix is the authoritative part; the language prefix is ignored.
+func unitSystemFromLocale(locale string) (unitSystem, tempUnit string) {
+	// Extract the country code: "en_US" → "US", "ar_SA" → "SA".
+	// Also handles "en-US" (hyphen) and bare codes like "US".
+	locale = strings.ReplaceAll(locale, "-", "_")
+	parts := strings.SplitN(locale, "_", 2)
+	country := ""
+	if len(parts) == 2 {
+		country = strings.ToUpper(parts[1])
+	} else {
+		country = strings.ToUpper(parts[0])
+	}
+
+	// Countries whose locale implies imperial measurements.
+	// Only the United States uses the US customary system for everyday measures.
+	// Myanmar and Liberia are formal non-metric countries but their Apple locale
+	// codes (MY, LR) are included for completeness.
+	imperialLocaleCodes := map[string]bool{
+		"US": true, // United States
+		"LR": true, // Liberia
+		"MM": true, // Myanmar
+	}
+	// Countries whose locale implies Fahrenheit.
+	fahrenheitLocaleCodes := map[string]bool{
+		"US": true, // United States
+		"BZ": true, // Belize
+		"KY": true, // Cayman Islands
+		"PW": true, // Palau
+		"MH": true, // Marshall Islands
+		"FM": true, // Micronesia
+		"BS": true, // Bahamas
+		"TC": true, // Turks and Caicos
+		"LR": true, // Liberia
+	}
+
+	if imperialLocaleCodes[country] {
+		unitSystem = "imperial"
+	} else {
+		unitSystem = "metric"
+	}
+	if fahrenheitLocaleCodes[country] {
+		tempUnit = "fahrenheit"
+	} else {
+		tempUnit = "celsius"
+	}
+	return
+}
+
+// execCommand runs a command and returns trimmed stdout, or an error.
+func execCommand(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 // fahrenheitCountries is the small set of countries that use °F.

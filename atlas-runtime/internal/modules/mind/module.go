@@ -37,13 +37,13 @@ type SkillsLister func() []mind.SkillLine
 
 // Module is the platform.Module implementation for mind-thoughts HTTP surface.
 type Module struct {
-	supportDir   string
-	db           *storage.DB
-	cfgStore     *config.Store
-	provider     ProviderResolver
-	skills       SkillsLister
-	telemetry    *telemetry.Emitter
-	dispatcher   *mind.Dispatcher
+	supportDir string
+	db         *storage.DB
+	cfgStore   *config.Store
+	provider   ProviderResolver
+	skills     SkillsLister
+	telemetry  *telemetry.Emitter
+	dispatcher *mind.Dispatcher
 }
 
 // New constructs a mind HTTP module. All dependencies are optional at
@@ -175,12 +175,12 @@ func (m *Module) readThoughts(w http.ResponseWriter, r *http.Request) {
 // seedThoughtRequest is the JSON body for POST /mind/thoughts/seed.
 // All fields are required except provenance and action.
 type seedThoughtRequest struct {
-	Body       string                  `json:"body"`
-	Confidence int                     `json:"confidence"`
-	Value      int                     `json:"value"`
-	Class      string                  `json:"class"`
-	Source     string                  `json:"source"`
-	Provenance string                  `json:"provenance,omitempty"`
+	Body       string                   `json:"body"`
+	Confidence int                      `json:"confidence"`
+	Value      int                      `json:"value"`
+	Class      string                   `json:"class"`
+	Source     string                   `json:"source"`
+	Provenance string                   `json:"provenance,omitempty"`
 	Action     *thoughts.ProposedAction `json:"action,omitempty"`
 }
 

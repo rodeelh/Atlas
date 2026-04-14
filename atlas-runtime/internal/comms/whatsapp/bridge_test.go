@@ -52,4 +52,3 @@ func TestIsAllowedSelfChat_RejectsGroup(t *testing.T) {
 		t.Fatal("expected group chat to be rejected")
 	}
 }
-

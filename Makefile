@@ -210,11 +210,16 @@ engine-update:
 	@rm -f "$$HOME/Library/Application Support/Atlas/engine/"*.dylib
 	@$(MAKE) download-engine LLAMA_VERSION=$(LLAMA_VERSION)
 
-install: build build-web download-engine download-voice
+install: build build-tui build-web download-engine download-voice
 	@echo "→ Installing runtime binary and web assets..."
 	@mkdir -p "$$HOME/Library/Application Support/Atlas"
 	cp $(RUNTIME_DIR)/$(BINARY) "$$HOME/Library/Application Support/Atlas/$(BINARY)"
 	rsync -a --delete $(WEB_DIR)/dist/ "$$HOME/Library/Application Support/Atlas/web/"
+	@echo "→ Installing TUI binary to ~/.local/bin..."
+	@mkdir -p "$$HOME/.local/bin"
+	cp $(TUI_DIR)/atlas-tui "$$HOME/.local/bin/atlas"
+	@echo "✓ TUI installed — run: atlas"
+	@echo "  (ensure ~/.local/bin is in your PATH)"
 	@echo "→ Creating log directory..."
 	@mkdir -p "$$HOME/Library/Logs/Atlas"
 	@echo "→ Installing plist..."
@@ -235,6 +240,7 @@ uninstall:
 	@echo "→ Removing installed files..."
 	@-rm -f "$$HOME/Library/Application Support/Atlas/$(BINARY)"
 	@-rm -rf "$$HOME/Library/Application Support/Atlas/web"
+	@-rm -f "$$HOME/.local/bin/atlas"
 	@echo "✓ Uninstalled (data in ~/Library/Application Support/ProjectAtlas preserved)"
 
 daemon-start:

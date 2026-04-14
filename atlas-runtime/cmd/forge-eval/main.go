@@ -31,9 +31,9 @@ import (
 // ── constants ─────────────────────────────────────────────────────────────────
 
 const (
-	defaultModel = "claude-sonnet-4-6"
-	caseTimeout  = 4 * time.Minute
-	betweenCases = 900 * time.Millisecond
+	defaultModel  = "claude-sonnet-4-6"
+	caseTimeout   = 4 * time.Minute
+	betweenCases  = 900 * time.Millisecond
 	passThreshold = 85
 )
 
@@ -127,7 +127,7 @@ func (p *anthropicProvider) CallNonStreaming(ctx context.Context, system, user s
 // Each call increments an internal counter: odd = draft, even = formalize.
 
 type stageRecord struct {
-	name     string        // "draft" | "formalize"
+	name     string // "draft" | "formalize"
 	duration time.Duration
 	err      error
 }
@@ -356,13 +356,27 @@ type scoreCard struct {
 
 func (sc scoreCard) Total() int {
 	pts := 0
-	if sc.ParseOK        { pts += 20 }
-	if sc.ActionIDMatch  { pts += 20 }
-	if sc.NoPlaceholders { pts += 15 }
-	if sc.AuthComplete   { pts += 15 }
-	if sc.SchemaComplete { pts += 15 }
-	if sc.RiskJustified  { pts += 10 }
-	if sc.URLsValid      { pts +=  5 }
+	if sc.ParseOK {
+		pts += 20
+	}
+	if sc.ActionIDMatch {
+		pts += 20
+	}
+	if sc.NoPlaceholders {
+		pts += 15
+	}
+	if sc.AuthComplete {
+		pts += 15
+	}
+	if sc.SchemaComplete {
+		pts += 15
+	}
+	if sc.RiskJustified {
+		pts += 10
+	}
+	if sc.URLsValid {
+		pts += 5
+	}
 	return pts
 }
 
@@ -491,13 +505,27 @@ func scoreProposal(p forge.ForgeProposal, tc testCase) scoreCard {
 
 	// ── 5. Schema completeness (15 pts) ──────────────────────────────────
 	missing := []string{}
-	if strings.TrimSpace(p.Name) == ""        { missing = append(missing, "name") }
-	if strings.TrimSpace(p.Description) == "" { missing = append(missing, "description") }
-	if strings.TrimSpace(p.Summary) == ""     { missing = append(missing, "summary") }
-	if strings.TrimSpace(spec.ID) == ""       { missing = append(missing, "spec.id") }
-	if strings.TrimSpace(spec.Category) == "" { missing = append(missing, "spec.category") }
-	if len(spec.Actions) == 0 { missing = append(missing, "spec.actions") }
-	if len(plans) == 0        { missing = append(missing, "plans") }
+	if strings.TrimSpace(p.Name) == "" {
+		missing = append(missing, "name")
+	}
+	if strings.TrimSpace(p.Description) == "" {
+		missing = append(missing, "description")
+	}
+	if strings.TrimSpace(p.Summary) == "" {
+		missing = append(missing, "summary")
+	}
+	if strings.TrimSpace(spec.ID) == "" {
+		missing = append(missing, "spec.id")
+	}
+	if strings.TrimSpace(spec.Category) == "" {
+		missing = append(missing, "spec.category")
+	}
+	if len(spec.Actions) == 0 {
+		missing = append(missing, "spec.actions")
+	}
+	if len(plans) == 0 {
+		missing = append(missing, "plans")
+	}
 
 	// Kind-appropriate plan type check — penalises wrong execution model.
 	switch tc.kind {
@@ -809,13 +837,27 @@ func printSummary(results []testResult) {
 		if sc.Pass() {
 			passed++
 		}
-		if !sc.ParseOK        { dimIdx["parse"].fail++ }
-		if !sc.ActionIDMatch  { dimIdx["actionID"].fail++ }
-		if !sc.NoPlaceholders { dimIdx["placeholder"].fail++ }
-		if !sc.AuthComplete   { dimIdx["auth"].fail++ }
-		if !sc.SchemaComplete { dimIdx["schema"].fail++ }
-		if !sc.RiskJustified  { dimIdx["risk"].fail++ }
-		if !sc.URLsValid      { dimIdx["urls"].fail++ }
+		if !sc.ParseOK {
+			dimIdx["parse"].fail++
+		}
+		if !sc.ActionIDMatch {
+			dimIdx["actionID"].fail++
+		}
+		if !sc.NoPlaceholders {
+			dimIdx["placeholder"].fail++
+		}
+		if !sc.AuthComplete {
+			dimIdx["auth"].fail++
+		}
+		if !sc.SchemaComplete {
+			dimIdx["schema"].fail++
+		}
+		if !sc.RiskJustified {
+			dimIdx["risk"].fail++
+		}
+		if !sc.URLsValid {
+			dimIdx["urls"].fail++
+		}
 
 		tier := r.Case.tier
 		if byTier[tier] == nil {

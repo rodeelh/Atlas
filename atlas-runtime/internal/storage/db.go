@@ -87,6 +87,7 @@ func (db *DB) migrate() error {
 			skill_id               TEXT,
 			tool_id                TEXT,
 			action_id              TEXT,
+			agent_id               TEXT,
 			tool_call_id           TEXT NOT NULL,
 			normalized_input_json  TEXT NOT NULL,
 			conversation_id        TEXT,
@@ -275,6 +276,90 @@ func (db *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_workflow_runs_started_at
 			ON workflow_runs(started_at DESC)`,
 
+		// agent_definitions — parsed AGENTS.md team member definitions.
+		`CREATE TABLE IF NOT EXISTS agent_definitions (
+			id                        TEXT PRIMARY KEY,
+			name                      TEXT NOT NULL,
+			role                      TEXT NOT NULL,
+			mission                   TEXT NOT NULL,
+			style                     TEXT NOT NULL DEFAULT '',
+			allowed_skills_json       TEXT NOT NULL DEFAULT '[]',
+			allowed_tool_classes_json TEXT NOT NULL DEFAULT '[]',
+			autonomy                  TEXT NOT NULL,
+			activation                TEXT NOT NULL DEFAULT '',
+			is_enabled                INTEGER NOT NULL DEFAULT 1,
+			created_at                TEXT NOT NULL,
+			updated_at                TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_definitions_name
+			ON agent_definitions(lower(name), id)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_definitions_enabled
+			ON agent_definitions(is_enabled)`,
+
+		// agent_runtime — live operational state for each configured team member.
+		`CREATE TABLE IF NOT EXISTS agent_runtime (
+			agent_id         TEXT PRIMARY KEY REFERENCES agent_definitions(id) ON DELETE CASCADE,
+			status           TEXT NOT NULL,
+			current_task_id  TEXT,
+			last_active_at   TEXT,
+			last_error       TEXT,
+			updated_at       TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_runtime_status
+			ON agent_runtime(status)`,
+
+		// agent_tasks — delegated sub-agent task records.
+		`CREATE TABLE IF NOT EXISTS agent_tasks (
+			task_id            TEXT PRIMARY KEY,
+			agent_id           TEXT NOT NULL,
+			status             TEXT NOT NULL,
+			goal               TEXT NOT NULL,
+			requested_by       TEXT NOT NULL DEFAULT 'atlas',
+			result_summary     TEXT,
+			error_message      TEXT,
+			conversation_id    TEXT,
+			started_at         TEXT NOT NULL,
+			finished_at        TEXT,
+			created_at         TEXT NOT NULL,
+			updated_at         TEXT NOT NULL,
+			iterations_used    INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_tasks_agent_id
+			ON agent_tasks(agent_id, started_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_tasks_status
+			ON agent_tasks(status, started_at DESC)`,
+
+		// agent_task_steps — sub-agent execution log for each delegated task.
+		`CREATE TABLE IF NOT EXISTS agent_task_steps (
+			step_id           TEXT PRIMARY KEY,
+			task_id           TEXT NOT NULL REFERENCES agent_tasks(task_id) ON DELETE CASCADE,
+			sequence_number   INTEGER NOT NULL,
+			role              TEXT NOT NULL,
+			step_type         TEXT NOT NULL,
+			content           TEXT NOT NULL,
+			tool_name         TEXT,
+			tool_call_id      TEXT,
+			created_at        TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_task_steps_task_id
+			ON agent_task_steps(task_id, sequence_number ASC)`,
+
+		// agent_events — agent activity feed and lifecycle log.
+		`CREATE TABLE IF NOT EXISTS agent_events (
+			event_id       TEXT PRIMARY KEY,
+			event_type     TEXT NOT NULL,
+			agent_id       TEXT,
+			task_id        TEXT,
+			title          TEXT NOT NULL,
+			detail         TEXT,
+			payload_json   TEXT NOT NULL DEFAULT '{}',
+			created_at     TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_events_created_at
+			ON agent_events(created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_events_agent_task
+			ON agent_events(agent_id, task_id, created_at DESC)`,
+
 		// browser_sessions — persists login cookies across Atlas restarts.
 		// cookies_json holds a JSON array of simplified cookie records.
 		// Sessions expire after 7 days of non-use.
@@ -350,6 +435,7 @@ func (db *DB) migrate() error {
 		`ALTER TABLE deferred_executions ADD COLUMN skill_id TEXT`,
 		`ALTER TABLE deferred_executions ADD COLUMN tool_id TEXT`,
 		`ALTER TABLE deferred_executions ADD COLUMN action_id TEXT`,
+		`ALTER TABLE deferred_executions ADD COLUMN agent_id TEXT`,
 		`ALTER TABLE deferred_executions ADD COLUMN conversation_id TEXT`,
 		`ALTER TABLE deferred_executions ADD COLUMN originating_message_id TEXT`,
 		`ALTER TABLE deferred_executions ADD COLUMN summary TEXT NOT NULL DEFAULT ''`,
@@ -431,6 +517,112 @@ func (db *DB) migrate() error {
 	for _, stmt := range alterWorkflowRuns {
 		db.conn.Exec(stmt) //nolint:errcheck
 	}
+	alterAgentDefinitions := []string{
+		`ALTER TABLE agent_definitions ADD COLUMN provider_type TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE agent_definitions ADD COLUMN model TEXT NOT NULL DEFAULT ''`,
+	}
+	for _, stmt := range alterAgentDefinitions {
+		db.conn.Exec(stmt) //nolint:errcheck
+	}
+	// agent_metrics table — created idempotently so it can be added to existing DBs.
+	db.conn.Exec(`CREATE TABLE IF NOT EXISTS agent_metrics (
+		agent_id          TEXT PRIMARY KEY REFERENCES agent_definitions(id) ON DELETE CASCADE,
+		tasks_completed   INTEGER NOT NULL DEFAULT 0,
+		tasks_failed      INTEGER NOT NULL DEFAULT 0,
+		total_tool_calls  INTEGER NOT NULL DEFAULT 0,
+		last_active_at    TEXT,
+		updated_at        TEXT NOT NULL
+	)`) //nolint:errcheck
+	// trigger_events — bounded autonomy trigger audit log.
+	db.conn.Exec(`CREATE TABLE IF NOT EXISTS trigger_events (
+		trigger_id    TEXT PRIMARY KEY,
+		trigger_type  TEXT NOT NULL,
+		agent_id      TEXT,
+		instruction   TEXT NOT NULL DEFAULT '',
+		status        TEXT NOT NULL DEFAULT 'pending',
+		fired_at      TEXT,
+		created_at    TEXT NOT NULL
+	)`) //nolint:errcheck
+	db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_trigger_events_created_at
+		ON trigger_events(created_at DESC)`) //nolint:errcheck
+	// trigger_cooldowns — prevents same (trigger_type, agent_id) firing more than once per window.
+	db.conn.Exec(`CREATE TABLE IF NOT EXISTS trigger_cooldowns (
+		cooldown_id  TEXT PRIMARY KEY,
+		trigger_type TEXT NOT NULL,
+		agent_id     TEXT NOT NULL,
+		fired_at     TEXT NOT NULL
+	)`) //nolint:errcheck
+	db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_trigger_cooldowns_lookup
+		ON trigger_cooldowns(trigger_type, agent_id, fired_at DESC)`) //nolint:errcheck
+	// Rename legacy team_* tables to agent_* tables if the old names still exist.
+	for _, rename := range []struct{ old, new string }{
+		{"team_tasks", "agent_tasks"},
+		{"team_task_steps", "agent_task_steps"},
+		{"team_events", "agent_events"},
+	} {
+		_, _ = db.conn.Exec(`ALTER TABLE ` + rename.old + ` RENAME TO ` + rename.new)
+	}
+	// Add iterations_used column to agent_tasks if upgrading from an older schema.
+	_, _ = db.conn.Exec(`ALTER TABLE agent_tasks ADD COLUMN iterations_used INTEGER NOT NULL DEFAULT 0`)
+
+	// ── Teams V1 Phase 1: additive schema columns ─────────────────────────────
+	// All ALTER TABLE statements below are idempotent — SQLite returns an error
+	// when a column already exists; we swallow those errors here.
+
+	// agent_definitions: add template_role and persona_style for V1 template contracts.
+	for _, stmt := range []string{
+		`ALTER TABLE agent_definitions ADD COLUMN template_role TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE agent_definitions ADD COLUMN persona_style TEXT NOT NULL DEFAULT ''`,
+	} {
+		db.conn.Exec(stmt) //nolint:errcheck
+	}
+
+	// agent_tasks: add structured task payload columns required by DelegationTaskSpec.
+	for _, stmt := range []string{
+		`ALTER TABLE agent_tasks ADD COLUMN title                TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE agent_tasks ADD COLUMN objective            TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE agent_tasks ADD COLUMN scope_json           TEXT NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE agent_tasks ADD COLUMN success_criteria_json TEXT NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE agent_tasks ADD COLUMN input_context_json   TEXT NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE agent_tasks ADD COLUMN expected_output_json TEXT NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE agent_tasks ADD COLUMN mode                 TEXT NOT NULL DEFAULT 'sync_assist'`,
+		`ALTER TABLE agent_tasks ADD COLUMN pattern              TEXT NOT NULL DEFAULT 'single'`,
+		`ALTER TABLE agent_tasks ADD COLUMN depends_on_json      TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE agent_tasks ADD COLUMN parent_turn_id       TEXT`,
+		`ALTER TABLE agent_tasks ADD COLUMN blocking_kind        TEXT`,
+		`ALTER TABLE agent_tasks ADD COLUMN blocking_detail      TEXT`,
+		`ALTER TABLE agent_tasks ADD COLUMN resume_token         TEXT`,
+	} {
+		db.conn.Exec(stmt) //nolint:errcheck
+	}
+
+	// delegation_task_results: new table for structured worker output.
+	// Keyed by task_id; one row per completed (or partially completed) task.
+	db.conn.Exec(`CREATE TABLE IF NOT EXISTS delegation_task_results (
+		task_id                   TEXT PRIMARY KEY,
+		output_type               TEXT NOT NULL DEFAULT 'summary',
+		summary                   TEXT NOT NULL DEFAULT '',
+		output_json               TEXT NOT NULL DEFAULT '{}',
+		artifacts_json            TEXT NOT NULL DEFAULT '[]',
+		risks_json                TEXT NOT NULL DEFAULT '[]',
+		blockers_json             TEXT NOT NULL DEFAULT '[]',
+		recommended_next_action   TEXT,
+		created_at                TEXT NOT NULL,
+		updated_at                TEXT NOT NULL
+	)`) //nolint:errcheck
+
+	// local_auth_credentials — stores WebAuthn public keys and bcrypt PIN hashes
+	// for local machine authentication. Idempotent.
+	db.conn.Exec(`CREATE TABLE IF NOT EXISTS local_auth_credentials (
+		id           TEXT PRIMARY KEY,
+		type         TEXT NOT NULL,
+		name         TEXT NOT NULL,
+		credential   TEXT,
+		pin_hash     TEXT,
+		created_at   TEXT NOT NULL,
+		last_used_at TEXT
+	)`) //nolint:errcheck
+
 	return nil
 }
 
@@ -754,6 +946,7 @@ type DeferredExecRow struct {
 	SkillID              *string
 	ToolID               *string
 	ActionID             *string
+	AgentID              *string
 	ToolCallID           string
 	NormalizedInputJSON  string
 	ConversationID       *string
@@ -770,7 +963,7 @@ type DeferredExecRow struct {
 	PreviewDiff          *string
 }
 
-const deferredCols = `deferred_id, source_type, skill_id, tool_id, action_id,
+const deferredCols = `deferred_id, source_type, skill_id, tool_id, action_id, agent_id,
 	tool_call_id, normalized_input_json, conversation_id, originating_message_id,
 	approval_id, summary, permission_level, risk_level, status, last_error,
 	result_json, created_at, updated_at, preview_diff`
@@ -778,7 +971,7 @@ const deferredCols = `deferred_id, source_type, skill_id, tool_id, action_id,
 func scanDeferredRow(row interface{ Scan(...any) error }) (*DeferredExecRow, error) {
 	var r DeferredExecRow
 	err := row.Scan(
-		&r.DeferredID, &r.SourceType, &r.SkillID, &r.ToolID, &r.ActionID,
+		&r.DeferredID, &r.SourceType, &r.SkillID, &r.ToolID, &r.ActionID, &r.AgentID,
 		&r.ToolCallID, &r.NormalizedInputJSON, &r.ConversationID, &r.OriginatingMessageID,
 		&r.ApprovalID, &r.Summary, &r.PermissionLevel, &r.RiskLevel, &r.Status, &r.LastError,
 		&r.ResultJSON, &r.CreatedAt, &r.UpdatedAt, &r.PreviewDiff,
@@ -793,17 +986,43 @@ func scanDeferredRow(row interface{ Scan(...any) error }) (*DeferredExecRow, err
 func (db *DB) SaveDeferredExecution(r DeferredExecRow) error {
 	_, err := db.conn.Exec(
 		`INSERT INTO deferred_executions(
-			deferred_id, source_type, skill_id, tool_id, action_id,
+			deferred_id, source_type, skill_id, tool_id, action_id, agent_id,
 			tool_call_id, normalized_input_json, conversation_id, originating_message_id,
 			approval_id, summary, permission_level, risk_level, status, last_error,
 			result_json, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.DeferredID, r.SourceType, r.SkillID, r.ToolID, r.ActionID,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.DeferredID, r.SourceType, r.SkillID, r.ToolID, r.ActionID, r.AgentID,
 		r.ToolCallID, r.NormalizedInputJSON, r.ConversationID, r.OriginatingMessageID,
 		r.ApprovalID, r.Summary, r.PermissionLevel, r.RiskLevel, r.Status, r.LastError,
 		r.ResultJSON, r.CreatedAt, r.UpdatedAt,
 	)
 	return err
+}
+
+// FetchDeferredsByAgentTaskID returns all deferred executions for a delegated
+// agent task, looking up by the task ID stored as conversation_id for agent
+// loop deferrals. The source_type='agent_loop' filter makes the intent explicit.
+func (db *DB) FetchDeferredsByAgentTaskID(taskID string, status string) ([]DeferredExecRow, error) {
+	rows, err := db.conn.Query(
+		`SELECT `+deferredCols+`
+		 FROM deferred_executions
+		 WHERE conversation_id = ? AND source_type = 'agent_loop' AND status = ?
+		 ORDER BY created_at ASC`,
+		taskID, status,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DeferredExecRow
+	for rows.Next() {
+		r, err := scanDeferredRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
 }
 
 // FetchDeferredsByConversationID returns all deferred_executions for a conversation with the given status.
@@ -1484,6 +1703,806 @@ func scanWorkflowRunRow(row interface{ Scan(...any) error }) (WorkflowRunRow, er
 		&out.ErrorMessage, &out.StartedAt, &out.FinishedAt, &out.ConversationID,
 		&out.TriggerSource, &out.DurationMs, &out.ArtifactsJSON, &out.RecordJSON)
 	return out, err
+}
+
+// ── Team definitions and runtime ─────────────────────────────────────────────
+
+// AgentDefinitionRow is a canonical team member definition row (agent_definitions table).
+// Fields added in Teams V1 Phase 1: TemplateRole, PersonaStyle.
+type AgentDefinitionRow struct {
+	ID                     string
+	Name                   string
+	Role                   string // legacy free-text role; TemplateRole is the V1 enum
+	Mission                string
+	Style                  string // kept for backward compat; PersonaStyle preferred
+	AllowedSkillsJSON      string
+	AllowedToolClassesJSON string
+	Autonomy               string
+	Activation             string
+	ProviderType           string
+	Model                  string
+	IsEnabled              bool
+	CreatedAt              string
+	UpdatedAt              string
+	// V1 fields (added Phase 1 schema migration):
+	TemplateRole string // "scout" | "builder" | "reviewer" | "operator" | "monitor" | ""
+	PersonaStyle string // preferred persona style (richer than Style)
+}
+
+// ListEnabledAgentDefinitions returns only enabled team member definitions.
+// Used by the DB-backed roster context (Phase 2) to build the system-prompt
+// roster block without touching AGENTS.md on every turn.
+func (db *DB) ListEnabledAgentDefinitions() ([]AgentDefinitionRow, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, name, role, mission, style, allowed_skills_json, allowed_tool_classes_json,
+		        autonomy, activation, provider_type, model, is_enabled, created_at, updated_at,
+		        template_role, persona_style
+		 FROM agent_definitions WHERE is_enabled = 1 ORDER BY lower(name), id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AgentDefinitionRow
+	for rows.Next() {
+		row, err := scanAgentDefinitionRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// AgentRuntimeRow is the live runtime state row for one team member.
+type AgentRuntimeRow struct {
+	AgentID       string
+	Status        string
+	CurrentTaskID *string
+	LastActiveAt  *string
+	LastError     *string
+	UpdatedAt     string
+}
+
+// AgentMetricsRow holds cumulative usage statistics for one team member.
+type AgentMetricsRow struct {
+	AgentID        string
+	TasksCompleted int
+	TasksFailed    int
+	TotalToolCalls int
+	LastActiveAt   *string
+	UpdatedAt      string
+}
+
+// ListAgentDefinitions returns canonical team member definitions ordered by name.
+func (db *DB) ListAgentDefinitions() ([]AgentDefinitionRow, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, name, role, mission, style, allowed_skills_json, allowed_tool_classes_json,
+		        autonomy, activation, provider_type, model, is_enabled, created_at, updated_at,
+		        template_role, persona_style
+		 FROM agent_definitions ORDER BY lower(name), id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []AgentDefinitionRow
+	for rows.Next() {
+		row, err := scanAgentDefinitionRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// GetAgentDefinition returns one team member definition by ID.
+func (db *DB) GetAgentDefinition(id string) (*AgentDefinitionRow, error) {
+	row := db.conn.QueryRow(
+		`SELECT id, name, role, mission, style, allowed_skills_json, allowed_tool_classes_json,
+		        autonomy, activation, provider_type, model, is_enabled, created_at, updated_at,
+		        template_role, persona_style
+		 FROM agent_definitions WHERE id = ?`, id)
+	out, err := scanAgentDefinitionRow(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SaveAgentDefinition upserts one team member definition row.
+func (db *DB) SaveAgentDefinition(row AgentDefinitionRow) error {
+	enabled := 0
+	if row.IsEnabled {
+		enabled = 1
+	}
+	_, err := db.conn.Exec(
+		`INSERT INTO agent_definitions
+		 (id, name, role, mission, style, allowed_skills_json, allowed_tool_classes_json,
+		  autonomy, activation, provider_type, model, is_enabled, created_at, updated_at,
+		  template_role, persona_style)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(id) DO UPDATE SET
+		  name=excluded.name,
+		  role=excluded.role,
+		  mission=excluded.mission,
+		  style=excluded.style,
+		  allowed_skills_json=excluded.allowed_skills_json,
+		  allowed_tool_classes_json=excluded.allowed_tool_classes_json,
+		  autonomy=excluded.autonomy,
+		  activation=excluded.activation,
+		  provider_type=excluded.provider_type,
+		  model=excluded.model,
+		  is_enabled=excluded.is_enabled,
+		  updated_at=excluded.updated_at,
+		  template_role=excluded.template_role,
+		  persona_style=excluded.persona_style`,
+		row.ID, row.Name, row.Role, row.Mission, row.Style, row.AllowedSkillsJSON,
+		row.AllowedToolClassesJSON, row.Autonomy, row.Activation, row.ProviderType, row.Model,
+		enabled, row.CreatedAt, row.UpdatedAt, row.TemplateRole, row.PersonaStyle,
+	)
+	return err
+}
+
+// DeleteAgentDefinition deletes one team member definition row.
+func (db *DB) DeleteAgentDefinition(id string) (bool, error) {
+	res, err := db.conn.Exec(`DELETE FROM agent_definitions WHERE id = ?`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func scanAgentDefinitionRow(row interface{ Scan(...any) error }) (AgentDefinitionRow, error) {
+	var out AgentDefinitionRow
+	var enabled int
+	err := row.Scan(
+		&out.ID,
+		&out.Name,
+		&out.Role,
+		&out.Mission,
+		&out.Style,
+		&out.AllowedSkillsJSON,
+		&out.AllowedToolClassesJSON,
+		&out.Autonomy,
+		&out.Activation,
+		&out.ProviderType,
+		&out.Model,
+		&enabled,
+		&out.CreatedAt,
+		&out.UpdatedAt,
+		&out.TemplateRole,
+		&out.PersonaStyle,
+	)
+	out.IsEnabled = enabled != 0
+	return out, err
+}
+
+// ListAgentRuntime returns live runtime state ordered by agent id.
+func (db *DB) ListAgentRuntime() ([]AgentRuntimeRow, error) {
+	rows, err := db.conn.Query(
+		`SELECT agent_id, status, current_task_id, last_active_at, last_error, updated_at
+		 FROM agent_runtime ORDER BY agent_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []AgentRuntimeRow
+	for rows.Next() {
+		row, err := scanAgentRuntimeRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// GetAgentRuntime returns one agent runtime row by agent ID.
+func (db *DB) GetAgentRuntime(agentID string) (*AgentRuntimeRow, error) {
+	row := db.conn.QueryRow(
+		`SELECT agent_id, status, current_task_id, last_active_at, last_error, updated_at
+		 FROM agent_runtime WHERE agent_id = ?`, agentID)
+	out, err := scanAgentRuntimeRow(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SaveAgentRuntime upserts one live runtime state row.
+func (db *DB) SaveAgentRuntime(row AgentRuntimeRow) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO agent_runtime
+		 (agent_id, status, current_task_id, last_active_at, last_error, updated_at)
+		 VALUES (?,?,?,?,?,?)
+		 ON CONFLICT(agent_id) DO UPDATE SET
+		  status=excluded.status,
+		  current_task_id=excluded.current_task_id,
+		  last_active_at=excluded.last_active_at,
+		  last_error=excluded.last_error,
+		  updated_at=excluded.updated_at`,
+		row.AgentID, row.Status, row.CurrentTaskID, row.LastActiveAt, row.LastError, row.UpdatedAt,
+	)
+	return err
+}
+
+// DeleteAgentRuntime deletes one runtime row.
+func (db *DB) DeleteAgentRuntime(agentID string) (bool, error) {
+	res, err := db.conn.Exec(`DELETE FROM agent_runtime WHERE agent_id = ?`, agentID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func scanAgentRuntimeRow(row interface{ Scan(...any) error }) (AgentRuntimeRow, error) {
+	var out AgentRuntimeRow
+	err := row.Scan(&out.AgentID, &out.Status, &out.CurrentTaskID, &out.LastActiveAt, &out.LastError, &out.UpdatedAt)
+	return out, err
+}
+
+// GetAgentMetrics returns the metrics row for one team member, or nil if none exists.
+func (db *DB) GetAgentMetrics(agentID string) (*AgentMetricsRow, error) {
+	row := db.conn.QueryRow(
+		`SELECT agent_id, tasks_completed, tasks_failed, total_tool_calls, last_active_at, updated_at
+		 FROM agent_metrics WHERE agent_id = ?`, agentID)
+	var out AgentMetricsRow
+	err := row.Scan(&out.AgentID, &out.TasksCompleted, &out.TasksFailed, &out.TotalToolCalls, &out.LastActiveAt, &out.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UpsertAgentMetrics inserts or replaces the metrics row for one team member.
+func (db *DB) UpsertAgentMetrics(row AgentMetricsRow) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO agent_metrics (agent_id, tasks_completed, tasks_failed, total_tool_calls, last_active_at, updated_at)
+		 VALUES (?,?,?,?,?,?)
+		 ON CONFLICT(agent_id) DO UPDATE SET
+		  tasks_completed=excluded.tasks_completed,
+		  tasks_failed=excluded.tasks_failed,
+		  total_tool_calls=excluded.total_tool_calls,
+		  last_active_at=excluded.last_active_at,
+		  updated_at=excluded.updated_at`,
+		row.AgentID, row.TasksCompleted, row.TasksFailed, row.TotalToolCalls, row.LastActiveAt, row.UpdatedAt,
+	)
+	return err
+}
+
+// ListAgentMetrics returns metrics rows for all team members.
+func (db *DB) ListAgentMetrics() ([]AgentMetricsRow, error) {
+	rows, err := db.conn.Query(
+		`SELECT agent_id, tasks_completed, tasks_failed, total_tool_calls, last_active_at, updated_at
+		 FROM agent_metrics ORDER BY agent_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AgentMetricsRow
+	for rows.Next() {
+		var r AgentMetricsRow
+		if err := rows.Scan(&r.AgentID, &r.TasksCompleted, &r.TasksFailed, &r.TotalToolCalls, &r.LastActiveAt, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// AgentTaskRow is a persisted delegated task record (agent_tasks table).
+// Fields added in Teams V1 Phase 1 are marked [new]; all others are [existing].
+type AgentTaskRow struct {
+	// [existing] core
+	TaskID         string
+	AgentID        string
+	Status         string
+	Goal           string
+	RequestedBy    string
+	ResultSummary  *string
+	ErrorMessage   *string
+	ConversationID *string
+	StartedAt      string
+	FinishedAt     *string
+	CreatedAt      string
+	UpdatedAt      string
+	IterationsUsed int
+	// [new] structured task payload
+	Title               string
+	Objective           string
+	ScopeJSON           string
+	SuccessCriteriaJSON string
+	InputContextJSON    string
+	ExpectedOutputJSON  string
+	// [new] orchestration metadata
+	Mode          string
+	Pattern       string
+	DependsOnJSON string
+	ParentTurnID  *string
+	// [new] blocking metadata
+	BlockingKind   *string
+	BlockingDetail *string
+	ResumeToken    *string
+}
+
+// AgentTaskStepRow is a persisted execution-log row for a delegated task.
+type AgentTaskStepRow struct {
+	StepID         string
+	TaskID         string
+	SequenceNumber int
+	Role           string
+	StepType       string
+	Content        string
+	ToolName       *string
+	ToolCallID     *string
+	CreatedAt      string
+}
+
+// AgentEventRow is one team activity feed event.
+type AgentEventRow struct {
+	EventID     string
+	EventType   string
+	AgentID     *string
+	TaskID      *string
+	Title       string
+	Detail      *string
+	PayloadJSON string
+	CreatedAt   string
+}
+
+// ListAgentTasks returns delegated task records ordered newest first.
+func (db *DB) ListAgentTasks(limit int) ([]AgentTaskRow, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := db.conn.Query(
+		`SELECT task_id, agent_id, status, goal, requested_by, result_summary, error_message,
+		        conversation_id, started_at, finished_at, created_at, updated_at, iterations_used,
+		        title, objective, scope_json, success_criteria_json, input_context_json,
+		        expected_output_json, mode, pattern, depends_on_json, parent_turn_id,
+		        blocking_kind, blocking_detail, resume_token
+		 FROM agent_tasks ORDER BY started_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []AgentTaskRow
+	for rows.Next() {
+		row, err := scanAgentTaskRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// GetAgentTask returns one delegated task record by ID.
+func (db *DB) GetAgentTask(taskID string) (*AgentTaskRow, error) {
+	row := db.conn.QueryRow(
+		`SELECT task_id, agent_id, status, goal, requested_by, result_summary, error_message,
+		        conversation_id, started_at, finished_at, created_at, updated_at, iterations_used,
+		        title, objective, scope_json, success_criteria_json, input_context_json,
+		        expected_output_json, mode, pattern, depends_on_json, parent_turn_id,
+		        blocking_kind, blocking_detail, resume_token
+		 FROM agent_tasks WHERE task_id = ?`, taskID)
+	out, err := scanAgentTaskRow(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SaveAgentTask upserts one delegated task record.
+func (db *DB) SaveAgentTask(row AgentTaskRow) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO agent_tasks
+		 (task_id, agent_id, status, goal, requested_by, result_summary, error_message,
+		  conversation_id, started_at, finished_at, created_at, updated_at, iterations_used,
+		  title, objective, scope_json, success_criteria_json, input_context_json,
+		  expected_output_json, mode, pattern, depends_on_json, parent_turn_id,
+		  blocking_kind, blocking_detail, resume_token)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(task_id) DO UPDATE SET
+		  agent_id=excluded.agent_id,
+		  status=excluded.status,
+		  goal=excluded.goal,
+		  requested_by=excluded.requested_by,
+		  result_summary=excluded.result_summary,
+		  error_message=excluded.error_message,
+		  conversation_id=excluded.conversation_id,
+		  started_at=excluded.started_at,
+		  finished_at=excluded.finished_at,
+		  updated_at=excluded.updated_at,
+		  iterations_used=excluded.iterations_used,
+		  title=excluded.title,
+		  objective=excluded.objective,
+		  scope_json=excluded.scope_json,
+		  success_criteria_json=excluded.success_criteria_json,
+		  input_context_json=excluded.input_context_json,
+		  expected_output_json=excluded.expected_output_json,
+		  mode=excluded.mode,
+		  pattern=excluded.pattern,
+		  depends_on_json=excluded.depends_on_json,
+		  parent_turn_id=excluded.parent_turn_id,
+		  blocking_kind=excluded.blocking_kind,
+		  blocking_detail=excluded.blocking_detail,
+		  resume_token=excluded.resume_token`,
+		row.TaskID, row.AgentID, row.Status, row.Goal, row.RequestedBy, row.ResultSummary, row.ErrorMessage,
+		row.ConversationID, row.StartedAt, row.FinishedAt, row.CreatedAt, row.UpdatedAt, row.IterationsUsed,
+		row.Title, row.Objective, row.ScopeJSON, row.SuccessCriteriaJSON, row.InputContextJSON,
+		row.ExpectedOutputJSON, row.Mode, row.Pattern, row.DependsOnJSON, row.ParentTurnID,
+		row.BlockingKind, row.BlockingDetail, row.ResumeToken,
+	)
+	return err
+}
+
+// AddAgentTaskIterations increments the iterations_used counter for a task.
+func (db *DB) AddAgentTaskIterations(taskID string, count int) error {
+	_, err := db.conn.Exec(
+		`UPDATE agent_tasks SET iterations_used = iterations_used + ?, updated_at = ? WHERE task_id = ?`,
+		count, time.Now().UTC().Format(time.RFC3339Nano), taskID,
+	)
+	return err
+}
+
+func scanAgentTaskRow(row interface{ Scan(...any) error }) (AgentTaskRow, error) {
+	var out AgentTaskRow
+	err := row.Scan(
+		&out.TaskID,
+		&out.AgentID,
+		&out.Status,
+		&out.Goal,
+		&out.RequestedBy,
+		&out.ResultSummary,
+		&out.ErrorMessage,
+		&out.ConversationID,
+		&out.StartedAt,
+		&out.FinishedAt,
+		&out.CreatedAt,
+		&out.UpdatedAt,
+		&out.IterationsUsed,
+		&out.Title,
+		&out.Objective,
+		&out.ScopeJSON,
+		&out.SuccessCriteriaJSON,
+		&out.InputContextJSON,
+		&out.ExpectedOutputJSON,
+		&out.Mode,
+		&out.Pattern,
+		&out.DependsOnJSON,
+		&out.ParentTurnID,
+		&out.BlockingKind,
+		&out.BlockingDetail,
+		&out.ResumeToken,
+	)
+	return out, err
+}
+
+// ListAgentTaskSteps returns one delegated task's execution log in sequence order.
+func (db *DB) ListAgentTaskSteps(taskID string) ([]AgentTaskStepRow, error) {
+	rows, err := db.conn.Query(
+		`SELECT step_id, task_id, sequence_number, role, step_type, content, tool_name, tool_call_id, created_at
+		 FROM agent_task_steps WHERE task_id = ? ORDER BY sequence_number ASC`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []AgentTaskStepRow
+	for rows.Next() {
+		row, err := scanAgentTaskStepRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// SaveAgentTaskStep inserts one delegated task step row.
+func (db *DB) SaveAgentTaskStep(row AgentTaskStepRow) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO agent_task_steps
+		 (step_id, task_id, sequence_number, role, step_type, content, tool_name, tool_call_id, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?)`,
+		row.StepID, row.TaskID, row.SequenceNumber, row.Role, row.StepType, row.Content,
+		row.ToolName, row.ToolCallID, row.CreatedAt,
+	)
+	return err
+}
+
+func scanAgentTaskStepRow(row interface{ Scan(...any) error }) (AgentTaskStepRow, error) {
+	var out AgentTaskStepRow
+	err := row.Scan(
+		&out.StepID,
+		&out.TaskID,
+		&out.SequenceNumber,
+		&out.Role,
+		&out.StepType,
+		&out.Content,
+		&out.ToolName,
+		&out.ToolCallID,
+		&out.CreatedAt,
+	)
+	return out, err
+}
+
+// ListAgentEvents returns recent team activity ordered newest first.
+func (db *DB) ListAgentEvents(limit int) ([]AgentEventRow, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := db.conn.Query(
+		`SELECT event_id, event_type, agent_id, task_id, title, detail, payload_json, created_at
+		 FROM agent_events ORDER BY created_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []AgentEventRow
+	for rows.Next() {
+		row, err := scanAgentEventRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// SaveAgentEvent inserts one team activity event row.
+func (db *DB) SaveAgentEvent(row AgentEventRow) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO agent_events
+		 (event_id, event_type, agent_id, task_id, title, detail, payload_json, created_at)
+		 VALUES (?,?,?,?,?,?,?,?)`,
+		row.EventID, row.EventType, row.AgentID, row.TaskID, row.Title, row.Detail, row.PayloadJSON, row.CreatedAt,
+	)
+	return err
+}
+
+func scanAgentEventRow(row interface{ Scan(...any) error }) (AgentEventRow, error) {
+	var out AgentEventRow
+	err := row.Scan(
+		&out.EventID,
+		&out.EventType,
+		&out.AgentID,
+		&out.TaskID,
+		&out.Title,
+		&out.Detail,
+		&out.PayloadJSON,
+		&out.CreatedAt,
+	)
+	return out, err
+}
+
+// ── Delegation task results (Teams V1) ───────────────────────────────────────
+
+// DelegationTaskResultRow is the structured worker-output record for one delegated task.
+// Written by the task engine on finalize; read by Team HQ and returned to Agent.
+type DelegationTaskResultRow struct {
+	TaskID                string
+	OutputType            string
+	Summary               string
+	OutputJSON            string
+	ArtifactsJSON         string
+	RisksJSON             string
+	BlockersJSON          string
+	RecommendedNextAction *string
+	CreatedAt             string
+	UpdatedAt             string
+}
+
+// SaveDelegationTaskResult upserts a structured result for a delegated task.
+func (db *DB) SaveDelegationTaskResult(row DelegationTaskResultRow) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO delegation_task_results
+		 (task_id, output_type, summary, output_json, artifacts_json, risks_json,
+		  blockers_json, recommended_next_action, created_at, updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(task_id) DO UPDATE SET
+		  output_type=excluded.output_type,
+		  summary=excluded.summary,
+		  output_json=excluded.output_json,
+		  artifacts_json=excluded.artifacts_json,
+		  risks_json=excluded.risks_json,
+		  blockers_json=excluded.blockers_json,
+		  recommended_next_action=excluded.recommended_next_action,
+		  updated_at=excluded.updated_at`,
+		row.TaskID, row.OutputType, row.Summary, row.OutputJSON, row.ArtifactsJSON,
+		row.RisksJSON, row.BlockersJSON, row.RecommendedNextAction, row.CreatedAt, row.UpdatedAt,
+	)
+	return err
+}
+
+// GetDelegationTaskResult returns the structured result for one delegated task.
+// Returns nil, nil when no result row exists yet (task still running).
+func (db *DB) GetDelegationTaskResult(taskID string) (*DelegationTaskResultRow, error) {
+	row := db.conn.QueryRow(
+		`SELECT task_id, output_type, summary, output_json, artifacts_json, risks_json,
+		        blockers_json, recommended_next_action, created_at, updated_at
+		 FROM delegation_task_results WHERE task_id = ?`, taskID)
+	var out DelegationTaskResultRow
+	err := row.Scan(
+		&out.TaskID, &out.OutputType, &out.Summary, &out.OutputJSON, &out.ArtifactsJSON,
+		&out.RisksJSON, &out.BlockersJSON, &out.RecommendedNextAction, &out.CreatedAt, &out.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListDelegationTaskResults returns results for a set of task IDs.
+// Useful for bulk-loading results when rendering Team HQ.
+func (db *DB) ListDelegationTaskResults(taskIDs []string) ([]DelegationTaskResultRow, error) {
+	if len(taskIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(taskIDs))
+	args := make([]any, len(taskIDs))
+	for i, id := range taskIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := `SELECT task_id, output_type, summary, output_json, artifacts_json, risks_json,
+	                 blockers_json, recommended_next_action, created_at, updated_at
+	          FROM delegation_task_results
+	          WHERE task_id IN (` + strings.Join(placeholders, ",") + `)`
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DelegationTaskResultRow
+	for rows.Next() {
+		var r DelegationTaskResultRow
+		if err := rows.Scan(
+			&r.TaskID, &r.OutputType, &r.Summary, &r.OutputJSON, &r.ArtifactsJSON,
+			&r.RisksJSON, &r.BlockersJSON, &r.RecommendedNextAction, &r.CreatedAt, &r.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// CountTeamMembers returns the number of rows in agent_definitions.
+// Used by the Phase 8 one-time AGENTS.md import guard.
+func (db *DB) CountTeamMembers() (int, error) {
+	var n int
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM agent_definitions`).Scan(&n)
+	return n, err
+}
+
+// ── Trigger events ────────────────────────────────────────────────────────────
+
+// TriggerEventRow is one bounded-autonomy trigger record.
+type TriggerEventRow struct {
+	TriggerID   string
+	TriggerType string
+	AgentID     *string
+	Instruction string
+	Status      string // "pending" | "fired" | "suppressed"
+	FiredAt     *string
+	CreatedAt   string
+}
+
+// TriggerCooldownRow records when a (trigger_type, agent_id) pair last fired.
+type TriggerCooldownRow struct {
+	CooldownID  string
+	TriggerType string
+	AgentID     string
+	FiredAt     string
+}
+
+// SaveTriggerEvent inserts one trigger event record.
+func (db *DB) SaveTriggerEvent(row TriggerEventRow) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO trigger_events (trigger_id, trigger_type, agent_id, instruction, status, fired_at, created_at)
+		 VALUES (?,?,?,?,?,?,?)
+		 ON CONFLICT(trigger_id) DO UPDATE SET
+		  status=excluded.status, fired_at=excluded.fired_at`,
+		row.TriggerID, row.TriggerType, row.AgentID, row.Instruction, row.Status, row.FiredAt, row.CreatedAt,
+	)
+	return err
+}
+
+// ListTriggerEvents returns recent trigger records ordered newest first.
+func (db *DB) ListTriggerEvents(limit int) ([]TriggerEventRow, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := db.conn.Query(
+		`SELECT trigger_id, trigger_type, agent_id, instruction, status, fired_at, created_at
+		 FROM trigger_events ORDER BY created_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TriggerEventRow
+	for rows.Next() {
+		var r TriggerEventRow
+		if err := rows.Scan(&r.TriggerID, &r.TriggerType, &r.AgentID, &r.Instruction, &r.Status, &r.FiredAt, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SaveTriggerCooldown records a cooldown entry for (trigger_type, agent_id).
+func (db *DB) SaveTriggerCooldown(row TriggerCooldownRow) error {
+	_, err := db.conn.Exec(
+		`INSERT OR IGNORE INTO trigger_cooldowns (cooldown_id, trigger_type, agent_id, fired_at)
+		 VALUES (?,?,?,?)`,
+		row.CooldownID, row.TriggerType, row.AgentID, row.FiredAt,
+	)
+	return err
+}
+
+// IsOnCooldown returns true if (triggerType, agentID) fired within the given window.
+func (db *DB) IsOnCooldown(triggerType, agentID string, window time.Duration) (bool, error) {
+	cutoff := time.Now().UTC().Add(-window).Format(time.RFC3339Nano)
+	var count int
+	err := db.conn.QueryRow(
+		`SELECT COUNT(*) FROM trigger_cooldowns WHERE trigger_type=? AND agent_id=? AND fired_at > ?`,
+		triggerType, agentID, cutoff,
+	).Scan(&count)
+	return count > 0, err
+}
+
+// TryAcquireTriggerCooldown atomically checks cooldown and records a new firing in one
+// SQLite operation. Returns true if the cooldown was acquired (i.e. not on cooldown before),
+// false if the agent is still within the cooldown window.
+// Because SQLite has a single writer, the INSERT … SELECT is atomic — no race possible.
+func (db *DB) TryAcquireTriggerCooldown(cooldownID, triggerType, agentID string, window time.Duration) (bool, error) {
+	cutoff := time.Now().UTC().Add(-window).Format(time.RFC3339Nano)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := db.conn.Exec(
+		`INSERT OR IGNORE INTO trigger_cooldowns (cooldown_id, trigger_type, agent_id, fired_at)
+		 SELECT ?, ?, ?, ?
+		 WHERE NOT EXISTS (
+		   SELECT 1 FROM trigger_cooldowns
+		   WHERE trigger_type=? AND agent_id=? AND fired_at > ?
+		 )`,
+		cooldownID, triggerType, agentID, now,
+		triggerType, agentID, cutoff,
+	)
+	if err != nil {
+		return false, err
+	}
+	rows, _ := res.RowsAffected()
+	return rows > 0, nil
 }
 
 // ── Memories ──────────────────────────────────────────────────────────────────
@@ -2303,4 +3322,79 @@ func (db *DB) TokenUsageDeleteBefore(before string) (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// ── Local auth credentials ────────────────────────────────────────────────────
+
+// LocalCredentialRow is the raw DB row for a local auth credential.
+type LocalCredentialRow struct {
+	ID          string
+	Type        string
+	Name        string
+	Credential  string // JSON-encoded webauthn.Credential, empty for PIN type
+	PINHash     string // bcrypt hash, empty for webauthn type
+	CreatedAt   string
+	LastUsedAt  string
+}
+
+// SaveLocalCredential inserts or replaces a local auth credential.
+func (db *DB) SaveLocalCredential(id, credType, name, credential, pinHash string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := db.conn.Exec(
+		`INSERT OR REPLACE INTO local_auth_credentials
+		 (id, type, name, credential, pin_hash, created_at, last_used_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, credType, name, credential, pinHash, now, now,
+	)
+	return err
+}
+
+// LoadLocalCredentials returns all stored local auth credentials.
+func (db *DB) LoadLocalCredentials() ([]LocalCredentialRow, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, type, name, COALESCE(credential,''), COALESCE(pin_hash,''), created_at, COALESCE(last_used_at,'')
+		 FROM local_auth_credentials ORDER BY created_at ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LocalCredentialRow
+	for rows.Next() {
+		var r LocalCredentialRow
+		if err := rows.Scan(&r.ID, &r.Type, &r.Name, &r.Credential, &r.PINHash, &r.CreatedAt, &r.LastUsedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// HasLocalCredentials returns true if at least one local credential is stored.
+func (db *DB) HasLocalCredentials() bool {
+	var n int
+	db.conn.QueryRow(`SELECT COUNT(*) FROM local_auth_credentials`).Scan(&n) //nolint:errcheck
+	return n > 0
+}
+
+// UpdateLocalCredentialSignCount updates the sign count for a WebAuthn credential.
+func (db *DB) UpdateLocalCredentialSignCount(id string, credJSON string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := db.conn.Exec(
+		`UPDATE local_auth_credentials SET credential=?, last_used_at=? WHERE id=?`,
+		credJSON, now, id,
+	)
+	return err
+}
+
+// TouchLocalCredential updates last_used_at for a credential.
+func (db *DB) TouchLocalCredential(id string) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	db.conn.Exec(`UPDATE local_auth_credentials SET last_used_at=? WHERE id=?`, now, id) //nolint:errcheck
+}
+
+// DeleteLocalCredential removes a local credential by ID.
+func (db *DB) DeleteLocalCredential(id string) error {
+	_, err := db.conn.Exec(`DELETE FROM local_auth_credentials WHERE id=?`, id)
+	return err
 }

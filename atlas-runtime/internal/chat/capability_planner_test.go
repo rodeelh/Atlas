@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
 
 	"atlas-runtime-go/internal/capabilities"
@@ -21,5 +23,30 @@ func TestApplyCapabilityPlanToolHintsAddsSuggestedGroups(t *testing.T) {
 	}
 	if !hasToolPrefix(out, "gremlin__") {
 		t.Fatalf("expected automation tools after planner hints, got %v", toolNames(out))
+	}
+}
+
+func TestApplyCapabilityPlanToolHintsAddsTeamTools(t *testing.T) {
+	reg := skills.NewRegistry(t.TempDir(), nil, nil)
+	reg.RegisterExternal(skills.SkillEntry{
+		Def: skills.ToolDef{
+			Name:        "team.list",
+			Description: "List Atlas agents.",
+			Properties:  map[string]skills.ToolParam{},
+		},
+		ActionClass: skills.ActionClassRead,
+		FnResult: func(context.Context, json.RawMessage) (skills.ToolResult, error) {
+			return skills.OKResult("ok", nil), nil
+		},
+	})
+	selected := reg.ToolDefsForGroupsForMessage([]string{"files"}, "delete all agents")
+	analysis := capabilities.Analysis{
+		Decision:        capabilities.DecisionRunExisting,
+		SuggestedGroups: []string{"team"},
+	}
+
+	out := applyCapabilityPlanToolHints(reg, selected, "delete all agents", analysis)
+	if !hasToolPrefix(out, "agent__") {
+		t.Fatalf("expected agent tools after planner hints, got %v", toolNames(out))
 	}
 }

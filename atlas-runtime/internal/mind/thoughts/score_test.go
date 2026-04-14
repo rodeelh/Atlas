@@ -136,12 +136,12 @@ func TestShouldPropose(t *testing.T) {
 		class ActionClass
 		want  bool
 	}{
-		{79, ClassLocalWrite, false},  // below propose threshold
-		{80, ClassLocalWrite, true},   // at propose threshold
-		{94, ClassLocalWrite, true},   // max for local_write
-		{95, ClassRead, false},        // auto-execute, not proposal
-		{100, ClassRead, false},       // auto-execute, not proposal
-		{80, ClassRead, true},         // read class but not at auto-execute threshold
+		{79, ClassLocalWrite, false}, // below propose threshold
+		{80, ClassLocalWrite, true},  // at propose threshold
+		{94, ClassLocalWrite, true},  // max for local_write
+		{95, ClassRead, false},       // auto-execute, not proposal
+		{100, ClassRead, false},      // auto-execute, not proposal
+		{80, ClassRead, true},        // read class but not at auto-execute threshold
 		{85, ClassExternalSideEffect, true},
 	}
 	for _, tc := range cases {

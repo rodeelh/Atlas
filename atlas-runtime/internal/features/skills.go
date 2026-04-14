@@ -34,6 +34,7 @@ func normalizePermLevel(level string) string {
 // SkillAction matches the web UI's SkillRecord.actions element shape.
 type SkillAction struct {
 	ID              string `json:"id"`
+	PublicID        string `json:"publicID,omitempty"`
 	Name            string `json:"name"`
 	Description     string `json:"description"`
 	PermissionLevel string `json:"permissionLevel"`
@@ -54,6 +55,7 @@ type SkillManifestInfo struct {
 	Source         string   `json:"source,omitempty"`
 	Capabilities   []string `json:"capabilities"`
 	Tags           []string `json:"tags"`
+	Routing        any      `json:"routing,omitempty"`
 }
 
 // SkillRecord matches the web UI SkillRecord interface.
@@ -122,9 +124,16 @@ func loadActionPolicies(supportDir string) map[string]string {
 	return p
 }
 
+func publicActionID(actionID string) string {
+	if strings.HasPrefix(actionID, "team.") {
+		return "agent." + strings.TrimPrefix(actionID, "team.")
+	}
+	return actionID
+}
+
 // builtInSkills returns the hardcoded catalog of built-in skills.
 func builtInSkills() []SkillRecord {
-	return []SkillRecord{
+	records := []SkillRecord{
 		{
 			Manifest: SkillManifestInfo{
 				ID: "weather", Name: "Weather", Version: "1.0",
@@ -391,6 +400,26 @@ func builtInSkills() []SkillRecord {
 		},
 		{
 			Manifest: SkillManifestInfo{
+				ID: "team-control", Name: "Agents Control", Version: "1.0",
+				Description:    "Create, inspect, update, and manage AGENTS.md agents.",
+				LifecycleState: "enabled", RiskLevel: "medium", IsUserVisible: true,
+				Category: "automation", Capabilities: []string{"team_management", "agent_management"}, Tags: []string{"team", "agents", "agnts", "delegation"},
+			},
+			Actions: []SkillAction{
+				{ID: "team.list", Name: "List Agents", Description: "List AGENTS.md agents and their runtime state.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "team.get", Name: "Get Agent", Description: "Inspect one AGENTS.md agent by ID.", PermissionLevel: "read", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "team.create", Name: "Create Agent", Description: "Create a new AGENTS.md agent.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "team.update", Name: "Update Agent", Description: "Update an AGENTS.md agent by ID.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "team.delete", Name: "Delete Agent", Description: "Delete an AGENTS.md agent by ID.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "team.enable", Name: "Enable Agent", Description: "Enable a disabled AGENTS.md agent.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "team.disable", Name: "Disable Agent", Description: "Disable an AGENTS.md agent.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "team.pause", Name: "Pause Agent", Description: "Pause an agent runtime.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "team.resume", Name: "Resume Agent", Description: "Resume a paused agent runtime.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+				{ID: "team.delegate", Name: "Delegate To Agent", Description: "Delegate a focused task to an existing AGENTS.md agent.", PermissionLevel: "execute", ApprovalPolicy: "auto_approve", IsEnabled: true},
+			},
+		},
+		{
+			Manifest: SkillManifestInfo{
 				ID: "communication-bridge", Name: "Communication Bridge", Version: "1.0",
 				Description:    "Reach the user through authorized chat channels.",
 				LifecycleState: "enabled", RiskLevel: "medium", IsUserVisible: true,
@@ -483,6 +512,12 @@ func builtInSkills() []SkillRecord {
 			},
 		},
 	}
+	for i := range records {
+		for j := range records[i].Actions {
+			records[i].Actions[j].PublicID = publicActionID(records[i].Actions[j].ID)
+		}
+	}
+	return records
 }
 
 // ListSkills returns all skills — built-in and custom — with lifecycle state from the
@@ -502,6 +537,21 @@ func ListSkills(supportDir string) []SkillRecord {
 			action := &records[i].Actions[j]
 			if policy, ok := policies[action.ID]; ok {
 				action.ApprovalPolicy = policy
+			} else if action.PublicID != "" {
+				if policy, ok := policies[action.PublicID]; ok {
+					action.ApprovalPolicy = policy
+				} else if action.ApprovalPolicy != "" {
+					// Preserve explicit defaults for module-owned control surfaces such
+					// as automation.* and workflow.*.
+					continue
+				} else {
+					// Default: read → auto_approve, others → always_ask
+					if action.PermissionLevel == "read" {
+						action.ApprovalPolicy = "auto_approve"
+					} else {
+						action.ApprovalPolicy = "always_ask"
+					}
+				}
 			} else if action.ApprovalPolicy != "" {
 				// Preserve explicit defaults for module-owned control surfaces such
 				// as automation.* and workflow.*.
@@ -540,11 +590,18 @@ func customManifestToRecord(manifest customskills.CustomSkillManifest, states sk
 		approvalPolicy := "always_ask"
 		if policy, ok := policies[actionID]; ok {
 			approvalPolicy = policy
+		} else if publicID := publicActionID(actionID); publicID != actionID {
+			if policy, ok := policies[publicID]; ok {
+				approvalPolicy = policy
+			} else if permLevel == "read" {
+				approvalPolicy = "auto_approve"
+			}
 		} else if permLevel == "read" {
 			approvalPolicy = "auto_approve"
 		}
 		actions = append(actions, SkillAction{
 			ID:              actionID,
+			PublicID:        publicActionID(actionID),
 			Name:            a.Name,
 			Description:     a.Description,
 			PermissionLevel: permLevel,
@@ -591,6 +648,7 @@ func customManifestToRecord(manifest customskills.CustomSkillManifest, states sk
 			Source:         source,
 			Capabilities:   []string{},
 			Tags:           tags,
+			Routing:        manifest.Routing,
 		},
 		Actions: actions,
 	}

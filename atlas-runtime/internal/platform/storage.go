@@ -1,6 +1,10 @@
 package platform
 
-import "atlas-runtime-go/internal/storage"
+import (
+	"time"
+
+	"atlas-runtime-go/internal/storage"
+)
 
 // Storage is the private storage contract exposed to internal modules.
 // The first tranche scopes this surface around the next planned extractions.
@@ -8,6 +12,7 @@ type Storage interface {
 	Approvals() ApprovalStore
 	Automations() AutomationStore
 	Communications() CommunicationsStore
+	Agents() AgentStore
 	Workflows() WorkflowStore
 	Memories() MemoryStore
 }
@@ -41,6 +46,35 @@ type CommunicationsStore interface {
 	FetchCommSession(platform, channelID, threadID string) (*storage.CommSessionRow, error)
 }
 
+type AgentStore interface {
+	ListAgentDefinitions() ([]storage.AgentDefinitionRow, error)
+	ListEnabledAgentDefinitions() ([]storage.AgentDefinitionRow, error)
+	GetAgentDefinition(id string) (*storage.AgentDefinitionRow, error)
+	SaveAgentDefinition(row storage.AgentDefinitionRow) error
+	DeleteAgentDefinition(id string) (bool, error)
+	ListAgentRuntime() ([]storage.AgentRuntimeRow, error)
+	GetAgentRuntime(agentID string) (*storage.AgentRuntimeRow, error)
+	SaveAgentRuntime(row storage.AgentRuntimeRow) error
+	DeleteAgentRuntime(agentID string) (bool, error)
+	ListAgentTasks(limit int) ([]storage.AgentTaskRow, error)
+	GetAgentTask(taskID string) (*storage.AgentTaskRow, error)
+	SaveAgentTask(row storage.AgentTaskRow) error
+	AddAgentTaskIterations(taskID string, count int) error
+	FetchDeferredsByAgentTaskID(taskID string, status string) ([]storage.DeferredExecRow, error)
+	ListAgentTaskSteps(taskID string) ([]storage.AgentTaskStepRow, error)
+	SaveAgentTaskStep(row storage.AgentTaskStepRow) error
+	ListAgentEvents(limit int) ([]storage.AgentEventRow, error)
+	SaveAgentEvent(row storage.AgentEventRow) error
+	GetAgentMetrics(agentID string) (*storage.AgentMetricsRow, error)
+	UpsertAgentMetrics(row storage.AgentMetricsRow) error
+	ListAgentMetrics() ([]storage.AgentMetricsRow, error)
+	SaveTriggerEvent(row storage.TriggerEventRow) error
+	ListTriggerEvents(limit int) ([]storage.TriggerEventRow, error)
+	SaveTriggerCooldown(row storage.TriggerCooldownRow) error
+	IsOnCooldown(triggerType, agentID string, window time.Duration) (bool, error)
+	TryAcquireTriggerCooldown(cooldownID, triggerType, agentID string, window time.Duration) (bool, error)
+}
+
 type WorkflowStore interface {
 	ListWorkflows() ([]storage.WorkflowRow, error)
 	GetWorkflow(id string) (*storage.WorkflowRow, error)
@@ -72,6 +106,8 @@ func (s *SQLiteStorage) Approvals() ApprovalStore { return approvalStore{s.db} }
 func (s *SQLiteStorage) Automations() AutomationStore { return automationStore{s.db} }
 
 func (s *SQLiteStorage) Communications() CommunicationsStore { return communicationsStore{s.db} }
+
+func (s *SQLiteStorage) Agents() AgentStore { return agentStore{s.db} }
 
 func (s *SQLiteStorage) Workflows() WorkflowStore { return workflowStore{s.db} }
 
@@ -155,6 +191,114 @@ func (s communicationsStore) ListCommunicationChannels(platform string) ([]stora
 
 func (s communicationsStore) FetchCommSession(platform, channelID, threadID string) (*storage.CommSessionRow, error) {
 	return s.db.FetchCommSession(platform, channelID, threadID)
+}
+
+type agentStore struct {
+	db *storage.DB
+}
+
+func (s agentStore) ListAgentDefinitions() ([]storage.AgentDefinitionRow, error) {
+	return s.db.ListAgentDefinitions()
+}
+
+func (s agentStore) ListEnabledAgentDefinitions() ([]storage.AgentDefinitionRow, error) {
+	return s.db.ListEnabledAgentDefinitions()
+}
+
+func (s agentStore) GetAgentDefinition(id string) (*storage.AgentDefinitionRow, error) {
+	return s.db.GetAgentDefinition(id)
+}
+
+func (s agentStore) SaveAgentDefinition(row storage.AgentDefinitionRow) error {
+	return s.db.SaveAgentDefinition(row)
+}
+
+func (s agentStore) DeleteAgentDefinition(id string) (bool, error) {
+	return s.db.DeleteAgentDefinition(id)
+}
+
+func (s agentStore) ListAgentRuntime() ([]storage.AgentRuntimeRow, error) {
+	return s.db.ListAgentRuntime()
+}
+
+func (s agentStore) GetAgentRuntime(agentID string) (*storage.AgentRuntimeRow, error) {
+	return s.db.GetAgentRuntime(agentID)
+}
+
+func (s agentStore) SaveAgentRuntime(row storage.AgentRuntimeRow) error {
+	return s.db.SaveAgentRuntime(row)
+}
+
+func (s agentStore) DeleteAgentRuntime(agentID string) (bool, error) {
+	return s.db.DeleteAgentRuntime(agentID)
+}
+
+func (s agentStore) ListAgentTasks(limit int) ([]storage.AgentTaskRow, error) {
+	return s.db.ListAgentTasks(limit)
+}
+
+func (s agentStore) GetAgentTask(taskID string) (*storage.AgentTaskRow, error) {
+	return s.db.GetAgentTask(taskID)
+}
+
+func (s agentStore) SaveAgentTask(row storage.AgentTaskRow) error {
+	return s.db.SaveAgentTask(row)
+}
+
+func (s agentStore) AddAgentTaskIterations(taskID string, count int) error {
+	return s.db.AddAgentTaskIterations(taskID, count)
+}
+
+func (s agentStore) FetchDeferredsByAgentTaskID(taskID, status string) ([]storage.DeferredExecRow, error) {
+	return s.db.FetchDeferredsByAgentTaskID(taskID, status)
+}
+
+func (s agentStore) ListAgentTaskSteps(taskID string) ([]storage.AgentTaskStepRow, error) {
+	return s.db.ListAgentTaskSteps(taskID)
+}
+
+func (s agentStore) SaveAgentTaskStep(row storage.AgentTaskStepRow) error {
+	return s.db.SaveAgentTaskStep(row)
+}
+
+func (s agentStore) ListAgentEvents(limit int) ([]storage.AgentEventRow, error) {
+	return s.db.ListAgentEvents(limit)
+}
+
+func (s agentStore) SaveAgentEvent(row storage.AgentEventRow) error {
+	return s.db.SaveAgentEvent(row)
+}
+
+func (s agentStore) GetAgentMetrics(agentID string) (*storage.AgentMetricsRow, error) {
+	return s.db.GetAgentMetrics(agentID)
+}
+
+func (s agentStore) UpsertAgentMetrics(row storage.AgentMetricsRow) error {
+	return s.db.UpsertAgentMetrics(row)
+}
+
+func (s agentStore) ListAgentMetrics() ([]storage.AgentMetricsRow, error) {
+	return s.db.ListAgentMetrics()
+}
+
+func (s agentStore) SaveTriggerEvent(row storage.TriggerEventRow) error {
+	return s.db.SaveTriggerEvent(row)
+}
+
+func (s agentStore) ListTriggerEvents(limit int) ([]storage.TriggerEventRow, error) {
+	return s.db.ListTriggerEvents(limit)
+}
+
+func (s agentStore) SaveTriggerCooldown(row storage.TriggerCooldownRow) error {
+	return s.db.SaveTriggerCooldown(row)
+}
+
+func (s agentStore) IsOnCooldown(triggerType, agentID string, window time.Duration) (bool, error) {
+	return s.db.IsOnCooldown(triggerType, agentID, window)
+}
+
+func (s agentStore) TryAcquireTriggerCooldown(cooldownID, triggerType, agentID string, window time.Duration) (bool, error) {
+	return s.db.TryAcquireTriggerCooldown(cooldownID, triggerType, agentID, window)
 }
 
 type workflowStore struct {

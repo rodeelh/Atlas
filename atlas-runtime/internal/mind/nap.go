@@ -64,20 +64,20 @@ type NapDeps struct {
 // NapResult summarises what a nap did. Returned from RunNap for the manual
 // trigger endpoint and captured in telemetry for the nap_completed event.
 type NapResult struct {
-	Trigger       NapTrigger          `json:"trigger"`
-	DurationMs    int64               `json:"duration_ms"`
-	InputTokens   int                 `json:"input_tokens"`   // approximate
-	OutputTokens  int                 `json:"output_tokens"`  // approximate
-	OpsRequested  int                 `json:"ops_requested"`
-	OpsApplied    int                 `json:"ops_applied"`
-	OpsRejected   int                 `json:"ops_rejected"`
-	Rationale     string              `json:"rationale"`
-	Before        int                 `json:"thoughts_before"`
-	After         int                 `json:"thoughts_after"`
-	OpsBreakdown  map[string]int      `json:"ops_breakdown"` // add, update, reinforce, discard, merge counts
-	Error         string              `json:"error,omitempty"`
-	Results       []thoughts.OpResult `json:"results,omitempty"`
-	Dispatch      *DispatchResult     `json:"dispatch,omitempty"`
+	Trigger      NapTrigger          `json:"trigger"`
+	DurationMs   int64               `json:"duration_ms"`
+	InputTokens  int                 `json:"input_tokens"`  // approximate
+	OutputTokens int                 `json:"output_tokens"` // approximate
+	OpsRequested int                 `json:"ops_requested"`
+	OpsApplied   int                 `json:"ops_applied"`
+	OpsRejected  int                 `json:"ops_rejected"`
+	Rationale    string              `json:"rationale"`
+	Before       int                 `json:"thoughts_before"`
+	After        int                 `json:"thoughts_after"`
+	OpsBreakdown map[string]int      `json:"ops_breakdown"` // add, update, reinforce, discard, merge counts
+	Error        string              `json:"error,omitempty"`
+	Results      []thoughts.OpResult `json:"results,omitempty"`
+	Dispatch     *DispatchResult     `json:"dispatch,omitempty"`
 }
 
 // Nap token budgets. These are the defaults; phase 3 wires them to

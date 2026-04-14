@@ -72,13 +72,13 @@ type Scheduler struct {
 	skills     NapSkillsLister
 	dispatcher *Dispatcher // optional — set via SetDispatcher before Start
 
-	mu         sync.Mutex
-	idleTimer  *time.Timer
-	lastNapAt  time.Time
-	runningMu  sync.Mutex // serializes concurrent RunNap attempts within this scheduler
-	stopCh     chan struct{}
-	wg         sync.WaitGroup
-	started    bool
+	mu        sync.Mutex
+	idleTimer *time.Timer
+	lastNapAt time.Time
+	runningMu sync.Mutex // serializes concurrent RunNap attempts within this scheduler
+	stopCh    chan struct{}
+	wg        sync.WaitGroup
+	started   bool
 }
 
 // SetDispatcher attaches a dispatcher that RunNap will invoke after each

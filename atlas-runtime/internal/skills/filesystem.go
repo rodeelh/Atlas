@@ -943,7 +943,7 @@ func fsSaveImage(_ context.Context, args json.RawMessage, supportDir string) (st
 
 type pdfRun struct {
 	text string
-	font string  // F1=Helvetica  F2=Helvetica-Bold  F3=Helvetica-Oblique  F4=Courier
+	font string // F1=Helvetica  F2=Helvetica-Bold  F3=Helvetica-Oblique  F4=Courier
 	size float64
 }
 
@@ -1034,7 +1034,7 @@ func parsePDFContent(title, content string) []pdfLine {
 		if level, text := parsePDFHeading(stripped); level > 0 {
 			type hStyle struct {
 				size, lh, sb float64
-				ww            int
+				ww           int
 			}
 			styles := [3]hStyle{{18, 26, 16, 57}, {15, 22, 12, 68}, {13, 19, 10, 79}}
 			s := styles[2]

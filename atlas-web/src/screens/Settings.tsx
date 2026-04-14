@@ -468,9 +468,9 @@ async function waitForAtlasRestart(): Promise<boolean> {
 
 function SettingsGroup({ title, children }: { title: string; children: preact.ComponentChild }) {
   return (
-    <div>
-      <div class="section-label">{title}</div>
-      <div class="card settings-group">{children}</div>
+    <div class="card settings-group">
+      <div class="card-header"><span class="card-title">{title}</span></div>
+      {children}
     </div>
   )
 }
@@ -519,7 +519,7 @@ function InfoTip({ text }: { text: string }) {
         ?
       </button>
       {pos && (
-        <span style={{ position: 'fixed', top: pos.top, left: pos.left, transform: 'translateY(-50%)', background: 'var(--surface, var(--bg))', border: '1px solid var(--border)', borderRadius: '8px', padding: '8px 11px', fontSize: '12px', color: 'var(--text-2)', width: '260px', zIndex: 9999, lineHeight: 1.5, boxShadow: '0 4px 20px rgba(0,0,0,0.22)', pointerEvents: 'none' }}>
+        <span style={{ position: 'fixed', top: pos.top, left: pos.left, transform: 'translateY(-50%)', background: 'var(--surface, var(--bg))', border: '1px solid var(--border)', borderRadius: 'var(--ui-radius)', padding: '8px 11px', fontSize: '12px', fontFamily: 'var(--ui-font)', color: 'var(--text-2)', width: '260px', zIndex: 9999, lineHeight: 1.5, boxShadow: '0 4px 20px rgba(0,0,0,0.22)', pointerEvents: 'none' }}>
           {text.split('\n').map((line, i) => (
             <span key={i} style={{ display: 'block' }}>
               {line}
@@ -852,7 +852,7 @@ function RemoteAccessSection({
     fontSize: '12px',
     background: 'var(--bg)',
     padding: '6px 10px',
-    borderRadius: '8px',
+    borderRadius: 'var(--ui-radius)',
     border: '1px solid var(--border)',
     whiteSpace: 'nowrap',
     width: '100%',

@@ -88,10 +88,10 @@ func TestApply_Update(t *testing.T) {
 	now := mustTime(t, "2026-04-07T12:00:00Z")
 	later := now.Add(time.Hour)
 	seed := []Thought{{
-		ID:          "T-01",
-		Body:        "original",
-		Confidence:  50, Value: 50, Class: ClassRead, Score: 25,
-		Created:     now, Reinforced: now,
+		ID:         "T-01",
+		Body:       "original",
+		Confidence: 50, Value: 50, Class: ClassRead, Score: 25,
+		Created: now, Reinforced: now,
 		SurfacedMax: 2,
 		Source:      "s",
 	}}

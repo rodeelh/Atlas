@@ -54,6 +54,76 @@ func TestAnalyze_ComposeExistingForScheduledChatDelivery(t *testing.T) {
 	assertContains(t, analysis.SuggestedGroups, "communication")
 }
 
+func TestAnalyze_ComposeExistingForExplicitTeamMemberCreation(t *testing.T) {
+	inventory, err := List(t.TempDir(), nil, nil)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	analysis := Analyze("Create an agent that triages my inbox and sends useful items to Telegram.", inventory)
+	if analysis.Decision != DecisionRunExisting {
+		t.Fatalf("decision = %q, want %q", analysis.Decision, DecisionRunExisting)
+	}
+	assertRequirementStatus(t, analysis, "team.manage", StatusAvailable)
+	assertContains(t, analysis.SuggestedGroups, "team")
+}
+
+func TestAnalyze_RunExistingForAgentDeletionRequest(t *testing.T) {
+	inventory, err := List(t.TempDir(), nil, nil)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	analysis := Analyze("Delete all agents.", inventory)
+	if analysis.Decision != DecisionRunExisting {
+		t.Fatalf("decision = %q, want %q", analysis.Decision, DecisionRunExisting)
+	}
+	assertRequirementStatus(t, analysis, "team.manage", StatusAvailable)
+	assertContains(t, analysis.SuggestedGroups, "team")
+}
+
+func TestAnalyze_RunExistingForAutomationDeletionRequest(t *testing.T) {
+	inventory, err := List(t.TempDir(), nil, nil)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	analysis := Analyze("Delete all automations.", inventory)
+	if analysis.Decision != DecisionRunExisting {
+		t.Fatalf("decision = %q, want %q", analysis.Decision, DecisionRunExisting)
+	}
+	assertRequirementStatus(t, analysis, "automation.schedule", StatusAvailable)
+	assertContains(t, analysis.SuggestedGroups, "automation")
+}
+
+func TestAnalyze_RunExistingForWorkflowDeletionRequest(t *testing.T) {
+	inventory, err := List(t.TempDir(), nil, nil)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	analysis := Analyze("Delete all workflows.", inventory)
+	if analysis.Decision != DecisionRunExisting {
+		t.Fatalf("decision = %q, want %q", analysis.Decision, DecisionRunExisting)
+	}
+	assertRequirementStatus(t, analysis, "workflow.compose", StatusAvailable)
+	assertContains(t, analysis.SuggestedGroups, "workflow")
+}
+
+func TestAnalyze_RunExistingForAutomationActivationRequest(t *testing.T) {
+	inventory, err := List(t.TempDir(), nil, nil)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	analysis := Analyze("Activate all automations.", inventory)
+	if analysis.Decision != DecisionRunExisting {
+		t.Fatalf("decision = %q, want %q", analysis.Decision, DecisionRunExisting)
+	}
+	assertRequirementStatus(t, analysis, "automation.schedule", StatusAvailable)
+	assertContains(t, analysis.SuggestedGroups, "automation")
+}
+
 func TestAnalyze_AskForPrerequisiteForAuthorizedChannel(t *testing.T) {
 	inventory, err := List(t.TempDir(), nil, nil)
 	if err != nil {

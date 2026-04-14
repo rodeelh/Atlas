@@ -19,10 +19,6 @@ atlas-runtime/config.json
 atlas-runtime/go-runtime-config.json
 atlas-runtime/models/
 
-# TUI local artifacts
-atlas-tui/atlas
-atlas-tui/config.json
-
 # Web UI build artifacts
 atlas-web/node_modules/
 atlas-web/dist/

@@ -138,6 +138,12 @@ type ForgePersistFn func(specJSON, plansJSON, summary, rationale, contractJSON s
 // Registry maps action IDs to SkillEntry.
 type Registry struct {
 	entries        map[string]SkillEntry
+	groupByAction  map[string]string
+	groupSignals   map[string]groupSignals
+	groupDescs     map[string]string
+	groupThreshold map[string]int
+	aliasToAction  map[string]string
+	publicByAction map[string]string
 	supportDir     string
 	db             *storage.DB
 	browserMgr     *browser.Manager
@@ -162,16 +168,34 @@ type ToolCapabilityGroupManifest struct {
 	ToolCount    int
 }
 
+// RoutingContract declares how a skill surface should be grouped and triggered
+// by natural-language requests. Built-in modules and third-party skills should
+// both use this contract so routing evolves consistently as Atlas grows.
+type RoutingContract struct {
+	Group       string
+	Description string
+	Phrases     []string
+	Words       []string
+	Pairs       [][2]string
+	Threshold   int
+}
+
 const policyCacheTTL = 5 * time.Second
 
 // NewRegistry creates a Registry with all built-in skills registered.
 // Pass a non-nil browserMgr to enable browser control and session skills.
 func NewRegistry(supportDir string, db *storage.DB, browserMgr *browser.Manager) *Registry {
 	r := &Registry{
-		entries:    make(map[string]SkillEntry),
-		supportDir: supportDir,
-		db:         db,
-		browserMgr: browserMgr,
+		entries:        make(map[string]SkillEntry),
+		groupByAction:  make(map[string]string),
+		groupSignals:   make(map[string]groupSignals),
+		groupDescs:     make(map[string]string),
+		groupThreshold: make(map[string]int),
+		aliasToAction:  make(map[string]string),
+		publicByAction: make(map[string]string),
+		supportDir:     supportDir,
+		db:             db,
+		browserMgr:     browserMgr,
 	}
 	r.registerInfo()
 	r.registerInfoSkill()
@@ -191,6 +215,7 @@ func NewRegistry(supportDir string, db *storage.DB, browserMgr *browser.Manager)
 	r.registerMemory()
 	r.registerVoice()
 	r.registerMaps()
+	r.registerBuiltInRoutingContracts()
 	return r
 }
 
@@ -208,6 +233,9 @@ func (r *Registry) register(entry SkillEntry) {
 		entry.ActionClass = defaultActionClass(entry.PermLevel)
 	}
 	r.entries[entry.Def.Name] = entry
+	if strings.HasPrefix(entry.Def.Name, "team.") {
+		r.registerActionAlias(entry.Def.Name, "agent."+strings.TrimPrefix(entry.Def.Name, "team."))
+	}
 }
 
 // RegisterExternal adds a module-owned action to the skill registry.
@@ -241,13 +269,140 @@ func defaultActionClass(permLevel string) ActionClass {
 // ToolCount returns the total number of registered tools.
 func (r *Registry) ToolCount() int { return len(r.entries) }
 
+func (r *Registry) registerActionAlias(canonicalID, publicID string) {
+	canonicalID = strings.TrimSpace(canonicalID)
+	publicID = strings.TrimSpace(publicID)
+	if canonicalID == "" || publicID == "" || canonicalID == publicID {
+		return
+	}
+	if _, ok := r.entries[canonicalID]; !ok {
+		return
+	}
+	r.aliasToAction[publicID] = canonicalID
+	r.publicByAction[canonicalID] = publicID
+}
+
+func (r *Registry) PublicActionID(actionID string) string {
+	actionID = r.normalise(actionID)
+	if publicID := strings.TrimSpace(r.publicByAction[actionID]); publicID != "" {
+		return publicID
+	}
+	return actionID
+}
+
+func (r *Registry) marshalToolDef(actionID string, def ToolDef) map[string]any {
+	def.Name = r.PublicActionID(actionID)
+	return def.MarshalOpenAI()
+}
+
 // ToolDefinitions returns the OpenAI tools array (all registered actions).
 func (r *Registry) ToolDefinitions() []map[string]any {
 	out := make([]map[string]any, 0, len(r.entries))
-	for _, e := range r.entries {
-		out = append(out, e.Def.MarshalOpenAI())
+	for actionID, e := range r.entries {
+		out = append(out, r.marshalToolDef(actionID, e.Def))
 	}
 	return out
+}
+
+// FilteredByPatterns returns a shallow registry copy containing only actions
+// whose IDs match one of the provided allow patterns. A pattern matches when:
+//   - it equals the full action ID
+//   - it ends with "." and the action has that prefix
+//   - it ends with "*" and the action has that prefix without the "*"
+func (r *Registry) FilteredByPatterns(patterns []string) *Registry {
+	filtered := &Registry{
+		entries:        make(map[string]SkillEntry),
+		groupByAction:  make(map[string]string),
+		groupSignals:   make(map[string]groupSignals),
+		groupDescs:     make(map[string]string),
+		groupThreshold: make(map[string]int),
+		aliasToAction:  make(map[string]string),
+		publicByAction: make(map[string]string),
+		supportDir:     r.supportDir,
+		db:             r.db,
+		browserMgr:     r.browserMgr,
+		voiceMgr:       r.voiceMgr,
+		visionFn:       r.visionFn,
+		forgePersistFn: r.forgePersistFn,
+	}
+	for actionID, entry := range r.entries {
+		if !matchesAnyPattern(actionID, patterns) {
+			continue
+		}
+		filtered.entries[actionID] = entry
+		if publicID := r.publicByAction[actionID]; publicID != "" {
+			filtered.publicByAction[actionID] = publicID
+			filtered.aliasToAction[publicID] = actionID
+		}
+	}
+	for actionID, group := range r.groupByAction {
+		if matchesAnyPattern(actionID, patterns) {
+			filtered.groupByAction[actionID] = group
+		}
+	}
+	for group, signals := range r.groupSignals {
+		filtered.groupSignals[group] = signals
+	}
+	for group, desc := range r.groupDescs {
+		filtered.groupDescs[group] = desc
+	}
+	for group, threshold := range r.groupThreshold {
+		filtered.groupThreshold[group] = threshold
+	}
+	return filtered
+}
+
+// FilteredByActionClasses returns a shallow registry copy containing only
+// actions whose ActionClass is in the allowed list. An empty list is a no-op
+// (all entries are kept), so callers can pass AllowedToolClasses directly
+// without checking length first.
+func (r *Registry) FilteredByActionClasses(classes []string) *Registry {
+	if len(classes) == 0 {
+		return r
+	}
+	allowed := make(map[ActionClass]bool, len(classes))
+	for _, c := range classes {
+		allowed[ActionClass(strings.TrimSpace(c))] = true
+	}
+	filtered := &Registry{
+		entries:        make(map[string]SkillEntry),
+		groupByAction:  make(map[string]string),
+		groupSignals:   make(map[string]groupSignals),
+		groupDescs:     make(map[string]string),
+		groupThreshold: make(map[string]int),
+		aliasToAction:  make(map[string]string),
+		publicByAction: make(map[string]string),
+		supportDir:     r.supportDir,
+		db:             r.db,
+		browserMgr:     r.browserMgr,
+		voiceMgr:       r.voiceMgr,
+		visionFn:       r.visionFn,
+		forgePersistFn: r.forgePersistFn,
+	}
+	for actionID, entry := range r.entries {
+		if allowed[entry.ActionClass] {
+			filtered.entries[actionID] = entry
+			if publicID := r.publicByAction[actionID]; publicID != "" {
+				filtered.publicByAction[actionID] = publicID
+				filtered.aliasToAction[publicID] = actionID
+			}
+		}
+	}
+	for actionID, group := range r.groupByAction {
+		if _, ok := filtered.entries[actionID]; ok {
+			filtered.groupByAction[actionID] = group
+		}
+	}
+	for group, signals := range r.groupSignals {
+		filtered.groupSignals[group] = signals
+	}
+	for group, desc := range r.groupDescs {
+		filtered.groupDescs[group] = desc
+	}
+	for group, threshold := range r.groupThreshold {
+		filtered.groupThreshold[group] = threshold
+	}
+	return filtered
 }
 
 // ToolDefsForGroups returns tools whose capability group is in groups. Unknown
@@ -270,7 +425,7 @@ func (r *Registry) ToolDefsForGroupsForMessage(groups []string, userMessage stri
 	}
 	selected := make(map[string][]SkillEntry)
 	for _, e := range r.entries {
-		group := toolCapabilityGroup(e.Def.Name)
+		group := r.toolCapabilityGroup(e.Def.Name)
 		if wanted[group] {
 			selected[group] = append(selected[group], e)
 		}
@@ -284,13 +439,13 @@ func (r *Registry) ToolDefsForGroupsForMessage(groups []string, userMessage stri
 			continue
 		}
 		for _, e := range r.narrowGroupEntries(group, entries, userMessage) {
-			out = append(out, e.Def.MarshalOpenAI())
+			out = append(out, r.marshalToolDef(e.Def.Name, e.Def))
 		}
 		delete(selected, group)
 	}
 	for _, entries := range selected {
 		for _, e := range entries {
-			out = append(out, e.Def.MarshalOpenAI())
+			out = append(out, r.marshalToolDef(e.Def.Name, e.Def))
 		}
 	}
 	return out
@@ -299,10 +454,13 @@ func (r *Registry) ToolDefsForGroupsForMessage(groups []string, userMessage stri
 var capabilityGroupOrder = []string{
 	"meta", "weather", "maps", "web", "finance", "office", "media", "mac", "shell",
 	"files", "vault", "browser", "voice", "communication", "creative",
-	"workflow", "automation", "forge", "dashboards", "custom",
+	"workflow", "automation", "team", "forge", "dashboards", "custom",
 }
 
-func capabilityGroupDescription(group string) string {
+func (r *Registry) capabilityGroupDescription(group string) string {
+	if desc := strings.TrimSpace(r.groupDescs[group]); desc != "" {
+		return desc
+	}
 	switch group {
 	case "meta":
 		return "Atlas runtime and self-status questions."
@@ -338,6 +496,8 @@ func capabilityGroupDescription(group string) string {
 		return "Workflow runs, step status, and workflow orchestration."
 	case "automation":
 		return "Automations, recurring runs, and gremlin scheduling."
+	case "team":
+		return "Agent roster management, agent state changes, and delegation."
 	case "forge":
 		return "Forge proposals, skill creation, and skill installation."
 	case "dashboards":
@@ -355,7 +515,7 @@ func capabilityGroupDescription(group string) string {
 func (r *Registry) ToolCapabilityManifest() []ToolCapabilityGroupManifest {
 	groupTools := make(map[string][]string)
 	for _, e := range r.entries {
-		group := toolCapabilityGroup(e.Def.Name)
+		group := r.toolCapabilityGroup(e.Def.Name)
 		if group == "core" {
 			continue
 		}
@@ -375,10 +535,46 @@ func (r *Registry) ToolCapabilityManifest() []ToolCapabilityGroupManifest {
 		}
 		out = append(out, ToolCapabilityGroupManifest{
 			Name:         group,
-			Description:  capabilityGroupDescription(group),
-			ExampleTools: examples,
+			Description:  r.capabilityGroupDescription(group),
+			ExampleTools: r.publicExampleTools(examples),
 			ToolCount:    len(names),
 		})
+	}
+	extraGroups := make([]string, 0, len(groupTools))
+	for group := range groupTools {
+		found := false
+		for _, ordered := range capabilityGroupOrder {
+			if ordered == group {
+				found = true
+				break
+			}
+		}
+		if !found {
+			extraGroups = append(extraGroups, group)
+		}
+	}
+	sort.Strings(extraGroups)
+	for _, group := range extraGroups {
+		names := groupTools[group]
+		sort.Strings(names)
+		examples := append([]string(nil), names...)
+		if len(examples) > 3 {
+			examples = examples[:3]
+		}
+		out = append(out, ToolCapabilityGroupManifest{
+			Name:         group,
+			Description:  r.capabilityGroupDescription(group),
+			ExampleTools: r.publicExampleTools(examples),
+			ToolCount:    len(names),
+		})
+	}
+	return out
+}
+
+func (r *Registry) publicExampleTools(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		out = append(out, r.PublicActionID(name))
 	}
 	return out
 }
@@ -388,7 +584,10 @@ func (r *Registry) ToolCapabilityManifest() []ToolCapabilityGroupManifest {
 //
 // "core" is always-on. All other groups are scored against the user message
 // via scoreGroups() in heuristic.go and activated when they meet their threshold.
-func toolCapabilityGroup(name string) string {
+func (r *Registry) toolCapabilityGroup(name string) string {
+	if group := strings.TrimSpace(r.groupByAction[name]); group != "" {
+		return group
+	}
 	switch {
 	// Always-on: time/date utilities only
 	case name == "info.current_time",
@@ -442,6 +641,8 @@ func toolCapabilityGroup(name string) string {
 		return "workflow"
 	case strings.HasPrefix(name, "automation."), strings.HasPrefix(name, "gremlin."):
 		return "automation"
+	case strings.HasPrefix(name, "team."):
+		return "team"
 	case strings.HasPrefix(name, "forge."):
 		return "forge"
 	case strings.HasPrefix(name, "dashboard."):
@@ -478,6 +679,7 @@ var groupThresholds = map[string]int{
 	"creative":      1,
 	"workflow":      1,
 	"automation":    1,
+	"team":          1,
 	"forge":         1,
 	"dashboards":    1,
 	"custom":        1,
@@ -504,9 +706,9 @@ func (r *Registry) SelectiveToolDefs(userMessage string) []map[string]any {
 	triggered := map[string]bool{"core": true}
 
 	// Score all groups and activate those meeting their threshold.
-	scores := scoreGroups(userMessage)
+	scores := r.scoreGroups(userMessage)
 	for group, score := range scores {
-		threshold, ok := groupThresholds[group]
+		threshold, ok := r.thresholdForGroup(group)
 		if ok && score >= threshold {
 			triggered[group] = true
 		}
@@ -527,7 +729,7 @@ func (r *Registry) SelectiveToolDefs(userMessage string) []map[string]any {
 	var groups []string
 	var customIncluded, customTotal int
 	for _, e := range r.entries {
-		group := toolCapabilityGroup(e.Def.Name)
+		group := r.toolCapabilityGroup(e.Def.Name)
 		if group == "custom" {
 			customTotal++
 		}
@@ -554,6 +756,148 @@ func (r *Registry) SelectiveToolDefs(userMessage string) []map[string]any {
 		map[string]string{"mode": "heuristic"})
 
 	return out
+}
+
+func (r *Registry) thresholdForGroup(group string) (int, bool) {
+	if threshold, ok := r.groupThreshold[group]; ok {
+		return threshold, true
+	}
+	threshold, ok := groupThresholds[group]
+	return threshold, ok
+}
+
+func (r *Registry) declareRoutingContract(prefixes []string, contract RoutingContract) {
+	group := strings.ToLower(strings.TrimSpace(contract.Group))
+	if group == "" {
+		return
+	}
+	for _, prefix := range prefixes {
+		prefix = strings.TrimSpace(prefix)
+		if prefix == "" {
+			continue
+		}
+		for actionID := range r.entries {
+			if strings.HasPrefix(actionID, prefix) || actionID == prefix {
+				r.groupByAction[actionID] = group
+			}
+		}
+	}
+	if desc := strings.TrimSpace(contract.Description); desc != "" {
+		r.groupDescs[group] = desc
+	}
+	if len(contract.Phrases) > 0 || len(contract.Words) > 0 || len(contract.Pairs) > 0 {
+		merged := r.groupSignals[group]
+		merged.phrases = append(merged.phrases, contract.Phrases...)
+		merged.words = append(merged.words, contract.Words...)
+		merged.pairs = append(merged.pairs, contract.Pairs...)
+		r.groupSignals[group] = merged
+	}
+	if contract.Threshold > 0 {
+		current, ok := r.groupThreshold[group]
+		if !ok || contract.Threshold < current {
+			r.groupThreshold[group] = contract.Threshold
+		}
+	}
+}
+
+func (r *Registry) registerBuiltInRoutingContracts() {
+	for _, spec := range []struct {
+		prefixes []string
+		contract RoutingContract
+	}{
+		{
+			prefixes: []string{"atlas."},
+			contract: RoutingContract{Group: "meta", Description: "Atlas runtime and self-status questions.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"weather."},
+			contract: RoutingContract{Group: "weather", Description: "Current weather, forecasts, and local conditions.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"maps."},
+			contract: RoutingContract{Group: "maps", Description: "Geocoding, place search, directions, distances, and current location.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"web.", "websearch."},
+			contract: RoutingContract{Group: "web", Description: "Search the web, read URLs, and summarize web content.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"finance.", "info.currency_for_location", "info.currency_convert"},
+			contract: RoutingContract{Group: "finance", Description: "Market quotes, crypto prices, currency and exchange rates.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"applescript.calendar_", "applescript.reminders_", "applescript.mail_", "applescript.contacts_", "applescript.notes_"},
+			contract: RoutingContract{Group: "office", Description: "Email, calendar, reminders, contacts, and notes.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"applescript.music_", "applescript.safari_", "applescript.system_info"},
+			contract: RoutingContract{Group: "media", Description: "Music playback, Safari, and system/media info.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"system."},
+			contract: RoutingContract{Group: "mac", Description: "Open apps, Finder, clipboard, and local Mac actions.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"terminal.", "applescript.run_custom"},
+			contract: RoutingContract{Group: "shell", Description: "Terminal commands and explicit script execution.", Threshold: 3},
+		},
+		{
+			prefixes: []string{"fs."},
+			contract: RoutingContract{Group: "files", Description: "Read, search, write, and manage files or folders.", Threshold: 2},
+		},
+		{
+			prefixes: []string{"vault."},
+			contract: RoutingContract{Group: "vault", Description: "Credentials, secrets, passwords, and 2FA.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"browser."},
+			contract: RoutingContract{Group: "browser", Description: "Interactive browser automation and web page control.", Threshold: 2},
+		},
+		{
+			prefixes: []string{"voice."},
+			contract: RoutingContract{Group: "voice", Description: "Speech, transcription, and voice playback controls.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"communication."},
+			contract: RoutingContract{Group: "communication", Description: "Chat channels, delivery destinations, and communications setup.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"image."},
+			contract: RoutingContract{Group: "creative", Description: "Images and other creative-generation actions.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"workflow."},
+			contract: RoutingContract{Group: "workflow", Description: "Workflow runs, step status, and workflow orchestration.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"automation.", "gremlin."},
+			contract: RoutingContract{Group: "automation", Description: "Automations, recurring runs, and gremlin scheduling.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"team."},
+			contract: RoutingContract{Group: "team", Description: "Agent roster management, agent state changes, and delegation.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"forge."},
+			contract: RoutingContract{Group: "forge", Description: "Forge proposals, skill creation, and skill installation.", Threshold: 1},
+		},
+		{
+			prefixes: []string{"dashboard."},
+			contract: RoutingContract{Group: "dashboards", Description: "Dashboard creation, templates, and widget resolution.", Threshold: 1},
+		},
+	} {
+		if signals, ok := intentSignals[spec.contract.Group]; ok {
+			spec.contract.Phrases = append(spec.contract.Phrases, signals.phrases...)
+			spec.contract.Words = append(spec.contract.Words, signals.words...)
+			spec.contract.Pairs = append(spec.contract.Pairs, signals.pairs...)
+		}
+		r.declareRoutingContract(spec.prefixes, spec.contract)
+	}
+	for actionID := range r.entries {
+		if strings.HasPrefix(actionID, "team.") {
+			r.registerActionAlias(actionID, "agent."+strings.TrimPrefix(actionID, "team."))
+		}
+	}
 }
 
 func (r *Registry) narrowGroupEntries(group string, entries []SkillEntry, userMessage string) []SkillEntry {
@@ -737,16 +1081,71 @@ func (r *Registry) Normalise(actionID string) string { return r.normalise(action
 // normalise converts an actionID arriving from the AI (which uses oaiName encoding)
 // back to the internal dot-separated form used as registry keys.
 func (r *Registry) normalise(actionID string) string {
+	if canonical, ok := r.aliasToAction[actionID]; ok {
+		return canonical
+	}
 	// If it's already in the registry as-is, use it directly.
 	if _, ok := r.entries[actionID]; ok {
 		return actionID
 	}
 	// Try converting __ → . (AI sent the OAI-safe name back).
 	canonical := fromOAIName(actionID)
+	if alias, ok := r.aliasToAction[canonical]; ok {
+		return alias
+	}
 	if _, ok := r.entries[canonical]; ok {
 		return canonical
 	}
 	return actionID
+}
+
+// MatchesAnyPattern is the exported, canonical skill-pattern matcher used
+// everywhere in Atlas that needs to check whether an action ID is covered by
+// a list of user-supplied patterns. It is the single source of truth for
+// pattern matching across team delegation, workflow ToolPolicy, and any
+// other caller that scopes tool access. All four syntaxes are accepted:
+//
+//   - bare prefix   "fs"           → matches "fs.read_file", "fs.write_file", …
+//   - dot suffix    "fs."          → same effect as bare prefix
+//   - wildcard      "fs.*"         → same effect as bare prefix
+//   - exact         "fs.read_file" → matches only that action
+//
+// A bare prefix "fs" will NOT match "filesystem.check" — the separator dot is
+// required (prevents false positives across similarly-named namespaces).
+func MatchesAnyPattern(actionID string, patterns []string) bool {
+	return matchesAnyPattern(actionID, patterns)
+}
+
+func matchesAnyPattern(actionID string, patterns []string) bool {
+	actionID = strings.TrimSpace(actionID)
+	if actionID == "" {
+		return false
+	}
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		switch {
+		case actionID == pattern:
+			return true
+		case strings.HasSuffix(pattern, "."):
+			if strings.HasPrefix(actionID, pattern) {
+				return true
+			}
+		case strings.HasSuffix(pattern, "*"):
+			prefix := strings.TrimSuffix(pattern, "*")
+			if prefix != "" && strings.HasPrefix(actionID, prefix) {
+				return true
+			}
+		default:
+			// Bare prefix like "fs" should match "fs.read_file", "fs.write_file", etc.
+			if strings.HasPrefix(actionID, pattern+".") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // NeedsApproval checks whether actionID requires user confirmation before
@@ -883,5 +1282,21 @@ func (r *Registry) loadPolicy(actionID string) string {
 		}
 		r.policyCacheAt = time.Now()
 	}
-	return r.policyCache[actionID]
+	if policy := r.policyCache[actionID]; policy != "" {
+		return policy
+	}
+	if publicID := r.publicByAction[actionID]; publicID != "" {
+		if policy := r.policyCache[publicID]; policy != "" {
+			return policy
+		}
+	}
+	if canonical, ok := r.aliasToAction[actionID]; ok {
+		if policy := r.policyCache[canonical]; policy != "" {
+			return policy
+		}
+		if publicID := r.publicByAction[canonical]; publicID != "" {
+			return r.policyCache[publicID]
+		}
+	}
+	return ""
 }

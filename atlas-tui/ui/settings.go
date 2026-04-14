@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-
-	"github.com/ralhassan/atlas-tui/client"
+	"github.com/rodeelh/atlas-tui/client"
 )
+
+// ── Message types ─────────────────────────────────────────────────────────────
 
 type settingsLoadedMsg struct {
 	cfg *client.RuntimeConfig
@@ -22,95 +22,84 @@ type settingsSavedMsg struct {
 	err error
 }
 
-type settingsClearStatusMsg struct{}
+// ── Field descriptor ──────────────────────────────────────────────────────────
 
-// settingsField describes a single editable config field.
+type fieldKind int
+
+const (
+	fieldString fieldKind = iota
+	fieldInt
+	fieldBool
+	fieldReadonly
+)
+
 type settingsField struct {
 	key     string // JSON key for PUT /config
-	label   string
-	value   string
-	kind    string // "string" | "int" | "bool" | "readonly"
+	label   string // display label
+	value   string // current string representation
+	kind    fieldKind
 	editing bool
 }
 
+// ── Model ─────────────────────────────────────────────────────────────────────
+
+// SettingsModel renders the config editor.
 type SettingsModel struct {
-	client    *client.Client
-	width     int
-	height    int
-	fields    []settingsField
-	cursor    int
-	textinput textinput.Model
-	loading   bool
-	saving    bool
-	saveMsg   string
-	saveErr   bool
-	err       string
-	cfg       *client.RuntimeConfig
+	client  *client.Client
+	width   int
+	height  int
+	fields  []settingsField
+	cursor  int
+	viewport viewport.Model
+	input   textinput.Model
+	loading bool
+	saving  bool
+	saveMsg string
+	saveErr bool
+	err     string
+	rawCfg  *client.RuntimeConfig
 }
 
 func NewSettingsModel(c *client.Client) SettingsModel {
 	ti := textinput.New()
-	ti.CharLimit = 200
-
-	m := SettingsModel{
-		client:    c,
-		textinput: ti,
-		loading:   true,
+	ti.CharLimit = 256
+	vp := viewport.New(80, 20)
+	vp.SetContent("")
+	return SettingsModel{
+		client:   c,
+		viewport: vp,
+		input:    ti,
+		loading:  true,
 	}
-	return m
 }
 
 func (m SettingsModel) Init() tea.Cmd {
-	return m.loadConfig()
+	return fetchSettings(m.client)
 }
 
-func (m SettingsModel) loadConfig() tea.Cmd {
-	c := m.client
+// OnFocus is called when the user switches to this tab.
+func (m SettingsModel) OnFocus() tea.Cmd {
+	return fetchSettings(m.client)
+}
+
+func fetchSettings(c *client.Client) tea.Cmd {
 	return func() tea.Msg {
 		cfg, err := c.GetConfig()
 		return settingsLoadedMsg{cfg: cfg, err: err}
 	}
 }
 
-func (m *SettingsModel) buildFields(cfg *client.RuntimeConfig) {
-	m.cfg = cfg
-	m.fields = []settingsField{
-		{
-			key:   "defaultOpenAIModel",
-			label: "model",
-			value: cfg.Model,
-			kind:  "string",
-		},
-		{
-			key:   "maxAgentIterations",
-			label: "max agent iterations",
-			value: strconv.Itoa(cfg.MaxAgentIterations),
-			kind:  "int",
-		},
-		{
-			key:   "enableMultiAgentOrchestration",
-			label: "multi-agent orchestration",
-			value: boolStr(cfg.EnableMultiAgentOrchestration),
-			kind:  "bool",
-		},
-		{
-			key:   "maxParallelAgents",
-			label: "max parallel agents",
-			value: strconv.Itoa(cfg.MaxParallelAgents),
-			kind:  "int",
-		},
-		{
-			key:   "workerMaxIterations",
-			label: "worker max iterations",
-			value: strconv.Itoa(cfg.WorkerMaxIterations),
-			kind:  "int",
-		},
-		{
-			key:   "runtimePort",
-			label: "port",
-			value: strconv.Itoa(cfg.Port),
-			kind:  "readonly",
-		},
+func configToFields(cfg *client.RuntimeConfig) []settingsField {
+	return []settingsField{
+		{key: "activeAIProvider", label: "provider", value: cfg.ActiveAIProvider, kind: fieldString},
+		{key: "defaultOpenAIModel", label: "model", value: cfg.DefaultOpenAIModel, kind: fieldString},
+		{key: "personaName", label: "persona name", value: cfg.PersonaName, kind: fieldString},
+		{key: "userName", label: "user name", value: cfg.UserName, kind: fieldString},
+		{key: "maxAgentIterations", label: "max iterations", value: fmt.Sprintf("%d", cfg.MaxAgentIterations), kind: fieldInt},
+		{key: "maxRetrievedMemoriesPerTurn", label: "memories per turn", value: fmt.Sprintf("%d", cfg.MaxRetrievedMemoriesPerTurn), kind: fieldInt},
+		{key: "memoryEnabled", label: "memory enabled", value: boolStr(cfg.MemoryEnabled), kind: fieldBool},
+		{key: "actionSafetyMode", label: "safety mode", value: cfg.ActionSafetyMode, kind: fieldString},
+		{key: "runtimePort", label: "port", value: fmt.Sprintf("%d", cfg.RuntimePort), kind: fieldReadonly},
 	}
 }
 
@@ -122,57 +111,50 @@ func boolStr(b bool) string {
 }
 
 func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
-	var cmds []tea.Cmd
-
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-
 	case settingsLoadedMsg:
 		m.loading = false
 		if msg.err != nil {
 			m.err = msg.err.Error()
 		} else {
-			m.buildFields(msg.cfg)
+			m.err = ""
+			m.rawCfg = msg.cfg
+			m.fields = configToFields(msg.cfg)
 		}
+		m.syncViewport()
+		return m, nil
 
 	case settingsSavedMsg:
 		m.saving = false
 		if msg.err != nil {
-			m.saveMsg = "error: " + msg.err.Error()
+			m.saveMsg = "✕ " + msg.err.Error()
 			m.saveErr = true
 		} else {
-			m.saveMsg = "saved"
+			m.saveMsg = "✓ saved"
 			m.saveErr = false
 		}
-		cmds = append(cmds, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
-			return settingsClearStatusMsg{}
-		}))
-
-	case settingsClearStatusMsg:
-		m.saveMsg = ""
-		m.saveErr = false
+		m.syncViewport()
+		return m, nil
 
 	case tea.KeyMsg:
-		// Editing mode
-		if m.cursor < len(m.fields) && m.fields[m.cursor].editing {
+		// If currently editing a field.
+		if m.isEditing() {
 			switch msg.String() {
 			case "enter":
-				m.fields[m.cursor].value = m.textinput.Value()
-				m.fields[m.cursor].editing = false
-				m.textinput.Blur()
+				return m.commitEdit()
 			case "esc":
-				m.fields[m.cursor].editing = false
-				m.textinput.Blur()
+				m.cancelEdit()
+				m.syncViewport()
+				return m, nil
 			default:
-				var tiCmd tea.Cmd
-				m.textinput, tiCmd = m.textinput.Update(msg)
-				cmds = append(cmds, tiCmd)
+				var inputCmd tea.Cmd
+				m.input, inputCmd = m.input.Update(msg)
+				m.syncViewport()
+				return m, inputCmd
 			}
-			return m, tea.Batch(cmds...)
 		}
 
+		// Navigation when not editing.
 		switch msg.String() {
 		case "up", "k":
 			if m.cursor > 0 {
@@ -182,158 +164,191 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			if m.cursor < len(m.fields)-1 {
 				m.cursor++
 			}
-		case "enter":
-			if m.cursor < len(m.fields) {
-				f := &m.fields[m.cursor]
-				switch f.kind {
-				case "bool":
-					if f.value == "true" {
-						f.value = "false"
-					} else {
-						f.value = "true"
-					}
-				case "readonly":
-					// no-op
-				default:
-					f.editing = true
-					m.textinput.SetValue(f.value)
-					m.textinput.Focus()
-				}
-			}
-		case " ":
-			// Toggle bool with space too
-			if m.cursor < len(m.fields) && m.fields[m.cursor].kind == "bool" {
-				f := &m.fields[m.cursor]
-				if f.value == "true" {
-					f.value = "false"
-				} else {
-					f.value = "true"
-				}
-			}
-		case "s":
-			if !m.saving && len(m.fields) > 0 {
-				m.saving = true
-				cmds = append(cmds, m.saveConfig())
-			}
+		case "enter", " ":
+			m.startEdit()
 		case "r":
 			m.loading = true
-			m.err = ""
-			cmds = append(cmds, m.loadConfig())
+			return m, fetchSettings(m.client)
 		}
+		m.syncViewport()
 	}
-
-	return m, tea.Batch(cmds...)
+	return m, nil
 }
 
-func (m SettingsModel) saveConfig() tea.Cmd {
-	patch := make(map[string]any)
-	for _, f := range m.fields {
-		if f.kind == "readonly" {
-			continue
-		}
-		switch f.kind {
-		case "bool":
-			patch[f.key] = f.value == "true"
-		case "int":
-			n, err := strconv.Atoi(f.value)
-			if err == nil {
-				patch[f.key] = n
-			}
-		default:
-			patch[f.key] = f.value
+func (m SettingsModel) isEditing() bool {
+	if m.cursor < 0 || m.cursor >= len(m.fields) {
+		return false
+	}
+	return m.fields[m.cursor].editing
+}
+
+func (m *SettingsModel) startEdit() {
+	if m.cursor < 0 || m.cursor >= len(m.fields) {
+		return
+	}
+	f := &m.fields[m.cursor]
+	if f.kind == fieldReadonly {
+		return
+	}
+	f.editing = true
+	m.input.SetValue(f.value)
+	m.input.Focus()
+	m.input.CursorEnd()
+	m.saveMsg = ""
+}
+
+func (m *SettingsModel) cancelEdit() {
+	for i := range m.fields {
+		m.fields[i].editing = false
+	}
+	m.input.Blur()
+}
+
+func (m SettingsModel) commitEdit() (SettingsModel, tea.Cmd) {
+	if m.cursor < 0 || m.cursor >= len(m.fields) {
+		return m, nil
+	}
+	f := &m.fields[m.cursor]
+	newVal := strings.TrimSpace(m.input.Value())
+
+	// Validate by type.
+	if f.kind == fieldInt {
+		if _, err := strconv.Atoi(newVal); err != nil {
+			m.saveMsg = "✕ must be a number"
+			m.saveErr = true
+			m.cancelEdit()
+			return m, nil
 		}
 	}
-	c := m.client
+	if f.kind == fieldBool {
+		if newVal != "true" && newVal != "false" {
+			m.saveMsg = "✕ must be true or false"
+			m.saveErr = true
+			m.cancelEdit()
+			return m, nil
+		}
+	}
+
+	f.value = newVal
+	f.editing = false
+	m.input.Blur()
+	m.saving = true
+	m.saveMsg = ""
+
+	return m, saveSettings(m.client, m.fields)
+}
+
+func saveSettings(c *client.Client, fields []settingsField) tea.Cmd {
 	return func() tea.Msg {
+		patch := make(map[string]any, len(fields))
+		for _, f := range fields {
+			if f.kind == fieldReadonly {
+				continue
+			}
+			switch f.kind {
+			case fieldInt:
+				n, _ := strconv.Atoi(f.value)
+				patch[f.key] = n
+			case fieldBool:
+				patch[f.key] = f.value == "true"
+			default:
+				patch[f.key] = f.value
+			}
+		}
 		err := c.UpdateConfig(patch)
 		return settingsSavedMsg{err: err}
 	}
 }
 
+func (m *SettingsModel) SetSize(w, h int) {
+	m.width = w
+	m.height = h
+	m.viewport.Width = w
+	m.viewport.Height = max(1, h)
+	m.input.Width = max(1, w-8)
+	m.syncViewport()
+}
+
 func (m SettingsModel) View() string {
-	if m.width == 0 {
-		return ""
-	}
-
-	var sb strings.Builder
-
 	if m.loading {
-		sb.WriteString("  loading settings...\n")
-		return sb.String()
+		return textMuted.Render("\n  loading…")
 	}
-
 	if m.err != "" {
-		sb.WriteString(lipgloss.NewStyle().Foreground(ColorDanger).Render("  error: "+m.err) + "\n")
-		sb.WriteString(FieldDimmed.Render("  r reload"))
-		return sb.String()
+		return textError.Render("\n  ✕ "+m.err+"\n\n") +
+			textMuted.Render("  r to retry")
 	}
+	return m.viewport.View()
+}
 
-	sb.WriteString("  " + FieldSelected.Render("Settings") + "\n\n")
+func (m SettingsModel) renderFields() string {
+	var sb strings.Builder
+	sb.WriteString("\n")
+	sb.WriteString(sectionTitleStyle.Render("  settings"))
+	sb.WriteString("\n\n")
 
 	for i, f := range m.fields {
-		cursor := "  "
+		cursor := "   "
 		if i == m.cursor {
-			cursor = "> "
+			cursor = textPrimary.Render(" › ")
 		}
 
-		var valueStr string
+		label := labelStyle.Render(f.label)
+		var value string
+
 		if f.editing {
-			valueStr = m.textinput.View()
+			value = inputPromptStyle.Render("[") + m.input.View() + inputPromptStyle.Render("]")
 		} else {
 			switch f.kind {
-			case "readonly":
-				valueStr = FieldDimmed.Render(f.value)
-			case "bool":
+			case fieldReadonly:
+				value = textMuted.Render(f.value)
+			case fieldBool:
 				if f.value == "true" {
-					valueStr = CheckboxSelected.Render("[on]")
+					value = textSuccess.Render(f.value)
 				} else {
-					valueStr = CheckboxUnselected.Render("[off]")
+					value = textMuted.Render(f.value)
 				}
 			default:
-				if i == m.cursor {
-					valueStr = FieldSelected.Render(f.value)
-				} else {
-					valueStr = FieldNormal.Render(f.value)
-				}
+				value = valueStyle.Render(f.value)
 			}
 		}
 
-		labelStyle := FieldDimmed
-		if i == m.cursor {
-			labelStyle = FieldSelected
-		}
-
-		line := fmt.Sprintf("%s%-28s %s",
-			cursor,
-			labelStyle.Render(f.label),
-			valueStr)
-		sb.WriteString(line + "\n")
+		sb.WriteString(cursor + label + value + "\n")
 	}
 
 	sb.WriteString("\n")
-
-	// Save status
 	if m.saveMsg != "" {
-		style := lipgloss.NewStyle().Foreground(ColorSuccess)
 		if m.saveErr {
-			style = lipgloss.NewStyle().Foreground(ColorDanger)
+			sb.WriteString(textError.Render("  " + m.saveMsg))
+		} else {
+			sb.WriteString(textSuccess.Render("  " + m.saveMsg))
 		}
-		sb.WriteString("  " + style.Render(m.saveMsg) + "\n")
+		sb.WriteString("\n\n")
 	}
-
 	if m.saving {
-		sb.WriteString("  saving...\n")
+		sb.WriteString(textMuted.Render("  saving…\n\n"))
 	}
+	sb.WriteString(textMuted.Render("  ↑↓ navigate  enter edit  esc cancel  r reload"))
 
-	// Pad to the full content budget so switching from a taller tab (e.g. status
-	// with its log viewport) doesn't leave old rows visible at the bottom.
-	result := sb.String()
-	budget := m.height - 3
-	if budget > 0 {
-		written := strings.Count(result, "\n")
-		if written < budget {
-			result += strings.Repeat("\n", budget-written)
-		}
+	return sb.String()
+}
+
+func (m *SettingsModel) syncViewport() {
+	if m.viewport.Width <= 0 || m.viewport.Height <= 0 {
+		return
 	}
-	return result
+	m.viewport.SetContent(m.renderFields())
+	m.ensureCursorVisible()
+}
+
+func (m *SettingsModel) ensureCursorVisible() {
+	line := 3 + m.cursor
+	if line < m.viewport.YOffset {
+		m.viewport.YOffset = line
+	}
+	if line >= m.viewport.YOffset+m.viewport.Height {
+		m.viewport.YOffset = line - m.viewport.Height + 1
+	}
+	if m.viewport.YOffset < 0 {
+		m.viewport.YOffset = 0
+	}
 }

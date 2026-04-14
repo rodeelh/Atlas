@@ -7,12 +7,24 @@ require (
 	github.com/go-chi/cors v1.2.1
 	github.com/go-rod/rod v0.116.2
 	github.com/go-rod/stealth v0.4.9
+	github.com/go-webauthn/webauthn v0.16.4
 	github.com/gorilla/websocket v1.5.3
 	github.com/pquerna/otp v1.5.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	go.mau.fi/whatsmeow v0.0.0-20260327181659-02ec817e7cf4
 	google.golang.org/protobuf v1.36.11
 	modernc.org/sqlite v1.29.9
+)
+
+require (
+	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
+	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
+	github.com/go-webauthn/x v0.2.3 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/google/go-tpm v0.9.8 // indirect
+	github.com/philhofer/fwd v1.2.0 // indirect
+	github.com/tinylib/msgp v1.6.3 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
 )
 
 require (
@@ -38,11 +50,11 @@ require (
 	github.com/ysmood/leakless v0.9.0 // indirect
 	go.mau.fi/libsignal v0.2.1 // indirect
 	go.mau.fi/util v0.9.6 // indirect
-	golang.org/x/crypto v0.48.0 // indirect
+	golang.org/x/crypto v0.50.0
 	golang.org/x/exp v0.0.0-20260212183809-81e46e3db34a // indirect
-	golang.org/x/net v0.50.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
-	golang.org/x/text v0.34.0 // indirect
+	golang.org/x/net v0.52.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 	modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb6 // indirect
 	modernc.org/libc v1.49.3 // indirect
 	modernc.org/mathutil v1.6.0 // indirect

@@ -53,6 +53,9 @@ func Analyze(message string, inventory []Record) Analysis {
 		return analysis
 	}
 
+	explicitWorkflowRequest := isExplicitWorkflowRequest(normalized)
+	explicitAutomationRequest := isExplicitAutomationRequest(normalized)
+
 	index := buildInventoryIndex(inventory)
 	reqs := inferRequirements(normalized)
 	if len(reqs) == 0 {
@@ -72,7 +75,7 @@ func Analyze(message string, inventory []Record) Analysis {
 		for _, group := range groupsForRequirement(reqType) {
 			suggestedGroups[group] = true
 		}
-		if reqType == "workflow.compose" || reqType == "automation.schedule" {
+		if (reqType == "workflow.compose" && !explicitWorkflowRequest) || (reqType == "automation.schedule" && !explicitAutomationRequest) {
 			hasMultiStepIntent = true
 		}
 
@@ -91,6 +94,8 @@ func Analyze(message string, inventory []Record) Analysis {
 			req = evaluateSkillRequirement(req, index, "workflow-control", "")
 		case "automation.schedule":
 			req = evaluateSkillRequirement(req, index, "automation-control", "")
+		case "team.manage":
+			req = evaluateSkillRequirement(req, index, "team-control", "")
 		case "forge.build":
 			req = evaluateSkillRequirement(req, index, "forge", "")
 		case "delivery.chat":
@@ -191,11 +196,33 @@ func inferRequirements(message string) []string {
 	if containsAny(message, "save file", "save files", "create file", "create files", "write file", "write files") {
 		add("file.write")
 	}
-	if containsAny(message, "workflow", "multi-step", "multistep", "chain", "pipeline", "orchestrate") {
+	explicitWorkflowRequest := isExplicitWorkflowRequest(message)
+	if containsAny(message, "workflow", "multi-step", "multistep", "chain", "pipeline", "orchestrate") || explicitWorkflowRequest {
 		add("workflow.compose")
 	}
-	if containsAny(message, "every ", "daily", "weekly", "monthly", "schedule", "automation", "remind me", "at 8", "at 9") {
+	explicitTeamRequest := containsAny(message,
+		"create an agent", "make an agent", "new agent", "add an agent",
+		"create a team member", "add a team member", "new team member",
+		"create teammate", "add teammate", "new teammate",
+		"create worker agent", "create a worker",
+		"delete agent", "delete an agent", "delete all agents",
+		"remove agent", "remove an agent", "remove all agents",
+		"list agents", "show agents", "show my agents", "what agents do i have",
+		"pause agent", "resume agent", "disable agent", "enable agent",
+		"pause all agents", "resume all agents", "disable all agents", "enable all agents",
+		"delete team member", "remove team member", "list team members",
+		"pause team member", "resume team member", "disable team member", "enable team member",
+		"delete teammate", "remove teammate", "list teammates",
+	)
+	if explicitTeamRequest {
+		add("team.manage")
+	}
+	explicitAutomationRequest := isExplicitAutomationRequest(message)
+	if containsAny(message, "every ", "daily", "weekly", "monthly", "schedule", "automation", "remind me", "at 8", "at 9") || explicitAutomationRequest {
 		add("automation.schedule")
+	}
+	if explicitTeamRequest || explicitWorkflowRequest || explicitAutomationRequest {
+		return reqs
 	}
 	if containsAny(message, "email", "mail ") {
 		add("delivery.email")
@@ -223,6 +250,35 @@ func wantsForge(message string) bool {
 	)
 }
 
+func isExplicitWorkflowRequest(message string) bool {
+	return containsAny(message,
+		"list workflows", "show workflows", "show my workflows", "what workflows do i have",
+		"create workflow", "new workflow", "add workflow", "make workflow",
+		"update workflow", "edit workflow", "change workflow",
+		"delete workflow", "delete a workflow", "delete all workflows",
+		"remove workflow", "remove a workflow", "remove all workflows",
+		"run workflow", "run a workflow", "run all workflows",
+		"enable workflow", "disable workflow",
+		"enable all workflows", "disable all workflows",
+		"activate workflow", "activate all workflows",
+	)
+}
+
+func isExplicitAutomationRequest(message string) bool {
+	return containsAny(message,
+		"list automations", "show automations", "show my automations", "what automations do i have",
+		"create automation", "new automation", "add automation", "make automation",
+		"update automation", "edit automation", "change automation",
+		"delete automation", "delete an automation", "delete all automations",
+		"remove automation", "remove an automation", "remove all automations",
+		"run automation", "run an automation", "run all automations",
+		"enable automation", "disable automation",
+		"enable all automations", "disable all automations",
+		"activate automation", "activate all automations",
+		"pause automation", "pause all automations", "resume automation", "resume all automations",
+	)
+}
+
 func groupsForRequirement(reqType string) []string {
 	switch reqType {
 	case "file.write", "file.create_pdf", "file.create_docx", "file.create_zip", "file.save_image":
@@ -231,6 +287,8 @@ func groupsForRequirement(reqType string) []string {
 		return []string{"workflow"}
 	case "automation.schedule":
 		return []string{"automation"}
+	case "team.manage":
+		return []string{"team"}
 	case "delivery.chat", "delivery.channel", "delivery.email":
 		return []string{"communication"}
 	case "forge.build":

@@ -28,8 +28,9 @@ Use Atlas's existing skills directly for this request.
 		policy.NextAction = "compose existing skills and control surfaces"
 		policy.PromptBlock = strings.TrimSpace(`
 This request is best handled by composing existing Atlas capabilities.
-- Prefer workflow, automation, and communication control surfaces over inventing a new skill.
-- Reuse existing file, workflow, automation, and communication tools before considering Forge.
+- Use the right control surface: agent.create for agent/team-member requests, automation.create for recurring scheduled tasks, workflow for multi-step pipelines.
+- Reuse existing file, workflow, automation, team, and communication tools before considering Forge.
+- Use exact outcome language in the user-facing answer: workflow means workflow, automation means automation, and agent/team member means an AGENTS.md team definition.
 - Keep the plan explicit and multi-step instead of improvising one giant action.`)
 	case DecisionForgeNew:
 		policy.NextAction = "forge a missing reusable capability"

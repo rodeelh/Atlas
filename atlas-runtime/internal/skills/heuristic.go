@@ -408,6 +408,69 @@ var intentSignals = map[string]groupSignals{
 		},
 	},
 
+	// ── team / agents ───────────────────────────────────────────────────────
+	//
+	// Two tiers within the same group:
+	//
+	//  Team-control signals (management — the original set):
+	//    explicit admin vocabulary like "create agent", "list agents", "delete agent".
+	//
+	//  Team-work signals (work-routing — new):
+	//    vocabulary that indicates the user wants a specialist to handle work.
+	//    Deliberately conservative: requires explicit specialist/team framing so
+	//    generic research or coding requests don't accidentally fire this group.
+	//    When the roster block is empty (no agents) the model ignores team tools
+	//    regardless, so false positives cost at most a few extra tokens.
+	"team": {
+		phrases: []string{
+			// ── team-control ────────────────────────────────────────────────
+			"list agents", "show agents", "show my agents",
+			"create agent", "new agent", "add agent",
+			"delete agent", "delete all agents", "remove agent", "remove all agents",
+			"enable agent", "disable agent", "pause agent", "resume agent",
+			"enable all agents", "disable all agents", "pause all agents", "resume all agents",
+			"team members", "list team members", "show team members",
+			"delegate to agent", "assign task to agent",
+
+			// ── team-work (work-routing via explicit specialist framing) ────
+			// Template role name references — fire when user names a specialist role.
+			"ask scout", "use scout", "have scout", "let scout",
+			"ask builder", "use builder", "have builder", "let builder",
+			"ask reviewer", "use reviewer", "have reviewer", "let reviewer",
+			"ask operator", "use operator", "have operator", "let operator",
+			"ask monitor", "use monitor", "have monitor", "let monitor",
+			// Generic team-routing phrases — explicit intent to use a specialist.
+			"use a specialist", "have a specialist", "let a specialist", "ask a specialist",
+			"use the team", "have the team", "let the team", "send to the team",
+			"ask a team member", "have a team member", "let a team member",
+			"have someone on the team", "get a team member",
+			"delegate this", "delegate that", "delegate the work",
+			"send this to my team",
+		},
+		words: []string{
+			"agent", "agents", "teammate", "teammates", "delegate",
+			// Template role names as nouns — only fire at word boundary so
+			// common English words like "builder" in unrelated contexts are caught
+			// but the low threshold (1 pt) means they contribute marginally.
+			"scout", "reviewer",
+		},
+		pairs: [][2]string{
+			// ── team-control ────────────────────────────────────────────────
+			{"list", "agents"}, {"show", "agents"}, {"create", "agent"},
+			{"add", "agent"}, {"delete", "agent"}, {"remove", "agent"},
+			{"enable", "agent"}, {"disable", "agent"}, {"pause", "agent"}, {"resume", "agent"},
+			{"delegate", "agent"}, {"assign", "agent"},
+
+			// ── team-work ────────────────────────────────────────────────────
+			{"use", "specialist"}, {"have", "specialist"}, {"ask", "specialist"},
+			{"use", "scout"}, {"ask", "scout"}, {"have", "scout"},
+			{"use", "builder"}, {"ask", "builder"}, {"have", "builder"},
+			{"use", "reviewer"}, {"ask", "reviewer"}, {"have", "reviewer"},
+			{"send", "team"}, {"use", "team"}, {"have", "team"},
+			{"ask", "teammate"}, {"use", "teammate"},
+		},
+	},
+
 	// ── communication bridge ─────────────────────────────────────────────────
 	"communication": {
 		phrases: []string{
@@ -506,6 +569,10 @@ var intentSignals = map[string]groupSignals{
 // Each tier contributes at most its point value per group — the first match
 // in a tier fires and that tier is done.
 func scoreGroups(message string) map[string]int {
+	return scoreGroupsWithSignals(message, intentSignals)
+}
+
+func scoreGroupsWithSignals(message string, signalsByGroup map[string]groupSignals) map[string]int {
 	lower := strings.ToLower(message)
 	tokens := tokenize(lower)
 
@@ -515,9 +582,9 @@ func scoreGroups(message string) map[string]int {
 	}
 	negated := negatedSet(tokens)
 
-	scores := make(map[string]int, len(intentSignals))
+	scores := make(map[string]int, len(signalsByGroup))
 
-	for group, sig := range intentSignals {
+	for group, sig := range signalsByGroup {
 		score := 0
 
 		// Tier 1 — phrase matching (+3 pts; first match wins)

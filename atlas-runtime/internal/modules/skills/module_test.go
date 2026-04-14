@@ -51,7 +51,7 @@ func TestModule_ListSkillsReturnsCurrentShape(t *testing.T) {
 	if body == nil {
 		t.Fatal("expected [] not null")
 	}
-	var foundAutomation, foundWorkflow, foundCommunication bool
+	var foundAutomation, foundWorkflow, foundTeam, foundCommunication bool
 	for _, rec := range body {
 		manifest, _ := rec["manifest"].(map[string]any)
 		switch manifest["id"] {
@@ -63,6 +63,10 @@ func TestModule_ListSkillsReturnsCurrentShape(t *testing.T) {
 		case "workflow-control":
 			foundWorkflow = true
 			assertActionPolicy(t, rec, "workflow.run", "auto_approve")
+		case "team-control":
+			foundTeam = true
+			assertActionPolicy(t, rec, "team.create", "auto_approve")
+			assertActionPublicID(t, rec, "team.create", "agent.create")
 		case "communication-bridge":
 			foundCommunication = true
 			assertActionPolicy(t, rec, "communication.send_message", "auto_approve")
@@ -74,9 +78,28 @@ func TestModule_ListSkillsReturnsCurrentShape(t *testing.T) {
 	if !foundWorkflow {
 		t.Fatal("expected workflow-control skill")
 	}
+	if !foundTeam {
+		t.Fatal("expected team-control skill")
+	}
 	if !foundCommunication {
 		t.Fatal("expected communication-bridge skill")
 	}
+}
+
+func assertActionPublicID(t *testing.T, rec map[string]any, actionID, want string) {
+	t.Helper()
+	actions, _ := rec["actions"].([]any)
+	for _, raw := range actions {
+		action, _ := raw.(map[string]any)
+		if action["id"] == actionID {
+			got, _ := action["publicID"].(string)
+			if got != want {
+				t.Fatalf("action %s publicID=%q want %q", actionID, got, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("action %s not found for publicID assertion", actionID)
 }
 
 func TestModule_ListSkillsIncludesWorkflowBackedForgeInstall(t *testing.T) {
@@ -149,6 +172,73 @@ func TestModule_ListSkillsIncludesWorkflowBackedForgeInstall(t *testing.T) {
 	if !found {
 		t.Fatal("expected workflow-backed forge install in /skills catalog")
 	}
+}
+
+func TestModule_ListSkillsIncludesCustomRoutingMetadata(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	skillDir := filepath.Join(dir, "skills", "ticket-helper")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manifest := `{
+		"id":"ticket-helper",
+		"name":"Ticket Helper",
+		"description":"Manage support tickets.",
+		"routing":{
+			"capability_group":"tickets",
+			"description":"Support ticket management and cleanup.",
+			"phrases":["close stale tickets"],
+			"words":["tickets"],
+			"pairs":[["close","tickets"]],
+			"threshold":1
+		},
+		"actions":[{"name":"close_stale","description":"Close stale tickets.","permission_level":"execute"}]
+	}`
+	if err := os.WriteFile(filepath.Join(skillDir, "skill.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("Write skill.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "run"), []byte("#!/bin/sh\nprintf '{\"success\":true,\"output\":\"ok\"}\\n'\n"), 0o755); err != nil {
+		t.Fatalf("Write run: %v", err)
+	}
+
+	host := platform.NewHost(stubConfig{}, platform.NewSQLiteStorage(db), nil, platform.NoopContextAssembler{}, platform.NewInProcessBus(8))
+	module := New(dir)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	r := chi.NewRouter()
+	host.ApplyProtected(r)
+	req := httptest.NewRequest(http.MethodGet, "/skills", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+
+	var body []map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	for _, rec := range body {
+		manifest, _ := rec["manifest"].(map[string]any)
+		if manifest["id"] != "ticket-helper" {
+			continue
+		}
+		routing, _ := manifest["routing"].(map[string]any)
+		if routing["capability_group"] != "tickets" {
+			t.Fatalf("expected routing capability_group=tickets, got %+v", routing)
+		}
+		return
+	}
+	t.Fatal("expected custom skill with routing metadata in /skills catalog")
 }
 
 func TestModule_ListCapabilitiesReturnsUnifiedInventory(t *testing.T) {

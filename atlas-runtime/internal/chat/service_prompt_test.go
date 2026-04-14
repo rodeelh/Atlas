@@ -2,6 +2,7 @@ package chat
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -89,6 +90,46 @@ func TestBuildSystemPromptAddsResponseContract(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Mode: research") {
 		t.Fatalf("expected research response contract, got: %q", prompt)
+	}
+}
+
+func TestAutomationResponseContractDistinguishesAutomationFromAgent(t *testing.T) {
+	cfg := storageTestDefaults()
+	db, err := storage.Open(filepath.Join(t.TempDir(), "prompt-test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	prompt := buildSystemPrompt(cfg, db, t.TempDir(), "Create an agent that checks my email every 3 hours and sends useful items to Telegram.", "")
+	if !strings.Contains(prompt, "Mode: automation") {
+		t.Fatalf("expected automation response contract, got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Use exact outcome language") {
+		t.Fatalf("expected automation contract to require exact outcome language, got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "only say agent/team member when you actually used agent.create") {
+		t.Fatalf("expected automation contract to distinguish automation from AGENTS team members, got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Never fulfill an agent request as an automation") {
+		t.Fatalf("expected automation contract to prohibit fulfilling agent requests as automations, got: %q", prompt)
+	}
+}
+
+func TestExecutionResponseContractDistinguishesWorkflowAutomationAndAgent(t *testing.T) {
+	cfg := storageTestDefaults()
+	db, err := storage.Open(filepath.Join(t.TempDir(), "prompt-test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	prompt := buildSystemPrompt(cfg, db, t.TempDir(), "Create an agent for triaging requests using the existing workflow tools.", "")
+	if !strings.Contains(prompt, "Mode: execution") {
+		t.Fatalf("expected execution response contract, got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "call workflows workflows, automations automations, and AGENTS team members agents") {
+		t.Fatalf("expected execution contract to distinguish control surfaces, got: %q", prompt)
 	}
 }
 

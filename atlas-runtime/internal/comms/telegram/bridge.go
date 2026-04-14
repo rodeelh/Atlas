@@ -264,7 +264,7 @@ func (b *Bridge) run() {
 			nextDelay := backoff
 			logstore.Write(
 				"error",
-				fmt.Sprintf("Telegram poll error (attempt %d): %s", retryCount, err.Error()),
+				fmt.Sprintf("Telegram poll error (attempt %d): %s", retryCount, strings.ReplaceAll(err.Error(), b.token, "<token>")),
 				map[string]string{
 					"platform":      "telegram",
 					"retryAttempt":  fmt.Sprintf("%d", retryCount),

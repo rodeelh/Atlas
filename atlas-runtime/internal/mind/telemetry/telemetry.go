@@ -30,10 +30,10 @@ import (
 type Kind string
 
 const (
-	KindNapStarted    Kind = "nap_started"
-	KindNapCompleted  Kind = "nap_completed"
-	KindNapFailed     Kind = "nap_failed"
-	KindNapSkipped    Kind = "nap_skipped"
+	KindNapStarted   Kind = "nap_started"
+	KindNapCompleted Kind = "nap_completed"
+	KindNapFailed    Kind = "nap_failed"
+	KindNapSkipped   Kind = "nap_skipped"
 
 	KindThoughtAdded      Kind = "thought_added"
 	KindThoughtUpdated    Kind = "thought_updated"
@@ -71,10 +71,10 @@ type Event struct {
 // Emitter is the public interface callers use. It hides the channel and the
 // drain goroutine behind a single method.
 type Emitter struct {
-	db     *storage.DB
-	ch     chan Event
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	db      *storage.DB
+	ch      chan Event
+	stopCh  chan struct{}
+	wg      sync.WaitGroup
 	dropped int64 // atomic not required; approximate metric only
 	mu      sync.Mutex
 }

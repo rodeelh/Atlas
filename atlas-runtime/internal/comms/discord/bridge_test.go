@@ -56,4 +56,3 @@ func TestClassifyIncomingMessage_GuildMentionStripsTag(t *testing.T) {
 		t.Fatalf("unexpected stripped text: %q", text)
 	}
 }
-

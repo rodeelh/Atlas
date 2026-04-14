@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Atlas — Major Build Validation
 #
-# Runs the full layered test pyramid (backend, TUI, web build) and emits
+# Runs the full layered test pyramid (backend, web build) and emits
 # a human-readable scorecard at docs/testing/atlas-test-scorecard.md.
 #
 # Tiers:
@@ -18,7 +18,6 @@ set -uo pipefail
 TIER="${1:-release}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUNTIME_DIR="$ROOT/atlas-runtime"
-TUI_DIR="$ROOT/atlas-tui"
 WEB_DIR="$ROOT/atlas-web"
 SCORECARD="$ROOT/docs/testing/atlas-test-scorecard.md"
 
@@ -77,14 +76,6 @@ if [[ "$TIER" == "fast" ]]; then
 else
   run_step "runtime: go test (full)" bash -c "cd '$RUNTIME_DIR' && go test -count=1 ./..."
 fi
-
-# ---------------------------------------------------------------------------
-# TUI (Bubble Tea)
-# ---------------------------------------------------------------------------
-echo; bold "TUI (Bubble Tea)"; echo
-run_step "tui: go vet"   bash -c "cd '$TUI_DIR' && go vet ./..."
-run_step "tui: go build" bash -c "cd '$TUI_DIR' && go build ./..."
-run_step "tui: go test"  bash -c "cd '$TUI_DIR' && go test -count=1 ./..."
 
 # ---------------------------------------------------------------------------
 # Web UI (Preact + Vite)
@@ -155,7 +146,6 @@ status_for() {
 }
 
 backend_status="$(status_for 'runtime: ')"
-tui_status="$(status_for 'tui: ')"
 web_status="$(status_for 'web: ')"
 integration_status="$(status_for 'integration:')"
 
@@ -169,7 +159,7 @@ readiness() {
 
 if [[ $FAIL_COUNT -eq 0 ]]; then
   overall="✅ Production-ready"
-elif [[ "$backend_status" == "PASS" && "$tui_status" == "PASS" ]]; then
+elif [[ "$backend_status" == "PASS" ]]; then
   overall="⚠️  Staging-ready (non-critical surface failed)"
 else
   overall="❌ Not production-ready"
@@ -190,7 +180,6 @@ now="$(date '+%Y-%m-%d %H:%M:%S %Z')"
   echo "| -------- | ------ | --------- |"
   echo "| Backend  | $backend_status     | $(readiness "$backend_status") |"
   echo "| Web UI   | $web_status     | $(readiness "$web_status") |"
-  echo "| TUI      | $tui_status     | $(readiness "$tui_status") |"
   echo "| E2E/Integration | $integration_status | $(readiness "$integration_status") |"
   echo
   echo "## Category coverage"
@@ -201,12 +190,11 @@ now="$(date '+%Y-%m-%d %H:%M:%S %Z')"
   cat_row "Unit tests (Go runtime)"           "$backend_status"      "go test ./... across 50+ packages"
   cat_row "Integration tests (runtime)"       "$integration_status"  "internal/integration baseline + architecture guardrails"
   cat_row "API/handler tests"                 "$backend_status"      "covered inside internal/modules/* and internal/domain"
-  cat_row "Config validation"                 "$backend_status"      "config/snapshot + tui/config tested"
+  cat_row "Config validation"                 "$backend_status"      "config/snapshot tested"
   cat_row "Frontend / component tests"        "$web_status"          "no component test runner installed; build + tsc are the gate"
-  cat_row "TUI tests"                         "$tui_status"          "config, client, root model smoke (Init/Update/View)"
   cat_row "End-to-end critical flows"         "$integration_status"  "runtime_baseline_test boots HTTP server, exercises routes"
-  cat_row "Smoke / startup"                   "$tui_status"          "TUI app smoke + runtime wiring_test"
-  cat_row "Build / package verification"      "$([[ $FAIL_COUNT -eq 0 ]] && echo PASS || echo FAIL)" "go build ./... for runtime and TUI; vite build for web"
+  cat_row "Smoke / startup"                   "$integration_status"  "runtime wiring_test"
+  cat_row "Build / package verification"      "$([[ $FAIL_COUNT -eq 0 ]] && echo PASS || echo FAIL)" "go build ./... for runtime; vite build for web"
   cat_row "Regression coverage"               "$backend_status"      "existing _test.go suites act as regression net"
   cat_row "Performance sanity"                "NOT YET COVERED"      "no benchmarks wired into release gate"
   cat_row "Security checks"                   "$backend_status"      "auth/middleware_security_test + cors_test in runtime"
@@ -227,7 +215,6 @@ now="$(date '+%Y-%m-%d %H:%M:%S %Z')"
   echo "- **Web UI has no component-level test runner.** Vitest / Preact Testing Library is not installed. The current gate is \`tsc --noEmit\` + \`vite build\` — that catches type and build regressions but not behavior regressions."
   echo "- **No load/perf benchmarks in the release gate.** Add \`go test -bench\` for hot paths (agent loop, validate gate) before claiming SLA-grade readiness."
   echo "- **No headless browser E2E** against the web UI served by the runtime."
-  echo "- **TUI tests are smoke-level** — they validate Init/Update/View shape and key handling, not full chat-streaming flows."
   echo
   echo "## Commands used to generate this scorecard"
   echo

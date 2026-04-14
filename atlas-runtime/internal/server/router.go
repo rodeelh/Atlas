@@ -19,6 +19,7 @@ import (
 // RuntimeHTTPHandler.route() auth-gate + handler-dispatch pattern.
 func BuildRouter(
 	authDomain *domain.AuthDomain,
+	localAuthDomain *domain.LocalAuthDomain,
 	controlDomain *domain.ControlDomain,
 	chatDomain *domain.ChatDomain,
 	authSvc *auth.Service,
@@ -56,9 +57,9 @@ func BuildRouter(
 
 	// ── Auth-exempt routes ────────────────────────────────────────────────────
 	// These must be registered BEFORE the RequireSession middleware group so
-	// that the browser can reach /auth/bootstrap (token exchange) without a
-	// session, and the menu bar app can reach /auth/token without one.
+	// that the browser can reach the auth gate and setup flow without a session.
 	authDomain.RegisterPublic(r)
+	localAuthDomain.RegisterPublic(r)
 	if host != nil {
 		host.ApplyPublic(r)
 	}

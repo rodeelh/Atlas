@@ -1,15 +1,3 @@
 {
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/Users/ralhassan/Desktop/CODING/Project Atlas/Atlas/scripts/update-claude-md.sh",
-            "timeout": 120
-          }
-        ]
-      }
-    ]
-  }
+  "hooks": {}
 }

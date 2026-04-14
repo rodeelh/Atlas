@@ -281,6 +281,48 @@ Required payload expectations:
 - `POST /dashboards/{id}/resolve` returns `{ widgetId, success, data, error?, sourceKind, resolvedAt, durationMs }`. Safety/allowlist rejections return HTTP 403; upstream/runtime failures return 200 with `success=false` so the dashboard can render an error tile without losing the rest of the grid.
 - AI generation (via `dashboard.create` skill) validates the model output against the same allowlist before persisting — the `web` source kind is reserved (not authorable by the model), and `custom_html` is rejected for AI-generated dashboards even though hand-authored dashboard definitions may still use it.
 
+### Teams API
+
+AGENTS.md defines the roster of Atlas team members (agents). The teams module manages their definitions, runtime state, tasks, and events.
+
+Core routes:
+
+- `GET /team` — full team snapshot (Atlas station + all agents + recent activity + blocked items)
+- `GET /team/agents` — list all team members with current runtime state
+- `GET /team/agents/{id}` — get one team member by ID
+- `POST /team/agents` — create a new team member (body: `agentDefinition`)
+- `PUT /team/agents/{id}` — update an existing team member
+- `DELETE /team/agents/{id}` — delete a team member
+- `POST /team/agents/{id}/enable` — enable a disabled team member
+- `POST /team/agents/{id}/disable` — disable a team member
+- `POST /team/agents/{id}/pause` — pause a team member's runtime
+- `POST /team/agents/{id}/resume` — resume a paused team member
+- `POST /team/sync` — re-sync team definitions from AGENTS.md into SQLite
+- `GET /team/tasks` — list recent tasks (last 100)
+- `GET /team/tasks/{id}` — get one task with its step log
+- `POST /team/tasks/{id}/cancel` — cancel a running task (409 if not running)
+- `POST /team/tasks/{id}/approve` — approve a `pending_approval` task → sets status `completed` (409 if not pending)
+- `POST /team/tasks/{id}/reject` — reject a `pending_approval` task → sets status `cancelled` (409 if not pending)
+- `GET /team/events` — list team activity events (last 100)
+
+Agent definition fields: `id`, `name`, `role`, `mission`, `style`, `allowedSkills`, `allowedToolClasses`, `autonomy`, `activation`, `enabled`.
+
+Runtime state fields: `status` (`idle` | `busy` | `paused` | `approval_needed`), `currentTaskID`, `lastActiveAt`, `lastError`, `updatedAt`.
+
+Task status lifecycle: `running` → `completed` | `error` | `cancelled` | `pending_approval`.
+
+Skills registered by the teams module:
+
+- `team.list` — list all team members
+- `team.get` — get one team member by ID
+- `team.create` — create a new team member (validates `allowedSkills` patterns against registered skills at create time)
+- `team.update` — update an existing team member
+- `team.delete` — delete a team member
+- `team.enable` / `team.disable` / `team.pause` / `team.resume` — lifecycle controls
+- `team.delegate` — delegate a focused task to a team member; enforces `allowedSkills` pattern filtering and `allowedToolClasses` class filtering on the sub-agent registry
+
+Agent/automation distinction: `team.create` creates persistent team members in AGENTS.md; `automation.create` creates recurring scheduled jobs in GREMLINS.md. These are different things and must never be substituted for one another.
+
 ### Memory API
 
 Long-term memories are stored in SQLite and recalled via BM25 FTS5 before each agent turn.

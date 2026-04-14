@@ -61,14 +61,14 @@ func (s Signal) IsTerminal() bool { return s.Valid() }
 //
 // The lifecycle is:
 //
-//   1. Agent surfaces a thought → Event created with Signal=pending
-//      and SurfacedAt set.
-//   2. User replies → classifier runs → same Event is rewritten in
-//      place with Signal=positive|negative|ignored, ClassifiedAt, and
-//      ClassifierConfidence.
-//   3. Nap reads recent events. Pending events older than the nap's
-//      window are treated as ignored for keep-test counting without
-//      being rewritten (avoids races with concurrent classifiers).
+//  1. Agent surfaces a thought → Event created with Signal=pending
+//     and SurfacedAt set.
+//  2. User replies → classifier runs → same Event is rewritten in
+//     place with Signal=positive|negative|ignored, ClassifiedAt, and
+//     ClassifierConfidence.
+//  3. Nap reads recent events. Pending events older than the nap's
+//     window are treated as ignored for keep-test counting without
+//     being rewritten (avoids races with concurrent classifiers).
 //
 // SurfacingID is the stable key used to find and upsert the pending row
 // before classification. Built from (conv_id, message_id, thought_id) so

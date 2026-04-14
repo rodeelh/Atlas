@@ -28,13 +28,13 @@ import (
 // WidgetData is the resolver result returned by POST /dashboards/{id}/resolve.
 // Exactly one of Data and Error is meaningful.
 type WidgetData struct {
-	WidgetID    string `json:"widgetId"`
-	Success     bool   `json:"success"`
-	Data        any    `json:"data,omitempty"`
-	Error       string `json:"error,omitempty"`
-	ResolvedAt  string `json:"resolvedAt"`
-	SourceKind  string `json:"sourceKind"`
-	DurationMs  int64  `json:"durationMs"`
+	WidgetID   string `json:"widgetId"`
+	Success    bool   `json:"success"`
+	Data       any    `json:"data,omitempty"`
+	Error      string `json:"error,omitempty"`
+	ResolvedAt string `json:"resolvedAt"`
+	SourceKind string `json:"sourceKind"`
+	DurationMs int64  `json:"durationMs"`
 }
 
 // SkillExecutor is the minimum slice of *skills.Registry that the dashboards
@@ -229,7 +229,7 @@ func parseFinanceHistory(text string) map[string]any {
 		if colonIdx < 1 {
 			continue
 		}
-		date  := strings.TrimSpace(trimmed[:colonIdx])
+		date := strings.TrimSpace(trimmed[:colonIdx])
 		priceS := strings.TrimSpace(trimmed[colonIdx+1:])
 		if len(date) != 10 || date[4] != '-' {
 			continue
@@ -282,8 +282,8 @@ func parseWebsearchQuery(text string) map[string]any {
 		}
 		lines := strings.Split(block, "\n")
 		title := strings.TrimSpace(lines[0])
-		url   := ""
-		desc  := ""
+		url := ""
+		desc := ""
 		for _, line := range lines[1:] {
 			line = strings.TrimSpace(line)
 			if line == "" {

@@ -38,7 +38,6 @@ with a single command.
 | **Runtime handler** | `internal/modules/*/module_test.go`, `internal/domain/*` | HTTP route shape, auth middleware, CORS, session handling. |
 | **Runtime integration** | `internal/integration/runtime_baseline_test.go`, `architecture_guardrails_test.go` | Boots the full server, exercises baseline routes, asserts package import boundaries. |
 | **Wiring** | `cmd/atlas-runtime/wiring_test.go` | All services compose without nil panics on startup. |
-| **TUI** | `atlas-tui/{config,client,ui}/*_test.go` | Config load/save round-trip, client HTTP contract via `httptest`, root model `Init`/`Update`/`View` smoke (splash + chat construction, window resize, keypress). |
 | **Web build gate** | `npm run build` + `tsc --noEmit` | TypeScript correctness and Vite production build succeed. |
 | **Cross-surface gate** | `scripts/verify-release.sh` | Aggregates everything and emits the scorecard. |
 
@@ -46,7 +45,7 @@ with a single command.
 
 | Tier | Target | What it runs | Use when |
 | --- | --- | --- | --- |
-| **fast** | `make test-fast` | `go vet`, `go build`, `go test -short` (runtime + TUI), `tsc --noEmit` (if web deps installed) | Local feedback loop while coding. ~30s. |
+| **fast** | `make test-fast` | `go vet`, `go build`, `go test -short` (runtime), `tsc --noEmit` (if web deps installed) | Local feedback loop while coding. ~30s. |
 | **standard** | `make test-standard` | Above + full `go test` (no `-short`) + `vite build` | CI on every PR / before push. |
 | **release** | `make verify-release` | Above + `go test -race -short` for the runtime + scorecard regeneration | Before tagging a release or `make install` to your daily driver. |
 
@@ -73,21 +72,12 @@ overwrites `docs/testing/atlas-test-scorecard.md` with the latest run.
 
 ## Adding new tests
 
-### Go (runtime or TUI)
+### Go (runtime)
 
 Add `<file>_test.go` next to the code under test. Use `httptest` for HTTP
 handlers — never bind real ports. For things that touch `~/Library/Application
 Support/ProjectAtlas/`, swap `HOME` with `t.Setenv("HOME", t.TempDir())` so
-runs are hermetic. The TUI follows the same convention (see
-`atlas-tui/config/config_test.go`).
-
-For Bubble Tea models, the smoke contract is:
-
-1. Send `tea.WindowSizeMsg` first — most views render empty until sized.
-2. Call `Update` with realistic `tea.KeyMsg` / domain messages.
-3. Assert `View()` returns non-empty content and the typed model is intact.
-
-See `atlas-tui/ui/app_test.go` for the canonical example.
+runs are hermetic.
 
 ### Web UI
 

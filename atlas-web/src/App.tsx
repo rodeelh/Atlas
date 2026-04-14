@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks'
-import { type ThemeMode, type ThemePreset, type ThemeConfig, type DensityMode, type ChatFontSize, type ChatRadius, type ChatFont, type ChatAvatarStyle, type ChatBubbleStyle, type ChatWidth, loadTheme, saveTheme, applyTheme, watchSystemTheme, THEME_PRESETS } from './theme'
+import { type ThemeMode, type ThemePreset, type ThemeConfig, type DensityMode, type ChatFontSize, type ChatRadius, type ChatFont, type ChatAvatarStyle, type ChatBubbleStyle, type ChatWidth, type UIRadius, type UIBlur, type UIFont, loadTheme, saveTheme, applyTheme, watchSystemTheme, THEME_PRESETS } from './theme'
 import { Chat } from './screens/Chat'
 import { Communications } from './screens/Communications'
 import { Approvals } from './screens/Approvals'
@@ -441,6 +441,15 @@ export function App() {
   const setChatWidth = (chatWidth: ChatWidth) =>
     setThemeConfig(prev => ({ ...prev, chatWidth }))
 
+  const setUIRadius = (uiRadius: UIRadius) =>
+    setThemeConfig(prev => ({ ...prev, uiRadius }))
+
+  const setUIBlur = (uiBlur: UIBlur) =>
+    setThemeConfig(prev => ({ ...prev, uiBlur }))
+
+  const setUIFont = (uiFont: UIFont) =>
+    setThemeConfig(prev => ({ ...prev, uiFont }))
+
   const activeTheme = themeConfig.mode
 
   // Chime when a chat notification first arrives (0 → >0 transition).
@@ -843,7 +852,7 @@ export function App() {
         {screen === 'settings'    && <Settings />}
         {screen === 'ai-providers' && <AIProviders />}
         {screen === 'api-keys'    && <APIKeys />}
-        {screen === 'theme'       && <Theme activePreset={themeConfig.preset} onPresetChange={setActivePreset} activeTheme={activeTheme} onThemeChange={setActiveTheme} activeAccent={themeConfig.accent} onAccentChange={setActiveAccent} activeDensity={themeConfig.density} onDensityChange={setActiveDensity} activeChatFontSize={themeConfig.chatFontSize} onChatFontSizeChange={setChatFontSize} activeChatRadius={themeConfig.chatRadius} onChatRadiusChange={setChatRadius} activeChatFont={themeConfig.chatFont} onChatFontChange={setChatFont} activeChatAvatarStyle={themeConfig.chatAvatarStyle} onChatAvatarStyleChange={setChatAvatarStyle} activeChatBubbleStyle={themeConfig.chatBubbleStyle} onChatBubbleStyleChange={setChatBubbleStyle} activeChatWidth={themeConfig.chatWidth} onChatWidthChange={setChatWidth} />}
+        {screen === 'theme'       && <Theme activePreset={themeConfig.preset} onPresetChange={setActivePreset} activeTheme={activeTheme} onThemeChange={setActiveTheme} activeAccent={themeConfig.accent} onAccentChange={setActiveAccent} activeDensity={themeConfig.density} onDensityChange={setActiveDensity} activeChatFontSize={themeConfig.chatFontSize} onChatFontSizeChange={setChatFontSize} activeChatRadius={themeConfig.chatRadius} onChatRadiusChange={setChatRadius} activeChatFont={themeConfig.chatFont} onChatFontChange={setChatFont} activeChatAvatarStyle={themeConfig.chatAvatarStyle} onChatAvatarStyleChange={setChatAvatarStyle} activeChatBubbleStyle={themeConfig.chatBubbleStyle} onChatBubbleStyleChange={setChatBubbleStyle} activeChatWidth={themeConfig.chatWidth} onChatWidthChange={setChatWidth} activeUIRadius={themeConfig.uiRadius} onUIRadiusChange={setUIRadius} activeUIBlur={themeConfig.uiBlur} onUIBlurChange={setUIBlur} activeUIFont={themeConfig.uiFont} onUIFontChange={setUIFont} />}
         {screen === 'local-lm'    && <LocalLM />}
         {screen === 'usage'       && <Usage />}
         {screen === 'docs'        && <Docs />}

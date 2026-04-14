@@ -67,19 +67,19 @@ type ProposedAction struct {
 // section of MIND.md as a markdown bullet with inline metadata. The body is
 // freeform prose; everything else is the structured contract.
 type Thought struct {
-	ID           string          `json:"id"`           // "T-01", "T-02", …
-	Body         string          `json:"body"`         // freeform prose, Atlas's voice
-	Confidence   int             `json:"confidence"`   // 0–100, model-proposed
-	Value        int             `json:"value"`        // 0–100, model-proposed
-	Class        ActionClass     `json:"class"`        // model-proposed
-	Score        int             `json:"score"`        // COMPUTED BY CODE, never model
-	Created      time.Time       `json:"created"`
-	Reinforced   time.Time       `json:"reinforced"`
-	SurfacedN    int             `json:"surfaced"`     // how many times raised in chat
-	SurfacedMax  int             `json:"surfaced_max"` // session cap, typically 2
-	Source       string          `json:"source"`       // "conv-7f3a:nap-3" or "nap-spontaneous"
-	Provenance   string          `json:"provenance"`   // one-line why-this-came-up trace
-	Action       *ProposedAction `json:"action,omitempty"`
+	ID          string          `json:"id"`         // "T-01", "T-02", …
+	Body        string          `json:"body"`       // freeform prose, Atlas's voice
+	Confidence  int             `json:"confidence"` // 0–100, model-proposed
+	Value       int             `json:"value"`      // 0–100, model-proposed
+	Class       ActionClass     `json:"class"`      // model-proposed
+	Score       int             `json:"score"`      // COMPUTED BY CODE, never model
+	Created     time.Time       `json:"created"`
+	Reinforced  time.Time       `json:"reinforced"`
+	SurfacedN   int             `json:"surfaced"`     // how many times raised in chat
+	SurfacedMax int             `json:"surfaced_max"` // session cap, typically 2
+	Source      string          `json:"source"`       // "conv-7f3a:nap-3" or "nap-spontaneous"
+	Provenance  string          `json:"provenance"`   // one-line why-this-came-up trace
+	Action      *ProposedAction `json:"action,omitempty"`
 }
 
 // Clone returns a deep copy of t suitable for independent mutation.

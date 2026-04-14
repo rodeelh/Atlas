@@ -30,6 +30,49 @@ func TestDefaultNeedsConfirmation(t *testing.T) {
 	}
 }
 
+// ── matchesAnyPattern ────────────────────────────────────────────────────────
+
+func TestMatchesAnyPattern(t *testing.T) {
+	cases := []struct {
+		actionID string
+		patterns []string
+		want     bool
+	}{
+		// Exact match
+		{"fs.read_file", []string{"fs.read_file"}, true},
+		// Trailing-dot prefix
+		{"fs.read_file", []string{"fs."}, true},
+		{"fs.write_file", []string{"fs."}, true},
+		// Wildcard prefix
+		{"fs.read_file", []string{"fs.*"}, true},
+		{"fs.write_file", []string{"fs.*"}, true},
+		// Bare prefix (the real-world allowedSkills format from Team HQ templates)
+		{"fs.read_file", []string{"fs"}, true},
+		{"fs.write_file", []string{"fs"}, true},
+		{"terminal.run", []string{"terminal"}, true},
+		{"websearch.search", []string{"websearch"}, true},
+		// Bare prefix must not match unrelated skills
+		{"weather.current", []string{"fs", "terminal"}, false},
+		{"team.delete", []string{"fs", "terminal"}, false},
+		// Bare prefix must not match a skill whose name starts with the pattern but has no dot
+		{"filesystem.check", []string{"fs"}, false},
+		// Empty / blank
+		{"", []string{"fs"}, false},
+		{"fs.read_file", []string{""}, false},
+		{"fs.read_file", []string{}, false},
+		// Multi-pattern: first hits
+		{"terminal.run", []string{"fs", "terminal", "websearch"}, true},
+		{"websearch.query", []string{"fs", "terminal", "websearch"}, true},
+		{"weather.current", []string{"fs", "terminal", "websearch"}, false},
+	}
+	for _, c := range cases {
+		got := matchesAnyPattern(c.actionID, c.patterns)
+		if got != c.want {
+			t.Errorf("matchesAnyPattern(%q, %v) = %v, want %v", c.actionID, c.patterns, got, c.want)
+		}
+	}
+}
+
 // ── ToolResult constructors ───────────────────────────────────────────────────
 
 func TestOKResult(t *testing.T) {

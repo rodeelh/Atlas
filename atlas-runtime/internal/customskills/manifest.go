@@ -29,6 +29,19 @@ type CustomSkillAction struct {
 	Parameters  map[string]any `json:"parameters"`       // raw JSON Schema object (optional)
 }
 
+// CustomSkillRouting declares how Atlas should route natural-language requests
+// toward this skill. Third-party skills can use this to participate in
+// heuristic selection and capability-plan tool injection without requiring
+// hardcoded runtime changes.
+type CustomSkillRouting struct {
+	CapabilityGroup string     `json:"capability_group,omitempty"`
+	Description     string     `json:"description,omitempty"`
+	Phrases         []string   `json:"phrases,omitempty"`
+	Words           []string   `json:"words,omitempty"`
+	Pairs           [][]string `json:"pairs,omitempty"`
+	Threshold       int        `json:"threshold,omitempty"`
+}
+
 // CustomSkillManifest is the full content of a skill.json file.
 type CustomSkillManifest struct {
 	ID          string `json:"id"`
@@ -47,6 +60,7 @@ type CustomSkillManifest struct {
 	Category string `json:"category,omitempty"`
 	// Tags are freeform labels used for discovery.
 	Tags    []string            `json:"tags,omitempty"`
+	Routing *CustomSkillRouting `json:"routing,omitempty"`
 	Actions []CustomSkillAction `json:"actions"`
 	// SkillDir is populated by ListCustomManifests — not present in skill.json.
 	SkillDir string `json:"-"`

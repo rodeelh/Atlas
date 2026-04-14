@@ -392,8 +392,8 @@ export function Communications() {
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
 
       <div>
-        <div class="section-label">Connected Channels</div>
         <div class="card settings-group">
+          <div class="card-header"><span class="card-title">Connected Channels</span></div>
           {readyPlatforms.length === 0 && (
             <div class="communication-empty-state">
               No channels are connected yet. Use Add Channel to set up Telegram, Discord, or Slack.
@@ -414,8 +414,8 @@ export function Communications() {
       </div>
 
       <div>
-        <div class="section-label">Recent Sessions</div>
         <div class="card settings-group">
+          <div class="card-header"><span class="card-title">Recent Sessions</span></div>
           {recentChannels.length === 0 && (
             <div class="communication-empty-state">
               No sessions in the last 7 days. Once a ready integration receives a message, it will appear here.
@@ -428,8 +428,8 @@ export function Communications() {
       </div>
 
       <div>
-        <div class="section-label">Routing</div>
         <div class="card communication-routing-card">
+          <div class="card-header"><span class="card-title">Routing</span></div>
           <div class="settings-row communication-routing-row">
             <div class="settings-label-col">
               <div class="communication-platform-heading">
@@ -452,8 +452,8 @@ export function Communications() {
       </div>
 
       <div>
-        <div class="section-label">Add Channel</div>
         <div class="card settings-group">
+          <div class="card-header"><span class="card-title">Add Channel</span></div>
           {addablePlatforms.length > 0 && (
             <div class="settings-row">
               <div class="settings-label-col">

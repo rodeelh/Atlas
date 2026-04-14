@@ -46,4 +46,3 @@ func TestIsSameHostOrigin(t *testing.T) {
 		t.Fatal("expected invalid origin to fail")
 	}
 }
-

@@ -34,3 +34,10 @@ func TestBuildPolicy_AskPrerequisiteIncludesMissingPrereqs(t *testing.T) {
 		t.Fatalf("expected missing prerequisite in prompt block: %q", policy.PromptBlock)
 	}
 }
+
+func TestBuildPolicy_ComposeExistingRequiresExactOutcomeLanguage(t *testing.T) {
+	policy := BuildPolicy(Analysis{Decision: DecisionComposeExisting})
+	if !strings.Contains(policy.PromptBlock, "workflow means workflow, automation means automation, and agent/team member means an AGENTS.md team definition") {
+		t.Fatalf("expected exact outcome language guidance in compose_existing policy: %q", policy.PromptBlock)
+	}
+}

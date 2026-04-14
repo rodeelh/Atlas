@@ -77,13 +77,13 @@ type GreetingQueuer interface {
 // Persisted to pending-greetings.json in phase 5; exposed here so the
 // dispatcher can construct them.
 type GreetingEntry struct {
-	ThoughtID   string    `json:"thought_id"`
-	Body        string    `json:"body"`
-	SkillID     string    `json:"skill_id"`
-	Result      string    `json:"result"`
-	Provenance  string    `json:"provenance"`
-	ExecutedAt  time.Time `json:"executed_at"`
-	DurationMs  int64     `json:"duration_ms"`
+	ThoughtID  string    `json:"thought_id"`
+	Body       string    `json:"body"`
+	SkillID    string    `json:"skill_id"`
+	Result     string    `json:"result"`
+	Provenance string    `json:"provenance"`
+	ExecutedAt time.Time `json:"executed_at"`
+	DurationMs int64     `json:"duration_ms"`
 }
 
 // Dispatcher is the action-gate implementation. One per process. Holds its
@@ -118,13 +118,13 @@ func NewDispatcher(supportDir string, executor SkillExecutor, approvals Approval
 // Returned from Dispatch so the caller (RunNap) can fold it into the
 // NapResult for the HTTP response.
 type DispatchResult struct {
-	AutoExecuted  int      `json:"auto_executed"`
-	Proposed      int      `json:"proposed"`
-	Skipped       int      `json:"skipped"`
-	RateLimited   int      `json:"rate_limited"`
-	Errors        []string `json:"errors,omitempty"`
-	AutoExecIDs   []string `json:"auto_exec_ids,omitempty"`
-	ProposedIDs   []string `json:"proposed_ids,omitempty"`
+	AutoExecuted int      `json:"auto_executed"`
+	Proposed     int      `json:"proposed"`
+	Skipped      int      `json:"skipped"`
+	RateLimited  int      `json:"rate_limited"`
+	Errors       []string `json:"errors,omitempty"`
+	AutoExecIDs  []string `json:"auto_exec_ids,omitempty"`
+	ProposedIDs  []string `json:"proposed_ids,omitempty"`
 }
 
 // dispatcherMaxPerNap and dispatcherMaxPerDay are defaults used when the
@@ -173,20 +173,20 @@ func (d *Dispatcher) Dispatch(ctx context.Context, list []thoughts.Thought, maxP
 			if execCount >= maxPerNap {
 				result.RateLimited++
 				d.telemetry.Emit(telemetry.KindAutoExecuteAttempted, t.ID, convID, map[string]any{
-					"outcome":  "rate_limited_per_nap",
-					"skill":    t.Action.SkillID,
-					"score":    t.Score,
-					"class":    string(t.Class),
+					"outcome": "rate_limited_per_nap",
+					"skill":   t.Action.SkillID,
+					"score":   t.Score,
+					"class":   string(t.Class),
 				})
 				continue
 			}
 			if !d.tryIncrementDaily(maxPerDay) {
 				result.RateLimited++
 				d.telemetry.Emit(telemetry.KindAutoExecuteAttempted, t.ID, convID, map[string]any{
-					"outcome":  "rate_limited_per_day",
-					"skill":    t.Action.SkillID,
-					"score":    t.Score,
-					"class":    string(t.Class),
+					"outcome": "rate_limited_per_day",
+					"skill":   t.Action.SkillID,
+					"score":   t.Score,
+					"class":   string(t.Class),
 				})
 				continue
 			}
@@ -209,11 +209,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, list []thoughts.Thought, maxP
 		result.Proposed++
 		result.ProposedIDs = append(result.ProposedIDs, t.ID)
 		d.telemetry.Emit(telemetry.KindApprovalProposed, t.ID, convID, map[string]any{
-			"outcome":      "applied",
-			"skill":        t.Action.SkillID,
-			"score":        t.Score,
-			"class":        string(t.Class),
-			"approval_id":  approvalID,
+			"outcome":     "applied",
+			"skill":       t.Action.SkillID,
+			"score":       t.Score,
+			"class":       string(t.Class),
+			"approval_id": approvalID,
 		})
 	}
 	return result

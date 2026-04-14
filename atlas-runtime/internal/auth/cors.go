@@ -43,4 +43,3 @@ func IsAllowedCORSOrigin(
 	}
 	return strings.EqualFold(CanonicalHost(u.Host), CanonicalHost(r.Host))
 }
-

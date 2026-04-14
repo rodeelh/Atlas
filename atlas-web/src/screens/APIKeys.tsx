@@ -120,8 +120,8 @@ export function APIKeys() {
 
       {/* Built-in providers */}
       <div>
-        <div class="section-label">Providers</div>
         <div class="card settings-group">
+          <div class="card-header"><span class="card-title">Providers</span></div>
           {providers.map((p, i) => (
             <KeyRow
               key={p.id}
@@ -138,20 +138,19 @@ export function APIKeys() {
 
       {/* Custom keys */}
       <div>
-        <div class="section-label credentials-section-label">
-          <span>Custom Keys</span>
-          {!addingNew && (
-            <button
-              class="btn btn-sm"
-              style={{ minWidth: '96px' }}
-              onClick={() => setAddingNew(true)}
-            >
-              Add key
-            </button>
-          )}
-        </div>
-
         <div class="card settings-group">
+          <div class="card-header">
+            <span class="card-title">Custom Keys</span>
+            {!addingNew && (
+              <button
+                class="btn btn-sm"
+                style={{ minWidth: '96px' }}
+                onClick={() => setAddingNew(true)}
+              >
+                Add key
+              </button>
+            )}
+          </div>
           {customKeys.map((name, i) => (
             <CustomKeyRow
               key={name}

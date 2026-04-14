@@ -1,64 +1,90 @@
+// Package ui implements the Atlas TUI using Bubble Tea.
 package ui
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-
-	"github.com/ralhassan/atlas-tui/client"
-	"github.com/ralhassan/atlas-tui/config"
+	"github.com/rodeelh/atlas-tui/client"
 )
 
-type tab int
+// sidebarWidth is the content width of the left sidebar (border adds 1 more).
+const sidebarWidth = 16
+
+// tabKind identifies the active TUI tab.
+type tabKind int
 
 const (
-	tabChat     tab = 0
-	tabStatus   tab = 1
-	tabSettings tab = 2
+	tabChat     tabKind = 0
+	tabLogs     tabKind = 1
+	tabStatus   tabKind = 2
+	tabSettings tabKind = 3
+	tabHelp     tabKind = 4
 )
 
-var tabNames = []string{"chat", "status", "settings"}
+var tabNames = []string{"CHAT", "LOGS", "STATUS", "SETTINGS", "HELP"}
+var tabIcons = []string{"◌", "≡", "◈", "⚙", "?"}
 
-type appPhase int
+// pingResultMsg carries the result of a connectivity probe.
+type pingResultMsg struct{ ok bool }
 
-const (
-	phaseSplash appPhase = iota
-	phaseMain
-)
+// pingCmd checks whether the runtime is reachable.
+func pingCmd(c *client.Client) tea.Cmd {
+	return func() tea.Msg {
+		return pingResultMsg{ok: c.Ping()}
+	}
+}
 
-// AppModel is the root BubbleTea model.
+// pingTickMsg fires on the ping-check timer.
+type pingTickMsg struct{}
+
+func pingTickCmd() tea.Cmd {
+	return tea.Tick(10*time.Second, func(time.Time) tea.Msg {
+		return pingTickMsg{}
+	})
+}
+
+// AppModel is the root Bubble Tea model.
 type AppModel struct {
 	client    *client.Client
-	cfg       *config.Config
+	port      int
 	width     int
 	height    int
-	activeTab tab
-	phase     appPhase
-	splash    SplashModel
+	activeTab tabKind
+	connected bool
 
 	chat     ChatModel
 	status   StatusModel
+	logs     LogsModel
 	settings SettingsModel
+	help     HelpModel
 }
 
-func NewAppModel(c *client.Client, cfg *config.Config) AppModel {
-	return AppModel{
-		client:   c,
-		cfg:      cfg,
-		phase:    phaseSplash,
-		splash:   NewSplashModel(),
-		chat:     NewChatModel(c, cfg),
-		status:   NewStatusModel(c),
-		settings: NewSettingsModel(c),
+// NewApp constructs the root application model.
+func NewApp(c *client.Client, port int) AppModel {
+	m := AppModel{
+		client:    c,
+		port:      port,
+		activeTab: tabChat,
+		chat:      NewChatModel(c),
+		status:    NewStatusModel(c),
+		logs:      NewLogsModel(c),
+		settings:  NewSettingsModel(c),
+		help:      NewHelpModel(),
 	}
+	return m
 }
 
 func (m AppModel) Init() tea.Cmd {
 	return tea.Batch(
-		m.splash.Init(),
+		pingCmd(m.client),
+		pingTickCmd(),
 		m.chat.Init(),
 		m.status.Init(),
+		m.logs.Init(),
 		m.settings.Init(),
 	)
 }
@@ -70,210 +96,197 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-
-		var splashCmd tea.Cmd
-		m.splash, splashCmd = m.splash.Update(msg)
-		cmds = append(cmds, splashCmd)
-
-		var chatCmd, statusCmd, settingsCmd tea.Cmd
-		m.chat, chatCmd = m.chat.Update(msg)
-		m.status, statusCmd = m.status.Update(msg)
-		m.settings, settingsCmd = m.settings.Update(msg)
-		cmds = append(cmds, chatCmd, statusCmd, settingsCmd)
-		return m, tea.Batch(cmds...)
-
-	case splashDoneMsg:
-		m.phase = phaseMain
+		contentW, bodyH := m.contentDims()
+		m.chat.SetSize(contentW, bodyH)
+		m.status.SetSize(contentW, bodyH)
+		m.logs.SetSize(contentW, bodyH)
+		m.settings.SetSize(contentW, bodyH)
+		m.help.SetSize(contentW, bodyH)
 		return m, nil
 
 	case tea.KeyMsg:
-		// Global quit always works.
-		if msg.String() == "ctrl+c" {
-			return m, tea.Quit
-		}
-
-		// During splash, any key skips it.
-		if m.phase == phaseSplash {
-			var cmd tea.Cmd
-			m.splash, cmd = m.splash.Update(msg)
-			return m, cmd
-		}
-
-		// During onboarding, only route to chat.
-		if m.chat.onboarding {
-			var cmd tea.Cmd
-			m.chat, cmd = m.chat.Update(msg)
-			cmds = append(cmds, cmd)
-			return m, tea.Batch(cmds...)
-		}
-
-		// Tab switching.
 		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
 		case "1":
-			m.activeTab = tabChat
-			return m, tea.ClearScreen
+			return m.switchTab(tabChat, cmds)
 		case "2":
-			if m.activeTab != tabStatus {
-				m.activeTab = tabStatus
-				var cmd tea.Cmd
-				m.status, cmd = m.status.Activate()
-				return m, tea.Batch(tea.ClearScreen, cmd)
-			}
-			return m, nil
+			return m.switchTab(tabLogs, cmds)
 		case "3":
-			m.activeTab = tabSettings
-			return m, tea.ClearScreen
+			return m.switchTab(tabStatus, cmds)
+		case "4":
+			return m.switchTab(tabSettings, cmds)
+		case "5":
+			return m.switchTab(tabHelp, cmds)
 		case "tab":
-			next := (m.activeTab + 1) % tab(len(tabNames))
-			m.activeTab = next
-			if next == tabStatus {
-				var cmd tea.Cmd
-				m.status, cmd = m.status.Activate()
-				return m, tea.Batch(tea.ClearScreen, cmd)
-			}
-			return m, tea.ClearScreen
+			next := tabKind((int(m.activeTab) + 1) % len(tabNames))
+			return m.switchTab(next, cmds)
+		case "shift+tab":
+			prev := tabKind((int(m.activeTab) + len(tabNames) - 1) % len(tabNames))
+			return m.switchTab(prev, cmds)
 		}
 
-		// Delegate to active tab.
-		switch m.activeTab {
-		case tabChat:
-			var cmd tea.Cmd
-			m.chat, cmd = m.chat.Update(msg)
-			cmds = append(cmds, cmd)
-		case tabStatus:
-			var cmd tea.Cmd
-			m.status, cmd = m.status.Update(msg)
-			cmds = append(cmds, cmd)
-		case tabSettings:
-			var cmd tea.Cmd
-			m.settings, cmd = m.settings.Update(msg)
-			cmds = append(cmds, cmd)
-		}
+	case pingResultMsg:
+		m.connected = msg.ok
+		cmds = append(cmds, pingTickCmd())
 
-	// Handle the sseReader msg from the chat open-SSE command.
-	case *sseReader:
+	case pingTickMsg:
+		cmds = append(cmds, pingCmd(m.client))
+	}
+
+	// Route message to active tab.
+	switch m.activeTab {
+	case tabChat:
 		var cmd tea.Cmd
-		m.chat, cmd = m.chat.handleSSEReaderMsg(msg)
+		m.chat, cmd = m.chat.Update(msg)
 		cmds = append(cmds, cmd)
-
-	default:
-		// Route splash ticks to splash during splash phase.
-		if m.phase == phaseSplash {
-			var cmd tea.Cmd
-			m.splash, cmd = m.splash.Update(msg)
-			cmds = append(cmds, cmd)
-		}
-
-		// Route all other messages to all tab models so timers/spinners work.
-		var chatCmd, statusCmd, settingsCmd tea.Cmd
-		m.chat, chatCmd = m.chat.Update(msg)
-		m.status, statusCmd = m.status.Update(msg)
-		m.settings, settingsCmd = m.settings.Update(msg)
-		cmds = append(cmds, chatCmd, statusCmd, settingsCmd)
+	case tabLogs:
+		var cmd tea.Cmd
+		m.logs, cmd = m.logs.Update(msg)
+		cmds = append(cmds, cmd)
+	case tabStatus:
+		var cmd tea.Cmd
+		m.status, cmd = m.status.Update(msg)
+		cmds = append(cmds, cmd)
+	case tabSettings:
+		var cmd tea.Cmd
+		m.settings, cmd = m.settings.Update(msg)
+		cmds = append(cmds, cmd)
+	case tabHelp:
+		var cmd tea.Cmd
+		m.help, cmd = m.help.Update(msg)
+		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)
 }
 
+// switchTab changes the active tab and triggers its on-focus command.
+func (m AppModel) switchTab(t tabKind, cmds []tea.Cmd) (AppModel, tea.Cmd) {
+	m.activeTab = t
+	switch t {
+	case tabLogs:
+		cmds = append(cmds, m.logs.OnFocus())
+	case tabStatus:
+		cmds = append(cmds, m.status.OnFocus())
+	case tabSettings:
+		cmds = append(cmds, m.settings.OnFocus())
+	}
+	return m, tea.Batch(cmds...)
+}
+
+// contentDims returns the usable width and height for the content pane.
+// header = 1 line, statusbar = 1 line.
+func (m AppModel) contentDims() (w, h int) {
+	sidebarFrame := sidebarStyle.Padding(0, 1).GetHorizontalFrameSize()
+	contentFrame := contentStyle.GetHorizontalFrameSize()
+	w = m.width - sidebarWidth - sidebarFrame - contentFrame
+	h = m.height - 2
+	if w < 0 {
+		w = 0
+	}
+	if h < 0 {
+		h = 0
+	}
+	return
+}
+
+// View renders the full TUI.
 func (m AppModel) View() string {
 	if m.width == 0 {
 		return ""
 	}
-
-	// Splash phase: full-screen logo animation.
-	if m.phase == phaseSplash {
-		return m.splash.View()
-	}
-
-	// During onboarding, full screen is the chat.
-	if m.chat.onboarding {
-		return m.chat.View()
-	}
-
-	var sb strings.Builder
-
-	// Tab bar (row 0).
-	sb.WriteString(m.renderTabBar())
-	sb.WriteString("\n")
-
-	// Active tab content rendered into a fixed-size box.
-	// Height+MaxHeight enforce exactly (m.height-3) rows regardless of tab content;
-	// Width pads every line to m.width so no old characters bleed through.
-	contentH := m.height - 3
-	if contentH < 1 {
-		contentH = 1
-	}
-	var rawContent string
-	switch m.activeTab {
-	case tabChat:
-		rawContent = m.chat.View()
-	case tabStatus:
-		rawContent = m.status.View()
-	case tabSettings:
-		rawContent = m.settings.View()
-	}
-	contentBox := lipgloss.NewStyle().
-		Width(m.width).
-		Height(contentH).
-		MaxHeight(contentH)
-	sb.WriteString(contentBox.Render(rawContent))
-
-	// Status bar (immediately after the fixed content box — no extra blank needed
-	// because the box already fills the rows).
-	sb.WriteString("\n")
-	sb.WriteString(m.renderStatusBar())
-
-	return sb.String()
+	header := m.renderHeader()
+	body := m.renderBody()
+	statusBar := m.renderStatusBar()
+	return lipgloss.JoinVertical(lipgloss.Left, header, body, statusBar)
 }
 
-func (m AppModel) renderTabBar() string {
-	var parts []string
+func (m AppModel) renderHeader() string {
+	logo := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(colorPrimary)).
+		Bold(true).
+		Render("◆ ATLAS")
+
+	// pad content to exactly m.width so the background fills the full line
+	pad := m.width - lipgloss.Width(logo) - 2 // 2 = left margin space
+	if pad < 0 {
+		pad = 0
+	}
+	content := " " + logo + strings.Repeat(" ", pad)
+	return headerStyle.Width(m.width).Render(content)
+}
+
+func (m AppModel) renderBody() string {
+	bodyH := m.height - 2
+	if bodyH < 0 {
+		bodyH = 0
+	}
+
+	sidebar := m.renderSidebar(bodyH)
+	contentTotalW := m.width - lipgloss.Width(sidebar)
+	if contentTotalW < 0 {
+		contentTotalW = 0
+	}
+	content := contentStyle.Width(contentTotalW).Height(bodyH).Render(m.activeView())
+	return lipgloss.JoinHorizontal(lipgloss.Top, sidebar, content)
+}
+
+func (m AppModel) renderSidebar(h int) string {
+	lines := make([]string, 0, len(tabNames)+2)
+	lines = append(lines, "") // top padding
+
 	for i, name := range tabNames {
-		if tab(i) == m.activeTab {
-			parts = append(parts, TabActive.Render(name))
+		t := tabKind(i)
+		if t == m.activeTab {
+			arrow := tabActiveStyle.Render("›")
+			label := tabActiveStyle.Render(name)
+			lines = append(lines, arrow+" "+label)
 		} else {
-			parts = append(parts, TabInactive.Render(name))
+			hint := tabHintStyle.Render(fmt.Sprintf("%d", i+1))
+			label := tabInactiveStyle.Render(name)
+			lines = append(lines, hint+" "+label)
 		}
 	}
-	// Join tabs then fill remaining width with the same dark background as the footer.
-	bar := strings.Join(parts, "")
-	return lipgloss.NewStyle().
-		Background(lipgloss.Color("#111827")).
-		Width(m.width).
-		Render(bar)
+
+	return sidebarStyle.
+		Width(sidebarWidth).
+		Height(h).
+		Padding(0, 1).
+		Render(strings.Join(lines, "\n"))
+}
+
+func (m AppModel) activeView() string {
+	switch m.activeTab {
+	case tabChat:
+		return m.chat.View()
+	case tabLogs:
+		return m.logs.View()
+	case tabStatus:
+		return m.status.View()
+	case tabSettings:
+		return m.settings.View()
+	case tabHelp:
+		return m.help.View()
+	}
+	return ""
 }
 
 func (m AppModel) renderStatusBar() string {
-	var hint string
-	switch m.activeTab {
-	case tabStatus:
-		hint = "  r refresh  |  c clear logs  |  ↑↓ scroll  |  1-3 switch tab  |  ctrl+c quit"
-	case tabSettings:
-		hint = "  s save  |  r reload  |  ↑↓ navigate  |  enter edit  |  space toggle  |  esc cancel"
-	default:
-		hint = "  1 chat  |  2 status  |  3 settings  |  tab switch  |  ctrl+c quit"
+	connDot := dot(m.connected)
+	connLabel := "connected"
+	if !m.connected {
+		connLabel = "disconnected"
 	}
-	return StatusBar.Width(m.width).Render(hint)
-}
 
-// lipglossLen approximates the visible width of a lipgloss-rendered string
-// by stripping ANSI escape codes.
-func lipglossLen(s string) int {
-	inEscape := false
-	count := 0
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c == '\x1b' {
-			inEscape = true
-			continue
-		}
-		if inEscape {
-			if c == 'm' {
-				inEscape = false
-			}
-			continue
-		}
-		count++
+	left := " " + connDot + " " + textMuted.Render(connLabel)
+	right := textMuted.Render("1-5 switch  tab cycle  ctrl+c quit") + " "
+
+	// fill the gap so the background covers the full width — no Padding needed
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 0 {
+		gap = 0
 	}
-	return count
+	content := left + strings.Repeat(" ", gap) + right
+	return statusBarStyle.Width(m.width).Render(content)
 }

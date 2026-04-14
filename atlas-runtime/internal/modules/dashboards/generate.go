@@ -397,8 +397,8 @@ func validateGeneratedDefinition(def *DashboardDefinition) error {
 		// Strip any html/css/js fields — custom_html is not allowed in AI
 		// generation. Built-in widgets have pre-built renderers.
 		w.HTML = ""
-		w.CSS  = ""
-		w.JS   = ""
+		w.CSS = ""
+		w.JS = ""
 	}
 	return nil
 }

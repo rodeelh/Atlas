@@ -90,7 +90,9 @@ function extractSeries(widget: DashboardWidget, data: unknown): SeriesPoint[] {
 }
 
 // Shared Chart.js default styles
-const CHART_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif'
+const getChartFont = () =>
+  getComputedStyle(document.documentElement).getPropertyValue('--ui-font').trim() ||
+  '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif'
 const GRID_COLOR  = 'rgba(156,163,175,0.15)'
 const TICK_COLOR  = 'rgba(107,114,128,0.9)'
 
@@ -176,13 +178,13 @@ export function LineChartWidget({ widget, data }: { widget: DashboardWidget; dat
         scales: {
           x: {
             grid: { color: GRID_COLOR },
-            ticks: { color: TICK_COLOR, font: { family: CHART_FONT, size: 11 }, maxTicksLimit: 8, maxRotation: 0 },
+            ticks: { color: TICK_COLOR, font: { family: getChartFont(), size: 11 }, maxTicksLimit: 8, maxRotation: 0 },
           },
           y: {
             grid: { color: GRID_COLOR },
             ticks: {
               color: TICK_COLOR,
-              font: { family: CHART_FONT, size: 11 },
+              font: { family: getChartFont(), size: 11 },
               callback: (v) => formatValue(v, (widget.options?.format as string) || ''),
             },
           },
@@ -245,13 +247,13 @@ export function BarChartWidget({ widget, data }: { widget: DashboardWidget; data
         scales: {
           x: {
             grid: { display: false },
-            ticks: { color: TICK_COLOR, font: { family: CHART_FONT, size: 11 }, maxTicksLimit: 12, maxRotation: 0 },
+            ticks: { color: TICK_COLOR, font: { family: getChartFont(), size: 11 }, maxTicksLimit: 12, maxRotation: 0 },
           },
           y: {
             grid: { color: GRID_COLOR },
             ticks: {
               color: TICK_COLOR,
-              font: { family: CHART_FONT, size: 11 },
+              font: { family: getChartFont(), size: 11 },
               callback: (v) => formatValue(v, (widget.options?.format as string) || ''),
             },
           },

@@ -1,3 +1,4 @@
+// Package client provides a typed HTTP client for the Atlas runtime API.
 package client
 
 import (
@@ -8,73 +9,120 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"strings"
 	"time"
 )
 
+// Client speaks to the Atlas runtime over HTTP.
 type Client struct {
-	baseURL string
-	http    *http.Client
+	baseURL  string
+	http     *http.Client // 15s timeout — for status, config, logs, ping
+	chatHTTP *http.Client // no timeout — for POST /message which blocks while agent runs
 }
 
-type APIError struct {
-	Code    int
-	Message string
+// New returns a Client targeting baseURL (e.g. "http://localhost:1984").
+func New(baseURL string) *Client {
+	return &Client{
+		baseURL:  strings.TrimRight(baseURL, "/"),
+		http:     &http.Client{Timeout: 15 * time.Second},
+		chatHTTP: &http.Client{}, // no timeout
+	}
 }
 
-func (e *APIError) Error() string {
-	return fmt.Sprintf("API error %d: %s", e.Code, e.Message)
+// BaseURL returns the runtime base URL.
+func (c *Client) BaseURL() string { return c.baseURL }
+
+// ── Response types ────────────────────────────────────────────────────────────
+
+// RuntimeStatus mirrors the GET /status JSON shape.
+type RuntimeStatus struct {
+	IsRunning            bool    `json:"isRunning"`
+	State                string  `json:"state"`
+	RuntimePort          int     `json:"runtimePort"`
+	StartedAt            *string `json:"startedAt,omitempty"`
+	ActiveRequests       int32   `json:"activeRequests"`
+	PendingApprovalCount int     `json:"pendingApprovalCount"`
+	Details              string  `json:"details"`
+	TokensIn             int64   `json:"tokensIn"`
+	TokensOut            int64   `json:"tokensOut"`
 }
 
-type Message struct {
-	ID        string    `json:"id"`
-	Role      string    `json:"role"`
-	Content   string    `json:"content"`
-	Timestamp time.Time `json:"timestamp"`
-	Platform  string    `json:"platform"`
-}
-
-type StatusResponse struct {
-	State       string `json:"state"`
-	CurrentTask string `json:"current_task"`
-	Model       string `json:"model"`
-	Uptime      string `json:"uptime"`
-	Version     string `json:"version"`
-}
-
-type RuntimeConfig struct {
-	Model                         string `json:"defaultOpenAIModel"`
-	MaxAgentIterations            int    `json:"maxAgentIterations"`
-	EnableMultiAgentOrchestration bool   `json:"enableMultiAgentOrchestration"`
-	MaxParallelAgents             int    `json:"maxParallelAgents"`
-	WorkerMaxIterations           int    `json:"workerMaxIterations"`
-	Port                          int    `json:"runtimePort"`
-}
-
-type CredentialBundle struct {
-	AnthropicAPIKey  string `json:"anthropic_api_key,omitempty"`
-	OpenAIAPIKey     string `json:"openai_api_key,omitempty"`
-	TelegramBotToken string `json:"telegram_bot_token,omitempty"`
-	DiscordBotToken  string `json:"discord_bot_token,omitempty"`
-	SlackBotToken    string `json:"slack_bot_token,omitempty"`
-	BraveAPIKey      string `json:"brave_api_key,omitempty"`
-	FinnhubAPIKey    string `json:"finnhub_api_key,omitempty"`
-}
-
-type PermissionBundle struct {
-	Files    bool `json:"files"`
-	Terminal bool `json:"terminal"`
-	Browser  bool `json:"browser"`
-}
-
+// LogEntry is one line from GET /logs.
 type LogEntry struct {
 	Level     string            `json:"level"`
 	Message   string            `json:"message"`
 	Timestamp string            `json:"timestamp"`
-	Fields    map[string]string `json:"fields"`
+	Fields    map[string]string `json:"fields,omitempty"`
 }
 
+// RuntimeConfig are the editable fields from GET /config.
+type RuntimeConfig struct {
+	DefaultOpenAIModel          string  `json:"defaultOpenAIModel"`
+	ActiveAIProvider            string  `json:"activeAIProvider"`
+	MaxAgentIterations          int     `json:"maxAgentIterations"`
+	MaxRetrievedMemoriesPerTurn int     `json:"maxRetrievedMemoriesPerTurn"`
+	ActionSafetyMode            string  `json:"actionSafetyMode"`
+	PersonaName                 string  `json:"personaName"`
+	UserName                    string  `json:"userName"`
+	RuntimePort                 int     `json:"runtimePort"`
+	MemoryEnabled               bool    `json:"memoryEnabled"`
+	MemoryAutoSaveThreshold     float64 `json:"memoryAutoSaveThreshold"`
+}
+
+// ApprovalToolCall is the tool call embedded in an Approval.
+type ApprovalToolCall struct {
+	ID              string `json:"id"`
+	ToolName        string `json:"toolName"`
+	ArgumentsJSON   string `json:"argumentsJSON"`
+	PermissionLevel string `json:"permissionLevel"`
+	Status          string `json:"status,omitempty"`
+	Timestamp       string `json:"timestamp,omitempty"`
+}
+
+// Approval is one record from GET /approvals.
+type Approval struct {
+	ID             string           `json:"id"`
+	Status         string           `json:"status"`
+	Source         string           `json:"source,omitempty"`
+	ConversationID *string          `json:"conversationID,omitempty"`
+	ToolCall       ApprovalToolCall `json:"toolCall"`
+}
+
+// MessageRequest is the body for POST /message.
+type MessageRequest struct {
+	Message        string `json:"message"`
+	ConversationID string `json:"conversationId,omitempty"`
+}
+
+// MessageResponse is returned by POST /message.
+type MessageResponse struct {
+	Conversation struct {
+		ID       string        `json:"id"`
+		Messages []MessageItem `json:"messages"`
+	} `json:"conversation"`
+	Response struct {
+		AssistantMessage string `json:"assistantMessage,omitempty"`
+		Status           string `json:"status"`
+		ErrorMessage     string `json:"errorMessage,omitempty"`
+	} `json:"response"`
+}
+
+// MessageItem is a single message in a conversation.
+type MessageItem struct {
+	ID        string `json:"id"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Timestamp string `json:"timestamp"`
+}
+
+// Conversation is a conversation summary from GET /conversations.
+type Conversation struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// SSEEvent is one parsed event from the message/stream endpoint.
 type SSEEvent struct {
 	Type           string `json:"type"`
 	Content        string `json:"content"`
@@ -86,172 +134,144 @@ type SSEEvent struct {
 	ApprovalID     string `json:"approvalID"`
 }
 
-// BaseURL returns the daemon base URL (used in error messages).
-func (c *Client) BaseURL() string { return c.baseURL }
+// ── HTTP helpers ──────────────────────────────────────────────────────────────
 
-func New(baseURL string) *Client {
-	jar, _ := cookiejar.New(nil)
-	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		http: &http.Client{
-			Timeout: 15 * time.Second,
-			Jar:     jar,
-		},
-	}
-}
-
-func (c *Client) do(method, path string, body any) (*http.Response, error) {
+func (c *Client) doJSON(method, path string, body, out any) error {
 	var bodyReader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		bodyReader = bytes.NewReader(b)
 	}
 	req, err := http.NewRequest(method, c.baseURL+path, bodyReader)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	// No Origin header — localhost bypasses auth
 	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
-}
-
-func (c *Client) doJSON(method, path string, body any, out any) error {
-	resp, err := c.do(method, path, body)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("reading response body: %w", err)
-	}
 	if resp.StatusCode >= 400 {
-		var errBody struct {
+		var e struct {
 			Error string `json:"error"`
 		}
-		_ = json.Unmarshal(data, &errBody)
-		msg := errBody.Error
-		if msg == "" {
-			msg = string(data)
+		json.NewDecoder(resp.Body).Decode(&e) //nolint:errcheck
+		if e.Error != "" {
+			return fmt.Errorf("API %d: %s", resp.StatusCode, e.Error)
 		}
-		return &APIError{Code: resp.StatusCode, Message: msg}
+		return fmt.Errorf("API error %d", resp.StatusCode)
 	}
-	if out != nil {
-		return json.Unmarshal(data, out)
+	if out != nil && resp.StatusCode != http.StatusNoContent {
+		return json.NewDecoder(resp.Body).Decode(out)
 	}
 	return nil
 }
 
-func (c *Client) HealthCheck() error {
-	var out any
-	return c.doJSON("GET", "/status", nil, &out)
+// ── API methods ───────────────────────────────────────────────────────────────
+
+// Ping returns true if the runtime is reachable.
+func (c *Client) Ping() bool {
+	req, err := http.NewRequest("GET", c.baseURL+"/auth/ping", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
-func (c *Client) Login(_ string) error {
-	// Localhost requests bypass auth — no login needed.
-	return c.HealthCheck()
+// GetStatus fetches runtime status.
+func (c *Client) GetStatus() (*RuntimeStatus, error) {
+	var s RuntimeStatus
+	return &s, c.doJSON("GET", "/status", nil, &s)
 }
 
-func (c *Client) Logout() error { return nil }
+// GetLogs fetches the most recent log entries.
+func (c *Client) GetLogs(limit int) ([]LogEntry, error) {
+	var entries []LogEntry
+	return entries, c.doJSON("GET", fmt.Sprintf("/logs?limit=%d", limit), nil, &entries)
+}
 
-// SendMessage posts a message. Returns the conversation ID and assistant response text.
-func (c *Client) SendMessage(text string, convID string) (string, string, error) {
-	body := map[string]any{
-		"message":        text,
-		"conversationId": convID,
-		"platform":       "tui",
-	}
-	var out struct {
-		Conversation struct {
-			ID       string `json:"id"`
-			Messages []struct {
-				ID        string `json:"id"`
-				Role      string `json:"role"`
-				Content   string `json:"content"`
-				Timestamp string `json:"timestamp"`
-			} `json:"messages"`
-		} `json:"conversation"`
-		Response struct {
-			AssistantMessage string `json:"assistantMessage"`
-			Status           string `json:"status"`
-			ErrorMessage     string `json:"errorMessage"`
-		} `json:"response"`
-	}
-	// Use a client with a generous timeout — AI responses can take a while.
-	jar := c.http.Jar
-	jarClient := &http.Client{
-		Jar:     jar,
-		Timeout: 10 * time.Minute,
-	}
-	b, _ := json.Marshal(body)
-	req, err := http.NewRequest("POST", c.baseURL+"/message", bytes.NewReader(b))
+// GetConfig fetches the current runtime config.
+func (c *Client) GetConfig() (*RuntimeConfig, error) {
+	var cfg RuntimeConfig
+	return &cfg, c.doJSON("GET", "/config", nil, &cfg)
+}
+
+// UpdateConfig patches the runtime config with the given fields.
+func (c *Client) UpdateConfig(patch map[string]any) error {
+	return c.doJSON("PUT", "/config", patch, nil)
+}
+
+// SendMessage posts a message and returns the full response (blocking).
+// Uses chatHTTP (no timeout) because agent turns can take minutes.
+func (c *Client) SendMessage(req MessageRequest) (*MessageResponse, error) {
+	b, err := json.Marshal(req)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := jarClient.Do(req)
+	httpReq, err := http.NewRequest("POST", c.baseURL+"/message", bytes.NewReader(b))
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpResp, err := c.chatHTTP.Do(httpReq)
 	if err != nil {
-		return "", "", fmt.Errorf("reading response body: %w", err)
+		return nil, err
 	}
-	if resp.StatusCode >= 400 {
-		var errBody struct {
+	defer httpResp.Body.Close()
+	if httpResp.StatusCode >= 400 {
+		var e struct {
 			Error string `json:"error"`
 		}
-		_ = json.Unmarshal(data, &errBody)
-		return "", "", &APIError{Code: resp.StatusCode, Message: errBody.Error}
+		json.NewDecoder(httpResp.Body).Decode(&e) //nolint:errcheck
+		if e.Error != "" {
+			return nil, fmt.Errorf("API %d: %s", httpResp.StatusCode, e.Error)
+		}
+		return nil, fmt.Errorf("API error %d", httpResp.StatusCode)
 	}
-	if err := json.Unmarshal(data, &out); err != nil {
-		return "", "", err
+	var resp MessageResponse
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		return nil, err
 	}
-	if out.Response.Status == "error" {
-		return "", "", fmt.Errorf("%s", out.Response.ErrorMessage)
-	}
-	return out.Conversation.ID, out.Response.AssistantMessage, nil
+	return &resp, nil
 }
 
-// OpenSSEStream opens a raw SSE HTTP connection and returns the response + scanner.
-// The caller must call cancel() when done to release the context and unblock the scanner.
-func (c *Client) OpenSSEStream(ctx context.Context, convID string) (*http.Response, *bufio.Scanner, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/message/stream?conversationID="+convID, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	// No timeout for SSE — the context provides cancellation.
-	sseClient := &http.Client{Jar: c.http.Jar}
-	resp, err := sseClient.Do(req)
-	if err != nil {
-		return nil, nil, err
-	}
-	scanner := bufio.NewScanner(resp.Body)
-	return resp, scanner, nil
+// GetConversations returns a list of recent conversations.
+func (c *Client) GetConversations() ([]Conversation, error) {
+	var convs []Conversation
+	return convs, c.doJSON("GET", "/conversations", nil, &convs)
 }
 
-// StreamSSE opens an SSE stream and calls onEvent for each event until done/error.
-func (c *Client) StreamSSE(convID string, onEvent func(SSEEvent)) error {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	resp, scanner, err := c.OpenSSEStream(ctx, convID)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+// GetConversation returns a full conversation by ID.
+func (c *Client) GetConversation(id string) (*MessageResponse, error) {
+	var resp MessageResponse
+	return &resp, c.doJSON("GET", "/conversations/"+id, nil, &resp)
+}
 
-	for scanner.Scan() {
-		line := scanner.Text()
+// ── SSE streaming ─────────────────────────────────────────────────────────────
+
+// SSEStream is an open server-sent-events connection to /message/stream.
+type SSEStream struct {
+	scanner *bufio.Scanner
+	body    io.ReadCloser
+	cancel  context.CancelFunc
+}
+
+// Next returns the next SSEEvent from the stream (blocks until one arrives).
+// ok is false when the stream ends or errors.
+func (s *SSEStream) Next() (*SSEEvent, bool) {
+	for s.scanner.Scan() {
+		line := s.scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
@@ -260,162 +280,63 @@ func (c *Client) StreamSSE(convID string, onEvent func(SSEEvent)) error {
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			continue
 		}
-		onEvent(event)
-		if event.Type == "done" || event.Type == "error" {
-			return nil
-		}
+		return &event, true
 	}
-	return scanner.Err()
+	return nil, false
 }
 
-func (c *Client) GetHistory(limit int) ([]Message, error) {
-	// Get the most recent conversation, then fetch its messages.
-	var convs []struct {
-		ID string `json:"id"`
+// Close cancels the request and closes the stream body.
+func (s *SSEStream) Close() {
+	if s.cancel != nil {
+		s.cancel()
 	}
-	if err := c.doJSON("GET", fmt.Sprintf("/conversations?limit=%d", 1), nil, &convs); err != nil {
-		return nil, err
+	if s.body != nil {
+		s.body.Close()
 	}
-	if len(convs) == 0 {
-		return nil, nil
-	}
-
-	var conv struct {
-		Messages []struct {
-			ID        string `json:"id"`
-			Role      string `json:"role"`
-			Content   string `json:"content"`
-			Timestamp string `json:"timestamp"`
-		} `json:"messages"`
-	}
-	if err := c.doJSON("GET", "/conversations/"+convs[0].ID, nil, &conv); err != nil {
-		return nil, err
-	}
-
-	msgs := make([]Message, 0, len(conv.Messages))
-	for _, m := range conv.Messages {
-		var ts time.Time
-		ts, _ = time.Parse(time.RFC3339Nano, m.Timestamp)
-		msgs = append(msgs, Message{
-			ID:        m.ID,
-			Role:      m.Role,
-			Content:   m.Content,
-			Timestamp: ts,
-		})
-	}
-	// Return at most `limit` messages from the end.
-	if len(msgs) > limit {
-		msgs = msgs[len(msgs)-limit:]
-	}
-	return msgs, nil
 }
 
-type statusRaw struct {
-	State                string `json:"state"`
-	CurrentTask          string `json:"currentTask"`
-	Model                string `json:"model"`
-	UptimeSeconds        int    `json:"uptimeSeconds"`
-	Version              string `json:"version"`
-	ConversationCount    int    `json:"conversationCount"`
-	TotalTokensIn        int    `json:"totalTokensIn"`
-	TotalTokensOut       int    `json:"totalTokensOut"`
-	PendingApprovalCount int    `json:"pendingApprovalCount"`
-}
-
-func (c *Client) GetStatus() (*StatusResponse, error) {
-	var raw statusRaw
-	if err := c.doJSON("GET", "/status", nil, &raw); err != nil {
+// OpenSSEStream opens a streaming connection for a conversationID.
+func (c *Client) OpenSSEStream(conversationID string) (*SSEStream, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		c.baseURL+"/message/stream?conversationID="+conversationID, nil)
+	if err != nil {
+		cancel()
 		return nil, err
 	}
-	uptime := fmt.Sprintf("%ds", raw.UptimeSeconds)
-	if raw.UptimeSeconds >= 3600 {
-		h := raw.UptimeSeconds / 3600
-		m := (raw.UptimeSeconds % 3600) / 60
-		uptime = fmt.Sprintf("%dh %dm", h, m)
-	} else if raw.UptimeSeconds >= 60 {
-		uptime = fmt.Sprintf("%dm %ds", raw.UptimeSeconds/60, raw.UptimeSeconds%60)
+	// No timeout for SSE streams.
+	sseHTTP := &http.Client{}
+	resp, err := sseHTTP.Do(req)
+	if err != nil {
+		cancel()
+		return nil, err
 	}
-	return &StatusResponse{
-		State:       raw.State,
-		CurrentTask: raw.CurrentTask,
-		Model:       raw.Model,
-		Uptime:      uptime,
-		Version:     raw.Version,
+	if resp.StatusCode != http.StatusOK {
+		cancel()
+		resp.Body.Close()
+		return nil, fmt.Errorf("SSE stream: status %d", resp.StatusCode)
+	}
+	return &SSEStream{
+		scanner: bufio.NewScanner(resp.Body),
+		body:    resp.Body,
+		cancel:  cancel,
 	}, nil
 }
 
-func (c *Client) GetLogs(lines int) ([]string, error) {
-	var entries []LogEntry
-	if err := c.doJSON("GET", fmt.Sprintf("/logs?limit=%d", lines), nil, &entries); err != nil {
-		return nil, err
-	}
-	result := make([]string, 0, len(entries))
-	for _, e := range entries {
-		ts := e.Timestamp
-		if len(ts) > 19 {
-			ts = ts[:19]
-		}
-		result = append(result, fmt.Sprintf("[%s] %s  %s", ts, strings.ToUpper(e.Level), e.Message))
-	}
-	return result, nil
+// ── Approvals ─────────────────────────────────────────────────────────────────
+
+// GetApprovals returns all approval records (pending and resolved).
+func (c *Client) GetApprovals() ([]Approval, error) {
+	var approvals []Approval
+	return approvals, c.doJSON("GET", "/approvals", nil, &approvals)
 }
 
-func (c *Client) GetConfig() (*RuntimeConfig, error) {
-	var cfg RuntimeConfig
-	if err := c.doJSON("GET", "/config", nil, &cfg); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
+// ApproveToolCall approves the pending approval identified by toolCallID.
+func (c *Client) ApproveToolCall(toolCallID string) error {
+	return c.doJSON("POST", "/approvals/"+toolCallID+"/approve", nil, nil)
 }
 
-func (c *Client) UpdateConfig(patch map[string]any) error {
-	return c.doJSON("PUT", "/config", patch, nil)
-}
-
-// credKey maps CredentialBundle field names to daemon api-key IDs.
-var credKey = map[string]string{
-	"AnthropicAPIKey":  "anthropic",
-	"OpenAIAPIKey":     "openai",
-	"TelegramBotToken": "telegram",
-	"DiscordBotToken":  "discord",
-	"SlackBotToken":    "slack",
-	"BraveAPIKey":      "braveSearch",
-	"FinnhubAPIKey":    "finnhub",
-}
-
-func (c *Client) SetCredentials(creds CredentialBundle) error {
-	type apiKeyReq struct {
-		Key   string `json:"key"`
-		Value string `json:"value"`
-	}
-
-	pairs := []struct{ field, value string }{
-		{"AnthropicAPIKey", creds.AnthropicAPIKey},
-		{"OpenAIAPIKey", creds.OpenAIAPIKey},
-		{"TelegramBotToken", creds.TelegramBotToken},
-		{"DiscordBotToken", creds.DiscordBotToken},
-		{"SlackBotToken", creds.SlackBotToken},
-		{"BraveAPIKey", creds.BraveAPIKey},
-		{"FinnhubAPIKey", creds.FinnhubAPIKey},
-	}
-
-	for _, p := range pairs {
-		if p.value == "" {
-			continue
-		}
-		key, ok := credKey[p.field]
-		if !ok {
-			continue
-		}
-		if err := c.doJSON("POST", "/api-keys", apiKeyReq{Key: key, Value: p.value}, nil); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// SetPermissions is not yet implemented — permissions selected during onboarding
-// are not persisted to the daemon. TODO: POST to /config when the runtime supports it.
-func (c *Client) SetPermissions(_ PermissionBundle) error {
-	return nil
+// DenyToolCall denies the pending approval identified by toolCallID.
+func (c *Client) DenyToolCall(toolCallID string) error {
+	return c.doJSON("POST", "/approvals/"+toolCallID+"/deny", nil, nil)
 }

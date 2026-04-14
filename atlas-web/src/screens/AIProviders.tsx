@@ -827,9 +827,9 @@ export function AIProviders() {
 
 function SettingsGroup({ title, children }: { title: string; children: preact.ComponentChild }) {
   return (
-    <div>
-      <div class="section-label">{title}</div>
-      <div class="card settings-group" style={{ overflow: 'visible' }}>{children}</div>
+    <div class="card settings-group" style={{ overflow: 'visible' }}>
+      <div class="card-header"><span class="card-title">{title}</span></div>
+      {children}
     </div>
   )
 }
@@ -933,7 +933,7 @@ function InfoTip({ text }: { text: string }) {
         onClick={() => { if (visible) setVisible(false); else open() }}
       >?</button>
       {visible && (
-        <span style={{ position: 'absolute', top: '50%', left: side === 'right' ? 'calc(100% + 8px)' : 'auto', right: side === 'left' ? 'calc(100% + 8px)' : 'auto', transform: 'translateY(-50%)', background: 'var(--surface, var(--bg))', border: '1px solid var(--border)', borderRadius: '8px', padding: '8px 11px', fontSize: '12px', color: 'var(--text-2)', width: '260px', zIndex: 9999, lineHeight: 1.5, boxShadow: '0 4px 20px rgba(0,0,0,0.22)', pointerEvents: 'none' }}>
+        <span style={{ position: 'absolute', top: '50%', left: side === 'right' ? 'calc(100% + 8px)' : 'auto', right: side === 'left' ? 'calc(100% + 8px)' : 'auto', transform: 'translateY(-50%)', background: 'var(--surface, var(--bg))', border: '1px solid var(--border)', borderRadius: 'var(--ui-radius)', padding: '8px 11px', fontSize: '12px', fontFamily: 'var(--ui-font)', color: 'var(--text-2)', width: '260px', zIndex: 9999, lineHeight: 1.5, boxShadow: '0 4px 20px rgba(0,0,0,0.22)', pointerEvents: 'none' }}>
           {text.split('\n').map((line, index) => <span key={index} style={{ display: 'block' }}>{line}</span>)}
         </span>
       )}

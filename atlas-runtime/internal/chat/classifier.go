@@ -195,11 +195,11 @@ func (s *Service) runClassifier(
 	}
 
 	tel.Emit(telemetry.KindEngagementRecorded, pending.ThoughtID, pending.ConvID, map[string]any{
-		"surfacing_id":           pending.SurfacingID,
-		"signal":                 string(signal),
-		"classifier_confidence":  parsed.Confidence,
-		"classifier_reasoning":   parsed.Reasoning,
-		"user_message_preview":   truncateForTelemetry(userMessage, 200),
+		"surfacing_id":          pending.SurfacingID,
+		"signal":                string(signal),
+		"classifier_confidence": parsed.Confidence,
+		"classifier_reasoning":  parsed.Reasoning,
+		"user_message_preview":  truncateForTelemetry(userMessage, 200),
 	})
 
 	logstore.Write("info",

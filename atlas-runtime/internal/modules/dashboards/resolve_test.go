@@ -44,11 +44,11 @@ func (f *fakeRuntime) Fetch(_ context.Context, endpoint string, query map[string
 }
 
 type fakeSkills struct {
-	level    string
-	result   skills.ToolResult
-	err      error
-	gotID    string
-	gotArgs  json.RawMessage
+	level   string
+	result  skills.ToolResult
+	err     error
+	gotID   string
+	gotArgs json.RawMessage
 }
 
 func (f *fakeSkills) PermissionLevel(string) string { return f.level }
@@ -192,7 +192,7 @@ func TestResolveSkill_RejectsUnknownAction(t *testing.T) {
 func TestResolveSkill_PropagatesFailure(t *testing.T) {
 	m := New(t.TempDir(), "")
 	m.skills = &fakeSkills{
-		level: "read",
+		level:  "read",
 		result: skills.ToolResult{Success: false, Summary: "API down"},
 	}
 	_, err := m.resolveSource(context.Background(), &DataSource{

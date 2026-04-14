@@ -1,4 +1,4 @@
-module github.com/ralhassan/atlas-tui
+module github.com/rodeelh/atlas-tui
 
 go 1.22
 
