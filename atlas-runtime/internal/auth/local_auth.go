@@ -10,10 +10,12 @@ package auth
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -80,34 +82,18 @@ type CredentialInfo struct {
 }
 
 // NewLocalAuthService creates a LocalAuthService for the given runtime port.
-// port is used to derive the WebAuthn RP origins (http://localhost:<port>).
-// The RPID is "localhost", so any http://localhost:* origin is spec-valid.
-// We include the runtime port plus common development server ports (Vite, webpack,
-// CRA, etc.) so WebAuthn works without extra config when running the frontend
-// dev server alongside the daemon.
-func NewLocalAuthService(db *storage.DB, port int) (*LocalAuthService, error) {
-	origins := []string{
-		fmt.Sprintf("http://localhost:%d", port),
-		fmt.Sprintf("http://127.0.0.1:%d", port),
-		"http://localhost",
-		"http://127.0.0.1",
-		// Common frontend dev server ports.
-		"http://localhost:5173", // Vite default
-		"http://localhost:4173", // Vite preview
-		"http://localhost:3000", // Create React App / Next.js
-		"http://localhost:8080", // webpack-dev-server / many others
-		"http://localhost:8000", // Python/Django dev servers
-		"http://127.0.0.1:5173",
-		"http://127.0.0.1:4173",
-		"http://127.0.0.1:3000",
-		"http://127.0.0.1:8080",
-		"http://127.0.0.1:8000",
-	}
-
+// Origins are validated dynamically at ceremony-finish time (see wauthForOrigin),
+// so the port argument is retained only for API compatibility and is no longer
+// used to build a static allowlist.
+func NewLocalAuthService(db *storage.DB, _ int) (*LocalAuthService, error) {
+	// s.wauth is used only for Begin* ceremony generation (challenge creation).
+	// Origin validation happens in FinishRegistration / FinishAuthentication via
+	// wauthForOrigin, so the origin listed here is never checked against real
+	// requests — it just needs to satisfy the library's config validator.
 	wauth, err := webauthn.New(&webauthn.Config{
 		RPDisplayName: "Atlas",
 		RPID:          "localhost",
-		RPOrigins:     origins,
+		RPOrigins:     []string{"http://localhost"},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("local auth: webauthn init: %w", err)
@@ -269,7 +255,22 @@ func (s *LocalAuthService) FinishRegistration(sessionID, credName string, body [
 		return fmt.Errorf("parse credential creation response: %w", err)
 	}
 
-	cred, err := s.wauth.CreateCredential(user, sessionData, parsedResponse)
+	// Build a ceremony-scoped webauthn instance from the origin the browser
+	// actually used. This makes registration work on any localhost port without
+	// a static allowlist — port changes and dev servers are handled transparently.
+	origin, err := originFromWebAuthnBody(body)
+	if err != nil {
+		return fmt.Errorf("extract origin: %w", err)
+	}
+	if !isLocalhostWebAuthnOrigin(origin) {
+		return fmt.Errorf("WebAuthn registration rejected: non-localhost origin %q", origin)
+	}
+	wa, err := wauthForOrigin(origin)
+	if err != nil {
+		return fmt.Errorf("webauthn init for origin: %w", err)
+	}
+
+	cred, err := wa.CreateCredential(user, sessionData, parsedResponse)
 	if err != nil {
 		return fmt.Errorf("create credential: %w", err)
 	}
@@ -354,7 +355,22 @@ func (s *LocalAuthService) FinishAuthentication(sessionID string, body []byte) e
 		return fmt.Errorf("parse credential request response: %w", err)
 	}
 
-	updatedCred, err := s.wauth.ValidateLogin(user, sessionData, parsedResponse)
+	// Build a ceremony-scoped webauthn instance from the origin the browser
+	// actually used. This makes authentication work regardless of which port
+	// the daemon or dev server is running on — no static allowlist needed.
+	origin, err := originFromWebAuthnBody(body)
+	if err != nil {
+		return fmt.Errorf("extract origin: %w", err)
+	}
+	if !isLocalhostWebAuthnOrigin(origin) {
+		return fmt.Errorf("WebAuthn authentication rejected: non-localhost origin %q", origin)
+	}
+	wa, err := wauthForOrigin(origin)
+	if err != nil {
+		return fmt.Errorf("webauthn init for origin: %w", err)
+	}
+
+	updatedCred, err := wa.ValidateLogin(user, sessionData, parsedResponse)
 	if err != nil {
 		return fmt.Errorf("validate login: %w", err)
 	}
@@ -445,6 +461,63 @@ func (s *LocalAuthService) VerifyPIN(clientIP, pin string) (bool, error) {
 	}
 	s.mu.Unlock()
 	return false, nil
+}
+
+// ── WebAuthn dynamic-origin helpers ──────────────────────────────────────────
+
+// originFromWebAuthnBody extracts the origin from a WebAuthn credential
+// response body (authentication or registration). The browser embeds the origin
+// in clientDataJSON, which is base64url-encoded inside the response JSON.
+func originFromWebAuthnBody(body []byte) (string, error) {
+	var resp struct {
+		Response struct {
+			ClientDataJSON string `json:"clientDataJSON"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("parse credential response: %w", err)
+	}
+	if resp.Response.ClientDataJSON == "" {
+		return "", fmt.Errorf("missing clientDataJSON in credential response")
+	}
+	// clientDataJSON is base64url without padding (RFC 4648 §5).
+	clientData, err := base64.RawURLEncoding.DecodeString(resp.Response.ClientDataJSON)
+	if err != nil {
+		// Fall back to standard base64 in case the client adds padding.
+		clientData, err = base64.URLEncoding.DecodeString(resp.Response.ClientDataJSON)
+		if err != nil {
+			return "", fmt.Errorf("decode clientDataJSON: %w", err)
+		}
+	}
+	var cd struct {
+		Origin string `json:"origin"`
+	}
+	if err := json.Unmarshal(clientData, &cd); err != nil {
+		return "", fmt.Errorf("parse clientDataJSON: %w", err)
+	}
+	if cd.Origin == "" {
+		return "", fmt.Errorf("empty origin in clientDataJSON")
+	}
+	return cd.Origin, nil
+}
+
+// isLocalhostWebAuthnOrigin returns true if origin is a localhost origin that
+// is safe to accept for WebAuthn. The RPID is "localhost" so any
+// http://localhost:* or http://127.0.0.1:* origin is spec-valid.
+func isLocalhostWebAuthnOrigin(origin string) bool {
+	return strings.HasPrefix(origin, "http://localhost") ||
+		strings.HasPrefix(origin, "http://127.0.0.1")
+}
+
+// wauthForOrigin returns a WebAuthn instance configured to accept exactly the
+// given origin. Used for Finish* ceremonies so origin validation is dynamic
+// rather than relying on a static allowlist built at startup.
+func wauthForOrigin(origin string) (*webauthn.WebAuthn, error) {
+	return webauthn.New(&webauthn.Config{
+		RPDisplayName: "Atlas",
+		RPID:          "localhost",
+		RPOrigins:     []string{origin},
+	})
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
