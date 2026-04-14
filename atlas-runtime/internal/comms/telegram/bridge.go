@@ -655,7 +655,7 @@ func (b *Bridge) handleAttachment(chatID, msgID int64, from *tgUser, msg *tgMess
 	}
 
 	// Download into memory (for vision) and also save to disk (for agent filesystem access).
-	attDir := filepath.Join(config.SupportDir(), "TelegramAttachments",
+	attDir := filepath.Join(config.TelegramAttachmentsDir(),
 		fmt.Sprintf("chat-%d", chatID), fmt.Sprintf("message-%d", msgID))
 	localPath := filepath.Join(attDir, sanitizeFilename(fileName))
 
@@ -727,7 +727,7 @@ func (b *Bridge) handleVoice(chatID, msgID int64, from *tgUser, msg *tgMessage) 
 		return
 	}
 
-	attDir := filepath.Join(config.SupportDir(), "TelegramAttachments",
+	attDir := filepath.Join(config.TelegramAttachmentsDir(),
 		fmt.Sprintf("chat-%d", chatID), fmt.Sprintf("message-%d", msgID))
 	localPath := filepath.Join(attDir, fmt.Sprintf("voice_%d.ogg", msgID))
 
@@ -794,7 +794,7 @@ func (b *Bridge) handleSticker(chatID, msgID int64, from *tgUser, msg *tgMessage
 		return
 	}
 
-	attDir := filepath.Join(config.SupportDir(), "TelegramAttachments",
+	attDir := filepath.Join(config.TelegramAttachmentsDir(),
 		fmt.Sprintf("chat-%d", chatID), fmt.Sprintf("message-%d", msgID))
 	localPath := filepath.Join(attDir, fmt.Sprintf("sticker_%d.webp", msgID))
 

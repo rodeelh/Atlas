@@ -91,3 +91,13 @@ func FilesDir() string {
 	_ = os.MkdirAll(dir, 0o755)
 	return dir
 }
+
+// TelegramAttachmentsDir returns the directory where files received over
+// Telegram (images, documents, voice notes, stickers) are saved.
+// Lives under FilesDir() so users can browse them alongside other Atlas files.
+// Created on first access if it does not exist.
+func TelegramAttachmentsDir() string {
+	dir := filepath.Join(FilesDir(), "Telegram")
+	_ = os.MkdirAll(dir, 0o755)
+	return dir
+}

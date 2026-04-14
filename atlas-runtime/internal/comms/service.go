@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -182,11 +183,37 @@ func (s *Service) DispatchTelegramWebhookUpdate(body []byte) error {
 
 // Start launches all enabled platform bridges.
 func (s *Service) Start() {
+	migrateTelegramAttachmentsDir()
 	cfg := s.cfgStore.Load()
 	bundle := readBundle()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.startBridges(cfg, bundle)
+}
+
+// migrateTelegramAttachmentsDir moves the legacy TelegramAttachments folder
+// (ProjectAtlas/TelegramAttachments/) into the new location under the general
+// files directory (ProjectAtlas/files/Telegram/). Runs once at startup; is a
+// no-op if the old path doesn't exist or the migration already happened.
+func migrateTelegramAttachmentsDir() {
+	oldDir := filepath.Join(config.SupportDir(), "TelegramAttachments")
+	newDir := config.TelegramAttachmentsDir()
+
+	if _, err := os.Stat(oldDir); os.IsNotExist(err) {
+		return // nothing to migrate
+	}
+	if _, err := os.Stat(newDir); err == nil {
+		return // new location already exists — migration already done
+	}
+
+	if err := os.Rename(oldDir, newDir); err != nil {
+		// Rename fails across filesystems (shouldn't happen here) — log and continue.
+		logstore.Write("warn", "Telegram: could not migrate attachments dir: "+err.Error(),
+			map[string]string{"platform": "telegram"})
+	} else {
+		logstore.Write("info", "Telegram: attachments migrated to "+newDir,
+			map[string]string{"platform": "telegram"})
+	}
 }
 
 // Stop shuts down all running bridges.
