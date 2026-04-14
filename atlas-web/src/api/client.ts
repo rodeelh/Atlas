@@ -184,6 +184,7 @@ async function request<T>(
   const res = await fetch(url, {
     ...options,
     headers,
+    credentials: 'include',
   })
   if (!res.ok) {
     // 401 handling varies by context:
