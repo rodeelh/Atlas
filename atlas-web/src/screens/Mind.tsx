@@ -3,22 +3,25 @@ import { api, type RuntimeConfig } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { PageSpinner } from '../components/PageSpinner'
 import { ErrorBanner } from '../components/ErrorBanner'
+import { Portal } from '../components/Portal'
 
 // ── Dream overlay ─────────────────────────────────────────────────────────────
 
 function DreamOverlay() {
   return (
-    <div class="dream-overlay">
-      <div class="dream-overlay-card">
-        <div class="dream-zzz-wrap">
-          <span class="dream-z dream-z1">Z</span>
-          <span class="dream-z dream-z2">Z</span>
-          <span class="dream-z dream-z3">Z</span>
+    <Portal>
+      <div class="dream-overlay">
+        <div class="dream-overlay-card">
+          <div class="dream-zzz-wrap">
+            <span class="dream-z dream-z1">Z</span>
+            <span class="dream-z dream-z2">Z</span>
+            <span class="dream-z dream-z3">Z</span>
+          </div>
+          <div class="dream-overlay-title">Dreaming</div>
+          <div class="dream-overlay-body">Consolidating memories and reflections…</div>
         </div>
-        <div class="dream-overlay-title">Dreaming</div>
-        <div class="dream-overlay-body">Consolidating memories and reflections…</div>
       </div>
-    </div>
+    </Portal>
   )
 }
 
