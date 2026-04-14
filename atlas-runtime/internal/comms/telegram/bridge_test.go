@@ -730,7 +730,9 @@ func TestHandleUpdate_UnsupportedMediaReplies(t *testing.T) {
 	}{
 		{"audio", tgMessage{MessageID: 50, Chat: tgChat{ID: 1}, Audio: &tgFileRef{FileID: "a"}}},
 		{"video", tgMessage{MessageID: 51, Chat: tgChat{ID: 1}, Video: &tgFileRef{FileID: "v"}}},
-		{"sticker", tgMessage{MessageID: 52, Chat: tgChat{ID: 1}, Sticker: &tgFileRef{FileID: "s"}}},
+		// Animated stickers are unsupported and should get a friendly reply.
+		{"animated_sticker", tgMessage{MessageID: 52, Chat: tgChat{ID: 1}, Sticker: &tgSticker{FileID: "s", IsAnimated: true, Emoji: "🔥"}}},
+		{"video_sticker", tgMessage{MessageID: 53, Chat: tgChat{ID: 1}, Sticker: &tgSticker{FileID: "sv", IsVideo: true, Emoji: "💧"}}},
 	}
 
 	for _, tc := range cases {

@@ -81,12 +81,22 @@ type tgMessage struct {
 	Audio     *tgFileRef    `json:"audio"`
 	Video     *tgFileRef    `json:"video"`
 	VideoNote *tgFileRef    `json:"video_note"`
-	Sticker   *tgFileRef    `json:"sticker"`
+	Sticker   *tgSticker    `json:"sticker"`
 }
 
 // tgFileRef is a minimal reference to a Telegram file used for unsupported media types.
 type tgFileRef struct {
 	FileID string `json:"file_id"`
+}
+
+// tgSticker carries the fields needed to distinguish static (WebP) stickers
+// from animated (TGS) and video (WebM) stickers.
+type tgSticker struct {
+	FileID     string `json:"file_id"`
+	IsAnimated bool   `json:"is_animated"`
+	IsVideo    bool   `json:"is_video"`
+	Emoji      string `json:"emoji"`
+	FileSize   int    `json:"file_size"`
 }
 
 type tgPhotoSize struct {
@@ -408,9 +418,16 @@ func (b *Bridge) handleUpdate(u tgUpdate) {
 		return
 	}
 
+	// Stickers — static WebP stickers are passed as image attachments.
+	// Animated (TGS) and video (WebM) stickers are acknowledged but not processed.
+	if msg.Sticker != nil {
+		b.handleSticker(chatID, msg.MessageID, msg.From, msg)
+		return
+	}
+
 	// Unsupported rich media — reply rather than silently dropping.
-	if msg.Audio != nil || msg.Video != nil || msg.VideoNote != nil || msg.Sticker != nil {
-		b.sendMessage(chatID, "I can only process text messages, images, documents, voice messages, and location shares. Audio, video, and stickers aren't supported yet.")
+	if msg.Audio != nil || msg.Video != nil || msg.VideoNote != nil {
+		b.sendMessage(chatID, "I can only process text messages, images, documents, voice messages, location shares, and stickers. Audio and video aren't supported yet.")
 		return
 	}
 
@@ -748,6 +765,63 @@ func (b *Bridge) handleVoice(chatID, msgID int64, from *tgUser, msg *tgMessage) 
 		map[string]string{"platform": "telegram", "chatID": fmt.Sprintf("%d", chatID)})
 
 	b.handleIncoming(chatID, msgID, from, transcript)
+}
+
+// ── Sticker handling ──────────────────────────────────────────────────────────
+
+// handleSticker processes an incoming sticker.
+// Static stickers (WebP) are downloaded and forwarded to the agent as image
+// attachments so the model can describe or react to them. Animated (TGS) and
+// video (WebM) stickers cannot be meaningfully passed to a vision model — they
+// get a friendly acknowledgement instead.
+func (b *Bridge) handleSticker(chatID, msgID int64, from *tgUser, msg *tgMessage) {
+	s := msg.Sticker
+	if s.IsAnimated || s.IsVideo {
+		emoji := s.Emoji
+		if emoji == "" {
+			emoji = "a sticker"
+		}
+		b.sendMessage(chatID, "I received "+emoji+" (animated sticker) but can't process animated or video stickers yet.")
+		return
+	}
+
+	b.sendReaction(chatID, msgID, eyesEmoji)
+
+	tgPath, err := b.getFilePath(s.FileID)
+	if err != nil {
+		logstore.Write("error", "Telegram: sticker getFilePath: "+err.Error(), map[string]string{"platform": "telegram"})
+		b.sendMessage(chatID, "Could not retrieve the sticker.")
+		return
+	}
+
+	attDir := filepath.Join(config.SupportDir(), "TelegramAttachments",
+		fmt.Sprintf("chat-%d", chatID), fmt.Sprintf("message-%d", msgID))
+	localPath := filepath.Join(attDir, fmt.Sprintf("sticker_%d.webp", msgID))
+
+	fileBytes, err := b.downloadTelegramFileBytes(tgPath, localPath)
+	if err != nil {
+		logstore.Write("error", "Telegram: sticker download: "+err.Error(), map[string]string{"platform": "telegram"})
+		b.sendMessage(chatID, "Could not download the sticker.")
+		return
+	}
+
+	emoji := s.Emoji
+	var agentText string
+	if msg.Caption != "" {
+		agentText = fmt.Sprintf("%s\n\n[Sticker saved to: %s]", msg.Caption, localPath)
+	} else if emoji != "" {
+		agentText = fmt.Sprintf("The user sent the %s sticker. [Sticker saved to: %s]", emoji, localPath)
+	} else {
+		agentText = fmt.Sprintf("The user sent a sticker. [Sticker saved to: %s]", localPath)
+	}
+
+	attachments := []Attachment{{
+		Filename: fmt.Sprintf("sticker_%d.webp", msgID),
+		MimeType: "image/webp",
+		Data:     base64.StdEncoding.EncodeToString(fileBytes),
+	}}
+
+	b.processText(chatID, msgID, from, agentText, attachments)
 }
 
 // ── Callback query handling ───────────────────────────────────────────────────
