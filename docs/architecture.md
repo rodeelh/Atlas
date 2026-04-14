@@ -1,6 +1,6 @@
 # Atlas Architecture
 
-**Last updated: 2026-04-12** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md) · Internal modules: [`docs/internal-modules.md`](internal-modules.md) · Agent boundary: [`docs/agent-boundary.md`](agent-boundary.md) · Migration verification: [`docs/migration-verification.md`](migration-verification.md) · Manual smoke: [`docs/manual-smoke-checklist.md`](manual-smoke-checklist.md) · Teams spec: [`docs/teams-v1-implementation-spec.md`](teams-v1-implementation-spec.md)
+**Last updated: 2026-04-14** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md) · Internal modules: [`docs/internal-modules.md`](internal-modules.md) · Agent boundary: [`docs/agent-boundary.md`](agent-boundary.md) · Migration verification: [`docs/migration-verification.md`](migration-verification.md) · Manual smoke: [`docs/manual-smoke-checklist.md`](manual-smoke-checklist.md) · Teams spec: [`docs/teams-v1-implementation-spec.md`](teams-v1-implementation-spec.md)
 
 Atlas is a local AI operator. A Go binary runs as a launchd daemon (`Atlas`), serves a web UI, and connects to any supported AI provider. No Swift required.
 
@@ -23,9 +23,11 @@ Atlas/
 │   └── internal/
 │       ├── agent/
 │       │   ├── loop.go                 # Multi-turn agent execution loop
-│       │   ├── provider.go             # AI provider dispatch (OpenAI/Anthropic/Gemini/LM Studio)
-│       │   ├── openai.go               # OpenAI-compatible streaming + non-streaming calls
-│       │   └── anthropic.go            # Anthropic Messages API client
+│       │   └── provider.go             # AI provider dispatch — all providers in one file:
+│       │                               #   OpenAI → Responses API (/v1/responses)
+│       │                               #   Anthropic → Messages API (/v1/messages) + prompt caching
+│       │                               #   Gemini / OpenRouter → OAI-compat (/chat/completions)
+│       │                               #   LM Studio / Ollama / Atlas Engine / Atlas MLX → OAI-compat (local)
 │       ├── auth/
 │       │   ├── service.go              # HMAC-SHA256 session tokens, bootstrap, middleware
 │       │   └── ratelimit.go            # Per-IP rate limiting
@@ -187,7 +189,7 @@ Atlas/
    └── /skills, /forge, Modules         Private module-backed feature surfaces
        /automations, /team, …
             │
-            ├── internal/agent      ← OpenAI / Anthropic / Gemini / LM Studio
+            ├── internal/agent      ← OpenAI (Responses API) / Anthropic / Gemini / OpenRouter / LM Studio / Ollama / Atlas Engine / Atlas MLX
             ├── internal/skills     ← 16 built-in skill groups, 90+ actions + custom skills
             ├── internal/customskills ← manifest types + filesystem scanning (leaf pkg)
             ├── internal/browser    ← Headless Chrome via go-rod
@@ -247,6 +249,18 @@ cutting multi-tool latency by 40–70%. `browser.*` are serialised via `IsStatef
 **Max iterations:** configurable per provider (default 10).
 **Vision:** screenshots from `browser.screenshot` are routed through vision content blocks —
 OpenAI gets `image_url`, Anthropic gets `base64`.
+
+**Provider dispatch** (`internal/agent/provider.go`):
+
+| Provider | API | Endpoint | Notes |
+|---|---|---|---|
+| `openai` | Responses API | `POST /v1/responses` | `store: false`, `max_output_tokens: 4096`, system prompt → `instructions` field, assistant content type `output_text` |
+| `anthropic` | Messages API | `POST /v1/messages` | `max_tokens: 4096`, prompt caching on system + tools (`anthropic-beta: prompt-caching-2024-07-31`) |
+| `gemini` | OAI-compat | `POST /v1beta/openai/chat/completions` | `max_tokens: 4096`, `stream_options: {include_usage: true}` |
+| `openrouter` | OAI-compat | `POST /api/v1/chat/completions` | `max_tokens: 4096`, `HTTP-Referer` + `X-Title` headers |
+| `lm_studio` / `ollama` / `atlas_engine` / `atlas_mlx` | OAI-compat (local) | `POST /v1/chat/completions` | No `max_tokens` cap (model controls context); local providers coalesce adjacent same-role messages |
+
+Health check probes mirror each provider's live chat endpoint and format. Model lists are fetched live from each provider's `/models` endpoint with a curated fallback for all providers including OpenRouter.
 
 ---
 
