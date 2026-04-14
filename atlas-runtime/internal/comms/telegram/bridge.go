@@ -651,19 +651,23 @@ func (b *Bridge) handleAttachment(chatID, msgID int64, from *tgUser, msg *tgMess
 	}
 
 	// Build caption / agent prompt.
+	// IMPORTANT: always embed localPath in agentText for PDFs and images so
+	// that the stored conversation history (which never contains base64 data)
+	// retains a reference to the file. Without this, follow-up questions have
+	// no way to retrieve the document content from history.
 	agentText := msg.Caption
 	isPDF := mimeType == "application/pdf"
 	if agentText == "" {
 		switch {
 		case isImage:
-			agentText = "Please analyse this image."
+			agentText = fmt.Sprintf("Please analyse this image. [File saved to: %s]", localPath)
 		case isPDF:
-			agentText = "Please read and summarise this document."
+			agentText = fmt.Sprintf("Please read and summarise this document. [File saved to: %s]", localPath)
 		default:
 			agentText = fmt.Sprintf("A file was attached: %s (saved to %s). Please process it.", fileName, localPath)
 		}
-	} else if !isImage && !isPDF {
-		// For other binary types, append the local path — model can't see them directly.
+	} else {
+		// Always append the local path so follow-up turns can reference the file.
 		agentText = fmt.Sprintf("%s\n\n[File saved to: %s]", agentText, localPath)
 	}
 
