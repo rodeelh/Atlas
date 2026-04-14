@@ -45,8 +45,20 @@ func BuildRouter(
 		AllowOriginFunc: func(r *http.Request, origin string) bool {
 			return auth.IsAllowedCORSOrigin(r, origin, remoteEnabled, tailscaleEnabled)
 		},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "Cookie", "X-Request-ID", "X-CSRF-Token"},
+		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
+		AllowedHeaders: []string{
+			"Accept", "Authorization", "Content-Type", "Cookie",
+			"X-Request-ID", "X-CSRF-Token",
+			// WebAuthn session token — passed as a request header on the finish
+			// call and returned as a response header from the begin call.
+			// Must be in both AllowedHeaders and ExposedHeaders so cross-origin
+			// callers (e.g. Vite dev server on a different port) can send and
+			// read it.
+			"X-WebAuthn-Session",
+		},
+		// ExposedHeaders lists response headers the browser JS may read in a
+		// cross-origin context. By default only "simple" headers are accessible.
+		ExposedHeaders:   []string{"X-WebAuthn-Session"},
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
