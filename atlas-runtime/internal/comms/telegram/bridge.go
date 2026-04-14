@@ -764,6 +764,11 @@ func (b *Bridge) handleVoice(chatID, msgID int64, from *tgUser, msg *tgMessage) 
 	logstore.Write("info", fmt.Sprintf("Telegram: voice transcribed (%d bytes → %q)", len(fileBytes), transcript),
 		map[string]string{"platform": "telegram", "chatID": fmt.Sprintf("%d", chatID)})
 
+	// Delete the audio file after transcription — the content is now in the
+	// transcript and there is no reason to keep the raw audio on disk.
+	_ = os.Remove(localPath)
+	_ = os.Remove(attDir) // removes the per-message dir if now empty
+
 	b.handleIncoming(chatID, msgID, from, transcript)
 }
 
