@@ -15,6 +15,7 @@ import (
 	"atlas-runtime-go/internal/chat"
 	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/features"
+	"atlas-runtime-go/internal/mind"
 	"atlas-runtime-go/internal/storage"
 )
 
@@ -73,6 +74,7 @@ func (d *ChatDomain) Register(r chi.Router) {
 	r.Get("/mind", d.getMind)
 	r.Put("/mind", d.putMind)
 	r.Post("/mind/regenerate", d.regenerateMind)
+	r.Get("/mind/dream", d.getDreamState)
 	r.Post("/mind/dream", d.forceDreamCycle)
 	r.Get("/skills-memory", d.getSkillsMemory)
 	r.Put("/skills-memory", d.putSkillsMemory)
@@ -538,6 +540,10 @@ func (d *ChatDomain) regenerateMind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"content": content})
+}
+
+func (d *ChatDomain) getDreamState(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]bool{"running": mind.IsDreamRunning()})
 }
 
 func (d *ChatDomain) forceDreamCycle(w http.ResponseWriter, r *http.Request) {

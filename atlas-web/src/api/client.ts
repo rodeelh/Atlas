@@ -343,6 +343,7 @@ export const api = {
   updateMind: (content: string) => put<object>('/mind', { content }),
   regenerateMind: () => post<{ content: string }>('/mind/regenerate', {}),
   forceDream: () => post<{ status: string }>('/mind/dream', {}),
+  dreamState: () => get<{ running: boolean }>('/mind/dream'),
 
   // Diary
   diary: () => get<{ content: string }>('/diary'),

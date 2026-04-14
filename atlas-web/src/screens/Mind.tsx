@@ -350,7 +350,6 @@ export function Mind() {
   async function triggerDream() {
     dreamStopRef.current?.()
     setDreaming(true)
-    const snapshot = content
 
     let stopped = false
     let poll: ReturnType<typeof setInterval>
@@ -372,18 +371,18 @@ export function Mind() {
       poll = setInterval(async () => {
         if (stopped) return
         try {
-          const data = await api.mind()
-          if (data.content !== snapshot) {
+          const state = await api.dreamState()
+          if (!state.running) {
             clearInterval(poll)
             clearTimeout(safety)
             dreamStopRef.current = null
-            setContent(data.content)
-            const diaryData = await api.diary()
+            const [mindData, diaryData] = await Promise.all([api.mind(), api.diary()])
+            setContent(mindData.content)
             setDiary(parseDiary(diaryData.content))
             setDreaming(false)
           }
         } catch { /* ignore poll errors */ }
-      }, 5000)
+      }, 3000)
 
       // Safety cap — give up after 3 minutes
       safety = setTimeout(stop, 180_000)

@@ -16,12 +16,20 @@ import (
 	"sync"
 	"time"
 
+	"sync/atomic"
+
 	"atlas-runtime-go/internal/agent"
 	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/features"
 	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/storage"
 )
+
+// dreamRunning is set to 1 while a dream cycle is in progress.
+var dreamRunning atomic.Bool
+
+// IsDreamRunning reports whether a dream cycle is currently executing.
+func IsDreamRunning() bool { return dreamRunning.Load() }
 
 // dreamHour is the local hour at which the dream cycle fires (3 AM).
 const dreamHour = 3
@@ -149,6 +157,9 @@ func saveDreamState(supportDir string) {
 }
 
 func runDreamCycle(ctx context.Context, supportDir string, db *storage.DB, cfgStore *config.Store, resolveProvider ProviderResolver) {
+	dreamRunning.Store(true)
+	defer dreamRunning.Store(false)
+
 	start := time.Now()
 	logstore.Write("info", "Dream cycle: starting", nil)
 
