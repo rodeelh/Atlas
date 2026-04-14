@@ -219,6 +219,8 @@ func main() {
 	communicationsModule.SetSkillRegistry(skillsRegistry)
 	// Wire local Whisper transcription into the Telegram bridge so voice messages
 	// are automatically converted to text before reaching the agent.
+	// The bundled whisper-server only accepts WAV, so non-WAV audio (e.g. the
+	// OGG Opus that Telegram sends for voice messages) is converted first via ffmpeg.
 	communicationsModule.SetTranscriber(func(ctx context.Context, data []byte, mimeType string) (string, error) {
 		c := cfgStore.Load()
 		model := c.VoiceWhisperModel
@@ -229,7 +231,15 @@ func main() {
 		if port == 0 {
 			port = 11987
 		}
-		result, err := voiceMgr.Transcribe(ctx, data, mimeType, c.VoiceWhisperLanguage, model, port)
+
+		// Convert to WAV if needed — whisper-server is compiled without ffmpeg support.
+		wavData, err := voice.ConvertToWAV(ctx, data, mimeType)
+		if err != nil {
+			return "", fmt.Errorf("audio conversion: %w", err)
+		}
+		wavMime := "audio/wav"
+
+		result, err := voiceMgr.Transcribe(ctx, wavData, wavMime, c.VoiceWhisperLanguage, model, port)
 		if err != nil {
 			return "", err
 		}

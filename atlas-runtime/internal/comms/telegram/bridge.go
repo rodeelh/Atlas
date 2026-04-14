@@ -735,6 +735,11 @@ func (b *Bridge) handleVoice(chatID, msgID int64, from *tgUser, msg *tgMessage) 
 		return
 	}
 
+	// Append any caption the user added alongside the voice note.
+	if cap := strings.TrimSpace(msg.Caption); cap != "" {
+		transcript = transcript + "\n\n" + cap
+	}
+
 	logstore.Write("info", fmt.Sprintf("Telegram: voice transcribed (%d bytes → %q)", len(fileBytes), transcript),
 		map[string]string{"platform": "telegram", "chatID": fmt.Sprintf("%d", chatID)})
 
@@ -1039,7 +1044,10 @@ func (b *Bridge) deleteWebhook() {
 // secret is sent back by Telegram in the X-Telegram-Bot-Api-Secret-Token header
 // on every update request, allowing us to verify the source.
 func (b *Bridge) setWebhook(webhookURL, secret string) error {
-	payload := map[string]any{"url": webhookURL}
+	payload := map[string]any{
+		"url":             webhookURL,
+		"allowed_updates": []string{"message", "callback_query"},
+	}
 	if secret != "" {
 		payload["secret_token"] = secret
 	}
@@ -1460,8 +1468,10 @@ func stripHTML(s string) string {
 // filePathRe matches absolute macOS file paths with sendable extensions.
 var filePathRe = regexp.MustCompile(`(?i)(/(?:Users|tmp|var|Library|private)[^\s"'<>]+\.(?:jpg|jpeg|png|gif|webp|pdf|txt|md|json))`)
 
-// markdownToHTMLRegexes are compiled once at startup to avoid per-message allocations.
+// markdownToHTMLRegexes and other per-call regexes compiled once at startup.
 var (
+	sanitizeFilenameRe = regexp.MustCompile(`[/\\:*?"<>|]`)
+
 	mdFenceRe  = regexp.MustCompile("(?s)```[a-zA-Z0-9]*\\n?(.*?)```")
 	mdHeadRe   = regexp.MustCompile(`(?m)^#{1,6}[ \t]+(.+)$`)
 	mdBulletRe = regexp.MustCompile(`(?m)^[ \t]*[-*+][ \t]+`)
@@ -1500,8 +1510,7 @@ func isImageExt(ext string) bool {
 
 // sanitizeFilename removes filesystem-unsafe characters.
 func sanitizeFilename(name string) string {
-	invalidRe := regexp.MustCompile(`[/\\:*?"<>|]`)
-	safe := invalidRe.ReplaceAllString(name, "_")
+	safe := sanitizeFilenameRe.ReplaceAllString(name, "_")
 	if safe == "" {
 		safe = "file"
 	}

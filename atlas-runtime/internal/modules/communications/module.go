@@ -74,21 +74,29 @@ func (m *Module) registerPublicRoutes(r chi.Router) {
 
 func (m *Module) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
 	secretToken := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
+
+	// Validate secret synchronously — must happen before the goroutine so we
+	// can return 401 while the connection is still open.
+	if !m.service.CheckTelegramWebhookSecret(secretToken) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1 MB max
 	if err != nil {
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := m.service.HandleTelegramWebhookUpdate(secretToken, body); err != nil {
-		logstore.Write("warn", "Telegram webhook: "+err.Error(), map[string]string{"platform": "telegram"})
-		if err.Error() == "invalid webhook secret token" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		// For all other errors (bridge not running, parse failure) return 200 so
-		// Telegram does not retry a payload we cannot process.
-	}
+
+	// Respond 200 immediately — Telegram retries if we don't respond within 60s,
+	// but agent turns can take several minutes. Dispatch processing asynchronously.
 	w.WriteHeader(http.StatusOK)
+
+	go func() {
+		if err := m.service.DispatchTelegramWebhookUpdate(body); err != nil {
+			logstore.Write("warn", "Telegram webhook dispatch: "+err.Error(), map[string]string{"platform": "telegram"})
+		}
+	}()
 }
 
 func (m *Module) registerRoutes(r chi.Router) {

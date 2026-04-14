@@ -159,15 +159,18 @@ func (s *Service) SetTranscriber(fn telegram.TranscribeFunc) {
 	s.mu.Unlock()
 }
 
-// HandleTelegramWebhookUpdate parses and dispatches a raw Telegram update body
-// delivered to the webhook endpoint. Returns an error if the bridge is not running
-// or the body is malformed — the HTTP handler should still return 200 to prevent
-// Telegram from retrying a permanently broken payload.
-func (s *Service) HandleTelegramWebhookUpdate(secretToken string, body []byte) error {
-	cfg := s.cfgStore.Load()
-	if cfg.TelegramWebhookSecret != "" && secretToken != cfg.TelegramWebhookSecret {
-		return fmt.Errorf("invalid webhook secret token")
-	}
+// CheckTelegramWebhookSecret returns true if secretToken matches the configured
+// webhook secret, or if no secret is configured (open mode). Call this before
+// dispatching a webhook update so the HTTP handler can return 401 synchronously.
+func (s *Service) CheckTelegramWebhookSecret(secretToken string) bool {
+	secret := s.cfgStore.Load().TelegramWebhookSecret
+	return secret == "" || secretToken == secret
+}
+
+// DispatchTelegramWebhookUpdate parses and dispatches a raw Telegram update body.
+// The caller is responsible for secret validation (use CheckTelegramWebhookSecret).
+// Returns an error if the bridge is not running or the body is malformed.
+func (s *Service) DispatchTelegramWebhookUpdate(body []byte) error {
 	s.mu.RLock()
 	bridge := s.tgBridge
 	s.mu.RUnlock()
