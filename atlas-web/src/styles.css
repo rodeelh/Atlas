@@ -1,11 +1,15 @@
 /* Atlas Web UI */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Geist:wght@300;400;500;600&display=swap');
 
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+button, input, select, textarea {
+  font-family: var(--ui-font);
 }
 
 ::selection {
@@ -87,8 +91,14 @@
   --radius-lg:    8px;
 
   /* Typography */
-  --font:         'Inter', -apple-system, 'Helvetica Neue', system-ui, sans-serif;
+  --font:         var(--ui-font);
   --font-mono:    'JetBrains Mono', 'SF Mono', 'Menlo', 'Courier New', monospace;
+
+  /* Interface controls — written by applyTheme(), defaults match 'default' preset */
+  --ui-radius:         12px;
+  --ui-surface-blur:   16px;
+  --ui-surface-alpha:  80%;
+  --ui-font:           'Inter', -apple-system, 'Helvetica Neue', sans-serif;
 }
 
 /* ── Dark theme (default / current palette) ─────────────────── */
@@ -309,7 +319,7 @@ html, body {
   height: 100%;
   background: var(--theme-bg-app);
   color: var(--theme-text-primary);
-  font-family: var(--font);
+  font-family: var(--ui-font);
   font-size: 14.5px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -333,9 +343,9 @@ html, body {
   min-width: var(--sidebar-w);
   position: relative;
   z-index: 30;
-  background: color-mix(in srgb, var(--surface) 50%, transparent);
-  backdrop-filter: blur(32px) saturate(1.8) brightness(1.05);
-  -webkit-backdrop-filter: blur(32px) saturate(1.8) brightness(1.05);
+  background: color-mix(in srgb, var(--surface) var(--ui-surface-alpha), transparent);
+  backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8) brightness(1.05);
+  -webkit-backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8) brightness(1.05);
   border-right: 1px solid color-mix(in srgb, var(--theme-border-subtle) 60%, transparent);
   display: flex;
   flex-direction: column;
@@ -378,7 +388,7 @@ html, body {
 .sidebar-control-glyph {
   width: 34px;
   height: 34px;
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -736,9 +746,9 @@ html, body {
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  background: color-mix(in srgb, var(--surface) 50%, transparent);
-  backdrop-filter: blur(32px) saturate(1.8) brightness(1.05);
-  -webkit-backdrop-filter: blur(32px) saturate(1.8) brightness(1.05);
+  background: color-mix(in srgb, var(--surface) var(--ui-surface-alpha), transparent);
+  backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8) brightness(1.05);
+  -webkit-backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8) brightness(1.05);
   box-shadow: 0 1px 0 0 color-mix(in srgb, white 4%, transparent),
               inset 0 -1px 0 0 color-mix(in srgb, white 3%, transparent);
   z-index: 10;
@@ -860,7 +870,7 @@ main {
 .card {
   background: var(--theme-surface-card);
   border: 1px solid color-mix(in srgb, var(--theme-border-subtle) 45%, transparent);
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   overflow: hidden;
   backdrop-filter: blur(24px) saturate(1.6);
   -webkit-backdrop-filter: blur(24px) saturate(1.6);
@@ -885,16 +895,11 @@ main {
 
 .card-header {
   padding: 14px 20px;
-  border-bottom: 1px solid var(--theme-border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: color-mix(in srgb, var(--theme-bg-elevated) 35%, transparent);
+  background: color-mix(in srgb, var(--text) 2%, var(--theme-surface-card));
   border-bottom: 1px solid color-mix(in srgb, var(--theme-border-subtle) 45%, transparent);
-}
-
-[data-theme="light"] .card-header {
-  background: color-mix(in srgb, var(--theme-bg-elevated) 40%, transparent);
 }
 
 .card-title {
@@ -908,7 +913,7 @@ main {
 .surface-card {
   background: var(--theme-surface-card);
   border: 1px solid var(--theme-border-subtle);
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   box-shadow: var(--theme-shadow-card);
 }
 
@@ -925,7 +930,7 @@ main {
 .surface-card-soft {
   background: color-mix(in srgb, var(--surface) 50%, transparent);
   border: 1px solid color-mix(in srgb, var(--theme-border-subtle) 45%, transparent);
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   backdrop-filter: blur(24px) saturate(1.6);
   -webkit-backdrop-filter: blur(24px) saturate(1.6);
   box-shadow: inset 0 1px 0 color-mix(in srgb, white 6%, transparent),
@@ -1075,7 +1080,7 @@ main {
 }
 
 .docs-search-input {
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   padding: 9px 11px;
 }
 
@@ -1584,7 +1589,7 @@ main {
   gap: 6px;
   min-height: 34px;
   padding: 7px 14px;
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   border: 1px solid var(--control-border);
   background: var(--control-bg);
   font-size: 13.5px;
@@ -1690,17 +1695,28 @@ main {
   color: var(--control-danger-text);
 }
 
+.btn-danger-ghost {
+  color: var(--control-danger-text);
+  border-color: transparent;
+  background: transparent;
+}
+
+.btn-danger-ghost:hover:not(:disabled) {
+  background: var(--theme-danger-fill);
+  border-color: var(--theme-danger-outline);
+}
+
 .btn-sm {
   min-height: 30px;
   padding: 5px 11px;
   font-size: 13px;
-  border-radius: 10px;
+  border-radius: var(--ui-radius);
 }
 
 .btn-icon {
   padding: 5px;
   min-width: 30px;
-  border-radius: 10px;
+  border-radius: var(--ui-radius);
 }
 
 .chat-header-action-btn {
@@ -1708,7 +1724,7 @@ main {
   min-width: 36px;
   height: 36px;
   padding: 0;
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   justify-content: center;
 }
 
@@ -1716,7 +1732,7 @@ main {
   position: relative;
   width: 36px;
   height: 36px;
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   border: 1px solid transparent;
   background: transparent;
   backdrop-filter: none;
@@ -1741,7 +1757,7 @@ main {
   width: 36px;
   height: 36px;
   border: 1px solid var(--control-border);
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   background: var(--control-bg);
   color: var(--control-text);
   box-shadow:
@@ -1782,7 +1798,7 @@ main {
   color: var(--theme-text-primary);
   outline: none;
   box-shadow: none;
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   font-size: 13px;
   font-family: var(--font);
   opacity: 0;
@@ -1809,7 +1825,7 @@ main {
   min-height: 24px;
   padding: 0;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--ui-radius);
   background: transparent;
   color: var(--theme-text-muted);
   display: inline-flex;
@@ -1845,7 +1861,7 @@ main {
   backdrop-filter: blur(20px) saturate(1.4);
   -webkit-backdrop-filter: blur(20px) saturate(1.4);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   box-shadow: 0 4px 20px rgba(0,0,0,0.10), 0 1px 4px rgba(0,0,0,0.06);
   overflow: hidden;
   z-index: 300;
@@ -1981,7 +1997,7 @@ main {
   width: 100%;
   background: var(--theme-surface-interactive);
   border: 1px solid var(--theme-border-strong);
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   padding: 7px 11px;
   font-size: 14px;
   font-family: var(--font);
@@ -2255,7 +2271,12 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   width: 36px;
   height: 36px;
   margin-bottom: 8px;
-  opacity: 0.4;
+  opacity: 0.38;
+}
+
+[data-theme="dark"] .empty-icon,
+[data-theme="terminal"] .empty-icon {
+  opacity: 0.6;
 }
 
 .empty-state h3 {
@@ -2982,7 +3003,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
       color-mix(in srgb, var(--surface-2) 92%, white 8%),
       color-mix(in srgb, var(--surface-2) 96%, transparent));
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   text-decoration: none;
   color: inherit;
   /* Hug content; never blow out wider than the bubble */
@@ -3155,7 +3176,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 }
 
 .map-card {
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   overflow: hidden;
   border: 1px solid var(--border);
   background: var(--surface-2);
@@ -3462,7 +3483,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   flex-direction: column;
   gap: 10px;
   padding: 14px;
-  border-radius: 22px;
+  border-radius: calc(var(--ui-radius) + 10px);
   background: color-mix(in srgb, var(--surface) 50%, transparent);
   backdrop-filter: blur(24px) saturate(1.6);
   -webkit-backdrop-filter: blur(24px) saturate(1.6);
@@ -3499,7 +3520,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   position: relative;
   background: color-mix(in srgb, var(--theme-surface-interactive) 82%, var(--surface));
   border: 1px solid var(--theme-border-subtle);
-  border-radius: 18px;
+  border-radius: calc(var(--ui-radius) + 6px);
   overflow: hidden;
   transition: border-color 0.15s, box-shadow 0.15s;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
@@ -3795,7 +3816,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 
   .chat-composer-inner {
     padding: 12px;
-    border-radius: 20px;
+    border-radius: calc(var(--ui-radius) + 8px);
   }
 }
 
@@ -3808,9 +3829,9 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--bg) 68%, transparent);
+  backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
+  -webkit-backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
   animation: restart-overlay-in 200ms ease both;
 }
 
@@ -3825,7 +3846,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   align-items: center;
   gap: 10px;
   padding: 40px 44px;
-  border-radius: 20px;
+  border-radius: calc(var(--ui-radius) + 8px);
   background: var(--theme-surface-card);
   border: 1px solid var(--theme-border-subtle);
   box-shadow: 0 24px 60px rgba(0,0,0,0.18);
@@ -3908,9 +3929,9 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--bg) 68%, transparent);
+  backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
+  -webkit-backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
   animation: confirm-dialog-in 180ms ease both;
 }
 
@@ -3925,7 +3946,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   align-items: center;
   gap: 10px;
   padding: 40px 44px;
-  border-radius: 20px;
+  border-radius: calc(var(--ui-radius) + 8px);
   background: var(--theme-surface-card);
   border: 1px solid var(--theme-border-subtle);
   box-shadow: 0 24px 60px rgba(0,0,0,0.18);
@@ -4300,58 +4321,71 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 
 /* ─── Appearance screen ─────────────────────────────────── */
 
-.appearance-screen {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-}
+/* ─── Appearance layout ─────────────────────────────────── */
 
-.appearance-layout {
+.ap-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 1fr);
+  grid-auto-rows: auto;
   gap: 20px;
   align-items: stretch;
 }
 
-.appearance-column {
+.ap-preview-card {
+  position: sticky;
+  top: 24px;
+  align-self: start;
+}
+
+.ap-preview-body {
+  padding: 16px 20px 20px;
+}
+
+/* ─── Option buttons (replaces segmented controls) ──────── */
+
+.ap-option-group {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+  width: 280px;
+  flex-shrink: 0;
+}
+
+.ap-option-btn {
+  appearance: none;
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: 450;
+  border-radius: var(--ui-radius);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.2;
+  transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
+}
+
+.ap-option-btn:hover:not(.is-active) {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text);
+}
+
+.ap-option-btn.is-active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* ─── Accent swatch strip ───────────────────────────────── */
+
+.ap-swatch-strip {
   display: flex;
-  flex-direction: column;
-  gap: 20px;
-  min-width: 0;
-}
-
-.appearance-card {
-  border-radius: 14px;
-  background:
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--surface) 84%, white 16%),
-      var(--surface));
-  border-color: color-mix(in srgb, var(--border) 88%, transparent);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.05);
-}
-
-[data-theme="dark"] .appearance-card {
-  background:
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--surface) 92%, white 8%),
-      var(--surface));
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
-}
-
-.appearance-card-body {
-  padding: 18px 20px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.appearance-section-title {
-  font-size: 11.5px;
-  font-weight: 650;
-  text-transform: uppercase;
-  letter-spacing: 0.7px;
-  color: var(--text-3);
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .appearance-theme-grid {
@@ -4517,7 +4551,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   height: 100%;
 }
 
-.appearance-preview-card .appearance-card-body {
+.ap-preview-card .ap-preview-body {
   gap: 16px;
   height: 100%;
 }
@@ -4527,10 +4561,11 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   --appearance-preview-font: var(--font);
   --appearance-preview-font-size: 15px;
   --appearance-preview-radius: 12px;
+  --appearance-preview-ui-radius: 10px;
   --appearance-preview-gap: 13px;
   --appearance-preview-pad-y: 10px;
   --appearance-preview-pad-x: 14px;
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   background:
     radial-gradient(circle at top left, color-mix(in srgb, var(--appearance-accent) 18%, transparent), transparent 30%),
@@ -4581,7 +4616,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   gap: 8px;
   margin: 0 12px 12px;
   padding: 10px 10px 10px 14px;
-  border-radius: 18px;
+  border-radius: calc(var(--appearance-preview-ui-radius) + 8px);
   background: color-mix(in srgb, var(--surface) 50%, transparent);
   backdrop-filter: blur(20px) saturate(1.5);
   -webkit-backdrop-filter: blur(20px) saturate(1.5);
@@ -4799,72 +4834,6 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 }
 
 /* Segmented control rows — Chat Display card */
-.segment-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.segment-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 3px 0;
-}
-
-.segment-row-label {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-  flex-shrink: 0;
-  width: 72px;
-}
-
-.segment-group {
-  flex: 1;
-  display: grid;
-  align-items: center;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 3px;
-  gap: 2px;
-}
-
-.segment-btn {
-  appearance: none;
-  min-width: 0;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  padding: 5px 6px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-2);
-  cursor: pointer;
-  white-space: nowrap;
-  text-align: center;
-  transition: background 110ms ease, color 110ms ease, box-shadow 110ms ease;
-  line-height: 1;
-}
-
-.segment-btn:hover:not(.is-active) {
-  color: var(--text);
-  background: color-mix(in srgb, var(--text) 6%, transparent);
-}
-
-.segment-btn.is-active {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.10), 0 0 0 0.5px rgba(0,0,0,0.06);
-}
-
-.segment-row-swatches {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
 
 .appearance-control-block {
   display: flex;
@@ -5186,7 +5155,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 }
 
 @media (max-width: 1120px) {
-  .appearance-layout {
+  .ap-layout {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -5203,8 +5172,8 @@ input[type="checkbox"]:not(.toggle input):checked::after {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .appearance-card-body {
-    padding: 16px 16px 18px;
+  .ap-preview-body {
+    padding: 12px 14px 16px;
   }
 
   .appearance-preview-bubble {
@@ -5388,7 +5357,7 @@ input[type=number] { -moz-appearance: textfield; }
   gap: 14px;
   padding: 12px 14px;
   border: 1px solid color-mix(in srgb, var(--theme-border-subtle) 58%, transparent);
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   background: color-mix(in srgb, var(--theme-surface-interactive) 72%, transparent);
 }
 
@@ -5435,7 +5404,7 @@ input[type=number] { -moz-appearance: textfield; }
   appearance: none;
   background: var(--control-bg);
   border: 1px solid var(--theme-border-subtle);
-  border-radius: 10px;
+  border-radius: var(--ui-radius);
   color: var(--theme-text-secondary);
   cursor: pointer;
   font-family: var(--font);
@@ -5481,7 +5450,7 @@ input[type=number] { -moz-appearance: textfield; }
   gap: 10px;
   padding: 9px 10px;
   border: 1px solid color-mix(in srgb, var(--theme-border-subtle) 58%, transparent);
-  border-radius: 10px;
+  border-radius: var(--ui-radius);
   background: color-mix(in srgb, var(--theme-surface-interactive) 62%, transparent);
 }
 
@@ -5508,7 +5477,7 @@ input[type=number] { -moz-appearance: textfield; }
   gap: 12px;
   margin-bottom: 10px;
   padding: 10px 12px;
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   font-size: 12.5px;
   border: 1px solid var(--theme-border-subtle);
 }
@@ -6230,7 +6199,7 @@ input[type=number] { -moz-appearance: textfield; }
   margin-top: 10px;
   padding: 12px 14px;
   background: color-mix(in srgb, var(--theme-surface-card) 80%, transparent);
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   font-size: 13px;
   font-family: var(--font-mono);
   color: var(--theme-text-secondary);
@@ -6253,7 +6222,7 @@ input[type=number] { -moz-appearance: textfield; }
   transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
   background: color-mix(in srgb, var(--surface) 50%, transparent);
   border: 1px solid color-mix(in srgb, var(--theme-border-subtle) 45%, transparent);
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   backdrop-filter: blur(24px) saturate(1.6);
   -webkit-backdrop-filter: blur(24px) saturate(1.6);
   box-shadow: inset 0 1px 0 color-mix(in srgb, white 6%, transparent),
@@ -6280,6 +6249,8 @@ input[type=number] { -moz-appearance: textfield; }
   align-items: flex-start;
   gap: 12px;
   padding: 16px 18px 14px;
+  background: color-mix(in srgb, var(--text) 2%, var(--theme-surface-card));
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-border-subtle) 45%, transparent);
 }
 
 .automation-identity {
@@ -6474,7 +6445,7 @@ input[type=number] { -moz-appearance: textfield; }
 .automation-action-btn {
   min-height: 32px;
   padding: 5px 11px;
-  border-radius: 10px;
+  border-radius: var(--ui-radius);
   background: color-mix(in srgb, var(--surface-2) 92%, transparent);
   border-color: color-mix(in srgb, var(--border) 90%, transparent);
   color: var(--text-2);
@@ -6536,7 +6507,7 @@ input[type=number] { -moz-appearance: textfield; }
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   border: 1px solid color-mix(in srgb, var(--theme-border-subtle) 80%, transparent);
   background: color-mix(in srgb, var(--theme-bg-elevated) 96%, transparent);
   box-shadow: 0 14px 34px rgba(0,0,0,0.22);
@@ -6552,8 +6523,9 @@ input[type=number] { -moz-appearance: textfield; }
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.58);
-  backdrop-filter: blur(14px);
+  background: color-mix(in srgb, var(--bg) 68%, transparent);
+  backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
+  -webkit-backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -6567,7 +6539,7 @@ input[type=number] { -moz-appearance: textfield; }
       color-mix(in srgb, var(--theme-bg-elevated) 84%, white 16%),
       var(--theme-bg-elevated));
   border: 1px solid var(--theme-border-subtle);
-  border-radius: 18px;
+  border-radius: calc(var(--ui-radius) + 6px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -6649,7 +6621,7 @@ input[type=number] { -moz-appearance: textfield; }
   width: 100%;
   background: var(--theme-surface-interactive);
   border: 1px solid var(--theme-border-strong);
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   padding: 7px 10px;
   font-size: 14px;
   font-family: var(--font);
@@ -6798,7 +6770,7 @@ select.field-input {
   z-index: 9999;
   background: var(--theme-bg-elevated);
   border: 1px solid var(--theme-border-strong);
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   padding: 10px;
   display: grid;
   grid-template-columns: repeat(8, 32px);
@@ -6909,7 +6881,7 @@ select.field-input {
 .automation-run-card {
   background: color-mix(in srgb, var(--surface) 50%, transparent);
   border: 1px solid color-mix(in srgb, var(--theme-border-subtle) 45%, transparent);
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   padding: 14px;
   margin-bottom: 10px;
   backdrop-filter: blur(24px) saturate(1.6);
@@ -7077,7 +7049,7 @@ select.field-input {
 .forge-danger-panel {
   background: color-mix(in srgb, var(--theme-bg-elevated) 92%, transparent);
   border: 1px solid color-mix(in srgb, var(--theme-border-subtle) 90%, transparent);
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
 }
 
 .forge-proposal-summary {
@@ -7119,7 +7091,7 @@ select.field-input {
   min-height: 500px;
   background: var(--theme-bg-elevated);
   border: 1px solid var(--theme-border-strong);
-  border-radius: var(--radius);
+  border-radius: var(--ui-radius);
   padding: 14px;
   font-size: 14px;
   font-family: var(--font-mono);
@@ -7821,7 +7793,7 @@ select.field-input {
 
 .communication-modal-panel {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   background: color-mix(in srgb, var(--surface-2) 96%, transparent);
   padding: 20px;
   display: flex;
@@ -8512,7 +8484,7 @@ select.field-input {
 .mobile-menu-btn {
   width: 36px;
   height: 36px;
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -8610,7 +8582,7 @@ select.field-input {
   .sidebar.mobile-open .nav-item,
   .sidebar.mobile-open .nav-group-toggle {
     min-height: 52px;
-    border-radius: 14px;
+    border-radius: calc(var(--ui-radius) + 2px);
   }
 
   .sidebar.mobile-open .nav-item.active {
@@ -9002,7 +8974,7 @@ select.field-input {
   }
 
   /* Appearance: single column */
-  .appearance-layout {
+  .ap-layout {
     grid-template-columns: 1fr;
   }
 
@@ -9163,7 +9135,7 @@ select.field-input {
   gap: 8px;
   padding: 8px 10px 8px 12px;
   border: 1px solid var(--theme-border-subtle);
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   background: color-mix(in srgb, var(--theme-surface-card) 62%, transparent);
   transition: background-color 0.15s, border-color 0.15s;
 }
@@ -9317,7 +9289,7 @@ select.field-input {
   -webkit-appearance: none;
   background: var(--theme-surface-interactive);
   border: 1px solid var(--theme-border-subtle);
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   padding: 12px 14px;
   text-align: left;
   cursor: pointer;
@@ -9505,7 +9477,7 @@ select.field-input {
   text-align: left;
   background: var(--theme-surface-card);
   border: 1px solid color-mix(in srgb, var(--theme-border-subtle) 45%, transparent);
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   cursor: pointer;
   color: var(--text);
   backdrop-filter: blur(24px) saturate(1.6);
@@ -9591,7 +9563,7 @@ select.field-input {
   flex-direction: column;
   background: var(--theme-surface-card);
   border: 1px solid color-mix(in srgb, var(--theme-border-subtle) 45%, transparent);
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   overflow: hidden;
   min-height: 0;
   position: relative;
@@ -9688,7 +9660,8 @@ select.field-input {
   justify-content: space-between;
   gap: 6px;
   padding: 8px 10px 7px;
-  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--text) 2%, var(--theme-surface-card));
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-border-subtle) 45%, transparent);
   flex-shrink: 0;
   min-width: 0;
 }
@@ -9809,7 +9782,7 @@ select.field-input {
 }
 .dw-news-card {
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: var(--ui-radius);
   background: var(--bg-2, rgba(0,0,0,0.04));
   border: 1px solid var(--border);
   display: flex;
@@ -10056,7 +10029,7 @@ select.field-input {
 
 .team-kpi {
   padding: 10px 12px;
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   background: color-mix(in srgb, var(--surface-2) 72%, transparent);
   border: 1px solid var(--border);
 }
@@ -10108,7 +10081,7 @@ select.field-input {
 
 .team-suggestion-item {
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   background: color-mix(in srgb, var(--surface-2) 60%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
 }
@@ -10128,7 +10101,7 @@ select.field-input {
 
 .team-blocked-strip {
   padding: 16px 20px;
-  border-radius: 16px;
+  border-radius: calc(var(--ui-radius) + 4px);
   border: 1px solid color-mix(in srgb, var(--yellow) 32%, var(--border));
   background: color-mix(in srgb, var(--yellow) 5%, var(--surface));
 }
@@ -10157,7 +10130,7 @@ select.field-input {
   justify-content: space-between;
   gap: 12px;
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   background: var(--theme-surface-soft);
   border: 1px solid var(--border);
 }
@@ -10196,16 +10169,61 @@ select.field-input {
   text-align: left;
   padding: 18px;
   min-height: 200px;
+  flex: 1;
   display: flex;
   flex-direction: column;
-  border-radius: 18px;
+  position: relative;
+  border-radius: calc(var(--ui-radius) + 6px);
   border: 1px solid var(--border);
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 88%, transparent), color-mix(in srgb, var(--surface) 96%, transparent));
   color: inherit;
   transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
+.team-agent-delete-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  appearance: none;
+  background: none;
+  border: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  color: var(--theme-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+  padding: 0;
+}
+
+.team-agent-card:hover .team-agent-delete-btn {
+  opacity: 1;
+}
+
+.team-agent-delete-btn:hover:not(:disabled) {
+  background: var(--theme-danger-fill);
+  color: var(--control-danger-text);
+}
+
+.team-agent-delete-btn:disabled {
+  cursor: default;
+  opacity: 0.3;
+}
+
 .team-agent-card.expanded {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom-color: transparent;
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.team-agent-card.assigning {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
   border-bottom-color: transparent;
@@ -10218,6 +10236,7 @@ select.field-input {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  padding-right: 28px;
 }
 
 .team-agent-name {
@@ -10259,36 +10278,17 @@ select.field-input {
   flex-wrap: wrap;
 }
 
-.team-agent-actions {
+.team-agent-actions-left {
   display: flex;
-  gap: 8px;
-}
-
-.team-agent-details-btn {
-  appearance: none;
-  background: none;
-  border: none;
-  padding: 4px 6px;
-  border-radius: 8px;
-  font-size: 12px;
-  color: var(--theme-text-secondary);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  transition: color 120ms ease, background 120ms ease;
-}
-
-.team-agent-details-btn:hover {
-  color: var(--theme-text-primary);
-  background: var(--theme-surface-soft);
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 /* ── Agent drawer ────────────────────────────────────────── */
 
 .team-agent-drawer {
   padding: 20px;
-  border-radius: 0 0 18px 18px;
+  border-radius: 0 0 calc(var(--ui-radius) + 6px) calc(var(--ui-radius) + 6px);
   border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
   border-top: none;
   background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
@@ -10326,7 +10326,7 @@ select.field-input {
   justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--ui-radius);
   background: var(--theme-surface-soft);
   border: 1px solid var(--border);
 }
@@ -10382,7 +10382,7 @@ select.field-input {
   width: 100%;
   text-align: left;
   padding: 14px;
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   border: 1px solid var(--border);
   background: var(--theme-surface-soft);
   color: inherit;
@@ -10424,7 +10424,7 @@ select.field-input {
 
 .team-task-drawer {
   padding: 20px;
-  border-radius: 0 0 14px 14px;
+  border-radius: 0 0 calc(var(--ui-radius) + 2px) calc(var(--ui-radius) + 2px);
   border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
   border-top: none;
   background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
@@ -10453,7 +10453,7 @@ select.field-input {
 
 .team-task-error {
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   background: var(--danger-bg);
   border: 1px solid var(--danger-border);
   color: var(--danger-btn-text);
@@ -10470,7 +10470,7 @@ select.field-input {
 
 .team-step-item {
   padding: 14px;
-  border-radius: 12px;
+  border-radius: var(--ui-radius);
   border: 1px solid var(--border);
   background: var(--theme-surface-soft);
 }
@@ -10545,7 +10545,7 @@ select.field-input {
   appearance: none;
   background: none;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--ui-radius);
   padding: 8px 16px;
   font-size: 13px;
   color: var(--theme-text-secondary);
@@ -10562,7 +10562,7 @@ select.field-input {
 
 .team-event-item {
   padding: 14px;
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   border: 1px solid var(--border);
   background: var(--theme-surface-soft);
 }
@@ -10604,7 +10604,7 @@ select.field-input {
 }
 
 .team-event-good {
-  border-color: color-mix(in srgb, var(--green) 32%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
 }
 
 .team-event-warning {
@@ -10758,7 +10758,7 @@ select.field-input {
   justify-content: center;
   gap: 8px;
   padding: 20px;
-  border-radius: 16px;
+  border-radius: calc(var(--ui-radius) + 4px);
   border: 1px dashed color-mix(in srgb, var(--accent) 18%, var(--border));
   background: color-mix(in srgb, var(--surface-2) 55%, transparent);
 }
@@ -10781,9 +10781,7 @@ select.field-input {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .team-header-actions,
-  .team-agent-actions,
-  .team-agent-card-footer {
+  .team-header-actions {
     flex-wrap: wrap;
   }
 
@@ -10797,8 +10795,9 @@ select.field-input {
 .team-modal-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.58);
-  backdrop-filter: blur(14px);
+  background: color-mix(in srgb, var(--bg) 68%, transparent);
+  backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
+  -webkit-backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -10814,7 +10813,7 @@ select.field-input {
     linear-gradient(160deg, color-mix(in srgb, var(--surface-2) 82%, transparent), color-mix(in srgb, var(--surface) 96%, transparent));
   border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.4);
-  border-radius: 24px;
+  border-radius: calc(var(--ui-radius) + 12px);
   padding: 26px;
   max-width: 1080px;
   width: 100%;
@@ -10903,7 +10902,7 @@ select.field-input {
   flex-direction: column;
   gap: 12px;
   padding: 18px;
-  border-radius: 18px;
+  border-radius: calc(var(--ui-radius) + 6px);
   border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
   background: color-mix(in srgb, var(--surface-2) 68%, transparent);
 }
@@ -10920,7 +10919,7 @@ select.field-input {
   width: 100%;
   text-align: left;
   padding: 16px;
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface) 82%, transparent);
   color: inherit;
@@ -10967,7 +10966,7 @@ select.field-input {
   gap: 16px;
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 88%, transparent), color-mix(in srgb, var(--surface) 96%, transparent));
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: calc(var(--ui-radius) + 6px);
   padding: 24px;
   text-align: left;
   cursor: pointer;
@@ -11025,7 +11024,7 @@ select.field-input {
 
 .team-template-style {
   padding: 16px 18px;
-  border-radius: 14px;
+  border-radius: calc(var(--ui-radius) + 2px);
   border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
   background: color-mix(in srgb, var(--surface-2) 58%, transparent);
   color: var(--theme-text-primary);
@@ -11055,7 +11054,7 @@ select.field-input {
 .team-modal-sidebar-card {
   flex: 1 1 auto;
   padding: 24px 26px;
-  border-radius: 18px;
+  border-radius: calc(var(--ui-radius) + 6px);
   border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
   background: color-mix(in srgb, var(--surface-2) 68%, transparent);
 }
@@ -11145,28 +11144,30 @@ select.field-input {
 /* ─── Team: Assign Task Form ─────────────────────────────────────────────── */
 
 .team-assign-form {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  padding: 20px;
+  border-radius: 0 0 calc(var(--ui-radius) + 6px) calc(var(--ui-radius) + 6px);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
   border-top: none;
-  border-radius: 0 0 10px 10px;
-  padding: 14px;
+  background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
 }
 
 .team-assign-form-title {
-  font-size: 13px;
-  font-weight: 500;
-  margin-bottom: 10px;
-  color: var(--text-secondary);
+  font-size: var(--section-label-size);
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--theme-text-muted);
+  margin-bottom: 14px;
 }
 
 .team-assign-textarea {
   width: 100%;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  background: var(--theme-surface-interactive);
+  border: 1px solid var(--theme-border-strong);
+  border-radius: var(--ui-radius);
   padding: 8px 10px;
   font-size: 13px;
-  color: var(--text-primary);
+  color: var(--theme-text-primary);
   resize: vertical;
   margin-bottom: 8px;
   font-family: inherit;
@@ -11175,12 +11176,12 @@ select.field-input {
 
 .team-assign-input {
   width: 100%;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  background: var(--theme-surface-interactive);
+  border: 1px solid var(--theme-border-strong);
+  border-radius: var(--ui-radius);
   padding: 8px 10px;
   font-size: 13px;
-  color: var(--text-primary);
+  color: var(--theme-text-primary);
   margin-bottom: 10px;
   font-family: inherit;
   box-sizing: border-box;
@@ -11208,7 +11209,7 @@ select.field-input {
 .team-metric-chip {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--ui-radius);
   padding: 8px 12px;
   text-align: center;
   min-width: 72px;
@@ -11295,7 +11296,7 @@ select.field-input {
 .team-trigger-item {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--ui-radius);
   padding: 10px 12px;
 }
 
@@ -11395,7 +11396,7 @@ select.field-input {
   padding: 40px 32px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: calc(var(--ui-radius) + 4px);
 }
 
 .local-auth-logo {
@@ -11420,7 +11421,7 @@ select.field-input {
   width: 100%;
   padding: 10px 14px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--ui-radius);
   background: var(--bg);
   color: var(--text);
   font-size: 15px;
@@ -11435,7 +11436,7 @@ select.field-input {
 .local-auth-btn {
   width: 100%;
   padding: 11px 16px;
-  border-radius: 8px;
+  border-radius: var(--ui-radius);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
