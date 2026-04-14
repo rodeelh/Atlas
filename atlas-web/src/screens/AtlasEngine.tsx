@@ -535,6 +535,22 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
               <div class="stat-note">{isRunning && (status?.promptTPS ?? 0) > 0 ? 'tok / sec' : 'prompt eval'}</div>
             </div>
             <div class="stat-cell">
+              <div class="stat-label">Active Slots</div>
+              <div class="stat-value">
+                {isRunning ? String(status?.activeRequests ?? 0) : '—'}
+              </div>
+              <div class="stat-note">in-flight</div>
+            </div>
+            <div class="stat-cell">
+              <div class="stat-label">Context Tokens</div>
+              <div class="stat-value">
+                {isRunning && (status?.contextTokens ?? 0) > 0
+                  ? String(status!.contextTokens)
+                  : '—'}
+              </div>
+              <div class="stat-note">tokens in context</div>
+            </div>
+            <div class="stat-cell">
               <div class="stat-label">Generation Time</div>
               <div class="stat-value">
                 {isRunning && (status?.genTimeSec ?? 0) > 0
@@ -544,13 +560,6 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
                   : '—'}
               </div>
               <div class="stat-note">{isRunning && (status?.genTimeSec ?? 0) > 0 ? 'total' : ''}</div>
-            </div>
-            <div class="stat-cell">
-              <div class="stat-label">Active Slots</div>
-              <div class="stat-value">
-                {isRunning ? String(status?.activeRequests ?? 0) : '—'}
-              </div>
-              <div class="stat-note">in-flight</div>
             </div>
           </div>
         </div>

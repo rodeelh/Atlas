@@ -19,6 +19,7 @@ import { LocalLM } from './screens/LocalLM'
 import { Team } from './screens/Team'
 import { Usage } from './screens/Usage'
 import { Onboarding } from './screens/Onboarding'
+import { LocalAuthGate } from './screens/LocalAuthGate'
 import { Toaster } from './components/Toaster'
 import { HeaderChromeContext } from './components/PageHeader'
 import { api, RuntimeStatus } from './api/client'
@@ -361,6 +362,12 @@ const NAV_GROUPS: NavGroup[] = [
 /* ── App ───────────────────────────────────────────────── */
 
 export function App() {
+  // Local auth gate — only active for localhost requests.
+  // On remote hosts (LAN / Tailscale) the existing remote-gate handles auth.
+  const isLocal = typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  const [localAuthPassed, setLocalAuthPassed] = useState(!isLocal)
+
   const [screen, setScreen]               = useState<Screen>(getInitialScreen)
   const [pendingApprovals, setPendingApprovals] = useState(0)
   const [pendingProposals, setPendingProposals] = useState(0)
@@ -468,14 +475,19 @@ export function App() {
     })
   }, [pendingGreetings, unreadChatReplies, pendingApprovals])
 
-  // Poll approval count + status for sidebar badge
+  // Poll approval count + status for sidebar badge.
+  // Both effects are gated on localAuthPassed so they don't fire while the
+  // local auth gate is visible — unauthenticated 401s from these calls would
+  // otherwise trigger the 401→reload→gate loop.
   useEffect(() => {
+    if (!localAuthPassed) return
     api.onboardingStatus()
       .then((status) => setOnboardingComplete(status.completed))
       .catch(() => setOnboardingComplete(true))
-  }, [])
+  }, [localAuthPassed])
 
   useEffect(() => {
+    if (!localAuthPassed) return
     const poll = async () => {
       try {
         const [approvals, status, proposals, greetings] = await Promise.allSettled([
@@ -500,7 +512,7 @@ export function App() {
     poll()
     const interval = setInterval(poll, 5000)
     return () => clearInterval(interval)
-  }, [])
+  }, [localAuthPassed])
 
   // Apply + persist theme; re-run whenever config changes or OS flips
   useEffect(() => {
@@ -591,6 +603,11 @@ export function App() {
   const statusLabel = runtimeStatus
     ? runtimeStatus.state.charAt(0).toUpperCase() + runtimeStatus.state.slice(1)
     : 'Connecting…'
+
+  // Show local auth gate before anything else on localhost.
+  if (!localAuthPassed) {
+    return <LocalAuthGate onAuthenticated={() => setLocalAuthPassed(true)} />
+  }
 
   if (onboardingComplete === null) {
     return (

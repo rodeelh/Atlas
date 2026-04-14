@@ -496,20 +496,6 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
               </div>
               <div class="stat-note">{(status?.lastInference?.generationSec ?? 0) > 0 ? 'total' : ''}</div>
             </div>
-            <div class="stat-cell">
-              <div class="stat-label">Output Tokens</div>
-              <div class="stat-value">
-                {(status?.lastInference?.completionTokens ?? 0) > 0
-                  ? String(status!.lastInference!.completionTokens)
-                  : '—'}
-              </div>
-              <div class="stat-note">output tokens</div>
-            </div>
-            <div class="stat-cell">
-              <div class="stat-label">Scheduler</div>
-              <div class="stat-value">{schedulerActive}/{scheduler?.maxConcurrency ?? '—'}</div>
-              <div class="stat-note">active / max · queue {schedulerQueueDepth}</div>
-            </div>
           </div>
         </div>
 

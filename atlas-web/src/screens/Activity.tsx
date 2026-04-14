@@ -378,7 +378,7 @@ export function Activity() {
             </div>
           ) : (
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '8px 0' }}>
-              {filteredLogs.map(entry => {
+              {filteredLogs.map((entry, i) => {
                 const isError = entry.level === 'error' || entry.level === 'fault'
                 const isExpanded = expandedLogIds.has(entry.id)
                 // Keys that are redundant with the message text or level badge.
@@ -395,7 +395,7 @@ export function Activity() {
                       .filter(item => item.value.length > 0)
                   : []
                 return (
-                  <div class={`log-entry${isError ? ' log-entry-error' : ''}`} key={entry.id}>
+                  <div class={`log-entry${isError ? ' log-entry-error' : ''}`} key={entry.id} style={{ background: i % 2 === 1 ? 'var(--row-alt)' : undefined }}>
                     <div class="log-entry-body">
                       <div class="log-entry-summary">
                         <span class="log-time">{formatTime(entry.timestamp)}</span>

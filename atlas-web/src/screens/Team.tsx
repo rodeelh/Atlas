@@ -1,9 +1,76 @@
-import { useEffect, useMemo, useState } from 'preact/hooks'
-import { api, TeamEvent, TeamSnapshot, TeamTask } from '../api/client'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { api, TeamAgent, TeamAssignPayload, TeamEvent, TeamSnapshot, TeamTask, TriggerEvent } from '../api/client'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { PageHeader } from '../components/PageHeader'
 import { PageSpinner } from '../components/PageSpinner'
 import { toast } from '../toast'
+
+interface AgentTemplate {
+  name: string
+  role: string
+  mission: string
+  style: string
+  allowedSkills: string[]
+  autonomy: string
+}
+
+const AGENT_TEMPLATES: AgentTemplate[] = [
+  {
+    name: 'Scout',
+    role: 'Research Specialist',
+    mission: 'Search the web, retrieve data, and synthesize research findings to inform decisions.',
+    style: 'Concise. Lead with key findings. Flag uncertainties.',
+    allowedSkills: ['websearch', 'web', 'fs'],
+    autonomy: 'assistive',
+  },
+  {
+    name: 'Builder',
+    role: 'Drafting and Implementation Specialist',
+    mission: 'Write, edit, and test code artifacts as directed. Verify correctness before reporting done.',
+    style: 'Precise. Show your work. Summarize changes made.',
+    allowedSkills: ['fs', 'terminal', 'websearch'],
+    autonomy: 'on_demand',
+  },
+  {
+    name: 'Reviewer',
+    role: 'Quality Specialist',
+    mission: 'Audit code, content, or plans for errors, edge cases, and improvement opportunities.',
+    style: 'Critical but constructive. Enumerate issues clearly.',
+    allowedSkills: ['fs', 'websearch', 'web'],
+    autonomy: 'assistive',
+  },
+  {
+    name: 'Operator',
+    role: 'Execution Specialist',
+    mission: 'Execute repeatable workflows, run automations, and operate tools on behalf of the team.',
+    style: 'Methodical. Log each step. Report outcomes clearly.',
+    allowedSkills: ['terminal', 'applescript', 'fs', 'system'],
+    autonomy: 'on_demand',
+  },
+  {
+    name: 'Monitor',
+    role: 'Watcher',
+    mission: 'Watch for conditions, check system health, and surface anomalies to the team.',
+    style: 'Brief. Signal-to-noise ratio matters. Only report what changed.',
+    allowedSkills: ['websearch', 'web', 'system', 'fs'],
+    autonomy: 'bounded_autonomous',
+  },
+]
+
+function formatAutonomy(value: string): string {
+  const map: Record<string, string> = {
+    assistive: 'Assistive',
+    on_demand: 'On Demand',
+    bounded_autonomous: 'Autonomous',
+    autonomous: 'Autonomous',
+  }
+  return map[value] ?? value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function formatLabel(value: string): string {
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
 
 function formatRelative(iso?: string): string {
   if (!iso) return '—'
@@ -36,21 +103,59 @@ function statusBadgeClass(status: string): string {
     case 'completed':
     case 'enabled':
       return 'badge badge-green'
+    case 'working':
     case 'busy':
     case 'running':
     case 'in_progress':
       return 'badge badge-blue'
+    case 'needs_review':
     case 'attention_needed':
     case 'pending_approval':
     case 'paused':
+    case 'waiting':
+    case 'blocked':
       return 'badge badge-yellow'
     case 'disabled':
     case 'error':
     case 'failed':
     case 'cancelled':
+    case 'canceled':
       return 'badge badge-red'
     default:
       return 'badge badge-gray'
+  }
+}
+
+function humanEventType(t: string): string {
+  const map: Record<string, string> = {
+    'team.task.completed': 'Task completed',
+    'team.task.failed': 'Task failed',
+    'team.task.started': 'Task started',
+    'team.task.cancelled': 'Task cancelled',
+    'team.task.pending_approval': 'Awaiting approval',
+    'team.task.approved': 'Task approved',
+    'team.task.rejected': 'Task rejected',
+    'team.synced': 'Agents synced',
+    'team.synced.v1': 'Agents synced',
+    'team.agent.created': 'Agent created',
+    'team.agent.deleted': 'Agent deleted',
+    'team.tool.started': 'Tool started',
+    'team.tool.finished': 'Tool finished',
+    'team.tool.failed': 'Tool failed',
+    'team.tool.approval_required': 'Tool needs approval',
+    'agent.triggered': 'Auto-triggered',
+    'agent.task.completed': 'Agent task completed',
+    'agent.task.failed': 'Agent task failed',
+    'agent.task.step': 'Task step recorded',
+  }
+  return map[t] ?? t.replace(/[._]/g, ' ')
+}
+
+function triggerStatusBadge(status: string): string {
+  switch (status) {
+    case 'fired': return 'badge badge-green'
+    case 'suppressed': return 'badge badge-gray'
+    default: return 'badge badge-yellow'
   }
 }
 
@@ -83,30 +188,44 @@ export function Team() {
   const [snapshot, setSnapshot] = useState<TeamSnapshot | null>(null)
   const [tasks, setTasks] = useState<TeamTask[]>([])
   const [events, setEvents] = useState<TeamEvent[]>([])
+  const [triggers, setTriggers] = useState<TriggerEvent[]>([])
   const [expandedAgentID, setExpandedAgentID] = useState<string | null>(null)
   const [expandedTaskID, setExpandedTaskID] = useState<string | null>(null)
   const [expandedTask, setExpandedTask] = useState<TeamTask | null>(null)
   const [expandedStepIDs, setExpandedStepIDs] = useState<Set<string>>(new Set())
   const [visibleEventCount, setVisibleEventCount] = useState(3)
+  const [visibleTaskCount, setVisibleTaskCount] = useState(3)
+  const [expandedEventDetails, setExpandedEventDetails] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [acting, setActing] = useState<Record<string, boolean>>({})
+  const [showTemplateModal, setShowTemplateModal] = useState(false)
+  const [selectedTemplateName, setSelectedTemplateName] = useState<string>(AGENT_TEMPLATES[0]?.name ?? '')
+  const [agentPendingDelete, setAgentPendingDelete] = useState<TeamAgent | null>(null)
+  const [assignAgentID, setAssignAgentID] = useState<string | null>(null)
+  const [assignTask, setAssignTaskText] = useState('')
+  const [assignGoal, setAssignGoal] = useState('')
+  const [submittingAssign, setSubmittingAssign] = useState(false)
 
   const EVENT_PAGE_SIZE = 3
+  const TASK_PAGE_SIZE = 3
   const STEP_CLAMP_CHARS = 240
+  const selectedTemplate = AGENT_TEMPLATES.find((tpl) => tpl.name === selectedTemplateName) ?? AGENT_TEMPLATES[0]
 
   const load = async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!silent) setRefreshing(true)
     try {
-      const [snapshotData, tasksData, eventsData] = await Promise.all([
+      const [snapshotData, tasksData, eventsData, triggersData] = await Promise.all([
         api.teamSnapshot(),
         api.teamTasks(),
         api.teamEvents(),
+        api.teamTriggers().catch(() => [] as TriggerEvent[]),
       ])
       setSnapshot(snapshotData)
       setTasks(tasksData)
       setEvents(eventsData)
+      setTriggers(triggersData)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load team workspace.')
@@ -134,7 +253,7 @@ export function Team() {
     return () => { cancelled = true }
   }, [expandedTaskID])
 
-  const runningTasks = useMemo(() => tasks.filter((t) => t.status === 'running').length, [tasks])
+  const runningTasks = useMemo(() => tasks.filter((t) => t.status === 'working' || t.status === 'running').length, [tasks])
   const blockedItems = snapshot?.blockedItems ?? []
   const suggestedActions = snapshot?.suggestedActions ?? []
 
@@ -175,37 +294,167 @@ export function Team() {
     })
   }
 
+  const applyTemplate = async (template: AgentTemplate) => {
+    const payload: Partial<TeamAgent> = {
+      name: template.name,
+      role: template.role,
+      mission: template.mission,
+      style: template.style,
+      allowedSkills: template.allowedSkills,
+      autonomy: template.autonomy,
+      enabled: true,
+    }
+    try {
+      await api.createTeamAgent(payload)
+      toast.success(`${template.name} agent created`)
+      setShowTemplateModal(false)
+      await load({ silent: true })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to create agent')
+    }
+  }
+
+  const submitAssignTask = async () => {
+    if (!assignAgentID || !assignTask.trim() || submittingAssign) return
+    setSubmittingAssign(true)
+    try {
+      const payload: TeamAssignPayload = {
+        agentID: assignAgentID,
+        task: assignTask.trim(),
+        goal: assignGoal.trim() || undefined,
+      }
+      await api.assignTeamTask(payload)
+      toast.success('Task assigned')
+      setAssignAgentID(null)
+      setAssignTaskText('')
+      setAssignGoal('')
+      await load({ silent: true })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to assign task')
+    } finally {
+      setSubmittingAssign(false)
+    }
+  }
+
+  const confirmDeleteAgent = async () => {
+    if (!agentPendingDelete) return
+    const agent = agentPendingDelete
+    const deleteKey = `delete:${agent.id}`
+    setActing((prev) => ({ ...prev, [deleteKey]: true }))
+    try {
+      await api.deleteTeamAgent(agent.id)
+      toast.success(`${agent.name} deleted`)
+      setAgentPendingDelete(null)
+      if (expandedAgentID === agent.id) setExpandedAgentID(null)
+      if (assignAgentID === agent.id) {
+        setAssignAgentID(null)
+        setAssignTaskText('')
+        setAssignGoal('')
+      }
+      await load({ silent: true })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete agent')
+    } finally {
+      setActing((prev) => ({ ...prev, [deleteKey]: false }))
+    }
+  }
+
   if (loading) {
     return (
       <div class="screen">
-        <PageHeader title="Team HQ" subtitle="Stations, delegated tasks, and live AGENTS activity." />
+        <PageHeader title="Team HQ" subtitle="Manage agents, delegate tasks, and monitor team activity." />
         <PageSpinner />
       </div>
     )
   }
 
   return (
-    <div class="screen team-screen">
+    <div class={`screen team-screen${showTemplateModal ? ' team-screen-modal-open' : ''}`}>
       <PageHeader
         title="Team HQ"
-        subtitle="Operate Atlas and every configured AGENTS teammate from one station."
+        subtitle="Manage agents, delegate tasks, and monitor team activity."
         actions={(
           <div class="team-header-actions">
-            <button class="btn btn-sm" onClick={() => void load()} disabled={refreshing}>
-              {refreshing ? 'Refreshing…' : 'Refresh'}
-            </button>
-            <button
-              class="btn btn-primary btn-sm"
-              onClick={() => void runAction('sync', () => api.syncTeam(), 'AGENTS synced')}
-              disabled={!!acting.sync}
-            >
-              {acting.sync ? 'Syncing…' : 'Sync AGENTS'}
+            <button class="btn btn-primary btn-sm" onClick={() => setShowTemplateModal(true)}>
+              Add Agent
             </button>
           </div>
         )}
       />
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
+
+      {/* ── Template Picker Modal ──────────────────────────────────── */}
+      {showTemplateModal && (
+        <div class="team-modal-overlay" onClick={() => setShowTemplateModal(false)}>
+          <div class="team-modal" onClick={(e) => e.stopPropagation()}>
+            <div class="team-modal-header">
+              <div class="team-modal-title-wrap">
+                <div class="team-section-label">Template Library</div>
+                <h3>Add Agent from Template</h3>
+                <p class="team-modal-subtitle">Pick a starting point that feels native to Team HQ. You can refine the agent in AGENTS.md after creation.</p>
+              </div>
+              <button class="team-modal-close" onClick={() => setShowTemplateModal(false)} aria-label="Close add agent dialog">✕</button>
+            </div>
+            <div class="team-modal-body">
+              <aside class="team-template-picker">
+                <div class="team-section-label">Agents</div>
+                <div class="team-template-picker-list">
+                  {AGENT_TEMPLATES.map((tpl) => {
+                    const active = tpl.name === selectedTemplate?.name
+                    return (
+                      <button
+                        key={tpl.name}
+                        class={`team-template-picker-item${active ? ' active' : ''}`}
+                        onClick={() => setSelectedTemplateName(tpl.name)}
+                      >
+                        <div class="team-template-picker-name">{tpl.name}</div>
+                        <div class="team-template-picker-role">{tpl.role}</div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </aside>
+              <div class="team-template-detail">
+                {selectedTemplate && (
+                  <>
+                    <div class="team-template-card">
+                      <div class="team-template-card-top">
+                        <div>
+                          <div class="team-template-name">{selectedTemplate.name}</div>
+                          <div class="team-template-role">{selectedTemplate.role}</div>
+                        </div>
+                        <span class="team-template-cta">Selected</span>
+                      </div>
+                      <p class="team-template-mission">{selectedTemplate.mission}</p>
+                      <div class="team-template-style">{selectedTemplate.style}</div>
+                      <div class="team-template-footer">
+                        <span class="team-token team-token-muted">{formatAutonomy(selectedTemplate.autonomy)}</span>
+                        {selectedTemplate.allowedSkills.map((s) => (
+                          <span class="team-token" key={s}>{s}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <div class="team-modal-sidebar-card">
+                      <div class="team-section-label">Station Notes</div>
+                      <h4>What creation does</h4>
+                      <p>Atlas creates the team member and makes it immediately available in Team HQ.</p>
+                    </div>
+                  </>
+                )}
+              </div>
+              {selectedTemplate && (
+                <div class="team-template-action-row">
+                  <button class="btn" onClick={() => setShowTemplateModal(false)}>Cancel</button>
+                  <button class="btn btn-primary" onClick={() => void applyTemplate(selectedTemplate)}>
+                    Create {selectedTemplate.name}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Atlas Station ──────────────────────────────────────────── */}
       <div class="card team-atlas-card">
@@ -217,7 +466,7 @@ export function Team() {
               <span class="team-live-dot" title="Live — auto-refreshing" />
             </div>
             {snapshot?.atlas.status && !['online', 'idle'].includes(snapshot.atlas.status) && (
-              <span class={statusBadgeClass(snapshot.atlas.status)}>{snapshot.atlas.status}</span>
+              <span class={statusBadgeClass(snapshot.atlas.status)}>{formatLabel(snapshot.atlas.status)}</span>
             )}
           </div>
           <p>{snapshot?.atlas.role ?? 'Coordinator'}</p>
@@ -227,6 +476,12 @@ export function Team() {
           <TeamKPI label="Running" value={String(runningTasks)} tone={runningTasks > 0 ? 'blue' : undefined} />
           <TeamKPI label="Blocked" value={String(blockedItems.length)} tone={blockedItems.length > 0 ? 'amber' : undefined} />
           <TeamKPI label="Activity" value={String(events.length)} />
+          {(() => { const k = snapshot?.kpis; return k && (k.totalTasksCompleted + k.totalTasksFailed) > 0 })() && (
+            <>
+              <TeamKPI label="Tasks Done" value={String(snapshot?.kpis?.totalTasksCompleted ?? 0)} tone="blue" />
+              <TeamKPI label="Tool Calls" value={String(snapshot?.kpis?.totalToolCalls ?? 0)} />
+            </>
+          )}
         </div>
 
         {/* Suggested Actions — only rendered when non-empty */}
@@ -257,7 +512,8 @@ export function Team() {
               <div class="team-blocked-item" key={`${item.kind}:${item.id}`}>
                 <div>
                   <div class="team-action-title">{item.title}</div>
-                  <div class="team-action-meta">{item.kind} · {item.status}</div>
+                  <div class="team-action-meta">{item.kind} · {item.blockingKind || item.status}</div>
+                  {item.blockingDetail && <div class="team-action-meta">{item.blockingDetail}</div>}
                 </div>
                 <span class={statusBadgeClass(item.status)}>{item.status}</span>
               </div>
@@ -284,14 +540,14 @@ export function Team() {
                       <div class="team-agent-card-top">
                         <div>
                           <div class="team-agent-name">{agent.name}</div>
-                          <div class="team-agent-role">{agent.role}</div>
+                          <div class="team-agent-role">{formatLabel(agent.role)}</div>
                         </div>
-                        <span class={statusBadgeClass(agent.runtime.status)}>{agent.runtime.status}</span>
+                        <span class={statusBadgeClass(agent.runtime.status)}>{formatLabel(agent.runtime.status)}</span>
                       </div>
                       <p class="team-agent-mission">{agent.mission}</p>
                       <div class="team-agent-meta-row">
                         <span>{agent.enabled ? 'Enabled' : 'Disabled'}</span>
-                        <span>{agent.autonomy}</span>
+                        <span>{formatAutonomy(agent.autonomy)}</span>
                         <span>{formatRelative(agent.runtime.lastActiveAt ?? agent.runtime.updatedAt)}</span>
                       </div>
                       <div class="team-agent-card-footer">
@@ -318,6 +574,20 @@ export function Team() {
                           >
                             {agent.runtime.status === 'paused' ? 'Resume' : 'Pause'}
                           </button>
+                          <button
+                            class="btn btn-sm"
+                            disabled={!agent.enabled || agent.runtime.status === 'working' || agent.runtime.status === 'busy'}
+                            onClick={() => setAssignAgentID(assignAgentID === agent.id ? null : agent.id)}
+                          >
+                            Assign Task
+                          </button>
+                          <button
+                            class="btn btn-sm"
+                            disabled={!!acting[`delete:${agent.id}`] || agent.runtime.status === 'working' || agent.runtime.status === 'busy'}
+                            onClick={() => setAgentPendingDelete(agent)}
+                          >
+                            Delete
+                          </button>
                         </div>
                         <button
                           class="team-agent-details-btn"
@@ -329,6 +599,41 @@ export function Team() {
                       </div>
                     </div>
 
+                    {assignAgentID === agent.id && (
+                      <div class="team-assign-form">
+                        <div class="team-assign-form-title">Assign task to {agent.name}</div>
+                        <textarea
+                          class="team-assign-textarea"
+                          placeholder="Describe the task…"
+                          value={assignTask}
+                          onInput={(e) => setAssignTaskText((e.target as HTMLTextAreaElement).value)}
+                          rows={3}
+                        />
+                        <input
+                          class="team-assign-input"
+                          type="text"
+                          placeholder="Goal label (optional)"
+                          value={assignGoal}
+                          onInput={(e) => setAssignGoal((e.target as HTMLInputElement).value)}
+                        />
+                        <div class="team-assign-form-actions">
+                          <button
+                            class="btn btn-primary btn-sm"
+                            disabled={submittingAssign || !assignTask.trim()}
+                            onClick={() => void submitAssignTask()}
+                          >
+                            {submittingAssign ? 'Assigning…' : 'Assign'}
+                          </button>
+                          <button
+                            class="btn btn-sm"
+                            onClick={() => { setAssignAgentID(null); setAssignTaskText(''); setAssignGoal('') }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     {isExpanded && (
                       <div class="team-agent-drawer">
                         <div class="team-detail-stack">
@@ -337,6 +642,11 @@ export function Team() {
                             <p class="team-detail-copy">{agent.mission}</p>
                             {agent.style && <div class="team-detail-note">Style: {agent.style}</div>}
                             {agent.activation && <div class="team-detail-note">Activation: {agent.activation}</div>}
+                            {agent.providerType && (
+                              <div class="team-detail-note team-provider-badge">
+                                Provider: {agent.providerType}{agent.model ? ` · ${agent.model}` : ''}
+                              </div>
+                            )}
                           </div>
 
                           <div class="team-drawer-section">
@@ -366,7 +676,7 @@ export function Team() {
                               <div class="team-mini-list">
                                 {agentTasks.map((task) => (
                                   <div class="team-mini-task-row" key={task.taskID}>
-                                    <span class="team-mini-task-goal">{task.goal}</span>
+                                    <span class="team-mini-task-goal">{task.title || task.goal}</span>
                                     <span class={statusBadgeClass(task.status)}>{task.status}</span>
                                   </div>
                                 ))}
@@ -375,6 +685,44 @@ export function Team() {
                               <div class="team-empty-inline">No tasks for this agent yet.</div>
                             )}
                           </div>
+
+                          {agent.metrics && (
+                            <div class="team-drawer-section">
+                              <div class="team-drawer-section-label">Performance</div>
+                              <div class="team-metrics-row">
+                                <div class="team-metric-chip">
+                                  <div class="team-metric-value">{agent.metrics.tasksCompleted}</div>
+                                  <div class="team-metric-label">Completed</div>
+                                </div>
+                                <div class="team-metric-chip team-metric-chip-muted">
+                                  <div class="team-metric-value">{agent.metrics.tasksFailed}</div>
+                                  <div class="team-metric-label">Failed</div>
+                                </div>
+                                <div class="team-metric-chip">
+                                  <div class="team-metric-value">{agent.metrics.totalToolCalls}</div>
+                                  <div class="team-metric-label">Tool Calls</div>
+                                </div>
+                                {agent.metrics.lastActiveAt && (
+                                  <div class="team-metric-chip">
+                                    <div class="team-metric-value">{formatRelative(agent.metrics.lastActiveAt)}</div>
+                                    <div class="team-metric-label">Last Active</div>
+                                  </div>
+                                )}
+                              </div>
+                              {agent.metrics.successRate != null && (agent.metrics.tasksCompleted + agent.metrics.tasksFailed) >= 3 && (
+                                <div class="team-success-rate">
+                                  <span class="team-success-rate-label">Success rate</span>
+                                  <div class="team-success-rate-bar">
+                                    <div
+                                      class="team-success-rate-fill"
+                                      style={{ width: `${(agent.metrics.successRate * 100).toFixed(0)}%` }}
+                                    />
+                                  </div>
+                                  <span class="team-success-rate-pct">{(agent.metrics.successRate * 100).toFixed(0)}%</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}
@@ -385,7 +733,7 @@ export function Team() {
           ) : (
             <TeamEmptyState
               title="No agents configured"
-              body="Add your first teammate in AGENTS.md, sync the file, and their station will appear here."
+              body="Click Add Agent above to create your first teammate from a template."
             />
           )}
         </div>
@@ -402,7 +750,7 @@ export function Team() {
         <div class="team-panel-body">
           {tasks.length ? (
             <div class="team-task-list">
-              {tasks.map((task) => {
+              {tasks.slice(0, visibleTaskCount).map((task) => {
                 const isExpanded = expandedTaskID === task.taskID
                 const detail = isExpanded ? expandedTask : null
                 return (
@@ -412,7 +760,7 @@ export function Team() {
                       onClick={() => toggleTask(task.taskID)}
                     >
                       <div class="team-task-row-main">
-                        <div class="team-task-title">{task.goal}</div>
+                        <div class="team-task-title">{task.title || task.goal}</div>
                         <div class="team-task-meta">
                           {task.agentID} · {task.requestedBy} · {formatRelative(task.updatedAt)}
                         </div>
@@ -435,7 +783,7 @@ export function Team() {
                               <div class="team-task-error" style={{ marginTop: '8px' }}>{detail.errorMessage}</div>
                             )}
                           </div>
-                          {task.status === 'running' && (
+                          {(task.status === 'working' || task.status === 'running') && (
                             <button
                               class="btn btn-sm btn-danger"
                               onClick={() => void runAction(
@@ -448,30 +796,36 @@ export function Team() {
                               Cancel
                             </button>
                           )}
-                          {task.status === 'pending_approval' && (
-                            <div style={{ display: 'flex', gap: '8px' }}>
-                              <button
-                                class="btn btn-sm btn-primary"
-                                onClick={() => void runAction(
-                                  `task:${task.taskID}`,
-                                  () => api.approveTeamTask(task.taskID),
-                                  'Task approved',
-                                )}
-                                disabled={!!acting[`task:${task.taskID}`]}
-                              >
-                                Approve
-                              </button>
-                              <button
-                                class="btn btn-sm btn-danger"
-                                onClick={() => void runAction(
-                                  `task:${task.taskID}`,
-                                  () => api.rejectTeamTask(task.taskID),
-                                  'Task rejected',
-                                )}
-                                disabled={!!acting[`task:${task.taskID}`]}
-                              >
-                                Reject
-                              </button>
+                          {(task.status === 'needs_review' || task.status === 'pending_approval') && (
+                            <div class="team-approval-block">
+                              <div class="team-approval-context">
+                                <span class="team-approval-agent-badge">{task.agentID}</span>
+                                <span class="team-approval-label">is requesting approval to proceed</span>
+                              </div>
+                              <div style={{ display: 'flex', gap: '8px' }}>
+                                <button
+                                  class="btn btn-sm btn-primary"
+                                  onClick={() => void runAction(
+                                    `task:${task.taskID}`,
+                                    () => api.approveTeamTask(task.taskID),
+                                    'Task approved',
+                                  )}
+                                  disabled={!!acting[`task:${task.taskID}`]}
+                                >
+                                  Approve
+                                </button>
+                                <button
+                                  class="btn btn-sm btn-danger"
+                                  onClick={() => void runAction(
+                                    `task:${task.taskID}`,
+                                    () => api.rejectTeamTask(task.taskID),
+                                    'Task rejected',
+                                  )}
+                                  disabled={!!acting[`task:${task.taskID}`]}
+                                >
+                                  Reject
+                                </button>
+                              </div>
                             </div>
                           )}
                         </div>
@@ -508,6 +862,26 @@ export function Team() {
                   </div>
                 )
               })}
+              {(visibleTaskCount < tasks.length || visibleTaskCount > TASK_PAGE_SIZE) && (
+                <div class="team-event-pagination">
+                  {visibleTaskCount < tasks.length ? (
+                    <button
+                      class="team-show-more-btn"
+                      onClick={() => setVisibleTaskCount((n) => n + TASK_PAGE_SIZE)}
+                    >
+                      Show {Math.min(TASK_PAGE_SIZE, tasks.length - visibleTaskCount)} more
+                    </button>
+                  ) : <span />}
+                  {visibleTaskCount > TASK_PAGE_SIZE && (
+                    <button
+                      class="team-show-more-btn"
+                      onClick={() => setVisibleTaskCount(TASK_PAGE_SIZE)}
+                    >
+                      Show less
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             <TeamEmptyInline
@@ -527,16 +901,36 @@ export function Team() {
           <div class="team-event-list">
             {events.length ? (
               <>
-                {events.slice(0, visibleEventCount).map((event) => (
-                  <div class={`team-event-item ${eventTone(event.eventType)}`} key={event.eventID}>
-                    <div class="team-event-title-row">
-                      <div class="team-event-title">{event.title}</div>
-                      <div class="team-event-time">{formatRelative(event.createdAt)}</div>
+                {events.slice(0, visibleEventCount).map((event) => {
+                  const detailExpanded = expandedEventDetails.has(event.eventID)
+                  const detailLong = !!event.detail && event.detail.length > 200
+                  return (
+                    <div class={`team-event-item ${eventTone(event.eventType)}`} key={event.eventID}>
+                      <div class="team-event-title-row">
+                        <div class="team-event-title">{event.title}</div>
+                        <div class="team-event-time">{formatRelative(event.createdAt)}</div>
+                      </div>
+                      <div class="team-event-meta">{humanEventType(event.eventType)}</div>
+                      {event.detail && (
+                        <>
+                          <div class={`team-event-detail${detailLong && !detailExpanded ? ' team-event-detail-clamped' : ''}`}>
+                            {event.detail}
+                          </div>
+                          {detailLong && (
+                            <button
+                              class="team-step-expand-btn"
+                              onClick={() => setExpandedEventDetails(prev => {
+                                const s = new Set(prev); s.has(event.eventID) ? s.delete(event.eventID) : s.add(event.eventID); return s
+                              })}
+                            >
+                              {detailExpanded ? 'Show less' : 'Show more'}
+                            </button>
+                          )}
+                        </>
+                      )}
                     </div>
-                    <div class="team-event-meta">{event.eventType}</div>
-                    {event.detail && <div class="team-event-detail">{event.detail}</div>}
-                  </div>
-                ))}
+                  )
+                })}
                 {(visibleEventCount < events.length || visibleEventCount > EVENT_PAGE_SIZE) && (
                   <div class="team-event-pagination">
                     {visibleEventCount < events.length ? (
@@ -567,6 +961,47 @@ export function Team() {
           </div>
         </div>
       </div>
+
+      {/* ── Autonomy Triggers ──────────────────────────────────────────── */}
+      {triggers.length > 0 && (
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Autonomy Triggers</span>
+            <span class="team-event-count-badge">{triggers.length} event{triggers.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div class="team-panel-body">
+            <div class="team-trigger-list">
+              {triggers.slice(0, 10).map((t) => (
+                <div class="team-trigger-item" key={t.triggerID}>
+                  <div class="team-trigger-row">
+                    <div class="team-trigger-info">
+                      <span class="team-trigger-type">{t.triggerType.replace(/\./g, ' › ')}</span>
+                      {t.agentID && <span class="team-trigger-agent">{t.agentID}</span>}
+                    </div>
+                    <div class="team-trigger-right">
+                      <span class={triggerStatusBadge(t.status)}>{t.status}</span>
+                      <span class="team-trigger-time">{formatRelative(t.createdAt)}</span>
+                    </div>
+                  </div>
+                  <div class="team-trigger-instruction">{t.instruction}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {agentPendingDelete && (
+        <ConfirmDialog
+          title={`Delete ${agentPendingDelete.name}?`}
+          body="This permanently removes the teammate from Team HQ. Use disable if you only want to stop using an agent without removing its definition."
+          confirmLabel="Delete Agent"
+          cancelLabel="Keep Agent"
+          danger
+          onConfirm={() => void confirmDeleteAgent()}
+          onCancel={() => setAgentPendingDelete(null)}
+        />
+      )}
     </div>
   )
 }
@@ -583,7 +1018,29 @@ function TeamKPI({ label, value, tone }: { label: string; value: string; tone?: 
 function TeamEmptyState({ title, body }: { title: string; body: string }) {
   return (
     <div class="team-empty-state">
-      <div class="team-empty-orb" />
+      {/*
+        Circle ring — faint orbit track + 5 explicit arc paths, one per adjacent edge.
+        Each path is a CW arc (sweep-flag=1) from one node to the next.
+        Nodes drawn last so they sit on top of the arc endpoints.
+      */}
+      <svg class="team-empty-icon" width="64" height="64" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+        <circle class="team-orbit-track" cx="32" cy="32" r="22" />
+        {/* Arc N1→N2 */}
+        <path class="team-edge-spark team-spark-1" d="M 32 10 A 22 22 0 0 1 53 25" />
+        {/* Arc N2→N3 */}
+        <path class="team-edge-spark team-spark-2" d="M 53 25 A 22 22 0 0 1 45 50" />
+        {/* Arc N3→N4 */}
+        <path class="team-edge-spark team-spark-3" d="M 45 50 A 22 22 0 0 1 19 50" />
+        {/* Arc N4→N5 */}
+        <path class="team-edge-spark team-spark-4" d="M 19 50 A 22 22 0 0 1 11 25" />
+        {/* Arc N5→N1 */}
+        <path class="team-edge-spark team-spark-5" d="M 11 25 A 22 22 0 0 1 32 10" />
+        <circle class="team-node-dot team-node-1" cx="32" cy="10" r="3.5" fill="currentColor" />
+        <circle class="team-node-dot team-node-2" cx="53" cy="25" r="3.5" fill="currentColor" />
+        <circle class="team-node-dot team-node-3" cx="45" cy="50" r="3.5" fill="currentColor" />
+        <circle class="team-node-dot team-node-4" cx="19" cy="50" r="3.5" fill="currentColor" />
+        <circle class="team-node-dot team-node-5" cx="11" cy="25" r="3.5" fill="currentColor" />
+      </svg>
       <h3>{title}</h3>
       <p>{body}</p>
     </div>

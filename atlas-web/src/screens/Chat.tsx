@@ -681,8 +681,8 @@ function InlineApprovalCard({ toolName, args, loading, onApprove, onDeny }: {
 
   return (
     <div class="chat-approval-card">
-      <div class="chat-approval-card-header">
-        <svg class="chat-approval-card-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+      <div class="chat-approval-card-row">
+        <svg class="chat-approval-card-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="8" cy="8" r="6.5" />
           <path d="M8 5v3.5l2 1.5" />
         </svg>
@@ -690,38 +690,21 @@ function InlineApprovalCard({ toolName, args, loading, onApprove, onDeny }: {
           <span class="chat-approval-card-title">Approval required</span>
           <span class="chat-approval-card-tool">{humanizeToolName(toolName)}</span>
         </div>
-        {hasArgs && (
-          <button
-            class="chat-approval-card-expand"
-            onClick={() => setExpanded(e => !e)}
-            title={expanded ? 'Collapse' : 'Show arguments'}
-          >
-            {expanded ? 'Hide' : 'Details'}
+        <div class="chat-approval-card-controls">
+          {hasArgs && (
+            <button class="btn btn-sm chat-approval-details-btn" onClick={() => setExpanded(e => !e)}>
+              {expanded ? 'Hide' : 'Details'}
+            </button>
+          )}
+          <button class="btn btn-sm chat-approval-deny-btn" onClick={onDeny} disabled={loading}>Deny</button>
+          <button class="btn btn-sm chat-approval-approve-btn" onClick={onApprove} disabled={loading}>
+            {loading ? 'Waiting…' : 'Approve'}
           </button>
-        )}
+        </div>
       </div>
       {hasArgs && expanded && (
         <pre class="chat-approval-card-args">{argsDisplay}</pre>
       )}
-      {hasArgs && !expanded && (
-        <p class="chat-approval-card-args-preview">{argsDisplay}</p>
-      )}
-      <div class="chat-approval-card-actions">
-        <button
-          class="btn btn-sm chat-approval-deny-btn"
-          onClick={onDeny}
-          disabled={loading}
-        >
-          Deny
-        </button>
-        <button
-          class="btn btn-sm chat-approval-approve-btn"
-          onClick={onApprove}
-          disabled={loading}
-        >
-          {loading ? 'Waiting…' : 'Approve'}
-        </button>
-      </div>
     </div>
   )
 }
@@ -2012,21 +1995,21 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
         ? (
           <span
             title="Checking model availability"
-            style={{ display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', marginLeft: '8px', background: 'var(--text-3)', opacity: 0.75 }}
+            style={{ display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', marginLeft: '8px', background: 'var(--text-3)', opacity: 0.75, verticalAlign: 'middle' }}
           />
         )
         : cloudModelHealth?.status === 'ok'
           ? (
             <span
               title="Model available"
-              style={{ display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', marginLeft: '8px', background: 'var(--green, #22c55e)' }}
+              style={{ display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', marginLeft: '8px', background: 'var(--green, #22c55e)', verticalAlign: 'middle' }}
             />
           )
           : cloudModelHealth && cloudModelHealth.status !== 'unknown'
             ? (
               <span
                 title={cloudModelHealth.message || 'Model unavailable'}
-                style={{ display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', marginLeft: '8px', background: 'var(--red, #ef4444)' }}
+                style={{ display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', marginLeft: '8px', background: 'var(--red, #ef4444)', verticalAlign: 'middle' }}
               />
             )
             : null)

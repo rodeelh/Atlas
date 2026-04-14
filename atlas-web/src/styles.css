@@ -2369,25 +2369,20 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 }
 
 .chat-avatar-minimal-dot {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 999px;
   background: currentColor;
-  animation: avatar-dot-pulse 2.4s ease-in-out infinite;
-}
-
-@keyframes avatar-dot-pulse {
-  0%, 100% { opacity: 0.92; transform: scale(1); }
-  50%       { opacity: 0.35; transform: scale(0.72); }
+  opacity: 0.45;
 }
 
 .chat-avatar-assistant {
-  background: color-mix(in srgb, var(--avatar-ai-bg) 50%, transparent);
-  backdrop-filter: blur(20px) saturate(1.6);
-  -webkit-backdrop-filter: blur(20px) saturate(1.6);
-  border: 1px solid color-mix(in srgb, var(--avatar-ai-border) 50%, transparent);
+  background: color-mix(in srgb, var(--bubble-ai-bg) 50%, transparent);
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  border: 1px solid color-mix(in srgb, var(--bubble-ai-border) 45%, transparent);
   color: var(--avatar-ai-fg);
-  box-shadow: var(--shadow-avatar),
+  box-shadow: var(--shadow-bubble-ai),
               inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
 }
 
@@ -2413,12 +2408,12 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 }
 
 .chat-avatar-user {
-  background: color-mix(in srgb, var(--avatar-user-bg) 55%, transparent);
-  backdrop-filter: blur(20px) saturate(1.6);
-  -webkit-backdrop-filter: blur(20px) saturate(1.6);
-  border: 1px solid color-mix(in srgb, var(--bubble-user-border) 50%, transparent);
+  background: color-mix(in srgb, var(--bubble-user-bg) 55%, transparent);
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  border: 1px solid color-mix(in srgb, var(--bubble-user-border) 45%, transparent);
   color: var(--avatar-user-fg);
-  box-shadow: var(--shadow-avatar),
+  box-shadow: var(--shadow-bubble-user),
               inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
 }
 
@@ -2495,17 +2490,53 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   background: color-mix(in srgb, var(--bubble-user-bg) 28%, transparent);
 }
 
-/* Flat style */
+/* Outline style */
 [data-chat-bubble-style="flat"] .chat-message-group.assistant .chat-bubble,
 [data-chat-bubble-style="flat"] .chat-message-group.user .chat-bubble {
   background: transparent;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  box-shadow: none;
+  color: var(--text);
+}
+
+/* ─── Avatar follows bubble style ──────────────────────── */
+
+/* Ghost (Flat) — remove chrome, keep a soft tint */
+[data-chat-bubble-style="ghost"] .chat-avatar-assistant,
+[data-chat-bubble-style="ghost"] .chat-avatar-user {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border: none;
   box-shadow: none;
-  padding: 0;
-  border-radius: 0;
-  color: var(--text);
+}
+[data-chat-bubble-style="ghost"] .chat-avatar-assistant {
+  background: color-mix(in srgb, var(--bubble-ai-bg) 18%, transparent);
+}
+[data-chat-bubble-style="ghost"] .chat-avatar-user {
+  background: color-mix(in srgb, var(--bubble-user-bg) 20%, transparent);
+  color: var(--accent);
+}
+[data-theme="dark"][data-chat-bubble-style="ghost"] .chat-avatar-assistant {
+  background: rgba(255, 255, 255, 0.07);
+}
+[data-theme="dark"][data-chat-bubble-style="ghost"] .chat-avatar-user {
+  background: color-mix(in srgb, var(--bubble-user-bg) 28%, transparent);
+  color: var(--accent);
+}
+
+/* Outline (None) — transparent with subtle border */
+[data-chat-bubble-style="flat"] .chat-avatar-assistant,
+[data-chat-bubble-style="flat"] .chat-avatar-user {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  box-shadow: none;
+}
+[data-chat-bubble-style="flat"] .chat-avatar-user {
+  color: var(--accent);
 }
 
 /* ─── Bubble wrap + message actions ─────────────────────── */
@@ -4731,11 +4762,34 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 [data-preview-bubble-style="flat"] .appearance-preview-bubble-ai,
 [data-preview-bubble-style="flat"] .appearance-preview-bubble-user {
   background: transparent;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  box-shadow: none;
+  color: var(--text);
+}
+
+/* Preview — avatar follows bubble style */
+
+[data-preview-bubble-style="ghost"] .appearance-preview-avatar-ai,
+[data-preview-bubble-style="ghost"] .appearance-preview-avatar-user {
   border: none;
   box-shadow: none;
-  padding: 0;
-  border-radius: 0;
-  color: var(--text);
+}
+[data-preview-bubble-style="ghost"] .appearance-preview-avatar-ai {
+  background: color-mix(in srgb, var(--surface-2) 50%, transparent);
+}
+[data-preview-bubble-style="ghost"] .appearance-preview-avatar-user {
+  background: color-mix(in srgb, var(--appearance-accent) 18%, transparent);
+  color: var(--appearance-accent);
+}
+
+[data-preview-bubble-style="flat"] .appearance-preview-avatar-ai,
+[data-preview-bubble-style="flat"] .appearance-preview-avatar-user {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  box-shadow: none;
+}
+[data-preview-bubble-style="flat"] .appearance-preview-avatar-user {
+  color: var(--appearance-accent);
 }
 
 .appearance-control-grid {
@@ -11319,4 +11373,122 @@ select.field-input {
 
 .team-approval-label {
   color: var(--text-secondary);
+}
+
+/* ── Local Auth Gate ─────────────────────────────────────────────────────── */
+
+.local-auth-gate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+.local-auth-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  max-width: 360px;
+  padding: 40px 32px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+}
+
+.local-auth-logo {
+  margin-bottom: 4px;
+}
+
+.local-auth-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+
+.local-auth-subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  text-align: center;
+  margin: 0;
+}
+
+.local-auth-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.local-auth-input:focus {
+  border-color: var(--accent);
+}
+
+.local-auth-btn {
+  width: 100%;
+  padding: 11px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: opacity 0.15s;
+}
+
+.local-auth-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.local-auth-btn.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.local-auth-btn.primary:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.local-auth-btn.secondary {
+  background: var(--surface-raised, var(--surface));
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.local-auth-btn.secondary:hover:not(:disabled) {
+  background: var(--surface-hover, var(--border));
+}
+
+.local-auth-btn.text {
+  background: none;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.local-auth-btn.text:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.local-auth-error {
+  font-size: 13px;
+  color: var(--error, #e05252);
+  text-align: center;
+  margin: 0;
+}
+
+.local-auth-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
 }

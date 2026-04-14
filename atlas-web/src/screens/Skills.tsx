@@ -77,7 +77,7 @@ const POLICY_LABELS: Record<string, string> = {
 type SkillGroupKey = 'agent' | 'capabilities' | 'system' | 'custom'
 
 const SKILL_GROUPS: Array<{ key: SkillGroupKey; label: string; sub: string }> = [
-  { key: 'agent',        label: 'Agent Control',     sub: 'Automation and workflow controls exposed to Atlas' },
+  { key: 'agent',        label: 'Agent Control',     sub: 'Automation, workflow, and agent controls exposed to Atlas' },
   { key: 'capabilities', label: 'Capabilities',      sub: 'Information, research, and creative tools' },
   { key: 'system',       label: 'System Access',     sub: 'Local files, apps, browser, and device controls' },
   { key: 'custom',       label: 'Custom Extensions', sub: 'User-installed and generated skill extensions' },
@@ -88,7 +88,7 @@ function classifySkill(skill: SkillRecord): SkillGroupKey | 'hidden' {
   if (!isUserVisible || id === 'websearch-api') return 'hidden'
   if (source === 'custom' || source === 'forge') return 'custom'
   if (id === 'gremlin-management') return 'hidden'
-  if (id === 'automation-control' || id === 'workflow-control') return 'agent'
+  if (id === 'automation-control' || id === 'workflow-control' || id === 'team-control') return 'agent'
   if (id === 'atlas.info') return 'hidden'
   if (category === 'system' || category === 'productivity' || category === 'automation') return 'system'
   return 'capabilities'
@@ -364,7 +364,7 @@ export function Skills() {
                           <span class="skill-action-name">{action.name}</span>
                           {permissionBadge(action.permissionLevel)}
                         </div>
-                        <div class="skill-action-id">{action.id}</div>
+                        <div class="skill-action-id">{action.publicID ?? action.id}</div>
                         <div class="skill-action-desc">{action.description ?? 'No description provided.'}</div>
                       </div>
                       <div class="skill-action-policy">

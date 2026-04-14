@@ -285,6 +285,32 @@ export function Settings() {
         )}
       </SettingsGroup>
 
+      <SettingsGroup title="Behavior">
+        <SettingsRow label="Action safety" sublabel="When Atlas should stop and ask before taking action">
+          <select
+            class="input"
+            value={draft.actionSafetyMode}
+            onChange={(e) => update('actionSafetyMode', (e.target as HTMLSelectElement).value)}
+          >
+            <option value="always_ask_before_actions">Ask every time</option>
+            <option value="ask_only_for_risky_actions">Ask for risky actions</option>
+            <option value="more_autonomous">Auto-approve actions</option>
+          </select>
+        </SettingsRow>
+        <SettingsRow label="Memory" sublabel="Extract and persist facts from conversations" mobileSplit>
+          <ToggleField checked={draft.memoryEnabled} onChange={(v) => update('memoryEnabled', v)} />
+        </SettingsRow>
+        {draft.memoryEnabled && <SettingsRow label="Memories per turn" sublabel="How many recalled facts are injected as context per request" hint="Higher values give Atlas more long-term context but use more of the model's token budget.">
+          <select class="input" value={draft.maxRetrievedMemoriesPerTurn} onChange={(e) => update('maxRetrievedMemoriesPerTurn', Number((e.target as HTMLSelectElement).value))}>
+            <option value={0}>0 — disabled</option>
+            <option value={2}>2 — minimal</option>
+            <option value={4}>4 — default</option>
+            <option value={6}>6 — more context</option>
+            <option value={10}>10 — maximum</option>
+          </select>
+        </SettingsRow>}
+      </SettingsGroup>
+
       <SettingsGroup title="Local Access">
         <LocalAccessSection />
       </SettingsGroup>
@@ -320,32 +346,6 @@ export function Settings() {
             }
           }}
         />
-      </SettingsGroup>
-
-      <SettingsGroup title="Behavior">
-        <SettingsRow label="Action safety" sublabel="When Atlas should stop and ask before taking action">
-          <select
-            class="input"
-            value={draft.actionSafetyMode}
-            onChange={(e) => update('actionSafetyMode', (e.target as HTMLSelectElement).value)}
-          >
-            <option value="always_ask_before_actions">Ask every time</option>
-            <option value="ask_only_for_risky_actions">Ask for risky actions</option>
-            <option value="more_autonomous">Auto-approve actions</option>
-          </select>
-        </SettingsRow>
-        <SettingsRow label="Memory" sublabel="Extract and persist facts from conversations" mobileSplit>
-          <ToggleField checked={draft.memoryEnabled} onChange={(v) => update('memoryEnabled', v)} />
-        </SettingsRow>
-        {draft.memoryEnabled && <SettingsRow label="Memories per turn" sublabel="How many recalled facts are injected as context per request" hint="Higher values give Atlas more long-term context but use more of the model's token budget.">
-          <select class="input" value={draft.maxRetrievedMemoriesPerTurn} onChange={(e) => update('maxRetrievedMemoriesPerTurn', Number((e.target as HTMLSelectElement).value))}>
-            <option value={0}>0 — disabled</option>
-            <option value={2}>2 — minimal</option>
-<option value={4}>4 — default</option>
-            <option value={6}>6 — more context</option>
-            <option value={10}>10 — maximum</option>
-          </select>
-        </SettingsRow>}
       </SettingsGroup>
 
       <SettingsGroup title="Local Storage">
@@ -406,7 +406,7 @@ export function Settings() {
             type="number"
             min="1024"
             max="65535"
-            style={{ width: '100px' }}
+            style={{ width: '80px', textAlign: 'center' }}
             value={draft.runtimePort}
             onInput={(e) => update('runtimePort', parseInt((e.target as HTMLInputElement).value, 10) || draft.runtimePort)}
           />
@@ -416,7 +416,7 @@ export function Settings() {
           sublabel="End your current session and return to the sign-in screen"
           mobileSplit
         >
-          <button class="btn btn-sm" style={{ width: '100px' }} onClick={lockAtlas} disabled={locking}>
+          <button class="btn btn-sm" style={{ width: '80px' }} onClick={lockAtlas} disabled={locking}>
             {locking ? 'Locking…' : 'Lock'}
           </button>
         </SettingsRow>
@@ -427,7 +427,7 @@ export function Settings() {
             : 'Restart is only available from a local Atlas session on this Mac.'}
           mobileSplit
         >
-          <button class="btn btn-sm" style={{ width: '100px' }} onClick={restartAtlas} disabled={restartPhase === 'restarting' || !canRestartLocally}>
+          <button class="btn btn-sm" style={{ width: '80px' }} onClick={restartAtlas} disabled={restartPhase === 'restarting' || !canRestartLocally}>
             {restartPhase === 'restarting' ? 'Restarting…' : 'Restart'}
           </button>
         </SettingsRow>
@@ -692,13 +692,13 @@ function LocalAccessSection() {
           sublabel="Touch ID, Windows Hello, or hardware security keys registered for local access"
           mobileSplit
         >
-          <button class="btn btn-sm" disabled>+ Add</button>
+          <button class="btn btn-sm" style={{ width: '80px' }} disabled>+ Add</button>
         </SettingsRow>
         <SettingsRow label="Loading…" sublabel="" mobileSplit>
           <span />
         </SettingsRow>
         <SettingsRow label="PIN" sublabel="" mobileSplit>
-          <button class="btn btn-sm" disabled>Add PIN</button>
+          <button class="btn btn-sm" style={{ width: '80px' }} disabled>Add PIN</button>
         </SettingsRow>
       </>
     )
@@ -712,7 +712,7 @@ function LocalAccessSection() {
         sublabel="Touch ID, Windows Hello, or hardware security keys registered for local access"
         mobileSplit
       >
-        <button class="btn btn-sm" onClick={addKey} disabled={addingKey}>
+        <button class="btn btn-sm" style={{ width: '80px' }} onClick={addKey} disabled={addingKey}>
           {addingKey ? 'Registering…' : '+ Add'}
         </button>
       </SettingsRow>
@@ -746,6 +746,7 @@ function LocalAccessSection() {
           <SettingsRow key={c.id} label={c.name} sublabel={`Last used: ${relativeDate(c.lastUsedAt)}`} mobileSplit>
             <button
               class="btn btn-sm"
+              style={{ width: '80px' }}
               onClick={() => requestDeleteKey(c.id)}
               disabled={deletingId === c.id}
             >
@@ -763,7 +764,7 @@ function LocalAccessSection() {
           : 'Add a PIN as a fallback for local access when Touch ID is unavailable'}
         mobileSplit
       >
-        <button class="btn btn-sm" onClick={() => setPinDialogOpen(true)}>
+        <button class="btn btn-sm" style={{ width: '80px' }} onClick={() => setPinDialogOpen(true)}>
           {hasPIN ? 'Change' : 'Add PIN'}
         </button>
       </SettingsRow>

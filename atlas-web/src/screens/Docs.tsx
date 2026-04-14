@@ -758,7 +758,7 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
               >
                 github.com/rodeelh/Project-Atlas
               </a>
-              . All three components — <code>atlas-runtime</code>, <code>atlas-web</code>, and <code>atlas-tui</code> — live in the same monorepo.
+              . Both components — <code>atlas-runtime</code> and <code>atlas-web</code> — live in the same monorepo.
             </p>
           </DocsSection>
           <DocsSection title="Quick links">
@@ -773,7 +773,7 @@ function DocsPage({ pageID, onNavigate }: { pageID: DocsPageID; onNavigate: (pag
           </DocsSection>
           <DocsSection title="Reporting an issue">
             <p>
-              When filing a bug, include: macOS version, which component (runtime / web / TUI), steps to reproduce, and the relevant output from{' '}
+              When filing a bug, include: macOS version, which component (runtime / web), steps to reproduce, and the relevant output from{' '}
               <strong>Activity → Logs</strong> or <code>~/Library/Logs/Atlas/runtime.log</code>.
             </p>
           </DocsSection>

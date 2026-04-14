@@ -57,6 +57,7 @@ const ACCENT_PRESETS = [
   { color: '#C8A87A', label: 'Warm Sand' },
   { color: '#C89070', label: 'Terracotta' },
   { color: '#C88B82', label: 'Dusty Rose' },
+  { color: '#00FF99', label: 'Operator' },
 ]
 
 const densities: { id: DensityMode; label: string }[] = [
@@ -90,9 +91,9 @@ const avatarStyles: { id: ChatAvatarStyle; label: string }[] = [
 ]
 
 const bubbleStyles: { id: ChatBubbleStyle; label: string }[] = [
-  { id: 'bubbles', label: 'Bubbles' },
-  { id: 'ghost',   label: 'Default' },
-  { id: 'flat',    label: 'Flat'    },
+  { id: 'bubbles', label: 'Filled'  },
+  { id: 'ghost',   label: 'Flat'    },
+  { id: 'flat',    label: 'Outline' },
 ]
 
 const widths: { id: ChatWidth; label: string }[] = [
