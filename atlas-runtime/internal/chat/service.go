@@ -110,7 +110,12 @@ type conversationSummary struct {
 
 // summaryTTL is how long a cached conversation summary stays valid.
 const summaryTTL = 10 * time.Minute
-const compactHistoryChars = 1200
+// compactHistoryChars caps how much prior conversation is replayed in compact
+// mode. 1200 was far too low — a single PDF summary easily exceeds it, causing
+// the agent to lose all document context on the very next turn. 8000 chars
+// (~2000 words) is enough to cover a thorough document analysis while still
+// trimming genuinely long histories.
+const compactHistoryChars = 8000
 const compactHistoryMessages = 4
 
 type Service struct {
@@ -1408,6 +1413,19 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 			historyChars += len(history[i].Content)
 			if historyChars > compactHistoryChars {
 				replayStart = i + 1
+				break
+			}
+		}
+		// Hard floor: always keep at least the last complete user+assistant
+		// exchange so the agent never loses turn-over-turn continuity.
+		// Without this, a long response (e.g. a document summary) could exceed
+		// compactHistoryChars and be stripped on the very next message, leaving
+		// the agent with only a 90-char truncated note and no document content.
+		for i := len(history) - 1; i >= start; i-- {
+			if history[i].Role == "user" && history[i].ID != userMsgID {
+				if replayStart > i {
+					replayStart = i
+				}
 				break
 			}
 		}
