@@ -746,6 +746,7 @@ export interface WorkflowRun {
 
 export interface ConversationSummary {
   id: string;
+  title?: string;
   messageCount: number;
   firstUserMessage?: string;
   lastAssistantMessage?: string;
@@ -760,6 +761,7 @@ export interface ConversationMessage {
   role: "user" | "assistant" | "system" | "tool";
   content: string;
   timestamp: string;
+  isPinned?: boolean;
 }
 
 export interface ConversationDetail extends ConversationSummary {

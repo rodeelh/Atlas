@@ -56,7 +56,9 @@ func (d *ChatDomain) Register(r chi.Router) {
 	r.Get("/conversations", d.listConversations)
 	r.Get("/conversations/search", d.searchConversations)
 	r.Get("/conversations/{id}", d.getConversation)
+	r.Patch("/conversations/{id}", d.patchConversation)
 	r.Delete("/conversations", d.deleteAllConversations)
+	r.Patch("/messages/{id}/pin", d.patchMessagePin)
 
 	// Memories — natively served from SQLite.
 	r.Get("/memories", d.listMemories)
@@ -181,6 +183,7 @@ func (d *ChatDomain) listConversations(w http.ResponseWriter, r *http.Request) {
 
 	type convSummary struct {
 		ID                   string  `json:"id"`
+		Title                string  `json:"title"`
 		CreatedAt            string  `json:"createdAt"`
 		UpdatedAt            string  `json:"updatedAt"`
 		Platform             string  `json:"platform"`
@@ -193,6 +196,7 @@ func (d *ChatDomain) listConversations(w http.ResponseWriter, r *http.Request) {
 	for i, r := range rows {
 		out[i] = convSummary{
 			ID:                   r.ID,
+			Title:                r.Title,
 			CreatedAt:            r.CreatedAt,
 			UpdatedAt:            r.UpdatedAt,
 			Platform:             r.Platform,
@@ -226,6 +230,7 @@ func (d *ChatDomain) searchConversations(w http.ResponseWriter, r *http.Request)
 
 	type convSummary struct {
 		ID                   string  `json:"id"`
+		Title                string  `json:"title"`
 		CreatedAt            string  `json:"createdAt"`
 		UpdatedAt            string  `json:"updatedAt"`
 		Platform             string  `json:"platform"`
@@ -238,6 +243,7 @@ func (d *ChatDomain) searchConversations(w http.ResponseWriter, r *http.Request)
 	for i, r := range rows {
 		out[i] = convSummary{
 			ID:                   r.ID,
+			Title:                r.Title,
 			CreatedAt:            r.CreatedAt,
 			UpdatedAt:            r.UpdatedAt,
 			Platform:             r.Platform,
@@ -282,10 +288,11 @@ func (d *ChatDomain) getConversation(w http.ResponseWriter, r *http.Request) {
 		Role      string `json:"role"`
 		Content   string `json:"content"`
 		Timestamp string `json:"timestamp"`
+		IsPinned  bool   `json:"isPinned,omitempty"`
 	}
 	items := make([]msgItem, len(msgs))
 	for i, m := range msgs {
-		items[i] = msgItem{ID: m.ID, Role: m.Role, Content: m.Content, Timestamp: m.Timestamp}
+		items[i] = msgItem{ID: m.ID, Role: m.Role, Content: m.Content, Timestamp: m.Timestamp, IsPinned: m.IsPinned}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -294,6 +301,39 @@ func (d *ChatDomain) getConversation(w http.ResponseWriter, r *http.Request) {
 		"updatedAt": conv.UpdatedAt,
 		"messages":  items,
 	})
+}
+
+// patchConversation handles PATCH /conversations/{id} — rename a conversation.
+func (d *ChatDomain) patchConversation(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body struct {
+		Title string `json:"title"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	title := strings.TrimSpace(body.Title)
+	if err := d.db.RenameConversation(id, title); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": id, "title": title})
+}
+
+// patchMessagePin handles PATCH /messages/{id}/pin — pin or unpin a message.
+func (d *ChatDomain) patchMessagePin(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body struct {
+		Pinned bool `json:"pinned"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if err := d.db.PinMessage(id, body.Pinned); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ── Memories ──────────────────────────────────────────────────────────────────

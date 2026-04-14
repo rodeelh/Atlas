@@ -28,6 +28,10 @@ marked.use({
       const rawLang   = lang?.trim() || ''
       const label     = (rawLang || 'code').toUpperCase()
       const copyIcon  = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"/></svg>`
+      const terminalLangs = new Set(['bash', 'sh', 'shell', 'zsh', 'fish', 'cmd', 'bat', 'powershell', 'ps1'])
+      const isTerminal = terminalLangs.has(rawLang.toLowerCase())
+      const runIcon   = `<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 2.5l10 5.5-10 5.5V2.5z"/></svg>`
+      const runBtn    = isTerminal ? `<button class="code-run-btn" type="button" title="Run in terminal" aria-label="Run in terminal" data-run-code="${encodeURIComponent(text)}">${runIcon} Run</button>` : ''
       let highlighted: string
       try {
         highlighted = rawLang && hljs.getLanguage(rawLang)
@@ -36,7 +40,7 @@ marked.use({
       } catch {
         highlighted = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       }
-      return `<div class="code-block"><div class="code-block-header"><span class="code-block-lang">${label}</span><button class="code-copy-btn" type="button" title="Copy code" aria-label="Copy code">${copyIcon}</button></div><pre>${highlighted}</pre></div>`
+      return `<div class="code-block"><div class="code-block-header"><span class="code-block-lang">${label}</span><div class="code-block-actions">${runBtn}<button class="code-copy-btn" type="button" title="Copy code" aria-label="Copy code">${copyIcon}</button></div></div><pre>${highlighted}</pre></div>`
     }
   }
 })
@@ -56,6 +60,7 @@ interface Message {
   content: string
   isTyping?: boolean
   createdAt?: number
+  isPinned?: boolean
   /** URL → preview map so each card can be anchored to its source URL. */
   linkPreviews?: Record<string, LinkPreview>
   /** Files produced by tools during this assistant turn. */
@@ -184,7 +189,7 @@ function saveMessages(msgs: Message[]) {
   try {
     const toSave = msgs
       .filter(m => m.content.length > 0 && !m.isTyping)
-      .map(({ id, role, content, createdAt, fileAttachments }) => ({ id, role, content, createdAt, fileAttachments }))
+      .map(({ id, role, content, createdAt, fileAttachments, isPinned }) => ({ id, role, content, createdAt, fileAttachments, isPinned }))
     localStorage.setItem(STORAGE_MSG_KEY, JSON.stringify(toSave))
   } catch {
     // QuotaExceededError — storage full; skip silently
@@ -766,6 +771,15 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
   const copyFeedbackTimer                       = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [revealedCopyId, setRevealedCopyId]     = useState<string | null>(null)
   const [promptIndex, setPromptIndex]           = useState(0)
+  // Drag-and-drop
+  const [dragOver, setDragOver]                 = useState(false)
+  const dragCounterRef                          = useRef(0)
+  // Proactive message composing indicator (background SSE turn in progress)
+  const [proactiveComposing, setProactiveComposing] = useState(false)
+  // Rename state — tracks which history item is being renamed
+  const [renamingConvId, setRenamingConvId]     = useState<string | null>(null)
+  const [renameValue, setRenameValue]           = useState('')
+  const renameInputRef                          = useRef<HTMLInputElement>(null)
 
   const PROMPTS = [
     'Help me draft an email',
@@ -799,6 +813,23 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8l4 4 6-7"/></svg>`
       setTimeout(() => { if (btn) btn.innerHTML = origHTML }, 2000)
     }).catch(() => {})
+  }, [])
+
+  // Code block "Run in terminal" — fills composer with the command pre-filled.
+  // The user reviews and sends; we never auto-fire shell commands.
+  const handleRunCode = useCallback((e: MouseEvent) => {
+    const btn = (e.target as HTMLElement).closest('.code-run-btn') as HTMLButtonElement | null
+    if (!btn) return
+    e.stopPropagation()
+    const encoded = btn.getAttribute('data-run-code') ?? ''
+    try {
+      const code = decodeURIComponent(encoded)
+      setInput(`Run this command in the terminal:\n\`\`\`bash\n${code}\n\`\`\``)
+      setTimeout(() => {
+        textareaRef.current?.focus()
+        resizeTextarea()
+      }, 0)
+    } catch { /* ignore */ }
   }, [])
 
   const bottomRef      = useRef<HTMLDivElement>(null)
@@ -937,6 +968,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
         try {
           const data = JSON.parse(evt.data) as ChatStreamEvent
           if (data.type === 'assistant_started') {
+            setProactiveComposing(false)
             const msg: Message = { id: uuid(), role: 'assistant', content: '', isTyping: true, createdAt: Date.now() }
             activeMsgId.current = msg.id
             setMessages(prev => [...prev, msg])
@@ -952,6 +984,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
               m.id === activeMsgId.current ? { ...m, isTyping: false } : m
             ))
             activeMsgId.current = null
+            setProactiveComposing(false)
           } else if (data.type === 'file_generated' && data.fileToken && data.filename) {
             const attachment: FileAttachment = {
               filename:  data.filename,
@@ -1005,8 +1038,8 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
         // This avoids clobbering an active in-progress turn or a fresh session.
         setMessages(prev => {
           if (serverMsgs.length > prev.filter(m => !m.isTyping).length) {
-            return serverMsgs.map((m: { id: string; role: string; content: string }) => ({
-              id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
+            return serverMsgs.map((m: { id: string; role: string; content: string; isPinned?: boolean }) => ({
+              id: m.id, role: m.role as 'user' | 'assistant', content: m.content, isPinned: m.isPinned,
             }))
           }
           return prev
@@ -1254,7 +1287,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       const detail: ConversationDetail = await api.conversationDetail(id)
       const loaded: Message[] = detail.messages
         .filter(m => m.role === 'user' || m.role === 'assistant')
-        .map(m => ({ id: m.id, role: m.role as 'user' | 'assistant', content: m.content }))
+        .map(m => ({ id: m.id, role: m.role as 'user' | 'assistant', content: m.content, isPinned: m.isPinned }))
       setMessages(loaded)
     } catch (err) {
       setMessages([])
@@ -1272,6 +1305,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
           role: m.role as 'user' | 'assistant',
           content: m.content,
           createdAt: new Date(m.timestamp).getTime(),
+          isPinned: m.isPinned,
         }))
       setMessages(loaded)
       return loaded
@@ -1650,6 +1684,70 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     setAttachments(prev => prev.filter((_, i) => i !== index))
   }
 
+  // Reads a File into a MessageAttachment (base64).
+  const readFileAsAttachment = (file: File): Promise<MessageAttachment> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const dataURL = reader.result as string
+        const comma = dataURL.indexOf(',')
+        resolve({ filename: file.name, mimeType: file.type || 'application/octet-stream', data: comma >= 0 ? dataURL.slice(comma + 1) : dataURL })
+      }
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+
+  // ── Drag-and-drop (Feature 5) ─────────────────────────────────────────────────
+
+  const handleDragEnter = (e: DragEvent) => {
+    e.preventDefault()
+    dragCounterRef.current++
+    if (dragCounterRef.current === 1) setDragOver(true)
+  }
+  const handleDragLeave = (e: DragEvent) => {
+    e.preventDefault()
+    dragCounterRef.current--
+    if (dragCounterRef.current === 0) setDragOver(false)
+  }
+  const handleDragOver = (e: DragEvent) => { e.preventDefault() }
+  const handleDrop = async (e: DragEvent) => {
+    e.preventDefault()
+    dragCounterRef.current = 0
+    setDragOver(false)
+    const files = Array.from(e.dataTransfer?.files ?? []).filter(f =>
+      f.type.startsWith('image/') || f.type === 'application/pdf'
+    )
+    if (!files.length) return
+    const loaded = await Promise.all(files.map(readFileAsAttachment))
+    setAttachments(prev => [...prev, ...loaded])
+  }
+
+  // ── Paste (Feature 6) — images pasted from clipboard ──────────────────────────
+
+  const handlePaste = useCallback(async (e: ClipboardEvent) => {
+    const items = Array.from(e.clipboardData?.items ?? [])
+    const imageItems = items.filter(item => item.type.startsWith('image/'))
+    if (!imageItems.length) return
+    e.preventDefault()
+    const files = imageItems.map(item => item.getAsFile()).filter(Boolean) as File[]
+    const loaded = await Promise.all(files.map(readFileAsAttachment))
+    setAttachments(prev => [...prev, ...loaded])
+  }, [])
+
+  // ── Pin message (Feature 8) ───────────────────────────────────────────────────
+
+  const togglePin = useCallback(async (msgId: string, currentlyPinned: boolean) => {
+    const next = !currentlyPinned
+    // Optimistic update
+    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, isPinned: next } : m))
+    try {
+      await api.pinMessage(msgId, next)
+    } catch {
+      // Rollback on failure
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, isPinned: currentlyPinned } : m))
+    }
+  }, [])
+
   // ── Stop ───────────────────────────────────────────────────────────────────────
 
   const stopTurn = () => {
@@ -1970,6 +2068,30 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     }, 1800)
   }
 
+  // ── Rename conversation (Feature 2) ──────────────────────────────────────────
+
+  const startRename = (id: string, currentTitle: string, e: MouseEvent) => {
+    e.stopPropagation()
+    setRenamingConvId(id)
+    setRenameValue(currentTitle)
+    setTimeout(() => renameInputRef.current?.focus(), 30)
+  }
+
+  const commitRename = async () => {
+    if (!renamingConvId) return
+    const id = renamingConvId
+    const title = renameValue.trim()
+    setRenamingConvId(null)
+    // Optimistic update in the dropdown list
+    setHistorySummaries(prev => prev.map(s => s.id === id ? { ...s, title } : s))
+    try {
+      await api.renameConversation(id, title)
+    } catch {
+      // Reload list on failure
+      api.conversations(50, 0).then(setHistorySummaries).catch(() => {})
+    }
+  }
+
   const newConversation = () => {
     const id = uuid()
     localStorage.setItem(STORAGE_ID_KEY, id)
@@ -2093,11 +2215,13 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                         {historySummaries.map((s, i) => {
                           const diff = Date.now() - new Date(s.updatedAt).getTime()
                           const rel = diff < 60000 ? 'Just now' : diff < 3600000 ? `${Math.floor(diff / 60000)}m ago` : diff < 86400000 ? `${Math.floor(diff / 3600000)}h ago` : diff < 604800000 ? `${Math.floor(diff / 86400000)}d ago` : new Date(s.updatedAt).toLocaleDateString()
+                          const displayTitle = s.title || s.firstUserMessage || ''
+                          const isRenaming = renamingConvId === s.id
                           return (
                             <div
                               key={s.id}
                               class={`chat-history-item${i < historySummaries.length - 1 ? ' bordered' : ''}`}
-                              onClick={() => resumeConversation(s.id)}
+                              onClick={() => !isRenaming && resumeConversation(s.id)}
                             >
                               <div class="chat-history-item-meta">
                                 <div class="chat-history-item-left">
@@ -2106,11 +2230,46 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                                     <span class="chat-history-platform-badge">{s.platform}</span>
                                   )}
                                 </div>
-                                <span class="chat-history-item-count">{s.messageCount} msgs</span>
+                                <div class="chat-history-item-actions">
+                                  <span class="chat-history-item-count">{s.messageCount} msgs</span>
+                                  <button
+                                    class="chat-history-rename-btn"
+                                    onClick={(e) => startRename(s.id, s.title || '', e as MouseEvent)}
+                                    title="Rename conversation"
+                                    aria-label="Rename conversation"
+                                  >
+                                    <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                      <path d="M11 2l3 3-9 9H2v-3L11 2z"/>
+                                    </svg>
+                                  </button>
+                                </div>
                               </div>
-                              <div class="chat-history-item-title">
-                                {s.firstUserMessage || <em class="chat-history-item-empty">No messages</em>}
-                              </div>
+                              {isRenaming ? (
+                                <input
+                                  ref={renameInputRef}
+                                  class="chat-history-rename-input"
+                                  value={renameValue}
+                                  placeholder={s.firstUserMessage || 'Conversation name…'}
+                                  onInput={(e) => setRenameValue((e.target as HTMLInputElement).value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') { e.preventDefault(); commitRename() }
+                                    if (e.key === 'Escape') { setRenamingConvId(null) }
+                                    e.stopPropagation()
+                                  }}
+                                  onBlur={commitRename}
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              ) : (
+                                <div class="chat-history-item-title">
+                                  {displayTitle
+                                    ? <>{s.title && <span class="chat-history-item-title-label">{s.title}</span>}{!s.title && (s.firstUserMessage || <em class="chat-history-item-empty">No messages</em>)}</>
+                                    : <em class="chat-history-item-empty">No messages</em>
+                                  }
+                                </div>
+                              )}
+                              {s.title && s.lastAssistantMessage && (
+                                <div class="chat-history-item-snippet">{s.lastAssistantMessage.slice(0, 80)}{s.lastAssistantMessage.length > 80 ? '…' : ''}</div>
+                              )}
                             </div>
                           )
                         })}
@@ -2146,7 +2305,25 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       />
 
       {/* Messages */}
-      <div ref={messagesRef} class="chat-messages" onClick={handleCodeCopy as any}>
+      <div
+        ref={messagesRef}
+        class={`chat-messages${dragOver ? ' drag-over' : ''}`}
+        onClick={(e) => { handleCodeCopy(e as any); handleRunCode(e as any) }}
+        onDragEnter={handleDragEnter as any}
+        onDragLeave={handleDragLeave as any}
+        onDragOver={handleDragOver as any}
+        onDrop={handleDrop as any}
+      >
+        {dragOver && (
+          <div class="chat-drop-overlay">
+            <div class="chat-drop-overlay-content">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+              <span>Drop to attach</span>
+            </div>
+          </div>
+        )}
         <div class="chat-thread">
           {messages.length === 0 && (
             thoughtCount > 0 ? (
@@ -2204,7 +2381,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
             <div
               key={msg.id}
               data-msg-id={msg.id}
-              class={`chat-message-group ${msg.role}${msg.isTyping ? ' typing' : ''}${revealedCopyId === msg.id ? ' meta-visible' : ''}`}
+              class={`chat-message-group ${msg.role}${msg.isTyping ? ' typing' : ''}${revealedCopyId === msg.id ? ' meta-visible' : ''}${msg.isPinned ? ' pinned' : ''}`}
             >
               <div class="chat-message-row">
                 <div class={`chat-avatar chat-avatar-${msg.role}`}>
@@ -2267,6 +2444,18 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                           </button>
                         )
                       })()}
+                      <button
+                        class={`chat-meta-pin-btn${msg.isPinned ? ' pinned' : ''}`}
+                        onClick={(e) => { e.stopPropagation(); togglePin(msg.id, !!msg.isPinned) }}
+                        title={msg.isPinned ? 'Unpin message' : 'Pin message'}
+                        aria-label={msg.isPinned ? 'Unpin message' : 'Pin message'}
+                        aria-pressed={msg.isPinned ? 'true' : 'false'}
+                      >
+                        <svg width="11" height="11" viewBox="0 0 16 16" fill={msg.isPinned ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                          <path d="M9.5 2L14 6.5l-5 5-1-1-3 3-1.5-1.5 3-3-1-1L9.5 2z"/>
+                          <line x1="2" y1="14" x2="6" y2="10"/>
+                        </svg>
+                      </button>
                       {msg.createdAt && (
                         <span class="chat-timestamp">{formatTime(msg.createdAt)}</span>
                       )}
@@ -2304,6 +2493,14 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                 }
               }}
             />
+          )}
+
+          {/* Proactive composing indicator (Feature 11) */}
+          {proactiveComposing && !sending && (
+            <div class="proactive-composing-pill">
+              <span class="proactive-composing-dot" /><span class="proactive-composing-dot" /><span class="proactive-composing-dot" />
+              <span class="proactive-composing-label">Atlas has something to share</span>
+            </div>
           )}
 
           <ErrorBanner error={error} onDismiss={() => setError(null)} />
@@ -2355,6 +2552,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
               value={input}
               onInput={(e) => { setInput((e.target as HTMLTextAreaElement).value); resizeTextarea() }}
               onKeyDown={handleKeyDown}
+              onPaste={handlePaste as any}
               disabled={sending || speechListening}
               rows={1}
             />
