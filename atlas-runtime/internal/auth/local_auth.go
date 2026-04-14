@@ -81,12 +81,27 @@ type CredentialInfo struct {
 
 // NewLocalAuthService creates a LocalAuthService for the given runtime port.
 // port is used to derive the WebAuthn RP origins (http://localhost:<port>).
+// The RPID is "localhost", so any http://localhost:* origin is spec-valid.
+// We include the runtime port plus common development server ports (Vite, webpack,
+// CRA, etc.) so WebAuthn works without extra config when running the frontend
+// dev server alongside the daemon.
 func NewLocalAuthService(db *storage.DB, port int) (*LocalAuthService, error) {
 	origins := []string{
 		fmt.Sprintf("http://localhost:%d", port),
 		fmt.Sprintf("http://127.0.0.1:%d", port),
 		"http://localhost",
 		"http://127.0.0.1",
+		// Common frontend dev server ports.
+		"http://localhost:5173", // Vite default
+		"http://localhost:4173", // Vite preview
+		"http://localhost:3000", // Create React App / Next.js
+		"http://localhost:8080", // webpack-dev-server / many others
+		"http://localhost:8000", // Python/Django dev servers
+		"http://127.0.0.1:5173",
+		"http://127.0.0.1:4173",
+		"http://127.0.0.1:3000",
+		"http://127.0.0.1:8080",
+		"http://127.0.0.1:8000",
 	}
 
 	wauth, err := webauthn.New(&webauthn.Config{
