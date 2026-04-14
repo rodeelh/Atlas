@@ -95,10 +95,11 @@ button, input, select, textarea {
   --font-mono:    'JetBrains Mono', 'SF Mono', 'Menlo', 'Courier New', monospace;
 
   /* Interface controls — written by applyTheme(), defaults match 'default' preset */
-  --ui-radius:         12px;
-  --ui-surface-blur:   16px;
-  --ui-surface-alpha:  80%;
-  --ui-font:           'Inter', -apple-system, 'Helvetica Neue', sans-serif;
+  --ui-radius:           12px;
+  --ui-surface-blur:     16px;
+  --ui-surface-alpha:    80%;
+  --ui-backdrop-filter:  blur(16px) saturate(1.8);
+  --ui-font:             'Inter', -apple-system, 'Helvetica Neue', sans-serif;
 }
 
 /* ── Dark theme (default / current palette) ─────────────────── */
@@ -3830,8 +3831,8 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   align-items: center;
   justify-content: center;
   background: color-mix(in srgb, var(--bg) 68%, transparent);
-  backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
-  -webkit-backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
+  backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
+  -webkit-backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
   animation: restart-overlay-in 200ms ease both;
 }
 
@@ -3930,8 +3931,8 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   align-items: center;
   justify-content: center;
   background: color-mix(in srgb, var(--bg) 68%, transparent);
-  backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
-  -webkit-backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
+  backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
+  -webkit-backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
   animation: confirm-dialog-in 180ms ease both;
 }
 
@@ -6524,8 +6525,8 @@ input[type=number] { -moz-appearance: textfield; }
   position: fixed;
   inset: 0;
   background: color-mix(in srgb, var(--bg) 68%, transparent);
-  backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
-  -webkit-backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
+  backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
+  -webkit-backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -10796,8 +10797,8 @@ select.field-input {
   position: absolute;
   inset: 0;
   background: color-mix(in srgb, var(--bg) 68%, transparent);
-  backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
-  -webkit-backdrop-filter: blur(var(--ui-surface-blur)) saturate(1.8);
+  backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
+  -webkit-backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
   display: flex;
   align-items: center;
   justify-content: center;

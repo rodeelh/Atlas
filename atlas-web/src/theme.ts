@@ -12,10 +12,14 @@ export type ThemePreset = 'atlas' | 'studio' | 'terminal'
 export type DensityMode     = 'compact' | 'comfortable' | 'spacious'
 export type ChatFontSize    = 'small' | 'default' | 'large'
 export type ChatRadius      = 'sharp' | 'default' | 'rounded'
-export type ChatFont        = 'default' | 'mono' | 'serif'
+export type ChatFont        = 'default' | 'mono' | 'geist'
 export type ChatAvatarStyle = 'glyph' | 'initial' | 'minimal'
 export type ChatBubbleStyle = 'bubbles' | 'ghost' | 'flat'
 export type ChatWidth       = 'narrow' | 'default' | 'wide' | 'full'
+
+export type UIRadius = 'sharp' | 'default' | 'rounded'
+export type UIBlur   = 'none' | 'subtle' | 'glass'
+export type UIFont   = 'system' | 'mono' | 'geist'
 
 export interface ThemeConfig {
   preset:          ThemePreset
@@ -28,6 +32,9 @@ export interface ThemeConfig {
   chatAvatarStyle: ChatAvatarStyle
   chatBubbleStyle: ChatBubbleStyle
   chatWidth:       ChatWidth
+  uiRadius:        UIRadius
+  uiBlur:          UIBlur
+  uiFont:          UIFont
 }
 
 const STORAGE_KEY = 'atlas.theme'
@@ -217,6 +224,9 @@ export const DEFAULT_THEME: ThemeConfig = {
   chatAvatarStyle: 'glyph',
   chatBubbleStyle: 'ghost',
   chatWidth:       'default',
+  uiRadius:        'default',
+  uiBlur:          'glass',
+  uiFont:          'system',
 }
 
 // ── Persistence ──────────────────────────────────────────────
@@ -268,9 +278,27 @@ const RADIUS_TOKENS: Record<ChatRadius, Record<string, string>> = {
 }
 
 const FONT_TOKENS: Record<ChatFont, Record<string, string>> = {
-  default: { '--bubble-font': "'Inter', -apple-system, 'Helvetica Neue', sans-serif" },
+  default: { '--bubble-font': "'Inter', -apple-system, 'Helvetica Neue', sans-serif"           },
   mono:    { '--bubble-font': "'JetBrains Mono', 'SF Mono', 'Menlo', 'Courier New', monospace" },
-  serif:   { '--bubble-font': "'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, serif" },
+  geist:   { '--bubble-font': "'Geist', -apple-system, 'Helvetica Neue', sans-serif"           },
+}
+
+const UI_RADIUS_TOKENS: Record<UIRadius, Record<string, string>> = {
+  sharp:   { '--ui-radius': '0px'  },
+  default: { '--ui-radius': '10px' },
+  rounded: { '--ui-radius': '20px' },
+}
+
+const UI_BLUR_TOKENS: Record<UIBlur, Record<string, string>> = {
+  none:   { '--ui-surface-blur': '0px',  '--ui-surface-alpha': '100%', '--ui-backdrop-filter': 'none'                     },
+  subtle: { '--ui-surface-blur': '16px', '--ui-surface-alpha': '80%',  '--ui-backdrop-filter': 'blur(16px) saturate(1.8)' },
+  glass:  { '--ui-surface-blur': '32px', '--ui-surface-alpha': '50%',  '--ui-backdrop-filter': 'blur(32px) saturate(1.8)' },
+}
+
+const UI_FONT_TOKENS: Record<UIFont, Record<string, string>> = {
+  system: { '--ui-font': "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" },
+  mono:   { '--ui-font': "'JetBrains Mono', 'SF Mono', 'Menlo', 'Courier New', monospace"       },
+  geist:  { '--ui-font': "'Geist', -apple-system, 'Helvetica Neue', sans-serif"                  },
 }
 
 const WIDTH_TOKENS: Record<ChatWidth, Record<string, string>> = {
@@ -354,6 +382,9 @@ export function applyTheme(config: ThemeConfig): void {
 
   document.documentElement.setAttribute('data-chat-bubble-style', config.chatBubbleStyle)
   writeTokens(WIDTH_TOKENS[config.chatWidth])
+  writeTokens(UI_RADIUS_TOKENS[config.uiRadius])
+  writeTokens(UI_BLUR_TOKENS[config.uiBlur])
+  writeTokens(UI_FONT_TOKENS[config.uiFont])
 }
 
 /**
