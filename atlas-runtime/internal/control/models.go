@@ -1093,20 +1093,35 @@ func fetchGeminiModels(apiKey string) []ModelRecord {
 	return top
 }
 
+func curatedOpenRouterModels() []ModelRecord {
+	return []ModelRecord{
+		{ID: "google/gemini-2.5-pro-preview", DisplayName: "Gemini 2.5 Pro", IsFast: false},
+		{ID: "anthropic/claude-sonnet-4-5", DisplayName: "Claude Sonnet 4.5", IsFast: false},
+		{ID: "anthropic/claude-opus-4", DisplayName: "Claude Opus 4", IsFast: false},
+		{ID: "openai/gpt-4.1", DisplayName: "GPT-4.1", IsFast: false},
+		{ID: "meta-llama/llama-3.3-70b-instruct", DisplayName: "Llama 3.3 70B", IsFast: false},
+		{ID: "google/gemini-2.5-flash-preview", DisplayName: "Gemini 2.5 Flash", IsFast: true},
+		{ID: "anthropic/claude-haiku-4-5", DisplayName: "Claude Haiku 4.5", IsFast: true},
+		{ID: "openai/gpt-4.1-mini", DisplayName: "GPT-4.1 Mini", IsFast: true},
+		{ID: "mistralai/mistral-small-3.1-24b-instruct", DisplayName: "Mistral Small 3.1", IsFast: true},
+		{ID: "meta-llama/llama-3.1-8b-instruct", DisplayName: "Llama 3.1 8B", IsFast: true},
+	}
+}
+
 func fetchOpenRouterModels(apiKey string, do func(*http.Request) (*http.Response, error)) []ModelRecord {
 	if apiKey == "" {
-		return []ModelRecord{}
+		return curatedOpenRouterModels()
 	}
 	req, err := http.NewRequest("GET", "https://openrouter.ai/api/v1/models", nil)
 	if err != nil {
-		return []ModelRecord{}
+		return curatedOpenRouterModels()
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("HTTP-Referer", "https://github.com/rodeelh/project-atlas")
 	req.Header.Set("X-Title", "Atlas")
 	resp, err := do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
-		return []ModelRecord{}
+		return curatedOpenRouterModels()
 	}
 	defer resp.Body.Close()
 
@@ -1128,7 +1143,7 @@ func fetchOpenRouterModels(apiKey string, do func(*http.Request) (*http.Response
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return []ModelRecord{}
+		return curatedOpenRouterModels()
 	}
 	type scored struct {
 		model ModelRecord

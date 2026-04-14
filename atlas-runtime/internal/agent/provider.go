@@ -1118,6 +1118,11 @@ func callOpenAICompatNonStreaming(
 		"messages": messages,
 		"stream":   false,
 	}
+	// Cap output tokens for cloud OAI-compat providers (Gemini, OpenRouter).
+	// Local providers manage their own context window limits.
+	if !isLocalProvider(p.Type) && p.Type != ProviderOpenAI {
+		reqBody["max_tokens"] = 4096
+	}
 	if len(tools) > 0 {
 		reqBody["tools"] = tools
 	}
@@ -1232,6 +1237,11 @@ func streamOpenAICompatWithToolDetection(
 		"model":    p.Model,
 		"messages": messages,
 		"stream":   true,
+	}
+	// Cap output tokens for cloud OAI-compat providers (Gemini, OpenRouter).
+	// Local providers manage their own context window limits.
+	if !isLocalProvider(p.Type) && p.Type != ProviderOpenAI {
+		reqBody["max_tokens"] = 4096
 	}
 	if len(tools) > 0 {
 		reqBody["tools"] = tools
