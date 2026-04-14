@@ -571,6 +571,15 @@ func (s *Service) ValidatePlatform(platform string, credentials map[string]strin
 		if err := s.cfgStore.Save(cfg); err != nil {
 			log.Printf("comms: ValidatePlatform: save config: %v", err)
 		}
+		// Restart the bridge so the new token takes effect immediately.
+		// Without this, a running bridge with a stale token is never replaced.
+		s.mu.Lock()
+		if s.tgBridge != nil {
+			s.tgBridge.Stop()
+			s.tgBridge = nil
+		}
+		s.startBridges(cfg, readBundle())
+		s.mu.Unlock()
 
 	case "discord":
 		token := credentials["discord"]

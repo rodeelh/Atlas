@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -72,6 +73,16 @@ type tgMessage struct {
 	Photo     []tgPhotoSize `json:"photo"`
 	Document  *tgDocument   `json:"document"`
 	Location  *tgLocation   `json:"location"`
+	Voice     *tgFileRef    `json:"voice"`
+	Audio     *tgFileRef    `json:"audio"`
+	Video     *tgFileRef    `json:"video"`
+	VideoNote *tgFileRef    `json:"video_note"`
+	Sticker   *tgFileRef    `json:"sticker"`
+}
+
+// tgFileRef is a minimal reference to a Telegram file used for unsupported media types.
+type tgFileRef struct {
+	FileID string `json:"file_id"`
 }
 
 type tgPhotoSize struct {
@@ -274,7 +285,7 @@ func (b *Bridge) run() {
 			select {
 			case <-b.stopCh:
 				return
-			case <-time.After(backoff):
+			case <-time.After(backoff + time.Duration(rand.Int63n(int64(backoff)/5+1))):
 				backoff = minDur(backoff*2, maxBackoff)
 			}
 			continue
@@ -322,6 +333,12 @@ func (b *Bridge) handleUpdate(u tgUpdate) {
 	// FIX #1: handle photo and document attachments instead of silently dropping them.
 	if len(msg.Photo) > 0 || msg.Document != nil {
 		b.handleAttachment(chatID, msg.MessageID, msg.From, msg)
+		return
+	}
+
+	// Unsupported rich media — reply rather than silently dropping.
+	if msg.Voice != nil || msg.Audio != nil || msg.Video != nil || msg.VideoNote != nil || msg.Sticker != nil {
+		b.sendMessage(chatID, "I can only process text messages and file attachments (images, documents). Voice messages, audio, video, and stickers aren't supported yet.")
 		return
 	}
 
@@ -964,7 +981,8 @@ func (b *Bridge) sendMessageWithKeyboard(chatID int64, text string, keyboard *tg
 			Description string `json:"description"`
 		}
 		if err := json.Unmarshal(body, &result); err != nil {
-			return true // assume OK if we can't parse the response
+			logstore.Write("warn", "Telegram: sendMessage: unparseable response: "+err.Error(), map[string]string{"platform": "telegram"})
+			return false
 		}
 		if !result.OK {
 			logstore.Write("warn", "Telegram: sendMessage rejected: "+result.Description, map[string]string{"platform": "telegram"})
@@ -1155,9 +1173,23 @@ func (b *Bridge) sendFileMultipart(chatID int64, filePath, method, fieldName str
 	resp, err := b.client.Do(req)
 	if err != nil {
 		logstore.Write("error", "Telegram: sendFile: "+err.Error(), map[string]string{"platform": "telegram"})
+		b.sendMessage(chatID, errorEmoji+" Failed to send file: "+filepath.Base(filePath))
 		return
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	var result struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil || !result.OK {
+		desc := result.Description
+		if err != nil {
+			desc = "unexpected response"
+		}
+		logstore.Write("error", "Telegram: sendFile rejected: "+desc, map[string]string{"platform": "telegram"})
+		b.sendMessage(chatID, errorEmoji+" Failed to send file: "+filepath.Base(filePath))
+	}
 }
 
 // ── Text utilities ────────────────────────────────────────────────────────────
@@ -1179,9 +1211,8 @@ func markdownToHTML(text string) string {
 	var blocks []savedBlock
 
 	// ── 1. Extract fenced code blocks ────────────────────────────────────────
-	fenceRe := regexp.MustCompile("(?s)```[a-zA-Z0-9]*\\n?(.*?)```")
-	text = fenceRe.ReplaceAllStringFunc(text, func(m string) string {
-		sub := fenceRe.FindStringSubmatch(m)
+	text = mdFenceRe.ReplaceAllStringFunc(text, func(m string) string {
+		sub := mdFenceRe.FindStringSubmatch(m)
 		content := ""
 		if len(sub) >= 2 {
 			content = strings.TrimSpace(sub[1])
@@ -1201,18 +1232,15 @@ func markdownToHTML(text string) string {
 	text = strings.ReplaceAll(text, ">", "&gt;")
 
 	// ── 3. Headings (# / ## / ###) → <b>text</b> ────────────────────────────
-	headRe := regexp.MustCompile(`(?m)^#{1,6}[ \t]+(.+)$`)
-	text = headRe.ReplaceAllString(text, "<b>$1</b>")
+	text = mdHeadRe.ReplaceAllString(text, "<b>$1</b>")
 
 	// ── 4. Bullet list items → Unicode bullet ────────────────────────────────
 	// Must run before italic so a leading * isn't eaten as an italic delimiter.
-	bulletRe := regexp.MustCompile(`(?m)^[ \t]*[-*+][ \t]+`)
-	text = bulletRe.ReplaceAllString(text, "• ")
+	text = mdBulletRe.ReplaceAllString(text, "• ")
 
 	// ── 5. Inline code (protect before bold/italic) ──────────────────────────
-	inlineRe := regexp.MustCompile("`([^`\n]+)`")
-	text = inlineRe.ReplaceAllStringFunc(text, func(m string) string {
-		sub := inlineRe.FindStringSubmatch(m)
+	text = mdInlineRe.ReplaceAllStringFunc(text, func(m string) string {
+		sub := mdInlineRe.FindStringSubmatch(m)
 		content := ""
 		if len(sub) >= 2 {
 			content = sub[1]
@@ -1223,16 +1251,16 @@ func markdownToHTML(text string) string {
 	})
 
 	// ── 6. Bold (**text** and __text__) ──────────────────────────────────────
-	text = regexp.MustCompile(`\*\*(.+?)\*\*`).ReplaceAllString(text, "<b>$1</b>")
-	text = regexp.MustCompile(`__(.+?)__`).ReplaceAllString(text, "<b>$1</b>")
+	text = mdBold1Re.ReplaceAllString(text, "<b>$1</b>")
+	text = mdBold2Re.ReplaceAllString(text, "<b>$1</b>")
 
 	// ── 7. Italic (*text* and _text_) ────────────────────────────────────────
 	// Use [^*\n] / [^_\n] to avoid crossing line boundaries or eating bold markers.
-	text = regexp.MustCompile(`\*([^*\n]+)\*`).ReplaceAllString(text, "<i>$1</i>")
-	text = regexp.MustCompile(`_([^_\n]+)_`).ReplaceAllString(text, "<i>$1</i>")
+	text = mdItal1Re.ReplaceAllString(text, "<i>$1</i>")
+	text = mdItal2Re.ReplaceAllString(text, "<i>$1</i>")
 
 	// ── 8. Strikethrough ─────────────────────────────────────────────────────
-	text = regexp.MustCompile(`~~(.+?)~~`).ReplaceAllString(text, "<s>$1</s>")
+	text = mdStrikeRe.ReplaceAllString(text, "<s>$1</s>")
 
 	// ── 9. Restore code placeholders ─────────────────────────────────────────
 	for i, blk := range blocks {
@@ -1245,8 +1273,7 @@ func markdownToHTML(text string) string {
 
 // stripHTML removes HTML tags and un-escapes entities — used as sendMessage fallback.
 func stripHTML(s string) string {
-	tagRe := regexp.MustCompile(`<[^>]+>`)
-	s = tagRe.ReplaceAllString(s, "")
+	s = htmlTagRe.ReplaceAllString(s, "")
 	s = strings.ReplaceAll(s, "&amp;", "&")
 	s = strings.ReplaceAll(s, "&lt;", "<")
 	s = strings.ReplaceAll(s, "&gt;", ">")
@@ -1255,6 +1282,20 @@ func stripHTML(s string) string {
 
 // filePathRe matches absolute macOS file paths with sendable extensions.
 var filePathRe = regexp.MustCompile(`(?i)(/(?:Users|tmp|var|Library|private)[^\s"'<>]+\.(?:jpg|jpeg|png|gif|webp|pdf|txt|md|json))`)
+
+// markdownToHTMLRegexes are compiled once at startup to avoid per-message allocations.
+var (
+	mdFenceRe  = regexp.MustCompile("(?s)```[a-zA-Z0-9]*\\n?(.*?)```")
+	mdHeadRe   = regexp.MustCompile(`(?m)^#{1,6}[ \t]+(.+)$`)
+	mdBulletRe = regexp.MustCompile(`(?m)^[ \t]*[-*+][ \t]+`)
+	mdInlineRe = regexp.MustCompile("`([^`\n]+)`")
+	mdBold1Re  = regexp.MustCompile(`\*\*(.+?)\*\*`)
+	mdBold2Re  = regexp.MustCompile(`__(.+?)__`)
+	mdItal1Re  = regexp.MustCompile(`\*([^*\n]+)\*`)
+	mdItal2Re  = regexp.MustCompile(`_([^_\n]+)_`)
+	mdStrikeRe = regexp.MustCompile(`~~(.+?)~~`)
+	htmlTagRe  = regexp.MustCompile(`<[^>]+>`)
+)
 
 // extractFilePaths returns unique local file paths found in text that actually exist on disk.
 func extractFilePaths(text string) []string {
