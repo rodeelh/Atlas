@@ -423,7 +423,11 @@ export function Usage() {
                 <div class="stat-cell">
                   <div class="stat-label">Input Tokens</div>
                   <div class="stat-value">{summary ? fmtTokens(summary.totalInputTokens) : '—'}</div>
-                  <div class="stat-note">prompt</div>
+                  <div class="stat-note">
+                    {summary
+                      ? `prompt · ${fmtTokens(summary.totalCachedInputTokens)} cached`
+                      : 'prompt'}
+                  </div>
                 </div>
                 <div class="stat-cell">
                   <div class="stat-label">Output Tokens</div>

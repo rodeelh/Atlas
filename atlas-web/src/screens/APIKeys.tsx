@@ -17,7 +17,7 @@ function fromKeychainKey(key: string): string {
 }
 
 const KNOWN_PROVIDERS = [
-  { id: 'openai',      label: 'OpenAI',              sublabel: 'API key for OpenAI models (GPT-4.1 etc.)',                            key: 'openAIKeySet'      },
+  { id: 'openai',      label: 'OpenAI',              sublabel: 'API key for OpenAI models (GPT-5.4, GPT-5.4 Mini, GPT-4.1 etc.)',     key: 'openAIKeySet'      },
   { id: 'anthropic',   label: 'Anthropic',           sublabel: 'API key for Claude models (Sonnet, Opus, Haiku)',                     key: 'anthropicKeySet'   },
   { id: 'gemini',      label: 'Google Gemini',       sublabel: 'API key for Gemini models (Flash, Pro etc.)',                        key: 'geminiKeySet'      },
   { id: 'openrouter',  label: 'OpenRouter',          sublabel: 'API key for OpenRouter models and routers',                           key: 'openRouterKeySet'  },

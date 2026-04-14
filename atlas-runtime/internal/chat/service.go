@@ -2146,7 +2146,7 @@ func (s *Service) recordTokenUsage(convID string, provider agent.ProviderConfig,
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if err := s.db.RecordTokenUsage(
 		newUUID(), convID, string(provider.Type), provider.Model,
-		usage.InputTokens, usage.OutputTokens,
+		usage.InputTokens, usage.CachedInputTokens, usage.OutputTokens,
 		inputCost, outputCost, now,
 	); err != nil {
 		logstore.Write("warn", "token usage: failed to persist: "+err.Error(), nil)

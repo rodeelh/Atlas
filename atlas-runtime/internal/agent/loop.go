@@ -344,6 +344,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		}
 		totalUsage.InputTokens += sr.Usage.InputTokens
 		totalUsage.OutputTokens += sr.Usage.OutputTokens
+		totalUsage.CachedInputTokens += sr.Usage.CachedInputTokens
 		AddSessionTokens(sr.Usage.InputTokens, sr.Usage.OutputTokens)
 		if firstTokenAt <= 0 && sr.FirstTokenAt > 0 {
 			firstTokenAt = sr.FirstTokenAt

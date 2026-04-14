@@ -38,7 +38,7 @@ func insertEvent(t *testing.T, db *DB, id, convID, provider, model string,
 	recordedAt string,
 ) {
 	t.Helper()
-	if err := db.RecordTokenUsage(id, convID, provider, model, inputTokens, outputTokens, inputCost, outputCost, recordedAt); err != nil {
+	if err := db.RecordTokenUsage(id, convID, provider, model, inputTokens, 0, outputTokens, inputCost, outputCost, recordedAt); err != nil {
 		t.Fatalf("RecordTokenUsage(%s): %v", id, err)
 	}
 }
@@ -62,6 +62,9 @@ func TestRecordTokenUsage_Insert_Succeeds(t *testing.T) {
 	if e.InputTokens != 100 || e.OutputTokens != 200 {
 		t.Errorf("token counts: want 100/200, got %d/%d", e.InputTokens, e.OutputTokens)
 	}
+	if e.CachedInputTokens != 0 {
+		t.Errorf("cached tokens: want 0, got %d", e.CachedInputTokens)
+	}
 	// total_cost_usd must equal inputCost + outputCost
 	const wantTotal = 0.0003 + 0.003
 	if math.Abs(e.TotalCostUSD-wantTotal) > 1e-9 {
@@ -69,10 +72,27 @@ func TestRecordTokenUsage_Insert_Succeeds(t *testing.T) {
 	}
 }
 
+func TestRecordTokenUsage_PersistsCachedInputTokens(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.RecordTokenUsage("cached-1", "conv1", "openai", "gpt-5.4-mini", 100, 65, 20, 0.001, 0.002, "2026-04-01T10:00:00Z"); err != nil {
+		t.Fatalf("RecordTokenUsage(cached-1): %v", err)
+	}
+	events, err := db.TokenUsageEvents("", "", "", "", 10)
+	if err != nil {
+		t.Fatalf("TokenUsageEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("want 1 event, got %d", len(events))
+	}
+	if events[0].CachedInputTokens != 65 {
+		t.Fatalf("cached_input_tokens: want 65, got %d", events[0].CachedInputTokens)
+	}
+}
+
 func TestRecordTokenUsage_DuplicateID_Rejected(t *testing.T) {
 	db := openTestDB(t)
 	insertEvent(t, db, "dup", "conv1", "openai", "gpt-4o", 10, 20, 0.001, 0.002, "2026-04-01T10:00:00Z")
-	err := db.RecordTokenUsage("dup", "conv2", "openai", "gpt-4o", 10, 20, 0.001, 0.002, "2026-04-01T11:00:00Z")
+	err := db.RecordTokenUsage("dup", "conv2", "openai", "gpt-4o", 10, 0, 20, 0.001, 0.002, "2026-04-01T11:00:00Z")
 	if err == nil {
 		t.Error("duplicate primary key should return an error")
 	}
@@ -245,6 +265,9 @@ func TestGetTokenUsageSummary_ScalarTotals(t *testing.T) {
 	if s.TotalInputTokens != 150 {
 		t.Errorf("TotalInputTokens: want 150, got %d", s.TotalInputTokens)
 	}
+	if s.TotalCachedInputTokens != 0 {
+		t.Errorf("TotalCachedInputTokens: want 0, got %d", s.TotalCachedInputTokens)
+	}
 	if s.TotalOutputTokens != 300 {
 		t.Errorf("TotalOutputTokens: want 300, got %d", s.TotalOutputTokens)
 	}
@@ -253,6 +276,30 @@ func TestGetTokenUsageSummary_ScalarTotals(t *testing.T) {
 	}
 	if s.TurnCount != 2 {
 		t.Errorf("TurnCount: want 2, got %d", s.TurnCount)
+	}
+}
+
+func TestGetTokenUsageSummary_IncludesCachedInputTokens(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.RecordTokenUsage("e1", "c1", "openai", "gpt-5.4-mini", 100, 60, 50, 0.0025, 0.002, "2026-04-01T00:00:00Z"); err != nil {
+		t.Fatalf("RecordTokenUsage(e1): %v", err)
+	}
+	if err := db.RecordTokenUsage("e2", "c1", "openai", "gpt-5.4-mini", 80, 40, 20, 0.0015, 0.001, "2026-04-01T01:00:00Z"); err != nil {
+		t.Fatalf("RecordTokenUsage(e2): %v", err)
+	}
+
+	s, err := db.GetTokenUsageSummary("", "", 30)
+	if err != nil {
+		t.Fatalf("GetTokenUsageSummary: %v", err)
+	}
+	if s.TotalCachedInputTokens != 100 {
+		t.Fatalf("TotalCachedInputTokens: want 100, got %d", s.TotalCachedInputTokens)
+	}
+	if len(s.ByModel) != 1 || s.ByModel[0].CachedInputTokens != 100 {
+		t.Fatalf("ByModel cached tokens mismatch: %+v", s.ByModel)
+	}
+	if len(s.DailySeries) != 1 || s.DailySeries[0].CachedInputTokens != 100 {
+		t.Fatalf("DailySeries cached tokens mismatch: %+v", s.DailySeries)
 	}
 }
 
@@ -451,7 +498,7 @@ func TestRecordTokenUsage_ConcurrentWrites_NoRace(t *testing.T) {
 				fmt.Sprintf("concurrent-%d", idx),
 				"conv-concurrent",
 				"openai", "gpt-4o",
-				100, 200,
+				100, 0, 200,
 				0.0025, 0.002,
 				fmt.Sprintf("2026-04-01T%02d:00:00Z", idx%24),
 			)

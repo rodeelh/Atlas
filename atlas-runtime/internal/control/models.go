@@ -96,11 +96,11 @@ func (s *ModelsService) Available(provider string) map[string]any {
 			primary = cfg.SelectedOpenAIPrimaryModel
 		}
 		if primary == "" {
-			primary = "gpt-4.1-mini"
+			primary = "gpt-5.4"
 		}
 		fast := cfg.SelectedOpenAIFastModel
 		if fast == "" {
-			fast = "gpt-4.1-mini"
+			fast = "gpt-5.4-mini"
 		}
 		apiKey, _ := bundle["openAIAPIKey"].(string)
 		return map[string]any{
@@ -912,16 +912,16 @@ func fetchOpenAIModels(apiKey string) []ModelRecord {
 
 func curatedOpenAIModels() []ModelRecord {
 	return []ModelRecord{
+		{ID: "gpt-5.4", DisplayName: "GPT-5.4", IsFast: false},
+		{ID: "gpt-5", DisplayName: "GPT-5", IsFast: false},
 		{ID: "gpt-4.1", DisplayName: "GPT-4.1", IsFast: false},
 		{ID: "gpt-4o", DisplayName: "GPT-4o", IsFast: false},
-		{ID: "o3", DisplayName: "O3", IsFast: false},
-		{ID: "o4", DisplayName: "O4", IsFast: false},
-		{ID: "gpt-4-turbo", DisplayName: "GPT-4 Turbo", IsFast: false},
+		{ID: "gpt-5.4-mini", DisplayName: "GPT-5.4 Mini", IsFast: true},
+		{ID: "gpt-5-mini", DisplayName: "GPT-5 Mini", IsFast: true},
+		{ID: "gpt-5.4-nano", DisplayName: "GPT-5.4 Nano", IsFast: true},
+		{ID: "gpt-5-nano", DisplayName: "GPT-5 Nano", IsFast: true},
 		{ID: "gpt-4.1-mini", DisplayName: "GPT-4.1 Mini", IsFast: true},
 		{ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini", IsFast: true},
-		{ID: "o4-mini", DisplayName: "O4 Mini", IsFast: true},
-		{ID: "o3-mini", DisplayName: "O3 Mini", IsFast: true},
-		{ID: "gpt-4.1-nano", DisplayName: "GPT-4.1 Nano", IsFast: true},
 	}
 }
 
@@ -932,6 +932,8 @@ func openAIBaseFamily(id string) string {
 
 func openAIDisplayName(id string) string {
 	for _, pair := range [][2]string{
+		{"gpt-5.4-mini", "GPT-5.4 Mini"}, {"gpt-5.4-nano", "GPT-5.4 Nano"}, {"gpt-5.4-pro", "GPT-5.4 Pro"}, {"gpt-5.4", "GPT-5.4"},
+		{"gpt-5-mini", "GPT-5 Mini"}, {"gpt-5-nano", "GPT-5 Nano"}, {"gpt-5-pro", "GPT-5 Pro"}, {"gpt-5", "GPT-5"},
 		{"gpt-4.1-mini", "GPT-4.1 Mini"}, {"gpt-4.1-nano", "GPT-4.1 Nano"}, {"gpt-4.1", "GPT-4.1"},
 		{"gpt-4o-mini", "GPT-4o Mini"}, {"gpt-4o", "GPT-4o"}, {"gpt-4-turbo", "GPT-4 Turbo"}, {"gpt-4", "GPT-4"},
 		{"o4-mini", "O4 Mini"}, {"o3-mini", "O3 Mini"}, {"o3", "O3"},
@@ -1295,6 +1297,9 @@ func openAIModelScore(id string) int {
 			fmt.Sscanf(rest, "%f", &version)
 		}
 		score := int(version * 100)
+		if strings.Contains(lower, "pro") {
+			score += 3
+		}
 		if strings.Contains(lower, "turbo") {
 			score += 2
 		}

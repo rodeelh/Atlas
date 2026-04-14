@@ -69,6 +69,55 @@ func TestModule_SummaryHonorsExplicitDays(t *testing.T) {
 	}
 }
 
+func TestModule_UsageEndpointsExposeCachedInputTokens(t *testing.T) {
+	db := openTestDB(t)
+	r := newUsageRouter(t, db)
+
+	if err := db.RecordTokenUsage("cached-1", "conv-test", "openai", "gpt-5.4-mini", 120, 70, 40, 0.001, 0.002, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		t.Fatalf("RecordTokenUsage(cached-1): %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/usage/summary?days=30", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("summary want 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var summary struct {
+		TotalCachedInputTokens int64 `json:"totalCachedInputTokens"`
+		ByModel                []struct {
+			CachedInputTokens int64 `json:"cachedInputTokens"`
+		} `json:"byModel"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if summary.TotalCachedInputTokens != 70 {
+		t.Fatalf("summary cached tokens: want 70, got %d", summary.TotalCachedInputTokens)
+	}
+	if len(summary.ByModel) != 1 || summary.ByModel[0].CachedInputTokens != 70 {
+		t.Fatalf("summary byModel cached tokens mismatch: %+v", summary.ByModel)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/usage/events?limit=10", nil)
+	rr = httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("events want 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var events struct {
+		Events []struct {
+			CachedInputTokens int `json:"cachedInputTokens"`
+		} `json:"events"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&events); err != nil {
+		t.Fatalf("decode events: %v", err)
+	}
+	if len(events.Events) != 1 || events.Events[0].CachedInputTokens != 70 {
+		t.Fatalf("events cached tokens mismatch: %+v", events.Events)
+	}
+}
+
 func TestModule_DeleteUsageRequiresBefore(t *testing.T) {
 	db := openTestDB(t)
 	r := newUsageRouter(t, db)
@@ -108,7 +157,7 @@ func newUsageRouter(t *testing.T, db *storage.DB) http.Handler {
 func insertTestEvent(t *testing.T, db *storage.DB, id, provider, model string, inputT, outputT int, recordedAt string) {
 	t.Helper()
 	ic, oc, _ := storage.ComputeCost(provider, model, inputT, outputT)
-	if err := db.RecordTokenUsage(id, "conv-test", provider, model, inputT, outputT, ic, oc, recordedAt); err != nil {
+	if err := db.RecordTokenUsage(id, "conv-test", provider, model, inputT, 0, outputT, ic, oc, recordedAt); err != nil {
 		t.Fatalf("RecordTokenUsage(%s): %v", id, err)
 	}
 }

@@ -38,7 +38,7 @@ const STEPS: Array<{ id: StepID; label: string; eyebrow: string; title: string; 
 ]
 
 const PROVIDERS: Array<{ id: ProviderID; label: string; hint: string; statusKey?: keyof APIKeyStatus }> = [
-  { id: 'openai', label: 'OpenAI', hint: 'Best default for a fast web-first setup.', statusKey: 'openAIKeySet' },
+  { id: 'openai', label: 'OpenAI', hint: 'Recommended default for Atlas, with the newest OpenAI chat and agent models.', statusKey: 'openAIKeySet' },
   { id: 'anthropic', label: 'Anthropic', hint: 'Claude models for longer reasoning and writing.', statusKey: 'anthropicKeySet' },
   { id: 'gemini', label: 'Gemini', hint: 'Google Gemini models with broad multimodal support.', statusKey: 'geminiKeySet' },
   { id: 'lm_studio', label: 'LM Studio', hint: 'Use a local model running on this machine.' },

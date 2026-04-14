@@ -209,6 +209,8 @@ func callAINonStreaming(
 	switch p.Type {
 	case ProviderAnthropic:
 		msg, reason, usage, err = callAnthropicNonStreaming(ctx, p, messages, tools)
+	case ProviderOpenAI:
+		msg, reason, usage, err = callOpenAIResponsesNonStreaming(ctx, p, messages, tools)
 	default: // openai, gemini, lm_studio, ollama
 		msg, reason, usage, err = callOpenAICompatNonStreaming(ctx, p, messages, tools)
 	}
@@ -245,7 +247,9 @@ func streamWithToolDetection(
 		// These providers do not reliably support stream:true + tools. Use non-streaming
 		// and emit the full response text as one token event.
 		return nonStreamingAsStream(ctx, p, messages, tools, convID, bc)
-	default: // openai, gemini, atlas_mlx
+	case ProviderOpenAI:
+		return streamOpenAIResponsesWithToolDetection(ctx, p, messages, tools, convID, bc)
+	default: // gemini, atlas_mlx
 		sr, err := streamOpenAICompatWithToolDetection(ctx, p, messages, tools, convID, bc)
 		if err != nil {
 			return streamResult{}, err
@@ -478,6 +482,13 @@ func oaiCompatBaseURL(p ProviderConfig) string {
 		}
 		return base
 	default: // openai
+		base := strings.TrimRight(p.BaseURL, "/")
+		if base != "" {
+			if !strings.HasSuffix(base, "/v1") {
+				base += "/v1"
+			}
+			return base
+		}
 		return "https://api.openai.com/v1"
 	}
 }
@@ -502,7 +513,17 @@ var atlasMLXHTTPClient = &http.Client{
 	},
 }
 
+var openAIHTTPClient = &http.Client{}
+
+const (
+	openAIResponsesStreamTimeout    = 5 * time.Minute
+	openAIResponsesNonStreamTimeout = 2 * time.Minute
+)
+
 func openAICompatHTTPClient(p ProviderConfig) *http.Client {
+	if p.Type == ProviderOpenAI {
+		return openAIHTTPClient
+	}
 	if p.Type == ProviderAtlasMLX {
 		return atlasMLXHTTPClient
 	}
@@ -558,6 +579,486 @@ func doOpenAICompatRequest(ctx context.Context, p ProviderConfig, url string, bo
 		}
 	}
 	return nil, lastErr
+}
+
+func withProviderTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if _, hasDeadline := ctx.Deadline(); hasDeadline || timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func responsesBaseURL(p ProviderConfig) string {
+	base := strings.TrimRight(p.BaseURL, "/")
+	if base == "" {
+		base = "https://api.openai.com/v1"
+	}
+	if !strings.HasSuffix(base, "/v1") {
+		base += "/v1"
+	}
+	return base
+}
+
+func convertChatToolsToResponsesTools(tools []map[string]any) []map[string]any {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		fn, _ := tool["function"].(map[string]any)
+		name, _ := fn["name"].(string)
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		converted := map[string]any{
+			"type":        "function",
+			"name":        name,
+			"description": fn["description"],
+			"parameters":  fn["parameters"],
+		}
+		out = append(out, converted)
+	}
+	return out
+}
+
+func convertMessageContentPartsToResponses(content any) []map[string]any {
+	appendText := func(parts []map[string]any, text string) []map[string]any {
+		if strings.TrimSpace(text) == "" {
+			return parts
+		}
+		return append(parts, map[string]any{"type": "input_text", "text": text})
+	}
+
+	switch c := content.(type) {
+	case nil:
+		return nil
+	case string:
+		return appendText(nil, c)
+	case []map[string]any:
+		parts := make([]map[string]any, 0, len(c))
+		for _, part := range c {
+			ptype, _ := part["type"].(string)
+			switch ptype {
+			case "text":
+				if text, _ := part["text"].(string); text != "" {
+					parts = append(parts, map[string]any{"type": "input_text", "text": text})
+				}
+			case "image_url":
+				imageURL, _ := part["image_url"].(map[string]any)
+				url, _ := imageURL["url"].(string)
+				if url == "" {
+					continue
+				}
+				if strings.HasPrefix(strings.ToLower(url), "data:application/pdf;") {
+					parts = append(parts, map[string]any{
+						"type":      "input_file",
+						"filename":  "attachment.pdf",
+						"file_data": url,
+					})
+				} else {
+					parts = append(parts, map[string]any{"type": "input_image", "image_url": url})
+				}
+			}
+		}
+		return parts
+	case []any:
+		parts := make([]map[string]any, 0, len(c))
+		for _, raw := range c {
+			part, _ := raw.(map[string]any)
+			if len(part) == 0 {
+				continue
+			}
+			parts = append(parts, convertMessageContentPartsToResponses([]map[string]any{part})...)
+		}
+		return parts
+	default:
+		return appendText(nil, fmt.Sprintf("%v", c))
+	}
+}
+
+func convertMessagesToResponsesInput(messages []OAIMessage) []map[string]any {
+	input := make([]map[string]any, 0, len(messages)*2)
+	for _, msg := range messages {
+		switch msg.Role {
+		case "system", "user", "assistant":
+			parts := convertMessageContentPartsToResponses(msg.Content)
+			if len(parts) > 0 {
+				input = append(input, map[string]any{
+					"role":    msg.Role,
+					"content": parts,
+				})
+			}
+			if msg.Role == "assistant" {
+				for _, tc := range msg.ToolCalls {
+					callID := strings.TrimSpace(tc.ID)
+					if callID == "" {
+						callID = fmt.Sprintf("call_%d", time.Now().UnixNano())
+					}
+					input = append(input, map[string]any{
+						"type":      "function_call",
+						"call_id":   callID,
+						"name":      tc.Function.Name,
+						"arguments": tc.Function.Arguments,
+					})
+				}
+			}
+		case "tool":
+			callID := strings.TrimSpace(msg.ToolCallID)
+			if callID == "" {
+				continue
+			}
+			output := ""
+			switch c := msg.Content.(type) {
+			case string:
+				output = c
+			case nil:
+				output = ""
+			default:
+				output = fmt.Sprintf("%v", c)
+			}
+			input = append(input, map[string]any{
+				"type":    "function_call_output",
+				"call_id": callID,
+				"output":  output,
+			})
+		}
+	}
+	return input
+}
+
+type responsesOutputContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type responsesOutputItem struct {
+	ID        string                   `json:"id"`
+	Type      string                   `json:"type"`
+	Role      string                   `json:"role"`
+	CallID    string                   `json:"call_id"`
+	Name      string                   `json:"name"`
+	Arguments string                   `json:"arguments"`
+	Content   []responsesOutputContent `json:"content"`
+}
+
+type responsesUsage struct {
+	InputTokens        int `json:"input_tokens"`
+	OutputTokens       int `json:"output_tokens"`
+	InputTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+}
+
+type responsesResponse struct {
+	ID         string                `json:"id"`
+	Status     string                `json:"status"`
+	Output     []responsesOutputItem `json:"output"`
+	OutputText string                `json:"output_text"`
+	Usage      responsesUsage        `json:"usage"`
+	Error      *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+	Incomplete *struct {
+		Reason string `json:"reason"`
+	} `json:"incomplete_details"`
+}
+
+func extractResponsesMessage(resp responsesResponse) (OAIMessage, string, TokenUsage, error) {
+	if resp.Error != nil && strings.TrimSpace(resp.Error.Message) != "" {
+		return OAIMessage{}, "", TokenUsage{}, errors.New(resp.Error.Message)
+	}
+
+	var (
+		textParts    []string
+		toolCalls    []OAIToolCall
+		finishReason = "stop"
+	)
+	for _, item := range resp.Output {
+		switch item.Type {
+		case "message":
+			if item.Role != "" && item.Role != "assistant" {
+				continue
+			}
+			for _, content := range item.Content {
+				if content.Text != "" {
+					textParts = append(textParts, content.Text)
+				}
+			}
+		case "function_call":
+			callID := strings.TrimSpace(item.CallID)
+			if callID == "" {
+				callID = item.ID
+			}
+			toolCalls = append(toolCalls, OAIToolCall{
+				ID:   callID,
+				Type: "function",
+				Function: OAIFunctionCall{
+					Name:      item.Name,
+					Arguments: item.Arguments,
+				},
+			})
+		}
+	}
+	if len(textParts) == 0 && strings.TrimSpace(resp.OutputText) != "" {
+		textParts = append(textParts, resp.OutputText)
+	}
+	if len(toolCalls) > 0 {
+		finishReason = "tool_calls"
+	}
+	if resp.Incomplete != nil && strings.TrimSpace(resp.Incomplete.Reason) != "" {
+		finishReason = resp.Incomplete.Reason
+	}
+
+	return OAIMessage{
+			Role:      "assistant",
+			Content:   strings.Join(textParts, ""),
+			ToolCalls: toolCalls,
+		}, finishReason, TokenUsage{
+			InputTokens:       resp.Usage.InputTokens,
+			OutputTokens:      resp.Usage.OutputTokens,
+			CachedInputTokens: resp.Usage.InputTokensDetails.CachedTokens,
+		}, nil
+}
+
+func doOpenAIResponsesRequest(ctx context.Context, p ProviderConfig, body []byte, stream bool) (*http.Response, error) {
+	client := openAICompatHTTPClient(p)
+	url := responsesBaseURL(p) + "/responses"
+	maxAttempts := 3
+	if stream {
+		maxAttempts = 2
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		applyOpenAICompatHeaders(req, p)
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			if attempt == maxAttempts-1 {
+				return nil, err
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt+1) * 250 * time.Millisecond):
+			}
+			continue
+		}
+		if resp.StatusCode == http.StatusTooManyRequests ||
+			resp.StatusCode == http.StatusInternalServerError ||
+			resp.StatusCode == http.StatusBadGateway ||
+			resp.StatusCode == http.StatusServiceUnavailable ||
+			resp.StatusCode == http.StatusGatewayTimeout {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			lastErr = fmt.Errorf("OpenAI Responses error %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+			if attempt == maxAttempts-1 {
+				return nil, lastErr
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt+1) * 400 * time.Millisecond):
+			}
+			continue
+		}
+		return resp, nil
+	}
+	return nil, lastErr
+}
+
+func callOpenAIResponsesNonStreaming(
+	ctx context.Context,
+	p ProviderConfig,
+	messages []OAIMessage,
+	tools []map[string]any,
+) (OAIMessage, string, TokenUsage, error) {
+	ctx, cancel := withProviderTimeout(ctx, openAIResponsesNonStreamTimeout)
+	defer cancel()
+
+	reqBody := map[string]any{
+		"model": p.Model,
+		"input": convertMessagesToResponsesInput(messages),
+	}
+	if convertedTools := convertChatToolsToResponsesTools(tools); len(convertedTools) > 0 {
+		reqBody["tools"] = convertedTools
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return OAIMessage{}, "", TokenUsage{}, err
+	}
+	resp, err := doOpenAIResponsesRequest(ctx, p, body, false)
+	if err != nil {
+		return OAIMessage{}, "", TokenUsage{}, fmt.Errorf("OpenAI Responses request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return OAIMessage{}, "", TokenUsage{}, fmt.Errorf("OpenAI Responses error %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+	var decoded responsesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return OAIMessage{}, "", TokenUsage{}, fmt.Errorf("OpenAI Responses parse failed: %w", err)
+	}
+	return extractResponsesMessage(decoded)
+}
+
+func streamOpenAIResponsesWithToolDetection(
+	ctx context.Context,
+	p ProviderConfig,
+	messages []OAIMessage,
+	tools []map[string]any,
+	convID string,
+	bc Emitter,
+) (streamResult, error) {
+	ctx, cancel := withProviderTimeout(ctx, openAIResponsesStreamTimeout)
+	defer cancel()
+
+	reqBody := map[string]any{
+		"model":  p.Model,
+		"input":  convertMessagesToResponsesInput(messages),
+		"stream": true,
+	}
+	if convertedTools := convertChatToolsToResponsesTools(tools); len(convertedTools) > 0 {
+		reqBody["tools"] = convertedTools
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return streamResult{}, err
+	}
+	resp, err := doOpenAIResponsesRequest(ctx, p, body, true)
+	if err != nil {
+		return streamResult{}, fmt.Errorf("OpenAI Responses streaming request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return streamResult{}, fmt.Errorf("OpenAI Responses streaming error %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+
+	bc.Emit(convID, EmitEvent{Type: "assistant_started", Role: "assistant", ConvID: convID})
+
+	var (
+		fullText     strings.Builder
+		usage        TokenUsage
+		finishReason string
+		firstTokenAt time.Duration
+		chunkCount   int
+		completed    bool
+		outputItems  []responsesOutputItem
+	)
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	streamStart := time.Now()
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+		var envelope struct {
+			Type     string              `json:"type"`
+			Delta    string              `json:"delta"`
+			Item     responsesOutputItem `json:"item"`
+			Response responsesResponse   `json:"response"`
+			Error    *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(data), &envelope); err != nil {
+			continue
+		}
+		switch envelope.Type {
+		case "response.output_text.delta":
+			if envelope.Delta == "" {
+				continue
+			}
+			if firstTokenAt <= 0 {
+				firstTokenAt = time.Since(streamStart)
+			}
+			chunkCount++
+			fullText.WriteString(envelope.Delta)
+			bc.Emit(convID, EmitEvent{Type: "assistant_delta", Content: envelope.Delta, Role: "assistant", ConvID: convID})
+		case "response.output_item.added", "response.output_item.done":
+			if envelope.Item.Type != "" {
+				outputItems = append(outputItems, envelope.Item)
+			}
+		case "response.completed":
+			completed = true
+			msg, reason, u, err := extractResponsesMessage(envelope.Response)
+			if err != nil {
+				return streamResult{}, err
+			}
+			usage = u
+			finishReason = reason
+			if text, _ := msg.Content.(string); text != "" && fullText.Len() == 0 {
+				if firstTokenAt <= 0 {
+					firstTokenAt = time.Since(streamStart)
+				}
+				chunkCount++
+				fullText.WriteString(text)
+				bc.Emit(convID, EmitEvent{Type: "assistant_delta", Content: text, Role: "assistant", ConvID: convID})
+			}
+			if len(msg.ToolCalls) > 0 {
+				return streamResult{
+					FinalText:    fullText.String(),
+					ToolCalls:    msg.ToolCalls,
+					FinishReason: finishReason,
+					Usage:        usage,
+					FirstTokenAt: firstTokenAt,
+					ChunkCount:   chunkCount,
+					StreamChars:  fullText.Len(),
+				}, nil
+			}
+		case "response.failed":
+			if envelope.Error != nil && envelope.Error.Message != "" {
+				return streamResult{}, errors.New(envelope.Error.Message)
+			}
+			return streamResult{}, errors.New("OpenAI Responses stream failed")
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return streamResult{}, fmt.Errorf("OpenAI Responses stream read error: %w", err)
+	}
+
+	if !completed && len(outputItems) > 0 {
+		msg, reason, u, err := extractResponsesMessage(responsesResponse{Output: outputItems})
+		if err != nil {
+			return streamResult{}, err
+		}
+		usage = u
+		finishReason = reason
+		if text, _ := msg.Content.(string); text != "" && fullText.Len() == 0 {
+			fullText.WriteString(text)
+		}
+		return streamResult{
+			FinalText:    fullText.String(),
+			ToolCalls:    msg.ToolCalls,
+			FinishReason: finishReason,
+			Usage:        usage,
+			FirstTokenAt: firstTokenAt,
+			ChunkCount:   chunkCount,
+			StreamChars:  fullText.Len(),
+		}, nil
+	}
+
+	return streamResult{
+		FinalText:    fullText.String(),
+		FinishReason: finishReason,
+		Usage:        usage,
+		FirstTokenAt: firstTokenAt,
+		ChunkCount:   chunkCount,
+		StreamChars:  fullText.Len(),
+	}, nil
 }
 
 func callOpenAICompatNonStreaming(

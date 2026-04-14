@@ -251,7 +251,7 @@ func Defaults() RuntimeConfigSnapshot {
 		TelegramCommandPrefix:           "/",
 		TelegramAllowedUserIDs:          []int64{},
 		TelegramAllowedChatIDs:          []int64{},
-		DefaultOpenAIModel:              "gpt-4.1-mini",
+		DefaultOpenAIModel:              "gpt-5.4",
 		BaseSystemPrompt:                fallbackSystemPrompt,
 		MaxAgentIterations:              3,
 		ConversationWindowLimit:         15,

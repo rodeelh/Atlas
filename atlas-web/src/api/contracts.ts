@@ -776,6 +776,7 @@ export interface LinkPreview {
 
 export interface TokenUsageSummary {
   totalInputTokens: number;
+  totalCachedInputTokens: number;
   totalOutputTokens: number;
   totalTokens: number;
   totalCostUSD: number;
@@ -788,6 +789,7 @@ export interface ModelUsageBreakdown {
   provider: string;
   model: string;
   inputTokens: number;
+  cachedInputTokens: number;
   outputTokens: number;
   totalTokens: number;
   totalCostUSD: number;
@@ -797,6 +799,7 @@ export interface ModelUsageBreakdown {
 export interface DailyUsageSeries {
   date: string;
   inputTokens: number;
+  cachedInputTokens: number;
   outputTokens: number;
   totalTokens: number;
   costUSD: number;
@@ -809,6 +812,7 @@ export interface TokenUsageEvent {
   provider: string;
   model: string;
   inputTokens: number;
+  cachedInputTokens: number;
   outputTokens: number;
   inputCostUSD: number;
   outputCostUSD: number;

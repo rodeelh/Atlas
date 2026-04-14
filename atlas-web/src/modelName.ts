@@ -70,6 +70,14 @@ function titleCaseWords(input: string): string {
 
 function formatOpenAIModel(id: string): string {
   const lower = id.toLowerCase()
+  if (lower.startsWith('gpt-5.4-mini')) return 'GPT-5.4 Mini'
+  if (lower.startsWith('gpt-5.4-nano')) return 'GPT-5.4 Nano'
+  if (lower.startsWith('gpt-5.4-pro')) return 'GPT-5.4 Pro'
+  if (lower.startsWith('gpt-5.4')) return 'GPT-5.4'
+  if (lower.startsWith('gpt-5-mini')) return 'GPT-5 Mini'
+  if (lower.startsWith('gpt-5-nano')) return 'GPT-5 Nano'
+  if (lower.startsWith('gpt-5-pro')) return 'GPT-5 Pro'
+  if (lower.startsWith('gpt-5')) return 'GPT-5'
   if (lower.startsWith('gpt-4.1-mini')) return 'GPT-4.1 Mini'
   if (lower.startsWith('gpt-4.1-nano')) return 'GPT-4.1 Nano'
   if (lower.startsWith('gpt-4.1')) return 'GPT-4.1'

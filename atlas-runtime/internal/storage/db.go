@@ -377,6 +377,7 @@ func (db *DB) migrate() error {
 			provider         TEXT NOT NULL,
 			model            TEXT NOT NULL,
 			input_tokens     INTEGER NOT NULL DEFAULT 0,
+			cached_input_tokens INTEGER NOT NULL DEFAULT 0,
 			output_tokens    INTEGER NOT NULL DEFAULT 0,
 			input_cost_usd   REAL NOT NULL DEFAULT 0.0,
 			output_cost_usd  REAL NOT NULL DEFAULT 0.0,
@@ -489,6 +490,9 @@ func (db *DB) migrate() error {
 		`ALTER TABLE workflow_runs ADD COLUMN artifacts_json TEXT`,
 		`ALTER TABLE workflow_runs ADD COLUMN record_json TEXT NOT NULL DEFAULT '{}'`,
 	}
+	alterTokenUsage := []string{
+		`ALTER TABLE token_usage ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0`,
+	}
 
 	for _, stmt := range stmts {
 		if _, err := db.conn.Exec(stmt); err != nil {
@@ -515,6 +519,9 @@ func (db *DB) migrate() error {
 		db.conn.Exec(stmt) //nolint:errcheck
 	}
 	for _, stmt := range alterWorkflowRuns {
+		db.conn.Exec(stmt) //nolint:errcheck
+	}
+	for _, stmt := range alterTokenUsage {
 		db.conn.Exec(stmt) //nolint:errcheck
 	}
 	alterAgentDefinitions := []string{
@@ -3062,53 +3069,57 @@ func min(a, b int) int {
 
 // TokenUsageRow is one persisted token usage event.
 type TokenUsageRow struct {
-	ID             string
-	ConversationID string
-	Provider       string
-	Model          string
-	InputTokens    int
-	OutputTokens   int
-	InputCostUSD   float64
-	OutputCostUSD  float64
-	TotalCostUSD   float64
-	RecordedAt     string
+	ID                string
+	ConversationID    string
+	Provider          string
+	Model             string
+	InputTokens       int
+	CachedInputTokens int
+	OutputTokens      int
+	InputCostUSD      float64
+	OutputCostUSD     float64
+	TotalCostUSD      float64
+	RecordedAt        string
 }
 
 // ModelUsageBreakdown aggregates usage for one provider+model combination.
 type ModelUsageBreakdown struct {
-	Provider     string
-	Model        string
-	InputTokens  int64
-	OutputTokens int64
-	TotalTokens  int64
-	TotalCostUSD float64
-	TurnCount    int64
+	Provider          string
+	Model             string
+	InputTokens       int64
+	CachedInputTokens int64
+	OutputTokens      int64
+	TotalTokens       int64
+	TotalCostUSD      float64
+	TurnCount         int64
 }
 
 // DailyUsage aggregates usage for one calendar day.
 type DailyUsage struct {
-	Date         string // "2025-04-03"
-	InputTokens  int64
-	OutputTokens int64
-	TotalTokens  int64
-	CostUSD      float64
-	TurnCount    int64
+	Date              string // "2025-04-03"
+	InputTokens       int64
+	CachedInputTokens int64
+	OutputTokens      int64
+	TotalTokens       int64
+	CostUSD           float64
+	TurnCount         int64
 }
 
 // TokenUsageSummary is the full aggregated response.
 type TokenUsageSummary struct {
-	TotalInputTokens  int64
-	TotalOutputTokens int64
-	TotalTokens       int64
-	TotalCostUSD      float64
-	TurnCount         int64
-	ByModel           []ModelUsageBreakdown
-	DailySeries       []DailyUsage
+	TotalInputTokens       int64
+	TotalCachedInputTokens int64
+	TotalOutputTokens      int64
+	TotalTokens            int64
+	TotalCostUSD           float64
+	TurnCount              int64
+	ByModel                []ModelUsageBreakdown
+	DailySeries            []DailyUsage
 }
 
 // RecordTokenUsage persists one token usage event.
 func (db *DB) RecordTokenUsage(id, convID, provider, model string,
-	inputTokens, outputTokens int,
+	inputTokens, cachedInputTokens, outputTokens int,
 	inputCost, outputCost float64,
 	recordedAt string,
 ) error {
@@ -3116,11 +3127,11 @@ func (db *DB) RecordTokenUsage(id, convID, provider, model string,
 	_, err := db.conn.Exec(`
 		INSERT INTO token_usage
 			(id, conversation_id, provider, model,
-			 input_tokens, output_tokens,
+			 input_tokens, cached_input_tokens, output_tokens,
 			 input_cost_usd, output_cost_usd, total_cost_usd, recorded_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, convID, provider, model,
-		inputTokens, outputTokens,
+		inputTokens, cachedInputTokens, outputTokens,
 		inputCost, outputCost, total, recordedAt,
 	)
 	return err
@@ -3135,7 +3146,7 @@ func (db *DB) TokenUsageEvents(since, until, provider, model string, limit int) 
 		limit = 1000
 	}
 	q := `SELECT id, conversation_id, provider, model,
-		input_tokens, output_tokens,
+		input_tokens, cached_input_tokens, output_tokens,
 		input_cost_usd, output_cost_usd, total_cost_usd, recorded_at
 		FROM token_usage WHERE 1=1`
 	args := []any{}
@@ -3167,7 +3178,7 @@ func (db *DB) TokenUsageEvents(since, until, provider, model string, limit int) 
 	for rows.Next() {
 		var r TokenUsageRow
 		if err := rows.Scan(&r.ID, &r.ConversationID, &r.Provider, &r.Model,
-			&r.InputTokens, &r.OutputTokens,
+			&r.InputTokens, &r.CachedInputTokens, &r.OutputTokens,
 			&r.InputCostUSD, &r.OutputCostUSD, &r.TotalCostUSD, &r.RecordedAt); err != nil {
 			return nil, err
 		}
@@ -3193,10 +3204,10 @@ func (db *DB) GetTokenUsageSummary(since, until string, dailyDays int) (TokenUsa
 
 	// ── Scalar totals ─────────────────────────────────────────────────────────
 	row := db.conn.QueryRow(
-		"SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), "+
+		"SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(cached_input_tokens),0), COALESCE(SUM(output_tokens),0), "+
 			"COALESCE(SUM(total_cost_usd),0), COUNT(*) FROM token_usage "+where,
 		args...)
-	if err := row.Scan(&s.TotalInputTokens, &s.TotalOutputTokens, &s.TotalCostUSD, &s.TurnCount); err != nil {
+	if err := row.Scan(&s.TotalInputTokens, &s.TotalCachedInputTokens, &s.TotalOutputTokens, &s.TotalCostUSD, &s.TurnCount); err != nil {
 		return s, err
 	}
 	s.TotalTokens = s.TotalInputTokens + s.TotalOutputTokens
@@ -3204,7 +3215,7 @@ func (db *DB) GetTokenUsageSummary(since, until string, dailyDays int) (TokenUsa
 	// ── Per-model breakdown ───────────────────────────────────────────────────
 	mrows, err := db.conn.Query(
 		"SELECT provider, model, "+
-			"COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), "+
+			"COALESCE(SUM(input_tokens),0), COALESCE(SUM(cached_input_tokens),0), COALESCE(SUM(output_tokens),0), "+
 			"COALESCE(SUM(total_cost_usd),0), COUNT(*) "+
 			"FROM token_usage "+where+
 			" GROUP BY provider, model ORDER BY SUM(total_cost_usd) DESC",
@@ -3215,7 +3226,7 @@ func (db *DB) GetTokenUsageSummary(since, until string, dailyDays int) (TokenUsa
 	defer mrows.Close()
 	for mrows.Next() {
 		var m ModelUsageBreakdown
-		if err := mrows.Scan(&m.Provider, &m.Model, &m.InputTokens, &m.OutputTokens, &m.TotalCostUSD, &m.TurnCount); err != nil {
+		if err := mrows.Scan(&m.Provider, &m.Model, &m.InputTokens, &m.CachedInputTokens, &m.OutputTokens, &m.TotalCostUSD, &m.TurnCount); err != nil {
 			return s, err
 		}
 		m.TotalTokens = m.InputTokens + m.OutputTokens
@@ -3241,7 +3252,7 @@ func (db *DB) GetTokenUsageSummary(since, until string, dailyDays int) (TokenUsa
 		}
 		drows, err := db.conn.Query(
 			"SELECT strftime('%Y-%m-%d', recorded_at) AS day, "+
-				"COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), "+
+				"COALESCE(SUM(input_tokens),0), COALESCE(SUM(cached_input_tokens),0), COALESCE(SUM(output_tokens),0), "+
 				"COALESCE(SUM(total_cost_usd),0), COUNT(*) "+
 				"FROM token_usage "+dwhere+
 				" GROUP BY day ORDER BY day ASC LIMIT ?",
@@ -3252,7 +3263,7 @@ func (db *DB) GetTokenUsageSummary(since, until string, dailyDays int) (TokenUsa
 		defer drows.Close()
 		for drows.Next() {
 			var d DailyUsage
-			if err := drows.Scan(&d.Date, &d.InputTokens, &d.OutputTokens, &d.CostUSD, &d.TurnCount); err != nil {
+			if err := drows.Scan(&d.Date, &d.InputTokens, &d.CachedInputTokens, &d.OutputTokens, &d.CostUSD, &d.TurnCount); err != nil {
 				return s, err
 			}
 			d.TotalTokens = d.InputTokens + d.OutputTokens
@@ -3328,13 +3339,13 @@ func (db *DB) TokenUsageDeleteBefore(before string) (int64, error) {
 
 // LocalCredentialRow is the raw DB row for a local auth credential.
 type LocalCredentialRow struct {
-	ID          string
-	Type        string
-	Name        string
-	Credential  string // JSON-encoded webauthn.Credential, empty for PIN type
-	PINHash     string // bcrypt hash, empty for webauthn type
-	CreatedAt   string
-	LastUsedAt  string
+	ID         string
+	Type       string
+	Name       string
+	Credential string // JSON-encoded webauthn.Credential, empty for PIN type
+	PINHash    string // bcrypt hash, empty for webauthn type
+	CreatedAt  string
+	LastUsedAt string
 }
 
 // SaveLocalCredential inserts or replaces a local auth credential.

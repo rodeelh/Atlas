@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -73,6 +74,170 @@ func TestCallOpenAICompatNonStreaming_AppliesExtraHeaders(t *testing.T) {
 	}
 	if gotAuth != "Bearer token" {
 		t.Fatalf("missing auth header: %q", gotAuth)
+	}
+}
+
+func TestCallOpenAIResponsesNonStreaming_ParsesToolCallsAndCachedUsage(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":     "resp_123",
+			"status": "completed",
+			"output": []map[string]any{
+				{
+					"id":   "msg_123",
+					"type": "message",
+					"role": "assistant",
+					"content": []map[string]any{
+						{"type": "output_text", "text": "Let me check."},
+					},
+				},
+				{
+					"id":        "fc_123",
+					"type":      "function_call",
+					"call_id":   "call_123",
+					"name":      "weather__current",
+					"arguments": "{\"location\":\"Boston\"}",
+				},
+			},
+			"usage": map[string]any{
+				"input_tokens":  120,
+				"output_tokens": 30,
+				"input_tokens_details": map[string]any{
+					"cached_tokens": 80,
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	p := ProviderConfig{
+		Type:    ProviderOpenAI,
+		APIKey:  "token",
+		Model:   "gpt-5.4-mini",
+		BaseURL: srv.URL,
+	}
+	msg, reason, usage, err := callOpenAIResponsesNonStreaming(context.Background(), p, []OAIMessage{{Role: "user", Content: "What's the weather?"}}, []map[string]any{
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "weather__current",
+				"description": "Weather",
+				"parameters":  map[string]any{"type": "object"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("callOpenAIResponsesNonStreaming: %v", err)
+	}
+	if gotPath != "/v1/responses" {
+		t.Fatalf("unexpected path: %s", gotPath)
+	}
+	if reason != "tool_calls" {
+		t.Fatalf("finish reason: got %q want tool_calls", reason)
+	}
+	if usage.InputTokens != 120 || usage.OutputTokens != 30 || usage.CachedInputTokens != 80 {
+		t.Fatalf("unexpected usage: %+v", usage)
+	}
+	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].ID != "call_123" || msg.ToolCalls[0].Function.Name != "weather__current" {
+		t.Fatalf("unexpected tool calls: %+v", msg.ToolCalls)
+	}
+	if text, _ := msg.Content.(string); text != "Let me check." {
+		t.Fatalf("unexpected message text: %#v", msg.Content)
+	}
+	tools, _ := gotBody["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("expected converted responses tools, got %#v", gotBody["tools"])
+	}
+}
+
+func TestStreamOpenAIResponsesWithToolDetection_StreamsTextAndUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		fmt.Fprintf(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hel\"}\n\n")
+		flusher.Flush()
+		fmt.Fprintf(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"lo\"}\n\n")
+		flusher.Flush()
+		fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hello\"}]}],\"usage\":{\"input_tokens\":44,\"output_tokens\":12,\"input_tokens_details\":{\"cached_tokens\":20}}}}\n\n")
+		flusher.Flush()
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	p := ProviderConfig{
+		Type:    ProviderOpenAI,
+		APIKey:  "token",
+		Model:   "gpt-5.4-mini",
+		BaseURL: srv.URL,
+	}
+	emitter := &testEmitter{}
+	sr, err := streamOpenAIResponsesWithToolDetection(context.Background(), p, []OAIMessage{{Role: "user", Content: "Hi"}}, nil, "conv1", emitter)
+	if err != nil {
+		t.Fatalf("streamOpenAIResponsesWithToolDetection: %v", err)
+	}
+	if sr.FinalText != "Hello" {
+		t.Fatalf("final text: got %q want Hello", sr.FinalText)
+	}
+	if sr.Usage.CachedInputTokens != 20 {
+		t.Fatalf("cached usage: got %+v", sr.Usage)
+	}
+	if len(emitter.events) < 3 {
+		t.Fatalf("expected streamed events, got %+v", emitter.events)
+	}
+	if emitter.events[0].Type != "assistant_started" {
+		t.Fatalf("first event should be assistant_started, got %+v", emitter.events[0])
+	}
+}
+
+func TestCallOpenAIResponsesNonStreaming_RetriesTransientStatus(t *testing.T) {
+	var attempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			http.Error(w, "try again", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":     "resp_retry",
+			"status": "completed",
+			"output": []map[string]any{
+				{
+					"id":   "msg_retry",
+					"type": "message",
+					"role": "assistant",
+					"content": []map[string]any{
+						{"type": "output_text", "text": "ok"},
+					},
+				},
+			},
+			"usage": map[string]any{"input_tokens": 1, "output_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+
+	p := ProviderConfig{
+		Type:    ProviderOpenAI,
+		APIKey:  "token",
+		Model:   "gpt-5.4-mini",
+		BaseURL: srv.URL,
+	}
+	msg, _, _, err := callOpenAIResponsesNonStreaming(context.Background(), p, []OAIMessage{{Role: "user", Content: "ping"}}, nil)
+	if err != nil {
+		t.Fatalf("callOpenAIResponsesNonStreaming: %v", err)
+	}
+	if atomic.LoadInt32(&attempts) != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts)
+	}
+	if text, _ := msg.Content.(string); text != "ok" {
+		t.Fatalf("unexpected message text: %#v", msg.Content)
 	}
 }
 

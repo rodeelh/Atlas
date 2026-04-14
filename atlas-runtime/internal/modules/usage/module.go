@@ -56,49 +56,53 @@ func (m *Module) getSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type modelBreakdown struct {
-		Provider     string  `json:"provider"`
-		Model        string  `json:"model"`
-		InputTokens  int64   `json:"inputTokens"`
-		OutputTokens int64   `json:"outputTokens"`
-		TotalTokens  int64   `json:"totalTokens"`
-		TotalCostUSD float64 `json:"totalCostUSD"`
-		TurnCount    int64   `json:"turnCount"`
+		Provider          string  `json:"provider"`
+		Model             string  `json:"model"`
+		InputTokens       int64   `json:"inputTokens"`
+		CachedInputTokens int64   `json:"cachedInputTokens"`
+		OutputTokens      int64   `json:"outputTokens"`
+		TotalTokens       int64   `json:"totalTokens"`
+		TotalCostUSD      float64 `json:"totalCostUSD"`
+		TurnCount         int64   `json:"turnCount"`
 	}
 	type dailySeries struct {
-		Date         string  `json:"date"`
-		InputTokens  int64   `json:"inputTokens"`
-		OutputTokens int64   `json:"outputTokens"`
-		TotalTokens  int64   `json:"totalTokens"`
-		CostUSD      float64 `json:"costUSD"`
-		TurnCount    int64   `json:"turnCount"`
+		Date              string  `json:"date"`
+		InputTokens       int64   `json:"inputTokens"`
+		CachedInputTokens int64   `json:"cachedInputTokens"`
+		OutputTokens      int64   `json:"outputTokens"`
+		TotalTokens       int64   `json:"totalTokens"`
+		CostUSD           float64 `json:"costUSD"`
+		TurnCount         int64   `json:"turnCount"`
 	}
 	type response struct {
-		TotalInputTokens  int64            `json:"totalInputTokens"`
-		TotalOutputTokens int64            `json:"totalOutputTokens"`
-		TotalTokens       int64            `json:"totalTokens"`
-		TotalCostUSD      float64          `json:"totalCostUSD"`
-		TurnCount         int64            `json:"turnCount"`
-		ByModel           []modelBreakdown `json:"byModel"`
-		DailySeries       []dailySeries    `json:"dailySeries"`
+		TotalInputTokens       int64            `json:"totalInputTokens"`
+		TotalCachedInputTokens int64            `json:"totalCachedInputTokens"`
+		TotalOutputTokens      int64            `json:"totalOutputTokens"`
+		TotalTokens            int64            `json:"totalTokens"`
+		TotalCostUSD           float64          `json:"totalCostUSD"`
+		TurnCount              int64            `json:"turnCount"`
+		ByModel                []modelBreakdown `json:"byModel"`
+		DailySeries            []dailySeries    `json:"dailySeries"`
 	}
 	resp := response{
-		TotalInputTokens:  summary.TotalInputTokens,
-		TotalOutputTokens: summary.TotalOutputTokens,
-		TotalTokens:       summary.TotalTokens,
-		TotalCostUSD:      summary.TotalCostUSD,
-		TurnCount:         summary.TurnCount,
-		ByModel:           make([]modelBreakdown, 0, len(summary.ByModel)),
-		DailySeries:       make([]dailySeries, 0, len(summary.DailySeries)),
+		TotalInputTokens:       summary.TotalInputTokens,
+		TotalCachedInputTokens: summary.TotalCachedInputTokens,
+		TotalOutputTokens:      summary.TotalOutputTokens,
+		TotalTokens:            summary.TotalTokens,
+		TotalCostUSD:           summary.TotalCostUSD,
+		TurnCount:              summary.TurnCount,
+		ByModel:                make([]modelBreakdown, 0, len(summary.ByModel)),
+		DailySeries:            make([]dailySeries, 0, len(summary.DailySeries)),
 	}
 	for _, bm := range summary.ByModel {
 		resp.ByModel = append(resp.ByModel, modelBreakdown{
-			Provider: bm.Provider, Model: bm.Model, InputTokens: bm.InputTokens, OutputTokens: bm.OutputTokens,
+			Provider: bm.Provider, Model: bm.Model, InputTokens: bm.InputTokens, CachedInputTokens: bm.CachedInputTokens, OutputTokens: bm.OutputTokens,
 			TotalTokens: bm.TotalTokens, TotalCostUSD: bm.TotalCostUSD, TurnCount: bm.TurnCount,
 		})
 	}
 	for _, ds := range summary.DailySeries {
 		resp.DailySeries = append(resp.DailySeries, dailySeries{
-			Date: ds.Date, InputTokens: ds.InputTokens, OutputTokens: ds.OutputTokens,
+			Date: ds.Date, InputTokens: ds.InputTokens, CachedInputTokens: ds.CachedInputTokens, OutputTokens: ds.OutputTokens,
 			TotalTokens: ds.TotalTokens, CostUSD: ds.CostUSD, TurnCount: ds.TurnCount,
 		})
 	}
@@ -123,22 +127,23 @@ func (m *Module) getEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type eventRow struct {
-		ID             string  `json:"id"`
-		ConversationID string  `json:"conversationId"`
-		Provider       string  `json:"provider"`
-		Model          string  `json:"model"`
-		InputTokens    int     `json:"inputTokens"`
-		OutputTokens   int     `json:"outputTokens"`
-		InputCostUSD   float64 `json:"inputCostUSD"`
-		OutputCostUSD  float64 `json:"outputCostUSD"`
-		TotalCostUSD   float64 `json:"totalCostUSD"`
-		RecordedAt     string  `json:"recordedAt"`
+		ID                string  `json:"id"`
+		ConversationID    string  `json:"conversationId"`
+		Provider          string  `json:"provider"`
+		Model             string  `json:"model"`
+		InputTokens       int     `json:"inputTokens"`
+		CachedInputTokens int     `json:"cachedInputTokens"`
+		OutputTokens      int     `json:"outputTokens"`
+		InputCostUSD      float64 `json:"inputCostUSD"`
+		OutputCostUSD     float64 `json:"outputCostUSD"`
+		TotalCostUSD      float64 `json:"totalCostUSD"`
+		RecordedAt        string  `json:"recordedAt"`
 	}
 	rows := make([]eventRow, 0, len(events))
 	for _, e := range events {
 		rows = append(rows, eventRow{
 			ID: e.ID, ConversationID: e.ConversationID, Provider: e.Provider, Model: e.Model,
-			InputTokens: e.InputTokens, OutputTokens: e.OutputTokens, InputCostUSD: e.InputCostUSD,
+			InputTokens: e.InputTokens, CachedInputTokens: e.CachedInputTokens, OutputTokens: e.OutputTokens, InputCostUSD: e.InputCostUSD,
 			OutputCostUSD: e.OutputCostUSD, TotalCostUSD: e.TotalCostUSD, RecordedAt: e.RecordedAt,
 		})
 	}

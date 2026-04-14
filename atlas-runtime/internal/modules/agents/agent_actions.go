@@ -246,9 +246,9 @@ func (m *Module) registerAgentActions() {
 				"- Performing step 1, then deciding step 2 separately when both are already known\n\n" +
 				"executionMode: sync_assist (default, result returned this turn) or async_assignment (background, returns taskID).",
 			properties: map[string]skills.ToolParam{
-				"pattern": {Type: "string", Description: "single (default) or sequence. Use sequence when step 2 depends on step 1's output."},
+				"pattern":       {Type: "string", Description: "single (default) or sequence. Use sequence when step 2 depends on step 1's output."},
 				"executionMode": {Type: "string", Description: "sync_assist (default, wait for result) or async_assignment (fire and forget, returns taskID)."},
-				"mode":    {Type: "string", Description: "specialist_assist (default) or team_lead."},
+				"mode":          {Type: "string", Description: "specialist_assist (default) or team_lead."},
 				"tasks": {
 					Type: "array",
 					Description: "For sequence: ordered steps as [{agentId,task},{agentId,task}]. " +
@@ -683,10 +683,10 @@ func (m *Module) teamDelegate(ctx context.Context, args json.RawMessage) (skills
 	// Wrap it in a minimal DelegationPlan so the rest of the path is uniform.
 	if len(input.Tasks) == 0 && strings.TrimSpace(input.AgentID) != "" {
 		input.Tasks = []DelegationTaskSpec{{
-			AgentID:      strings.TrimSpace(input.AgentID),
-			Title:        strings.TrimSpace(input.Task),
-			Objective:    strings.TrimSpace(input.Task),
-			InputContext: DelegationInputContext{AtlasTaskFrame: strings.TrimSpace(input.Goal)},
+			AgentID:        strings.TrimSpace(input.AgentID),
+			Title:          strings.TrimSpace(input.Task),
+			Objective:      strings.TrimSpace(input.Task),
+			InputContext:   DelegationInputContext{AtlasTaskFrame: strings.TrimSpace(input.Goal)},
 			ExpectedOutput: DelegationExpectedOutput{Type: "summary"},
 		}}
 		if input.Pattern == "" {
@@ -1591,7 +1591,6 @@ func (m *Module) agentAssign(ctx context.Context, args json.RawMessage) (skills.
 	}), nil
 }
 
-
 type taskStepRecorder struct {
 	store       platform.AgentStore
 	recordEvent func(eventType string, agentID, taskID *string, title string, detail *string, payload map[string]any) error
@@ -1683,7 +1682,7 @@ func (m *Module) recordTokenUsage(convID string, provider agent.ProviderConfig, 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	id := newID("tu")
 	if err := m.db.RecordTokenUsage(id, convID, string(provider.Type), provider.Model,
-		usage.InputTokens, usage.OutputTokens, inputCost, outputCost, now,
+		usage.InputTokens, usage.CachedInputTokens, usage.OutputTokens, inputCost, outputCost, now,
 	); err != nil {
 		logstore.Write("warn", "agent token usage: failed to persist: "+err.Error(), nil)
 	}

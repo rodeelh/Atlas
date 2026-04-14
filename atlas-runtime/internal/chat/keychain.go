@@ -458,7 +458,7 @@ func resolveFastProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig
 			model = cfg.DefaultOpenAIModel
 		}
 		if model == "" {
-			model = "gpt-4.1-mini"
+			model = "gpt-5.4-mini"
 		}
 		return agent.ProviderConfig{
 			Type:   agent.ProviderOpenAI,
@@ -600,7 +600,7 @@ func resolveProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, er
 			model = cfg.SelectedOpenAIPrimaryModel
 		}
 		if model == "" {
-			model = "gpt-4.1-mini"
+			model = "gpt-5.4"
 		}
 		return agent.ProviderConfig{
 			Type:   agent.ProviderOpenAI,
