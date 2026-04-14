@@ -56,6 +56,10 @@ type ChatHandler func(ctx context.Context, req BridgeRequest) (string, []string,
 // ApprovalResolver resolves a pending approval by tool call ID.
 type ApprovalResolver func(toolCallID string, approved bool) error
 
+// TranscribeFunc converts raw audio bytes to a text transcript.
+// mimeType is the MIME type of the audio (e.g. "audio/ogg", "audio/wav").
+type TranscribeFunc func(ctx context.Context, data []byte, mimeType string) (string, error)
+
 // ── Telegram API structs ──────────────────────────────────────────────────────
 
 type tgUpdate struct {
@@ -139,7 +143,7 @@ type tgBotCommand struct {
 
 // ── Bridge ────────────────────────────────────────────────────────────────────
 
-// Bridge implements Telegram HTTP long-polling.
+// Bridge implements Telegram long-polling (default) or webhook receiving.
 type Bridge struct {
 	token   string
 	db      *storage.DB
@@ -153,6 +157,7 @@ type Bridge struct {
 	lastErr          string
 	botName          string
 	approvalResolver ApprovalResolver
+	transcriber      TranscribeFunc
 
 	stopCh chan struct{}
 	doneCh chan struct{}
@@ -175,6 +180,13 @@ func New(token string, db *storage.DB, cfgFn func() config.RuntimeConfigSnapshot
 func (b *Bridge) SetApprovalResolver(fn ApprovalResolver) {
 	b.mu.Lock()
 	b.approvalResolver = fn
+	b.mu.Unlock()
+}
+
+// SetTranscriber sets the voice-to-text function used for incoming voice messages.
+func (b *Bridge) SetTranscriber(fn TranscribeFunc) {
+	b.mu.Lock()
+	b.transcriber = fn
 	b.mu.Unlock()
 }
 
@@ -219,6 +231,49 @@ func (b *Bridge) LastError() string {
 func (b *Bridge) run() {
 	defer close(b.doneCh)
 
+	cfg := b.cfgFn()
+
+	// Webhook mode: register the webhook URL with Telegram and block until stopped.
+	// Telegram will POST updates to the registered URL instead of us polling.
+	if cfg.TelegramWebhookURL != "" {
+		name, err := b.getMe()
+		if err != nil {
+			errMsg := "Telegram bridge (webhook): " + err.Error()
+			b.mu.Lock()
+			b.lastErr = errMsg
+			b.mu.Unlock()
+			logstore.Write("error", errMsg+" — bridge stopped", map[string]string{"platform": "telegram"})
+			return
+		}
+		b.mu.Lock()
+		b.botName = name
+		b.mu.Unlock()
+
+		if err := b.setWebhook(cfg.TelegramWebhookURL, cfg.TelegramWebhookSecret); err != nil {
+			errMsg := "Telegram: setWebhook failed: " + err.Error()
+			b.mu.Lock()
+			b.lastErr = errMsg
+			b.mu.Unlock()
+			logstore.Write("error", errMsg+" — falling back to polling", map[string]string{"platform": "telegram"})
+			// Fall through to polling below.
+		} else {
+			logstore.Write("info", fmt.Sprintf("Telegram webhook registered (@%s) → %s", name, cfg.TelegramWebhookURL),
+				map[string]string{"platform": "telegram"})
+			b.setMyCommands()
+			b.mu.Lock()
+			b.connected = true
+			b.lastErr = ""
+			b.mu.Unlock()
+			<-b.stopCh
+			b.mu.Lock()
+			b.connected = false
+			b.mu.Unlock()
+			logstore.Write("info", "Telegram bridge (webhook) stopped", map[string]string{"platform": "telegram"})
+			return
+		}
+	}
+
+	// Polling mode.
 	b.deleteWebhook()
 
 	// Stop immediately if getMe fails — bad token = infinite 401 loop.
@@ -242,7 +297,8 @@ func (b *Bridge) run() {
 	// FIX #6: register bot command menu with Telegram.
 	b.setMyCommands()
 
-	cfg := b.cfgFn()
+	// Re-read config for polling parameters (cfg already declared above, just refresh).
+	cfg = b.cfgFn()
 	baseBackoff := time.Duration(cfg.TelegramPollingRetryBaseSeconds) * time.Second
 	if baseBackoff <= 0 {
 		baseBackoff = 2 * time.Second
@@ -336,9 +392,25 @@ func (b *Bridge) handleUpdate(u tgUpdate) {
 		return
 	}
 
+	// Voice messages — transcribe with Whisper if available.
+	if msg.Voice != nil {
+		b.handleVoice(chatID, msg.MessageID, msg.From, msg)
+		return
+	}
+
+	// Location share — pass coordinates to the agent so maps.* skills can act on them.
+	if msg.Location != nil {
+		locText := fmt.Sprintf("My current location is latitude %.6f, longitude %.6f.", msg.Location.Latitude, msg.Location.Longitude)
+		if msg.Caption != "" {
+			locText = locText + " " + msg.Caption
+		}
+		b.handleIncoming(chatID, msg.MessageID, msg.From, locText)
+		return
+	}
+
 	// Unsupported rich media — reply rather than silently dropping.
-	if msg.Voice != nil || msg.Audio != nil || msg.Video != nil || msg.VideoNote != nil || msg.Sticker != nil {
-		b.sendMessage(chatID, "I can only process text messages and file attachments (images, documents). Voice messages, audio, video, and stickers aren't supported yet.")
+	if msg.Audio != nil || msg.Video != nil || msg.VideoNote != nil || msg.Sticker != nil {
+		b.sendMessage(chatID, "I can only process text messages, images, documents, voice messages, and location shares. Audio, video, and stickers aren't supported yet.")
 		return
 	}
 
@@ -607,6 +679,66 @@ func (b *Bridge) handleAttachment(chatID, msgID int64, from *tgUser, msg *tgMess
 	}
 
 	b.processText(chatID, msgID, from, agentText, attachments)
+}
+
+// ── Voice handling ────────────────────────────────────────────────────────────
+
+// handleVoice downloads a Telegram voice message (.ogg), transcribes it via the
+// configured Whisper function, and routes the transcript to the agent as plain text.
+func (b *Bridge) handleVoice(chatID, msgID int64, from *tgUser, msg *tgMessage) {
+	b.mu.Lock()
+	transcriber := b.transcriber
+	b.mu.Unlock()
+
+	if transcriber == nil {
+		b.sendMessage(chatID, "Voice transcription is not available. Please ensure the Atlas voice module is running.")
+		return
+	}
+
+	b.sendReaction(chatID, msgID, eyesEmoji)
+	b.sendChatAction(chatID, "typing")
+
+	tgPath, err := b.getFilePath(msg.Voice.FileID)
+	if err != nil {
+		logstore.Write("error", "Telegram: voice getFile: "+err.Error(), map[string]string{"platform": "telegram"})
+		b.sendReaction(chatID, msgID, errorEmoji)
+		b.sendMessage(chatID, "Could not retrieve the voice message.")
+		return
+	}
+
+	attDir := filepath.Join(config.SupportDir(), "TelegramAttachments",
+		fmt.Sprintf("chat-%d", chatID), fmt.Sprintf("message-%d", msgID))
+	localPath := filepath.Join(attDir, fmt.Sprintf("voice_%d.ogg", msgID))
+
+	fileBytes, err := b.downloadTelegramFileBytes(tgPath, localPath)
+	if err != nil {
+		logstore.Write("error", "Telegram: voice download: "+err.Error(), map[string]string{"platform": "telegram"})
+		b.sendReaction(chatID, msgID, errorEmoji)
+		b.sendMessage(chatID, "Could not download the voice message.")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	transcript, err := transcriber(ctx, fileBytes, "audio/ogg")
+	if err != nil {
+		logstore.Write("error", "Telegram: voice transcribe: "+err.Error(), map[string]string{"platform": "telegram"})
+		b.sendReaction(chatID, msgID, errorEmoji)
+		b.sendMessage(chatID, "Could not transcribe the voice message.")
+		return
+	}
+
+	transcript = strings.TrimSpace(transcript)
+	if transcript == "" {
+		b.sendMessage(chatID, "Voice message was empty or couldn't be understood.")
+		return
+	}
+
+	logstore.Write("info", fmt.Sprintf("Telegram: voice transcribed (%d bytes → %q)", len(fileBytes), transcript),
+		map[string]string{"platform": "telegram", "chatID": fmt.Sprintf("%d", chatID)})
+
+	b.handleIncoming(chatID, msgID, from, transcript)
 }
 
 // ── Callback query handling ───────────────────────────────────────────────────
@@ -901,6 +1033,51 @@ func (b *Bridge) deleteWebhook() {
 		return
 	}
 	resp.Body.Close()
+}
+
+// setWebhook registers webhookURL with Telegram so updates are pushed to us.
+// secret is sent back by Telegram in the X-Telegram-Bot-Api-Secret-Token header
+// on every update request, allowing us to verify the source.
+func (b *Bridge) setWebhook(webhookURL, secret string) error {
+	payload := map[string]any{"url": webhookURL}
+	if secret != "" {
+		payload["secret_token"] = secret
+	}
+	data, _ := json.Marshal(payload)
+	apiURL := fmt.Sprintf("%s%s/setWebhook", apiBase, b.token)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(data))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("setWebhook request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var result struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("setWebhook parse response: %w", err)
+	}
+	if !result.OK {
+		return fmt.Errorf("setWebhook rejected: %s", result.Description)
+	}
+	return nil
+}
+
+// HandleWebhookUpdate parses a raw Telegram update body (as POSTed by Telegram
+// to the registered webhook URL) and dispatches it exactly as the polling loop
+// would. Called by the HTTP handler at POST /telegram/webhook.
+func (b *Bridge) HandleWebhookUpdate(body []byte) error {
+	var u tgUpdate
+	if err := json.Unmarshal(body, &u); err != nil {
+		return fmt.Errorf("parse update: %w", err)
+	}
+	b.handleUpdate(u)
+	return nil
 }
 
 // FIX #6: register command menu in the Telegram bot UI.

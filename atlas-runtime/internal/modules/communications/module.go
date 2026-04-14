@@ -3,11 +3,14 @@ package communications
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
 	"atlas-runtime-go/internal/comms"
+	"atlas-runtime-go/internal/comms/telegram"
+	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/platform"
 	"atlas-runtime-go/internal/skills"
 )
@@ -30,6 +33,7 @@ func (m *Module) Manifest() platform.Manifest {
 func (m *Module) Register(host platform.Host) error {
 	m.registerAgentActions()
 	host.MountProtected(m.registerRoutes)
+	host.MountPublic(m.registerPublicRoutes)
 	return nil
 }
 
@@ -53,6 +57,38 @@ func (m *Module) SetApprovalResolver(resolver func(toolCallID string, approved b
 
 func (m *Module) SetSkillRegistry(registry *skills.Registry) {
 	m.skills = registry
+}
+
+// SetTranscriber wires the voice-to-text function into the Telegram bridge so
+// incoming voice messages are automatically transcribed before reaching the agent.
+func (m *Module) SetTranscriber(fn telegram.TranscribeFunc) {
+	m.service.SetTranscriber(fn)
+}
+
+// registerPublicRoutes mounts routes that bypass session auth.
+// The Telegram webhook endpoint must be reachable by Telegram's servers without
+// an Atlas session cookie.
+func (m *Module) registerPublicRoutes(r chi.Router) {
+	r.Post("/telegram/webhook", m.handleTelegramWebhook)
+}
+
+func (m *Module) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
+	secretToken := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1 MB max
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := m.service.HandleTelegramWebhookUpdate(secretToken, body); err != nil {
+		logstore.Write("warn", "Telegram webhook: "+err.Error(), map[string]string{"platform": "telegram"})
+		if err.Error() == "invalid webhook secret token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		// For all other errors (bridge not running, parse failure) return 200 so
+		// Telegram does not retry a payload we cannot process.
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (m *Module) registerRoutes(r chi.Router) {

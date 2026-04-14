@@ -111,6 +111,7 @@ type Service struct {
 	db               *storage.DB
 	handler          ChatHandler
 	approvalResolver telegram.ApprovalResolver
+	transcriber      telegram.TranscribeFunc
 	mu               sync.RWMutex
 	tgBridge         *telegram.Bridge
 	discBridge       *discord.Bridge
@@ -144,6 +145,36 @@ func (s *Service) SetChatHandler(h ChatHandler) {
 // Must be called before Start().
 func (s *Service) SetApprovalResolver(fn telegram.ApprovalResolver) {
 	s.approvalResolver = fn
+}
+
+// SetTranscriber sets the voice-to-text function used by the Telegram bridge for
+// incoming voice messages. Safe to call before or after Start() — a running bridge
+// picks up the transcriber immediately.
+func (s *Service) SetTranscriber(fn telegram.TranscribeFunc) {
+	s.mu.Lock()
+	s.transcriber = fn
+	if s.tgBridge != nil {
+		s.tgBridge.SetTranscriber(fn)
+	}
+	s.mu.Unlock()
+}
+
+// HandleTelegramWebhookUpdate parses and dispatches a raw Telegram update body
+// delivered to the webhook endpoint. Returns an error if the bridge is not running
+// or the body is malformed — the HTTP handler should still return 200 to prevent
+// Telegram from retrying a permanently broken payload.
+func (s *Service) HandleTelegramWebhookUpdate(secretToken string, body []byte) error {
+	cfg := s.cfgStore.Load()
+	if cfg.TelegramWebhookSecret != "" && secretToken != cfg.TelegramWebhookSecret {
+		return fmt.Errorf("invalid webhook secret token")
+	}
+	s.mu.RLock()
+	bridge := s.tgBridge
+	s.mu.RUnlock()
+	if bridge == nil {
+		return fmt.Errorf("Telegram bridge not running")
+	}
+	return bridge.HandleWebhookUpdate(body)
 }
 
 // Start launches all enabled platform bridges.
@@ -184,6 +215,9 @@ func (s *Service) startBridges(cfg config.RuntimeConfigSnapshot, bundle credBund
 		b := telegram.New(strVal(bundle.TelegramBotToken), s.db, cfgFn, tgHandler)
 		if s.approvalResolver != nil {
 			b.SetApprovalResolver(s.approvalResolver)
+		}
+		if s.transcriber != nil {
+			b.SetTranscriber(s.transcriber)
 		}
 		s.tgBridge = b
 		b.Start()

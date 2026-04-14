@@ -29,6 +29,8 @@ type RuntimeConfigSnapshot struct {
 	TelegramCommandPrefix           string               `json:"telegramCommandPrefix"`
 	TelegramAllowedUserIDs          []int64              `json:"telegramAllowedUserIDs"`
 	TelegramAllowedChatIDs          []int64              `json:"telegramAllowedChatIDs"`
+	TelegramWebhookURL              string               `json:"telegramWebhookURL"`
+	TelegramWebhookSecret           string               `json:"telegramWebhookSecret"`
 	DefaultOpenAIModel              string               `json:"defaultOpenAIModel"`
 	BaseSystemPrompt                string               `json:"baseSystemPrompt"`
 	MaxAgentIterations              int                  `json:"maxAgentIterations"`

@@ -217,6 +217,24 @@ func main() {
 	}
 	communicationsModule := communicationsmodule.New(commsSvc)
 	communicationsModule.SetSkillRegistry(skillsRegistry)
+	// Wire local Whisper transcription into the Telegram bridge so voice messages
+	// are automatically converted to text before reaching the agent.
+	communicationsModule.SetTranscriber(func(ctx context.Context, data []byte, mimeType string) (string, error) {
+		c := cfgStore.Load()
+		model := c.VoiceWhisperModel
+		if model == "" {
+			model = "ggml-base.en.bin"
+		}
+		port := c.VoiceWhisperPort
+		if port == 0 {
+			port = 11987
+		}
+		result, err := voiceMgr.Transcribe(ctx, data, mimeType, c.VoiceWhisperLanguage, model, port)
+		if err != nil {
+			return "", err
+		}
+		return result.Text, nil
+	})
 	if err := moduleRegistry.Register(communicationsModule); err != nil {
 		log.Fatalf("Atlas: register communications module: %v", err)
 	}
