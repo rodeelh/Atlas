@@ -621,12 +621,12 @@ func convertChatToolsToResponsesTools(tools []map[string]any) []map[string]any {
 	return out
 }
 
-func convertMessageContentPartsToResponses(content any) []map[string]any {
+func convertMessageContentPartsToResponses(content any, textType string) []map[string]any {
 	appendText := func(parts []map[string]any, text string) []map[string]any {
 		if strings.TrimSpace(text) == "" {
 			return parts
 		}
-		return append(parts, map[string]any{"type": "input_text", "text": text})
+		return append(parts, map[string]any{"type": textType, "text": text})
 	}
 
 	switch c := content.(type) {
@@ -641,7 +641,7 @@ func convertMessageContentPartsToResponses(content any) []map[string]any {
 			switch ptype {
 			case "text":
 				if text, _ := part["text"].(string); text != "" {
-					parts = append(parts, map[string]any{"type": "input_text", "text": text})
+					parts = append(parts, map[string]any{"type": textType, "text": text})
 				}
 			case "image_url":
 				imageURL, _ := part["image_url"].(map[string]any)
@@ -668,7 +668,7 @@ func convertMessageContentPartsToResponses(content any) []map[string]any {
 			if len(part) == 0 {
 				continue
 			}
-			parts = append(parts, convertMessageContentPartsToResponses([]map[string]any{part})...)
+			parts = append(parts, convertMessageContentPartsToResponses([]map[string]any{part}, textType)...)
 		}
 		return parts
 	default:
@@ -676,31 +676,55 @@ func convertMessageContentPartsToResponses(content any) []map[string]any {
 	}
 }
 
+// extractSystemInstructions pulls system-role messages out of the message list
+// and returns their text joined as a single instructions string, plus the
+// remaining non-system messages. The Responses API does not accept a "system"
+// role in the input array — the system prompt goes in the instructions field.
+func extractSystemInstructions(messages []OAIMessage) (instructions string, rest []OAIMessage) {
+	var parts []string
+	for _, m := range messages {
+		if m.Role == "system" {
+			if s, ok := m.Content.(string); ok && strings.TrimSpace(s) != "" {
+				parts = append(parts, s)
+			}
+		} else {
+			rest = append(rest, m)
+		}
+	}
+	return strings.Join(parts, "\n\n"), rest
+}
+
 func convertMessagesToResponsesInput(messages []OAIMessage) []map[string]any {
 	input := make([]map[string]any, 0, len(messages)*2)
 	for _, msg := range messages {
 		switch msg.Role {
-		case "system", "user", "assistant":
-			parts := convertMessageContentPartsToResponses(msg.Content)
+		case "user":
+			parts := convertMessageContentPartsToResponses(msg.Content, "input_text")
 			if len(parts) > 0 {
 				input = append(input, map[string]any{
-					"role":    msg.Role,
+					"role":    "user",
 					"content": parts,
 				})
 			}
-			if msg.Role == "assistant" {
-				for _, tc := range msg.ToolCalls {
-					callID := strings.TrimSpace(tc.ID)
-					if callID == "" {
-						callID = fmt.Sprintf("call_%d", time.Now().UnixNano())
-					}
-					input = append(input, map[string]any{
-						"type":      "function_call",
-						"call_id":   callID,
-						"name":      tc.Function.Name,
-						"arguments": tc.Function.Arguments,
-					})
+		case "assistant":
+			parts := convertMessageContentPartsToResponses(msg.Content, "output_text")
+			if len(parts) > 0 {
+				input = append(input, map[string]any{
+					"role":    "assistant",
+					"content": parts,
+				})
+			}
+			for _, tc := range msg.ToolCalls {
+				callID := strings.TrimSpace(tc.ID)
+				if callID == "" {
+					callID = fmt.Sprintf("call_%d", time.Now().UnixNano())
 				}
+				input = append(input, map[string]any{
+					"type":      "function_call",
+					"call_id":   callID,
+					"name":      tc.Function.Name,
+					"arguments": tc.Function.Arguments,
+				})
 			}
 		case "tool":
 			callID := strings.TrimSpace(msg.ToolCallID)
@@ -880,9 +904,15 @@ func callOpenAIResponsesNonStreaming(
 	ctx, cancel := withProviderTimeout(ctx, openAIResponsesNonStreamTimeout)
 	defer cancel()
 
+	instructions, rest := extractSystemInstructions(messages)
 	reqBody := map[string]any{
-		"model": p.Model,
-		"input": convertMessagesToResponsesInput(messages),
+		"model":             p.Model,
+		"input":             convertMessagesToResponsesInput(rest),
+		"max_output_tokens": 4096,
+		"store":             false,
+	}
+	if instructions != "" {
+		reqBody["instructions"] = instructions
 	}
 	if convertedTools := convertChatToolsToResponsesTools(tools); len(convertedTools) > 0 {
 		reqBody["tools"] = convertedTools
@@ -919,10 +949,16 @@ func streamOpenAIResponsesWithToolDetection(
 	ctx, cancel := withProviderTimeout(ctx, openAIResponsesStreamTimeout)
 	defer cancel()
 
+	instructions, rest := extractSystemInstructions(messages)
 	reqBody := map[string]any{
-		"model":  p.Model,
-		"input":  convertMessagesToResponsesInput(messages),
-		"stream": true,
+		"model":             p.Model,
+		"input":             convertMessagesToResponsesInput(rest),
+		"stream":            true,
+		"max_output_tokens": 4096,
+		"store":             false,
+	}
+	if instructions != "" {
+		reqBody["instructions"] = instructions
 	}
 	if convertedTools := convertChatToolsToResponsesTools(tools); len(convertedTools) > 0 {
 		reqBody["tools"] = convertedTools

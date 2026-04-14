@@ -431,15 +431,18 @@ func (s *ModelsService) CloudModelHealth(provider, model string) map[string]any 
 				return reqInfo{}, "missing_key"
 			}
 			return reqInfo{
-				url: "https://api.openai.com/v1/chat/completions",
+				url: "https://api.openai.com/v1/responses",
 				headers: map[string]string{
 					"Authorization": "Bearer " + apiKey,
 					"Content-Type":  "application/json",
 				},
 				body: map[string]any{
-					"model":                 model,
-					"messages":              []map[string]string{{"role": "user", "content": "ping"}},
-					"max_completion_tokens": 16,
+					"model": model,
+					"input": []map[string]any{{
+						"role":    "user",
+						"content": []map[string]any{{"type": "input_text", "text": "ping"}},
+					}},
+					"max_output_tokens": 16,
 				},
 			}, ""
 		case "anthropic":
@@ -851,7 +854,7 @@ func fetchOpenAIModels(apiKey string) []ModelRecord {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return curatedOpenAIModels()
 	}
-	skipKeywords := []string{"audio", "realtime", "tts", "whisper", "transcrib", "search", "embed", "instruct"}
+	skipKeywords := []string{"audio", "realtime", "tts", "whisper", "transcrib", "search", "embed", "instruct", "codex", "chat-latest", "computer-use"}
 	fastKeywords := []string{"mini", "nano", "lite"}
 	type entry struct{ id, base string }
 	var candidates []entry
