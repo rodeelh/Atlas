@@ -3831,8 +3831,8 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   align-items: center;
   justify-content: center;
   background: color-mix(in srgb, var(--bg) 68%, transparent);
-  backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
-  -webkit-backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
+  backdrop-filter: blur(32px) saturate(1.8);
+  -webkit-backdrop-filter: blur(32px) saturate(1.8);
   animation: restart-overlay-in 200ms ease both;
 }
 
@@ -3921,6 +3921,85 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   min-width: 96px;
 }
 
+/* ─── Dream overlay ─────────────────────────────────────── */
+
+.dream-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 68%, transparent);
+  backdrop-filter: blur(32px) saturate(1.8);
+  -webkit-backdrop-filter: blur(32px) saturate(1.8);
+  animation: dream-overlay-in 280ms ease both;
+}
+
+@keyframes dream-overlay-in {
+  from { opacity: 0 }
+  to   { opacity: 1 }
+}
+
+.dream-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 44px;
+  border-radius: calc(var(--ui-radius) + 8px);
+  background: var(--theme-surface-card);
+  border: 1px solid var(--theme-border-subtle);
+  box-shadow: 0 8px 48px rgba(0,0,0,0.24), 0 2px 8px rgba(0,0,0,0.1);
+  animation: dream-card-in 320ms cubic-bezier(0.34,1.56,0.64,1) both;
+}
+
+@keyframes dream-card-in {
+  from { opacity: 0; transform: scale(0.92) translateY(8px) }
+  to   { opacity: 1; transform: scale(1)    translateY(0)   }
+}
+
+.dream-zzz-wrap {
+  position: relative;
+  width: 80px;
+  height: 60px;
+  margin-bottom: 2px;
+}
+
+.dream-z {
+  position: absolute;
+  font-weight: 750;
+  color: var(--accent);
+  opacity: 0;
+  animation: dream-z-rise 1.8s ease-in-out infinite;
+}
+
+.dream-z1 { font-size: 16px; left: 6px;  bottom: 2px;  animation-delay: 0s    }
+.dream-z2 { font-size: 22px; left: 24px; bottom: 10px; animation-delay: 0.55s }
+.dream-z3 { font-size: 30px; left: 42px; bottom: 16px; animation-delay: 1.1s  }
+
+@keyframes dream-z-rise {
+  0%   { opacity: 0;   transform: translateY(0)     }
+  20%  { opacity: 1;   transform: translateY(-5px)  }
+  80%  { opacity: 0.6; transform: translateY(-20px) }
+  100% { opacity: 0;   transform: translateY(-32px) }
+}
+
+.dream-overlay-title {
+  font-size: var(--dialog-title-size);
+  font-weight: 650;
+  color: var(--theme-text-primary);
+  letter-spacing: -0.01em;
+}
+
+.dream-overlay-body {
+  font-size: var(--dialog-body-size);
+  color: var(--theme-text-secondary);
+  line-height: 1.5;
+  max-width: 240px;
+  text-align: center;
+}
+
 /* ─── Confirm dialog ────────────────────────────────────── */
 
 .confirm-dialog-overlay {
@@ -3931,8 +4010,8 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   align-items: center;
   justify-content: center;
   background: color-mix(in srgb, var(--bg) 68%, transparent);
-  backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
-  -webkit-backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
+  backdrop-filter: blur(32px) saturate(1.8);
+  -webkit-backdrop-filter: blur(32px) saturate(1.8);
   animation: confirm-dialog-in 180ms ease both;
 }
 
@@ -6525,8 +6604,8 @@ input[type=number] { -moz-appearance: textfield; }
   position: fixed;
   inset: 0;
   background: color-mix(in srgb, var(--bg) 68%, transparent);
-  backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
-  -webkit-backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
+  backdrop-filter: blur(32px) saturate(1.8);
+  -webkit-backdrop-filter: blur(32px) saturate(1.8);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -10797,8 +10876,8 @@ select.field-input {
   position: absolute;
   inset: 0;
   background: color-mix(in srgb, var(--bg) 68%, transparent);
-  backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
-  -webkit-backdrop-filter: var(--ui-backdrop-filter, blur(16px) saturate(1.8));
+  backdrop-filter: blur(32px) saturate(1.8);
+  -webkit-backdrop-filter: blur(32px) saturate(1.8);
   display: flex;
   align-items: center;
   justify-content: center;

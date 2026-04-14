@@ -1,8 +1,26 @@
-import { useState, useEffect } from 'preact/hooks'
+import { useState, useEffect, useRef } from 'preact/hooks'
 import { api, type RuntimeConfig } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { PageSpinner } from '../components/PageSpinner'
 import { ErrorBanner } from '../components/ErrorBanner'
+
+// ── Dream overlay ─────────────────────────────────────────────────────────────
+
+function DreamOverlay() {
+  return (
+    <div class="dream-overlay">
+      <div class="dream-overlay-card">
+        <div class="dream-zzz-wrap">
+          <span class="dream-z dream-z1">Z</span>
+          <span class="dream-z dream-z2">Z</span>
+          <span class="dream-z dream-z3">Z</span>
+        </div>
+        <div class="dream-overlay-title">Dreaming</div>
+        <div class="dream-overlay-body">Consolidating memories and reflections…</div>
+      </div>
+    </div>
+  )
+}
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
@@ -286,6 +304,7 @@ export function Mind() {
   const [dreamMsg, setDreamMsg] = useState<string | null>(null)
   const [diary, setDiary]       = useState<DiaryDay[]>([])
   const [cfg, setCfg]           = useState<RuntimeConfig | null>(null)
+  const dreamStopRef            = useRef<(() => void) | null>(null)
 
   async function load() {
     setError(null)
@@ -326,18 +345,55 @@ export function Mind() {
   }
 
   async function triggerDream() {
-    setDreaming(true); setDreamMsg(null)
+    dreamStopRef.current?.()
+    setDreaming(true)
+    const snapshot = content
+
+    let stopped = false
+    let poll: ReturnType<typeof setInterval>
+    let safety: ReturnType<typeof setTimeout>
+
+    function stop() {
+      if (stopped) return
+      stopped = true
+      clearInterval(poll)
+      clearTimeout(safety)
+      dreamStopRef.current = null
+      setDreaming(false)
+    }
+    dreamStopRef.current = stop
+
     try {
       await api.forceDream()
-      setDreamMsg('Dream cycle started — check back in ~30s')
-      setTimeout(() => setDreamMsg(null), 5000)
+
+      poll = setInterval(async () => {
+        if (stopped) return
+        try {
+          const data = await api.mind()
+          if (data.content !== snapshot) {
+            clearInterval(poll)
+            clearTimeout(safety)
+            dreamStopRef.current = null
+            setContent(data.content)
+            const diaryData = await api.diary()
+            setDiary(parseDiary(diaryData.content))
+            setDreaming(false)
+          }
+        } catch { /* ignore poll errors */ }
+      }, 5000)
+
+      // Safety cap — give up after 3 minutes
+      safety = setTimeout(stop, 180_000)
+
     } catch (e: unknown) {
+      stop()
       setDreamMsg(e instanceof Error ? e.message : 'Failed to start dream cycle.')
       setTimeout(() => setDreamMsg(null), 4000)
-    } finally { setDreaming(false) }
+    }
   }
 
   useEffect(() => { load() }, [])
+  useEffect(() => () => { dreamStopRef.current?.() }, [])
 
   const sections = content ? parseMindSections(content) : []
 
@@ -350,7 +406,7 @@ export function Mind() {
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             {dreamMsg && <span style={{ fontSize: '12px', color: 'var(--text-2)' }}>{dreamMsg}</span>}
             <button class="btn btn-ghost btn-sm" onClick={triggerDream} disabled={dreaming} title="Run dream consolidation cycle now">
-              <DreamIcon /> {dreaming ? 'Dreaming…' : 'Dream'}
+              <DreamIcon /> Dream
             </button>
             <button class="btn btn-ghost btn-sm" onClick={() => { setEditText(content); setEditing(true) }}>
               <EditIcon /> Edit
@@ -414,6 +470,8 @@ export function Mind() {
           <ThoughtsSettingsCard config={cfg} onUpdate={updateThoughtsCfg} />
         </>
       )}
+
+      {dreaming && <DreamOverlay />}
     </div>
   )
 }
