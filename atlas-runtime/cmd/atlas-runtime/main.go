@@ -43,6 +43,7 @@ import (
 	forgemodule "atlas-runtime-go/internal/modules/forge"
 	mindmodule "atlas-runtime-go/internal/modules/mind"
 	skillsmodule "atlas-runtime-go/internal/modules/skills"
+	agentsmodule "atlas-runtime-go/internal/modules/agents"
 	usagemodule "atlas-runtime-go/internal/modules/usage"
 	voicemodule "atlas-runtime-go/internal/modules/voice"
 	workflowsmodule "atlas-runtime-go/internal/modules/workflows"
@@ -242,6 +243,12 @@ func main() {
 	if err := moduleRegistry.Register(skillsModule); err != nil {
 		log.Fatalf("Atlas: register skills module: %v", err)
 	}
+	agentsModule := agentsmodule.New(config.SupportDir())
+	agentsModule.SetSkillRegistry(skillsRegistry)
+	agentsModule.SetDatabase(db)
+	if err := moduleRegistry.Register(agentsModule); err != nil {
+		log.Fatalf("Atlas: register agents module: %v", err)
+	}
 	apiValidationModule := apivalidationmodule.New(config.SupportDir())
 	if err := moduleRegistry.Register(apiValidationModule); err != nil {
 		log.Fatalf("Atlas: register api validation module: %v", err)
@@ -394,6 +401,17 @@ func main() {
 	// ── Domain handlers ───────────────────────────────────────────────────────
 	authDomain := domain.NewAuthDomain(authSvc, cfgStore, webDir, port)
 	authDomain.EnsureRemoteKey() // Generate initial key if Keychain has none.
+
+	localAuthSvc, err := auth.NewLocalAuthService(db, port)
+	if err != nil {
+		log.Fatalf("Atlas: local auth init: %v", err)
+	}
+	// Wire the LocalAuthService into the session Service so HasLocalCredentials
+	// uses the atomic flag (no DB round-trip, no TOCTOU window).
+	authSvc.SetLocalAuth(localAuthSvc)
+	localAuthDomain := domain.NewLocalAuthDomain(authSvc, localAuthSvc)
+	authDomain.SetLocalAuth(localAuthSvc)
+
 	controlDomain := domain.NewControlDomain(cfgStore, runtimeSvc, db, engineMgr)
 	controlDomain.SetMLXManager(mlxMgr)
 	chatDomain := domain.NewChatDomain(chatSvc, bc, db)
@@ -410,6 +428,7 @@ func main() {
 
 	handler := server.BuildRouter(
 		authDomain,
+		localAuthDomain,
 		controlDomain,
 		chatDomain,
 		authSvc,

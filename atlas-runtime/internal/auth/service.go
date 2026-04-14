@@ -30,8 +30,9 @@ var (
 const (
 	SessionCookieName     = "atlas_session"
 	tokenLifetime         = 60 * time.Second
-	sessionLifetime       = 7 * 24 * time.Hour // local browser sessions
-	remoteSessionLifetime = 24 * time.Hour     // remote sessions expire sooner
+	localSessionLifetime  = 8 * time.Hour      // local machine sessions (WebAuthn / PIN)
+	sessionLifetime       = 7 * 24 * time.Hour // legacy — kept for compatibility
+	remoteSessionLifetime = 24 * time.Hour     // remote LAN sessions
 )
 
 // Session is an active browser session.
@@ -53,6 +54,13 @@ type Service struct {
 	sessions   map[string]*Session
 	usedNonces map[string]struct{}
 	db         *storage.DB
+	localAuth  *LocalAuthService // set via SetLocalAuth after construction
+}
+
+// SetLocalAuth wires the LocalAuthService so that HasLocalCredentials uses the
+// atomic flag rather than a DB round-trip on every request.
+func (s *Service) SetLocalAuth(l *LocalAuthService) {
+	s.localAuth = l
 }
 
 // NewService creates a Service with a fresh in-process signing key.
@@ -168,6 +176,56 @@ func (s *Service) CreateSession(isRemote bool) *Session {
 
 	go s.db.SaveWebSession(sess.ID, sess.CreatedAt, sess.ExpiresAt, isRemote)
 	return sess
+}
+
+// CreateLocalSession creates an 8-hour local machine session (WebAuthn / PIN auth).
+// Local sessions have IsRemote=false and a shorter lifetime than legacy sessions.
+func (s *Service) CreateLocalSession() *Session {
+	now := time.Now()
+	sess := &Session{
+		ID:        randomHex(32),
+		CreatedAt: now,
+		ExpiresAt: now.Add(localSessionLifetime),
+		IsRemote:  false,
+	}
+	s.mu.Lock()
+	s.sessions[sess.ID] = sess
+	s.pruneExpiredSessions()
+	s.mu.Unlock()
+	go s.db.SaveWebSession(sess.ID, sess.CreatedAt, sess.ExpiresAt, false)
+	return sess
+}
+
+// HasLocalCredentials returns true if at least one local auth credential (WebAuthn or PIN)
+// has been registered. Used by the middleware to decide whether to enforce local auth.
+// Uses the LocalAuthService atomic flag when available (no DB round-trip, no TOCTOU).
+func (s *Service) HasLocalCredentials() bool {
+	if s.localAuth != nil {
+		return s.localAuth.HasCredentials()
+	}
+	return s.db.HasLocalCredentials()
+}
+
+// DeleteLocalSession immediately removes a local session, e.g. on explicit lock/logout.
+func (s *Service) DeleteLocalSession(id string) {
+	if id == "" {
+		return
+	}
+	s.mu.Lock()
+	delete(s.sessions, id)
+	s.mu.Unlock()
+	go s.db.DeleteWebSession(id)
+}
+
+// ValidateLocalSession returns true if id is a valid, non-expired local session.
+func (s *Service) ValidateLocalSession(id string) bool {
+	if !s.ValidateSession(id) {
+		return false
+	}
+	s.mu.Lock()
+	sess := s.sessions[id]
+	s.mu.Unlock()
+	return sess != nil && !sess.IsRemote
 }
 
 // ValidateSession returns true if the session ID is known and not expired.

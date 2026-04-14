@@ -42,6 +42,12 @@ import type {
   RuntimeConfigUpdateResponse,
   RuntimeStatus,
   SkillRecord,
+  TeamAgent,
+  TeamAssignPayload,
+  TeamEvent,
+  TeamSnapshot,
+  TeamTask,
+  TriggerEvent,
   WorkflowDefinition,
   WorkflowSummary,
   WorkflowRun,
@@ -98,6 +104,12 @@ export type {
   RuntimeConfigUpdateResponse,
   RuntimeStatus,
   SkillRecord,
+  TeamAgent,
+  TeamAssignPayload,
+  TeamEvent,
+  TeamSnapshot,
+  TeamTask,
+  TriggerEvent,
   WorkflowDefinition,
   WorkflowSummary,
   WorkflowRun,
@@ -174,13 +186,19 @@ async function request<T>(
     headers,
   })
   if (!res.ok) {
-    // On remote device, a 401 means the session expired — redirect to root.
-    // Root will route unauthenticated users to /auth/remote-gate.
-    if (res.status === 401 && typeof window !== 'undefined' &&
-        window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-      window.location.href = `${window.location.origin}/`
-      csrfTokenCache = null
-      throw new Error('Session expired — redirecting to login')
+    // 401 handling varies by context:
+    // - Local (localhost): reload the page so the LocalAuthGate re-evaluates state.
+    // - Remote (LAN / Tailscale): redirect to root which routes to /auth/remote-gate.
+    if (res.status === 401 && typeof window !== 'undefined') {
+      const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+      if (isLocal) {
+        window.location.reload()
+        throw new Error('Session expired — reloading')
+      } else {
+        window.location.href = `${window.location.origin}/`
+        csrfTokenCache = null
+        throw new Error('Session expired — redirecting to login')
+      }
     }
     const text = await res.text().catch(() => res.statusText)
     let message = text
@@ -216,6 +234,31 @@ function del<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: 'DELETE', body: JSON.stringify(body) })
 }
 
+// requestWithHeaders is like request but also returns response headers.
+// Used for WebAuthn ceremony routes that pass the session ID in a header.
+async function requestWithHeaders<T>(
+  path: string,
+  options: RequestInit & { extraHeaders?: Record<string, string> } = {}
+): Promise<{ data: T; headers: Headers }> {
+  const url = `${BASE()}${path}`
+  const method = (options.method ?? 'POST').toUpperCase()
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((options.headers ?? {}) as Record<string, string>),
+    ...(options.extraHeaders ?? {}),
+  }
+  const res = await fetch(url, { ...options, headers, credentials: 'include' })
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText)
+    let message = text
+    try { const j = JSON.parse(text); if (j?.error) message = j.error } catch { /* raw */ }
+    throw new Error(message)
+  }
+  const text = await res.text()
+  const data = text ? (JSON.parse(text) as T) : ({} as T)
+  return { data, headers: res.headers }
+}
+
 // ---- API surface ----
 
 export const api = {
@@ -241,6 +284,27 @@ export const api = {
   // approve/deny take the toolCall.id (toolCallID), not the approval.id
   approve: (toolCallID: string) => post<Approval>(`/approvals/${toolCallID}/approve`, {}),
   deny: (toolCallID: string) => post<Approval>(`/approvals/${toolCallID}/deny`, {}),
+  teamSnapshot: () => get<TeamSnapshot>('/agents/hq'),
+  teamAgents: () => get<TeamAgent[]>('/agents'),
+  teamAgent: (id: string) => get<TeamAgent>(`/agents/${encodeURIComponent(id)}`),
+  teamEvents: () => get<TeamEvent[]>('/agents/events'),
+  teamTasks: () => get<TeamTask[]>('/agents/tasks'),
+  teamTask: (id: string) => get<TeamTask>(`/agents/tasks/${encodeURIComponent(id)}`),
+  syncTeam: () => post<{ count: number; source: string; updated: string; agents: TeamAgent[] }>('/agents/sync', {}),
+  enableTeamAgent: (id: string) => post<TeamAgent>(`/agents/${encodeURIComponent(id)}/enable`, {}),
+  disableTeamAgent: (id: string) => post<TeamAgent>(`/agents/${encodeURIComponent(id)}/disable`, {}),
+  pauseTeamAgent: (id: string) => post<TeamAgent>(`/agents/${encodeURIComponent(id)}/pause`, {}),
+  resumeTeamAgent: (id: string) => post<TeamAgent>(`/agents/${encodeURIComponent(id)}/resume`, {}),
+  cancelTeamTask: (id: string) => post<TeamTask>(`/agents/tasks/${encodeURIComponent(id)}/cancel`, {}),
+  approveTeamTask: (id: string) => post<TeamTask>(`/agents/tasks/${encodeURIComponent(id)}/approve`, {}),
+  rejectTeamTask: (id: string) => post<TeamTask>(`/agents/tasks/${encodeURIComponent(id)}/reject`, {}),
+  assignTeamTask: (payload: TeamAssignPayload) => post<{ taskID: string; agentID: string; status: string }>('/agents/tasks', payload),
+  createTeamAgent: (payload: Partial<TeamAgent>) => post<TeamAgent>('/agents', payload),
+  updateTeamAgent: (id: string, payload: Partial<TeamAgent>) => put<TeamAgent>(`/agents/${encodeURIComponent(id)}`, payload),
+  deleteTeamAgent: (id: string) => del<{ id: string; deleted: boolean }>(`/agents/${encodeURIComponent(id)}`, {}),
+  teamTriggers: () => get<TriggerEvent[]>('/agents/triggers'),
+  evaluateTrigger: (triggerType: string, instruction?: string) =>
+    post<{ status: string; triggerType: string }>('/agents/triggers/evaluate', { triggerType, instruction }),
 
   // Mind-thoughts greeting flow (phase 5/6). pendingGreetings returns the
   // count for the sidebar dot; triggerGreeting drains the queue into a
@@ -548,4 +612,64 @@ export const api = {
       abort() { ctrl.abort() },
     }
   },
+
+  // ── Local auth ────────────────────────────────────────────────────────────
+
+  localAuthStatus: () =>
+    get<{ configured: boolean; authenticated: boolean; hasWebAuthn: boolean; hasPIN: boolean }>(
+      '/auth/local/status'
+    ),
+
+  localAuthWebAuthnRegisterBegin: async (name: string) => {
+    const { data, headers } = await requestWithHeaders<Record<string, unknown>>(
+      '/auth/local/webauthn/register/begin',
+      { method: 'POST', body: JSON.stringify({ name }) }
+    )
+    return { options: data, sessionId: headers.get('X-WebAuthn-Session') ?? '' }
+  },
+
+  localAuthWebAuthnRegisterFinish: async (
+    sessionId: string,
+    credName: string,
+    credential: Record<string, unknown>
+  ) => {
+    await requestWithHeaders('/auth/local/webauthn/register/finish', {
+      method: 'POST',
+      body: JSON.stringify(credential),
+      extraHeaders: { 'X-WebAuthn-Session': sessionId, 'X-Credential-Name': credName },
+    })
+  },
+
+  localAuthWebAuthnAuthBegin: async () => {
+    const { data, headers } = await requestWithHeaders<Record<string, unknown>>(
+      '/auth/local/webauthn/authenticate/begin',
+      { method: 'POST', body: '{}' }
+    )
+    return { options: data, sessionId: headers.get('X-WebAuthn-Session') ?? '' }
+  },
+
+  localAuthWebAuthnAuthFinish: async (sessionId: string, assertion: Record<string, unknown>) => {
+    await requestWithHeaders('/auth/local/webauthn/authenticate/finish', {
+      method: 'POST',
+      body: JSON.stringify(assertion),
+      extraHeaders: { 'X-WebAuthn-Session': sessionId },
+    })
+  },
+
+  localAuthPINSetup: (pin: string) =>
+    post<{ status: string }>('/auth/local/pin/setup', { pin }),
+
+  localAuthPINVerify: (pin: string) =>
+    post<{ status: string }>('/auth/local/pin/verify', { pin }),
+
+  localAuthCredentials: () =>
+    get<Array<{ id: string; type: string; name: string; createdAt: string; lastUsedAt: string }>>(
+      '/auth/local/credentials'
+    ),
+
+  localAuthDeleteCredential: (id: string) =>
+    del<void>(`/auth/local/credentials/${id}`, undefined),
+
+  localAuthLogout: () =>
+    post<{ status: string }>('/auth/local/logout', {}),
 }

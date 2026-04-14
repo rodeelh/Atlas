@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { api, type RuntimeConfig } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { PageSpinner } from '../components/PageSpinner'
+import { PINDialog } from '../components/PINDialog'
 import { toast } from '../toast'
 import { ErrorBanner } from '../components/ErrorBanner'
 import type { RuntimeConfigUpdateResponse, StorageStats } from '../api/client'
@@ -26,9 +27,21 @@ export function Settings() {
   const [restartStatus, setRestartStatus] = useState('Restarting Atlas…')
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
   const [storageCleaning, setStorageCleaning] = useState(false)
+  const [locking, setLocking] = useState(false)
 
   const canRestartLocally = typeof window !== 'undefined' &&
     (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+
+  const lockAtlas = async () => {
+    setLocking(true)
+    try {
+      await api.localAuthLogout()
+      window.location.reload()
+    } catch {
+      toast.error('Failed to lock Atlas.')
+      setLocking(false)
+    }
+  }
 
   useEffect(() => {
     const init = async () => {
@@ -272,6 +285,10 @@ export function Settings() {
         )}
       </SettingsGroup>
 
+      <SettingsGroup title="Local Access">
+        <LocalAccessSection />
+      </SettingsGroup>
+
       <SettingsGroup title="Remote Access">
         <RemoteAccessSection
           enabled={draft.remoteAccessEnabled}
@@ -393,6 +410,15 @@ export function Settings() {
             value={draft.runtimePort}
             onInput={(e) => update('runtimePort', parseInt((e.target as HTMLInputElement).value, 10) || draft.runtimePort)}
           />
+        </SettingsRow>
+        <SettingsRow
+          label="Lock Atlas"
+          sublabel="End your current session and return to the sign-in screen"
+          mobileSplit
+        >
+          <button class="btn btn-sm" style={{ width: '100px' }} onClick={lockAtlas} disabled={locking}>
+            {locking ? 'Locking…' : 'Lock'}
+          </button>
         </SettingsRow>
         <SettingsRow
           label="Restart Atlas"
@@ -526,6 +552,232 @@ const CheckIcon = () => (
     <path d="M3 8l4 4 6-7" />
   </svg>
 )
+
+// ── WebAuthn helpers (registration only) ─────────────────────────────────────
+
+function b64urlDecode(s: string): ArrayBuffer {
+  const b64 = s.replace(/-/g, '+').replace(/_/g, '/')
+  const bin = atob(b64.padEnd(b64.length + (4 - b64.length % 4) % 4, '='))
+  const buf = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i)
+  return buf.buffer
+}
+
+function b64urlEncode(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf)
+  let bin = ''
+  for (const b of bytes) bin += String.fromCharCode(b)
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
+}
+
+function decodeCreationOptions(opts: Record<string, unknown>): PublicKeyCredentialCreationOptions {
+  const pk = (opts.publicKey ?? opts) as Record<string, unknown>
+  return {
+    ...(pk as object),
+    challenge: b64urlDecode(pk.challenge as string),
+    user: { ...(pk.user as object), id: b64urlDecode((pk.user as Record<string, string>).id) },
+    excludeCredentials: ((pk.excludeCredentials as unknown[]) ?? []).map((c: unknown) => ({
+      ...(c as object), id: b64urlDecode((c as Record<string, string>).id),
+    })),
+  } as unknown as PublicKeyCredentialCreationOptions
+}
+
+function encodeCredential(cred: PublicKeyCredential): Record<string, unknown> {
+  const r = cred.response as AuthenticatorAttestationResponse
+  return {
+    id: cred.id, rawId: b64urlEncode(cred.rawId), type: cred.type,
+    response: { clientDataJSON: b64urlEncode(r.clientDataJSON), attestationObject: b64urlEncode(r.attestationObject) },
+  }
+}
+
+function relativeDate(iso: string): string {
+  if (!iso) return 'Never'
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return 'Never'
+  const days = Math.floor((Date.now() - d.getTime()) / 86400000)
+  if (days === 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  if (days < 7) return `${days} days ago`
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+// ── Local Access section ──────────────────────────────────────────────────────
+
+type LocalCredential = { id: string; type: string; name: string; createdAt: string; lastUsedAt: string }
+
+function LocalAccessSection() {
+  // ── Authenticators state ──
+  const [creds, setCreds] = useState<LocalCredential[] | null>(null)
+  const [addingKey, setAddingKey] = useState(false)
+  const [addErr, setAddErr] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+
+  // ── PIN state ──
+  const [hasPIN, setHasPIN] = useState<boolean | null>(null)
+  const [pinDialogOpen, setPinDialogOpen] = useState(false)
+
+
+  const loadCreds = () => {
+    api.localAuthCredentials()
+      .then(list => {
+        setCreds(list)
+        setHasPIN(list.some(c => c.type === 'pin'))
+      })
+      .catch(() => { setCreds([]); setHasPIN(false) })
+  }
+
+  useEffect(() => { loadCreds() }, [])
+
+  // ── Authenticator actions ──
+  const addKey = async () => {
+    setAddErr(null)
+    setAddingKey(true)
+    try {
+      const { options, sessionId } = await api.localAuthWebAuthnRegisterBegin('Security Key')
+      const cred = await navigator.credentials.create({ publicKey: decodeCreationOptions(options) })
+      if (!cred) throw new Error('No credential returned')
+      await api.localAuthWebAuthnRegisterFinish(sessionId, 'Security Key', encodeCredential(cred as PublicKeyCredential))
+      loadCreds()
+      toast.success('Authenticator added.')
+    } catch (e) {
+      setAddErr(e instanceof Error ? e.message : 'Registration failed')
+    } finally {
+      setAddingKey(false)
+    }
+  }
+
+  // Checks for lockout risk before deleting — shows inline confirmation if needed.
+  const requestDeleteKey = (id: string) => {
+    const webAuthnCount = (creds ?? []).filter(c => c.type === 'webauthn').length
+    if (webAuthnCount === 1 && !hasPIN) {
+      setConfirmDeleteId(id)
+      return
+    }
+    void deleteKey(id)
+  }
+
+  const deleteKey = async (id: string) => {
+    setConfirmDeleteId(null)
+    setDeletingId(id)
+    try {
+      await api.localAuthDeleteCredential(id)
+      loadCreds()
+      toast.success('Authenticator removed.')
+    } catch {
+      toast.error('Failed to remove authenticator.')
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  // ── PIN actions ──
+  const savePIN = async (pin: string) => {
+    await api.localAuthPINSetup(pin)
+    setHasPIN(true)
+    setPinDialogOpen(false)
+    toast.success(hasPIN ? 'PIN changed.' : 'PIN added.')
+    loadCreds()
+  }
+
+  const webAuthnCreds = creds?.filter(c => c.type === 'webauthn') ?? []
+  const pinCred = creds?.find(c => c.type === 'pin') ?? null
+
+  // ── Loading skeleton ──
+  if (creds === null) {
+    return (
+      <>
+        <SettingsRow
+          label="Authenticators"
+          sublabel="Touch ID, Windows Hello, or hardware security keys registered for local access"
+          mobileSplit
+        >
+          <button class="btn btn-sm" disabled>+ Add</button>
+        </SettingsRow>
+        <SettingsRow label="Loading…" sublabel="" mobileSplit>
+          <span />
+        </SettingsRow>
+        <SettingsRow label="PIN" sublabel="" mobileSplit>
+          <button class="btn btn-sm" disabled>Add PIN</button>
+        </SettingsRow>
+      </>
+    )
+  }
+
+  return (
+    <>
+      {/* ── Authenticators ── */}
+      <SettingsRow
+        label="Authenticators"
+        sublabel="Touch ID, Windows Hello, or hardware security keys registered for local access"
+        mobileSplit
+      >
+        <button class="btn btn-sm" onClick={addKey} disabled={addingKey}>
+          {addingKey ? 'Registering…' : '+ Add'}
+        </button>
+      </SettingsRow>
+      {addErr && (
+        <SettingsRow label="" sublabel="">
+          <span style={{ fontSize: '12px', color: 'var(--danger, #ff453a)' }}>{addErr}</span>
+        </SettingsRow>
+      )}
+      {webAuthnCreds.map(c => (
+        confirmDeleteId === c.id ? (
+          <SettingsRow
+            key={c.id}
+            label={`Remove "${c.name}"?`}
+            sublabel="This is your only authenticator and you have no PIN. Removing it will lock you out of Atlas."
+            mobileSplit
+          >
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                class="btn btn-sm"
+                onClick={() => deleteKey(c.id)}
+                disabled={!!deletingId}
+              >
+                Remove anyway
+              </button>
+              <button class="btn btn-sm" onClick={() => setConfirmDeleteId(null)}>
+                Cancel
+              </button>
+            </div>
+          </SettingsRow>
+        ) : (
+          <SettingsRow key={c.id} label={c.name} sublabel={`Last used: ${relativeDate(c.lastUsedAt)}`} mobileSplit>
+            <button
+              class="btn btn-sm"
+              onClick={() => requestDeleteKey(c.id)}
+              disabled={deletingId === c.id}
+            >
+              {deletingId === c.id ? '…' : 'Remove'}
+            </button>
+          </SettingsRow>
+        )
+      ))}
+
+      {/* ── PIN — first-class credential with last-used date ── */}
+      <SettingsRow
+        label="PIN"
+        sublabel={pinCred
+          ? `Last used: ${relativeDate(pinCred.lastUsedAt)}`
+          : 'Add a PIN as a fallback for local access when Touch ID is unavailable'}
+        mobileSplit
+      >
+        <button class="btn btn-sm" onClick={() => setPinDialogOpen(true)}>
+          {hasPIN ? 'Change' : 'Add PIN'}
+        </button>
+      </SettingsRow>
+      {pinDialogOpen && (
+        <PINDialog
+          isChange={!!hasPIN}
+          onSave={savePIN}
+          onCancel={() => setPinDialogOpen(false)}
+        />
+      )}
+
+    </>
+  )
+}
 
 function RemoteAccessSection({
   enabled,

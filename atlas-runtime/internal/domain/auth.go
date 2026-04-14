@@ -42,11 +42,12 @@ import (
 //	POST     /auth/remote-key      — rotate remote access key (authenticated)
 //	DELETE   /auth/remote-sessions — revoke all remote sessions + rotate key
 type AuthDomain struct {
-	svc      *auth.Service
-	cfgStore *config.Store
-	webDir   string // path to atlas-web/dist for static serving
-	limiter  *auth.RemoteAuthLimiter
-	port     int // resolved listen port (from -port flag or config)
+	svc       *auth.Service
+	cfgStore  *config.Store
+	webDir    string // path to atlas-web/dist for static serving
+	limiter   *auth.RemoteAuthLimiter
+	port      int // resolved listen port (from -port flag or config)
+	localAuth *auth.LocalAuthService
 }
 
 // NewAuthDomain creates an AuthDomain.
@@ -60,6 +61,12 @@ func NewAuthDomain(svc *auth.Service, cfgStore *config.Store, webDir string, por
 		port:     port,
 		limiter:  auth.NewRemoteAuthLimiter(),
 	}
+}
+
+// SetLocalAuth wires the local auth service into AuthDomain so that remote
+// LAN logins can also be validated against the shared PIN credential.
+func (d *AuthDomain) SetLocalAuth(s *auth.LocalAuthService) {
+	d.localAuth = s
 }
 
 // EnsureRemoteKey generates and stores a remote access key if none currently
@@ -239,9 +246,10 @@ func (d *AuthDomain) remoteGate(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/auth/https-required", http.StatusFound)
 		return
 	}
+	pinRequired := d.localAuth != nil && d.localAuth.HasPINCredential()
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, remoteGateHTML())
+	fmt.Fprint(w, remoteGateHTML(pinRequired))
 }
 
 func (d *AuthDomain) httpsRequired(w http.ResponseWriter, r *http.Request) {
@@ -259,6 +267,7 @@ func (d *AuthDomain) tailscaleDisabled(w http.ResponseWriter, r *http.Request) {
 func (d *AuthDomain) remoteAuth(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Key string `json:"key"`
+		PIN string `json:"pin"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid request body.")
@@ -291,9 +300,26 @@ func (d *AuthDomain) remoteAuth(w http.ResponseWriter, r *http.Request) {
 	}
 	storedKey := readRemoteAccessKey(cfg)
 	if !auth.ValidateAPIKey(key, storedKey) {
-		log.Printf("Atlas: remote login rejected — invalid key (ip=%s)", remoteClientIP(r))
-		writeError(w, http.StatusUnauthorized, "Invalid remote access key.")
+		log.Printf("Atlas: remote login rejected — invalid credentials (ip=%s)", remoteClientIP(r))
+		writeError(w, http.StatusUnauthorized, "Invalid credentials.")
 		return
+	}
+	// If a PIN credential is configured, the remote login must also include the
+	// correct PIN. This unifies local and LAN auth under the same credential.
+	if d.localAuth != nil && d.localAuth.HasPINCredential() {
+		ok, rateLimitErr := d.localAuth.VerifyPIN(remoteClientIP(r), req.PIN)
+		if rateLimitErr != nil {
+			log.Printf("Atlas: remote login rate-limited (ip=%s)", remoteClientIP(r))
+			writeError(w, http.StatusTooManyRequests, rateLimitErr.Error())
+			return
+		}
+		if !ok {
+			log.Printf("Atlas: remote login rejected — invalid credentials (ip=%s)", remoteClientIP(r))
+			// Use the same error message as an invalid key to avoid leaking which
+			// factor failed (prevents independent brute-force of each factor).
+			writeError(w, http.StatusUnauthorized, "Invalid credentials.")
+			return
+		}
 	}
 	sess := d.svc.CreateSession(true)
 	w.Header().Set("Set-Cookie", auth.SessionSetCookieValueForRequest(sess, r))
@@ -554,7 +580,17 @@ func remoteClientIP(r *http.Request) string {
 	return host
 }
 
-func remoteGateHTML() string {
+func remoteGateHTML(pinRequired bool) string {
+	pinField := ""
+	pinBody := ""
+	if pinRequired {
+		pinField = `
+    <div class="field">
+      <label for="p">PIN</label>
+      <input id="p" type="password" placeholder="Enter your PIN" autocomplete="current-password">
+    </div>`
+		pinBody = `,pin:document.getElementById('p').value`
+	}
 	return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -683,12 +719,12 @@ button:disabled{opacity:.55;cursor:not-allowed}
 <body>
 <div class="card">
   <h1>Authorize Remote Access</h1>
-  <p class="subtitle">Enter your remote access key to connect to this Atlas runtime.</p>
+  <p class="subtitle">Enter your credentials to connect to this Atlas runtime.</p>
   <form id="f" onsubmit="event.preventDefault();login()">
     <div class="field">
       <label for="k">Access Key</label>
       <input id="k" type="password" placeholder="Paste your remote access key" autocomplete="current-password" autofocus>
-    </div>
+    </div>` + pinField + `
     <button type="submit" id="btn">Connect</button>
     <div class="err" id="err"></div>
   </form>
@@ -702,11 +738,12 @@ async function login(){
   btn.disabled=true;btn.textContent='Connecting\u2026';
   err.style.display='none';
   try{
-    var res=await fetch('/auth/remote',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:k})});
+    var body={key:k` + pinBody + `};
+    var res=await fetch('/auth/remote',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(res.ok){window.location='/web';return;}
     var j=await res.json().catch(function(){return{};});
     showErr(j.error||'Login failed ('+res.status+')');
-  }catch(e){showErr('Network error. Check that Atlas is running on the host Mac.');}
+  }catch(e){showErr('Network error. Check that Atlas is running on the host.');}
   btn.disabled=false;btn.textContent='Connect';
 }
 function showErr(msg){var e=document.getElementById('err');e.textContent=msg;e.style.display='block';}
