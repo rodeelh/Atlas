@@ -736,7 +736,6 @@ type ConversationRow struct {
 // web UI list view, matching the contracts.ts ConversationSummary interface.
 type ConversationSummaryRow struct {
 	ID                   string
-	Title                string
 	CreatedAt            string
 	UpdatedAt            string
 	Platform             string
@@ -756,7 +755,6 @@ func (db *DB) ListConversationSummaries(limit int) ([]ConversationSummaryRow, er
 	rows, err := db.conn.Query(`
 		SELECT
 			c.conversation_id,
-			c.title,
 			c.created_at,
 			c.updated_at,
 			c.platform,
@@ -780,7 +778,7 @@ func (db *DB) ListConversationSummaries(limit int) ([]ConversationSummaryRow, er
 	for rows.Next() {
 		var r ConversationSummaryRow
 		if err := rows.Scan(
-			&r.ID, &r.Title, &r.CreatedAt, &r.UpdatedAt, &r.Platform, &r.PlatformContext,
+			&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.Platform, &r.PlatformContext,
 			&r.MessageCount, &r.FirstUserMessage, &r.LastAssistantMessage,
 		); err != nil {
 			return nil, err
@@ -800,7 +798,6 @@ func (db *DB) SearchConversationSummaries(query string, limit int) ([]Conversati
 	rows, err := db.conn.Query(`
 		SELECT
 			c.conversation_id,
-			c.title,
 			c.created_at,
 			c.updated_at,
 			c.platform,
@@ -813,13 +810,13 @@ func (db *DB) SearchConversationSummaries(query string, limit int) ([]Conversati
 			 WHERE m3.conversation_id = c.conversation_id AND m3.role = 'assistant'
 			 ORDER BY m3.timestamp DESC LIMIT 1) AS last_assistant_message
 		FROM conversations c
-		WHERE (LOWER(c.title) LIKE LOWER(?) OR EXISTS (
+		WHERE EXISTS (
 			SELECT 1 FROM messages mx
 			WHERE mx.conversation_id = c.conversation_id
 			AND LOWER(mx.content) LIKE LOWER(?)
-		))
+		)
 		ORDER BY c.updated_at DESC
-		LIMIT ?`, like, like, limit)
+		LIMIT ?`, like, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -829,7 +826,7 @@ func (db *DB) SearchConversationSummaries(query string, limit int) ([]Conversati
 	for rows.Next() {
 		var r ConversationSummaryRow
 		if err := rows.Scan(
-			&r.ID, &r.Title, &r.CreatedAt, &r.UpdatedAt, &r.Platform, &r.PlatformContext,
+			&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.Platform, &r.PlatformContext,
 			&r.MessageCount, &r.FirstUserMessage, &r.LastAssistantMessage,
 		); err != nil {
 			return nil, err
@@ -909,7 +906,6 @@ type MessageRow struct {
 	Role           string
 	Content        string
 	Timestamp      string
-	IsPinned       bool
 }
 
 // SaveMessage inserts a message and updates the conversation's updated_at.
@@ -939,7 +935,7 @@ func (db *DB) SaveMessage(id, convID, role, content, timestamp string) error {
 // ListMessages returns all messages for a conversation ordered by timestamp ASC.
 func (db *DB) ListMessages(convID string) ([]MessageRow, error) {
 	rows, err := db.conn.Query(
-		`SELECT message_id, conversation_id, role, content, timestamp, COALESCE(is_pinned, 0)
+		`SELECT message_id, conversation_id, role, content, timestamp
 		 FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC`, convID)
 	if err != nil {
 		return nil, err
@@ -949,32 +945,12 @@ func (db *DB) ListMessages(convID string) ([]MessageRow, error) {
 	var out []MessageRow
 	for rows.Next() {
 		var r MessageRow
-		var pinned int
-		if err := rows.Scan(&r.ID, &r.ConversationID, &r.Role, &r.Content, &r.Timestamp, &pinned); err != nil {
+		if err := rows.Scan(&r.ID, &r.ConversationID, &r.Role, &r.Content, &r.Timestamp); err != nil {
 			return nil, err
 		}
-		r.IsPinned = pinned != 0
 		out = append(out, r)
 	}
 	return out, rows.Err()
-}
-
-// RenameConversation sets the user-visible title for a conversation.
-func (db *DB) RenameConversation(id, title string) error {
-	_, err := db.conn.Exec(
-		`UPDATE conversations SET title = ? WHERE conversation_id = ?`, title, id)
-	return err
-}
-
-// PinMessage sets or clears the is_pinned flag on a message.
-func (db *DB) PinMessage(msgID string, pinned bool) error {
-	val := 0
-	if pinned {
-		val = 1
-	}
-	_, err := db.conn.Exec(
-		`UPDATE messages SET is_pinned = ? WHERE message_id = ?`, val, msgID)
-	return err
 }
 
 // ── Deferred executions ───────────────────────────────────────────────────────

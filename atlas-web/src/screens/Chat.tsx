@@ -60,7 +60,6 @@ interface Message {
   content: string
   isTyping?: boolean
   createdAt?: number
-  isPinned?: boolean
   /** URL → preview map so each card can be anchored to its source URL. */
   linkPreviews?: Record<string, LinkPreview>
   /** Files produced by tools during this assistant turn. */
@@ -189,7 +188,7 @@ function saveMessages(msgs: Message[]) {
   try {
     const toSave = msgs
       .filter(m => m.content.length > 0 && !m.isTyping)
-      .map(({ id, role, content, createdAt, fileAttachments, isPinned }) => ({ id, role, content, createdAt, fileAttachments, isPinned }))
+      .map(({ id, role, content, createdAt, fileAttachments }) => ({ id, role, content, createdAt, fileAttachments }))
     localStorage.setItem(STORAGE_MSG_KEY, JSON.stringify(toSave))
   } catch {
     // QuotaExceededError — storage full; skip silently
@@ -776,10 +775,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
   const dragCounterRef                          = useRef(0)
   // Proactive message composing indicator (background SSE turn in progress)
   const [proactiveComposing, setProactiveComposing] = useState(false)
-  // Rename state — tracks which history item is being renamed
-  const [renamingConvId, setRenamingConvId]     = useState<string | null>(null)
-  const [renameValue, setRenameValue]           = useState('')
-  const renameInputRef                          = useRef<HTMLInputElement>(null)
 
   const PROMPTS = [
     'Help me draft an email',
@@ -1038,8 +1033,8 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
         // This avoids clobbering an active in-progress turn or a fresh session.
         setMessages(prev => {
           if (serverMsgs.length > prev.filter(m => !m.isTyping).length) {
-            return serverMsgs.map((m: { id: string; role: string; content: string; isPinned?: boolean }) => ({
-              id: m.id, role: m.role as 'user' | 'assistant', content: m.content, isPinned: m.isPinned,
+            return serverMsgs.map((m: { id: string; role: string; content: string }) => ({
+              id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
             }))
           }
           return prev
@@ -1287,7 +1282,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       const detail: ConversationDetail = await api.conversationDetail(id)
       const loaded: Message[] = detail.messages
         .filter(m => m.role === 'user' || m.role === 'assistant')
-        .map(m => ({ id: m.id, role: m.role as 'user' | 'assistant', content: m.content, isPinned: m.isPinned }))
+        .map(m => ({ id: m.id, role: m.role as 'user' | 'assistant', content: m.content }))
       setMessages(loaded)
     } catch (err) {
       setMessages([])
@@ -1305,7 +1300,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
           role: m.role as 'user' | 'assistant',
           content: m.content,
           createdAt: new Date(m.timestamp).getTime(),
-          isPinned: m.isPinned,
         }))
       setMessages(loaded)
       return loaded
@@ -1734,20 +1728,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     setAttachments(prev => [...prev, ...loaded])
   }, [])
 
-  // ── Pin message (Feature 8) ───────────────────────────────────────────────────
-
-  const togglePin = useCallback(async (msgId: string, currentlyPinned: boolean) => {
-    const next = !currentlyPinned
-    // Optimistic update
-    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, isPinned: next } : m))
-    try {
-      await api.pinMessage(msgId, next)
-    } catch {
-      // Rollback on failure
-      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, isPinned: currentlyPinned } : m))
-    }
-  }, [])
-
   // ── Stop ───────────────────────────────────────────────────────────────────────
 
   const stopTurn = () => {
@@ -2068,30 +2048,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     }, 1800)
   }
 
-  // ── Rename conversation (Feature 2) ──────────────────────────────────────────
-
-  const startRename = (id: string, currentTitle: string, e: MouseEvent) => {
-    e.stopPropagation()
-    setRenamingConvId(id)
-    setRenameValue(currentTitle)
-    setTimeout(() => renameInputRef.current?.focus(), 30)
-  }
-
-  const commitRename = async () => {
-    if (!renamingConvId) return
-    const id = renamingConvId
-    const title = renameValue.trim()
-    setRenamingConvId(null)
-    // Optimistic update in the dropdown list
-    setHistorySummaries(prev => prev.map(s => s.id === id ? { ...s, title } : s))
-    try {
-      await api.renameConversation(id, title)
-    } catch {
-      // Reload list on failure
-      api.conversations(50, 0).then(setHistorySummaries).catch(() => {})
-    }
-  }
-
   const newConversation = () => {
     const id = uuid()
     localStorage.setItem(STORAGE_ID_KEY, id)
@@ -2215,13 +2171,11 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                         {historySummaries.map((s, i) => {
                           const diff = Date.now() - new Date(s.updatedAt).getTime()
                           const rel = diff < 60000 ? 'Just now' : diff < 3600000 ? `${Math.floor(diff / 60000)}m ago` : diff < 86400000 ? `${Math.floor(diff / 3600000)}h ago` : diff < 604800000 ? `${Math.floor(diff / 86400000)}d ago` : new Date(s.updatedAt).toLocaleDateString()
-                          const displayTitle = s.title || s.firstUserMessage || ''
-                          const isRenaming = renamingConvId === s.id
                           return (
                             <div
                               key={s.id}
                               class={`chat-history-item${i < historySummaries.length - 1 ? ' bordered' : ''}`}
-                              onClick={() => !isRenaming && resumeConversation(s.id)}
+                              onClick={() => resumeConversation(s.id)}
                             >
                               <div class="chat-history-item-meta">
                                 <div class="chat-history-item-left">
@@ -2230,46 +2184,11 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                                     <span class="chat-history-platform-badge">{s.platform}</span>
                                   )}
                                 </div>
-                                <div class="chat-history-item-actions">
-                                  <span class="chat-history-item-count">{s.messageCount} msgs</span>
-                                  <button
-                                    class="chat-history-rename-btn"
-                                    onClick={(e) => startRename(s.id, s.title || '', e as MouseEvent)}
-                                    title="Rename conversation"
-                                    aria-label="Rename conversation"
-                                  >
-                                    <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                      <path d="M11 2l3 3-9 9H2v-3L11 2z"/>
-                                    </svg>
-                                  </button>
-                                </div>
+                                <span class="chat-history-item-count">{s.messageCount} msgs</span>
                               </div>
-                              {isRenaming ? (
-                                <input
-                                  ref={renameInputRef}
-                                  class="chat-history-rename-input"
-                                  value={renameValue}
-                                  placeholder={s.firstUserMessage || 'Conversation name…'}
-                                  onInput={(e) => setRenameValue((e.target as HTMLInputElement).value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') { e.preventDefault(); commitRename() }
-                                    if (e.key === 'Escape') { setRenamingConvId(null) }
-                                    e.stopPropagation()
-                                  }}
-                                  onBlur={commitRename}
-                                  onClick={(e) => e.stopPropagation()}
-                                />
-                              ) : (
-                                <div class="chat-history-item-title">
-                                  {displayTitle
-                                    ? <>{s.title && <span class="chat-history-item-title-label">{s.title}</span>}{!s.title && (s.firstUserMessage || <em class="chat-history-item-empty">No messages</em>)}</>
-                                    : <em class="chat-history-item-empty">No messages</em>
-                                  }
-                                </div>
-                              )}
-                              {s.title && s.lastAssistantMessage && (
-                                <div class="chat-history-item-snippet">{s.lastAssistantMessage.slice(0, 80)}{s.lastAssistantMessage.length > 80 ? '…' : ''}</div>
-                              )}
+                              <div class="chat-history-item-title">
+                                {s.firstUserMessage || <em class="chat-history-item-empty">No messages</em>}
+                              </div>
                             </div>
                           )
                         })}
@@ -2381,7 +2300,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
             <div
               key={msg.id}
               data-msg-id={msg.id}
-              class={`chat-message-group ${msg.role}${msg.isTyping ? ' typing' : ''}${revealedCopyId === msg.id ? ' meta-visible' : ''}${msg.isPinned ? ' pinned' : ''}`}
+              class={`chat-message-group ${msg.role}${msg.isTyping ? ' typing' : ''}${revealedCopyId === msg.id ? ' meta-visible' : ''}`}
             >
               <div class="chat-message-row">
                 <div class={`chat-avatar chat-avatar-${msg.role}`}>
@@ -2444,18 +2363,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                           </button>
                         )
                       })()}
-                      <button
-                        class={`chat-meta-pin-btn${msg.isPinned ? ' pinned' : ''}`}
-                        onClick={(e) => { e.stopPropagation(); togglePin(msg.id, !!msg.isPinned) }}
-                        title={msg.isPinned ? 'Unpin message' : 'Pin message'}
-                        aria-label={msg.isPinned ? 'Unpin message' : 'Pin message'}
-                        aria-pressed={msg.isPinned ? 'true' : 'false'}
-                      >
-                        <svg width="11" height="11" viewBox="0 0 16 16" fill={msg.isPinned ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                          <path d="M9.5 2L14 6.5l-5 5-1-1-3 3-1.5-1.5 3-3-1-1L9.5 2z"/>
-                          <line x1="2" y1="14" x2="6" y2="10"/>
-                        </svg>
-                      </button>
                       {msg.createdAt && (
                         <span class="chat-timestamp">{formatTime(msg.createdAt)}</span>
                       )}

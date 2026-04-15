@@ -1940,62 +1940,6 @@ main {
   color: var(--theme-text-muted);
 }
 
-.chat-history-item-title-label {
-  font-weight: 500;
-}
-
-.chat-history-item-snippet {
-  font-size: 11.5px;
-  color: var(--theme-text-muted);
-  margin-top: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Actions area in history item header (rename button + count) */
-.chat-history-item-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.chat-history-rename-btn {
-  appearance: none;
-  -webkit-appearance: none;
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--text-3);
-  padding: 2px 3px;
-  border-radius: 4px;
-  display: inline-flex;
-  align-items: center;
-  opacity: 0;
-  transition: opacity 0.12s, color 0.12s;
-}
-
-.chat-history-item:hover .chat-history-rename-btn {
-  opacity: 1;
-}
-
-.chat-history-rename-btn:hover {
-  color: var(--text);
-}
-
-.chat-history-rename-input {
-  width: 100%;
-  font-size: 13px;
-  font-family: var(--font-ui);
-  color: var(--theme-text-primary);
-  background: var(--surface-2);
-  border: 1px solid var(--accent);
-  border-radius: 5px;
-  padding: 3px 7px;
-  outline: none;
-  margin-top: 2px;
-}
-
 .chat-history-footer {
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   padding: 6px 8px;
@@ -3057,40 +3001,6 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 
 .chat-meta-copy-btn.failed {
   color: var(--yellow);
-}
-
-/* Pin button (Feature 8) */
-.chat-meta-pin-btn {
-  appearance: none;
-  -webkit-appearance: none;
-  background: none;
-  border: none;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  padding: 3px;
-  box-sizing: content-box;
-  color: var(--text-3);
-  border-radius: 4px;
-  transition: color 0.12s ease;
-  flex-shrink: 0;
-}
-
-.chat-meta-pin-btn:hover {
-  color: var(--accent);
-}
-
-.chat-meta-pin-btn.pinned {
-  color: var(--accent);
-}
-
-/* Pinned message bubble — subtle left border accent */
-.chat-message-group.pinned .chat-bubble {
-  border-left: 2px solid var(--accent);
-  padding-left: calc(var(--bubble-padding-x, 14px) - 2px);
 }
 
 /* Drag-and-drop overlay (Feature 5) */

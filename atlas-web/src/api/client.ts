@@ -424,16 +424,6 @@ export const api = {
     get<ConversationSummary[]>('/conversations/search', { query, limit }),
   conversationDetail: (id: string) =>
     get<ConversationDetail>(`/conversations/${encodeURIComponent(id)}`),
-  renameConversation: (id: string, title: string) =>
-    request<{ id: string; title: string }>(`/conversations/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ title }),
-    }),
-  pinMessage: (id: string, pinned: boolean) =>
-    request<void>(`/messages/${encodeURIComponent(id)}/pin`, {
-      method: 'PATCH',
-      body: JSON.stringify({ pinned }),
-    }),
   clearAllConversations: () => request<void>('/conversations', { method: 'DELETE' }),
 
   // Link Preview
