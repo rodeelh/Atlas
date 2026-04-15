@@ -22,10 +22,10 @@ const SAFETY_LABELS: Record<string, string> = {
 }
 
 const CLOUD_PROVIDERS = [
-  { id: 'openai', label: 'OpenAI' },
-  { id: 'anthropic', label: 'Claude (Anthropic)' },
-  { id: 'gemini', label: 'Gemini (Google)' },
-  { id: 'openrouter', label: 'OpenRouter' },
+  { id: 'openai',     label: 'OpenAI',            recommended: true  },
+  { id: 'anthropic',  label: 'Claude (Anthropic)', recommended: false },
+  { id: 'gemini',     label: 'Gemini (Google)',    recommended: false },
+  { id: 'openrouter', label: 'OpenRouter',         recommended: false },
 ] as const
 
 const LOCAL_BACKENDS = [
@@ -519,7 +519,7 @@ export function AIProviders() {
                 await fetchCloudModels(provider, true)
               }}
             >
-              {CLOUD_PROVIDERS.map((provider) => <option key={provider.id} value={provider.id}>{provider.label}</option>)}
+              {CLOUD_PROVIDERS.map((provider) => <option key={provider.id} value={provider.id}>{provider.label}{provider.recommended ? ' — Recommended' : ''}</option>)}
             </select>
           </SettingsRow>
           <ModelSelectRow
@@ -578,7 +578,7 @@ export function AIProviders() {
                 await fetchCloudModels(provider, true)
               }}
             >
-              {CLOUD_PROVIDERS.map((provider) => <option key={provider.id} value={provider.id}>{provider.label}</option>)}
+              {CLOUD_PROVIDERS.map((provider) => <option key={provider.id} value={provider.id}>{provider.label}{provider.recommended ? ' — Recommended' : ''}</option>)}
             </select>
           </SettingsRow>
           <ModelSelectRow

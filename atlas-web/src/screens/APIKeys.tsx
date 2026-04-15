@@ -51,7 +51,11 @@ export function APIKeys() {
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState<string | null>(null)
   const [addingNew, setAddingNew] = useState(false)
+  const [search, setSearch]       = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
   const loadingRef                = useRef(false)
+  const searchInputRef            = useRef<HTMLInputElement>(null)
+  const searchContainerRef        = useRef<HTMLDivElement>(null)
 
   const loadKeys = () => {
     if (loadingRef.current) return
@@ -72,6 +76,19 @@ export function APIKeys() {
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [])
+
+  // Close search on click-outside
+  useEffect(() => {
+    if (!searchOpen) return
+    const handler = (e: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setSearchOpen(false)
+        setSearch('')
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [searchOpen])
 
   const handleSaved = (updated: APIKeyStatus) =>
     setKeyStatus({ ...updated, customKeys: updated.customKeys ?? [] })
@@ -112,6 +129,18 @@ export function APIKeys() {
     })
   })()
 
+  const keyStatusMap     = keyStatus as Record<string, unknown> | null
+  const searchQuery      = search.trim().toLowerCase()
+  const configuredRows   = providers.filter(p => keyStatusMap?.[p.key] === true)
+  const unconfiguredRows = providers.filter(p => keyStatusMap?.[p.key] !== true)
+
+  const searchResults = searchQuery
+    ? providers.filter(p =>
+        p.label.toLowerCase().includes(searchQuery) ||
+        p.sublabel.toLowerCase().includes(searchQuery)
+      )
+    : null
+
   return (
     <div class="screen credentials-screen">
       <PageHeader title="Credentials" subtitle="Keys, tokens, and provider credentials Atlas uses to operate." />
@@ -121,18 +150,94 @@ export function APIKeys() {
       {/* Built-in providers */}
       <div>
         <div class="card settings-group">
-          <div class="card-header"><span class="card-title">Providers</span></div>
-          {providers.map((p, i) => (
-            <KeyRow
-              key={p.id}
-              providerID={p.id}
-              label={p.label}
-              sublabel={p.sublabel}
-              configured={(keyStatus as Record<string, unknown> | null)?.[p.key] === true}
-              last={i === providers.length - 1}
-              onSaved={handleSaved}
-            />
-          ))}
+          <div class="card-header">
+            <span class="card-title">Providers</span>
+            <div ref={searchContainerRef} class={`chat-history-search${searchOpen ? ' open' : ''}`}>
+              <button
+                class="chat-history-search-trigger"
+                onClick={() => {
+                  if (!searchOpen) {
+                    setSearchOpen(true)
+                    setTimeout(() => searchInputRef.current?.focus(), 180)
+                  }
+                }}
+                title="Search providers"
+                aria-label="Search providers"
+              >
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="6.5" cy="6.5" r="4.5" /><line x1="10" y1="10" x2="14" y2="14" />
+                </svg>
+              </button>
+              <input
+                ref={searchInputRef}
+                class="chat-history-search-input"
+                type="text"
+                placeholder="Search providers…"
+                value={search}
+                onInput={e => setSearch((e.target as HTMLInputElement).value)}
+                onKeyDown={e => {
+                  if (e.key === 'Escape') { setSearchOpen(false); setSearch('') }
+                }}
+                tabIndex={searchOpen ? 0 : -1}
+              />
+              <button
+                class="chat-history-close-btn"
+                onClick={() => { setSearchOpen(false); setSearch('') }}
+                aria-label="Clear search"
+              >
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                  <line x1="1" y1="1" x2="11" y2="11" /><line x1="11" y1="1" x2="1" y2="11" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          {searchResults ? (
+            // Search active — flat list of all matching
+            searchResults.map((p, i) => (
+              <KeyRow
+                key={p.id}
+                providerID={p.id}
+                label={p.label}
+                sublabel={p.sublabel}
+                configured={keyStatusMap?.[p.key] === true}
+                last={i === searchResults.length - 1}
+                onSaved={handleSaved}
+              />
+            ))
+          ) : (
+            <>
+              {configuredRows.map((p, i) => (
+                <KeyRow
+                  key={p.id}
+                  providerID={p.id}
+                  label={p.label}
+                  sublabel={p.sublabel}
+                  configured
+                  last={i === configuredRows.length - 1 && unconfiguredRows.length === 0}
+                  onSaved={handleSaved}
+                />
+              ))}
+              {unconfiguredRows.length > 0 && (
+                <details class="ai-provider-advanced-panel">
+                  <summary>{unconfiguredRows.length} unconfigured</summary>
+                  <div class="ai-provider-advanced-panel-body">
+                    {unconfiguredRows.map((p, i) => (
+                      <KeyRow
+                        key={p.id}
+                        providerID={p.id}
+                        label={p.label}
+                        sublabel={p.sublabel}
+                        configured={false}
+                        last={i === unconfiguredRows.length - 1}
+                        onSaved={handleSaved}
+                      />
+                    ))}
+                  </div>
+                </details>
+              )}
+            </>
+          )}
         </div>
       </div>
 
@@ -371,10 +476,9 @@ function AddKeyRow({ last, onSaved, onCancel }: { last: boolean; onSaved: (u: AP
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 function StatusBadge({ configured }: { configured: boolean }) {
+  if (!configured) return null
   return (
-    <span class={`badge ${configured ? 'badge-green' : 'badge-red'}`} style={BADGE_STYLE}>
-      {configured ? 'Configured' : 'Not configured'}
-    </span>
+    <span class="badge badge-green" style={BADGE_STYLE}>Configured</span>
   )
 }
 

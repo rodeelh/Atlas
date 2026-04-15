@@ -3,6 +3,7 @@ import { api, CommunicationChannel, CommunicationPlatformStatus, CommunicationsS
 import { PageHeader } from '../components/PageHeader'
 import { Portal } from '../components/Portal'
 import { ErrorBanner } from '../components/ErrorBanner'
+import { EmptyState } from '../components/EmptyState'
 
 type PlatformID = CommunicationPlatformStatus['platform']
 type SetupField = {
@@ -391,104 +392,102 @@ export function Communications() {
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
 
+      {/* Empty state — shown above Channels card when nothing is connected */}
+      {readyPlatforms.length === 0 && (
+        <EmptyState
+          icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="0.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5h5.5A1.5 1.5 0 0 1 13 4v3.5A1.5 1.5 0 0 1 11.5 9H9l-2 2V9H6A1.5 1.5 0 0 1 4.5 7.5V4A1.5 1.5 0 0 1 6 2.5z" /><path d="M4.5 6H3A1.5 1.5 0 0 0 1.5 7.5V11l2-1.5h1" /></svg>}
+          title="No channels connected"
+          body="Connect a messaging platform to start receiving and sending messages through Atlas."
+        />
+      )}
+
+      {/* Channels card */}
       <div>
         <div class="card settings-group">
-          <div class="card-header"><span class="card-title">Connected Channels</span></div>
-          {readyPlatforms.length === 0 && (
-            <div class="communication-empty-state">
-              No channels are connected yet. Use Add Channel to set up Telegram, Discord, or Slack.
-            </div>
-          )}
+          <div class="card-header"><span class="card-title">Channels</span></div>
           {readyPlatforms.map((platform, index) => (
             <ConnectedPlatformRow
               key={platform.id}
               platform={platform}
-              idle={!activePlatformsWithRecentSessions.has(platform.platform)}
-              last={index === readyPlatforms.length - 1}
+              last={index === readyPlatforms.length - 1 && addablePlatforms.length === 0}
               busy={busyPlatform === `${platform.platform}:disable` || busyPlatform === `${platform.platform}:validate`}
               onDisable={() => disablePlatform(platform.platform)}
               onValidate={() => revalidatePlatform(platform.platform)}
             />
           ))}
+          {addablePlatforms.length > 0 && (
+            readyPlatforms.length === 0 ? (
+              // No connected channels — show platforms directly, no collapse header
+              addablePlatforms.map(platform => (
+                <button
+                  key={platform.id}
+                  class="communication-picker-row communication-platform-row"
+                  onClick={() => { void choosePlatform(platform.platform) }}
+                >
+                  <div class="communication-platform-summary">
+                    <PlatformLogo platform={platform.platform} />
+                    <div class="settings-label-col">
+                      <div class="settings-label">
+                        {platformLabel(platform.platform)}
+                        {platform.platform === 'telegram' && <span class="badge badge-blue" style="margin-left:6px">Recommended</span>}
+                      </div>
+                      <div class="settings-sublabel">{platformSubtitle(platform.platform)}</div>
+                    </div>
+                  </div>
+                  <div class="communication-platform-controls communication-platform-controls-bottom">
+                    <div class="communication-platform-actions">
+                      <span class="btn btn-sm communication-platform-action-btn">Connect</span>
+                    </div>
+                  </div>
+                </button>
+              ))
+            ) : (
+              // Some channels connected — collapse the rest
+              <details class="ai-provider-advanced-panel">
+                <summary>{addablePlatforms.length} not configured</summary>
+                <div class="ai-provider-advanced-panel-body">
+                  {addablePlatforms.map(platform => (
+                    <button
+                      key={platform.id}
+                      class="communication-picker-row communication-platform-row"
+                      onClick={() => { void choosePlatform(platform.platform) }}
+                    >
+                      <div class="communication-platform-summary">
+                        <PlatformLogo platform={platform.platform} />
+                        <div class="settings-label-col">
+                          <div class="settings-label">
+                            {platformLabel(platform.platform)}
+                            {platform.platform === 'telegram' && <span class="badge badge-blue" style="margin-left:6px">Recommended</span>}
+                          </div>
+                          <div class="settings-sublabel">{platformSubtitle(platform.platform)}</div>
+                        </div>
+                      </div>
+                      <div class="communication-platform-controls communication-platform-controls-bottom">
+                        <div class="communication-platform-actions">
+                          <span class="btn btn-sm communication-platform-action-btn">Connect</span>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </details>
+            )
+          )}
         </div>
       </div>
 
+      {/* Recent Sessions */}
       <div>
         <div class="card settings-group">
           <div class="card-header"><span class="card-title">Recent Sessions</span></div>
           {recentChannels.length === 0 && (
             <div class="communication-empty-state">
-              No sessions in the last 7 days. Once a ready integration receives a message, it will appear here.
+              No sessions in the last 7 days. Once a connected channel receives a message it will appear here.
             </div>
           )}
           {recentChannels.map((channel, index) => (
             <CommunicationChannelRow key={channel.id} channel={channel} last={index === recentChannels.length - 1} />
           ))}
-        </div>
-      </div>
-
-      <div>
-        <div class="card communication-routing-card">
-          <div class="card-header"><span class="card-title">Routing</span></div>
-          <div class="settings-row communication-routing-row">
-            <div class="settings-label-col">
-              <div class="communication-platform-heading">
-                <div class="settings-label">Inbound routing</div>
-                <div class="badge badge-green">Unified</div>
-              </div>
-              <div class="settings-sublabel">All connected channels route into the same Atlas runtime.</div>
-            </div>
-          </div>
-          <div class="settings-row communication-routing-row">
-            <div class="settings-label-col">
-              <div class="communication-platform-heading">
-                <div class="settings-label">Outbound automations</div>
-                <div class="badge badge-gray">{recentChannels.filter(channel => channel.canReceiveNotifications).length} channels</div>
-              </div>
-              <div class="settings-sublabel">Automation results can target any notification-capable ready channel.</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div>
-        <div class="card settings-group">
-          <div class="card-header"><span class="card-title">Add Channel</span></div>
-          {addablePlatforms.length > 0 && (
-            <div class="settings-row">
-              <div class="settings-label-col">
-                <div class="settings-label">Available Apps</div>
-                <div class="settings-sublabel">Choose any supported app that is not fully configured yet to open guided setup.</div>
-              </div>
-            </div>
-          )}
-          <div>
-            {addablePlatforms.map(platform => (
-              <button
-                key={platform.id}
-                class="communication-picker-row communication-platform-row"
-                onClick={() => { void choosePlatform(platform.platform) }}
-              >
-                <div class="communication-platform-summary">
-                  <PlatformLogo platform={platform.platform} />
-                  <div class="settings-label-col">
-                    <div class="communication-platform-heading">
-                      <div class="settings-label">{platformLabel(platform.platform)}</div>
-                    </div>
-                    <div class="settings-sublabel">{platformSubtitle(platform.platform)}</div>
-                  </div>
-                </div>
-                <div class="communication-platform-controls communication-platform-controls-bottom">
-                  <div class="communication-platform-actions">
-                    <span class="btn btn-sm communication-platform-action-btn">Configure</span>
-                  </div>
-                </div>
-              </button>
-            ))}
-            {addablePlatforms.length === 0 && (
-              <div class="communication-empty-state">All supported communication apps are already configured.</div>
-            )}
-          </div>
         </div>
       </div>
 
@@ -513,14 +512,12 @@ export function Communications() {
 
 function ConnectedPlatformRow({
   platform,
-  idle,
   last,
   busy,
   onDisable,
   onValidate,
 }: {
   platform: CommunicationPlatformStatus
-  idle: boolean
   last: boolean
   busy: boolean
   onDisable: () => void
@@ -536,13 +533,12 @@ function ConnectedPlatformRow({
             <span class={setupBadgeClass(platform)}>{platform.statusLabel}</span>
           </div>
           <div class="settings-sublabel communication-bot-label">{platformBotLabel(platform)}</div>
-          {idle && <div class="settings-sublabel">No messages in the last 7 days.</div>}
           {platform.blockingReason && <div class="settings-sublabel" style={{ color: 'var(--text-2)', marginTop: '4px' }}>{platform.blockingReason}</div>}
         </div>
       </div>
       <div class="communication-platform-controls">
         <div class="communication-platform-actions">
-          <button class="btn btn-sm communication-platform-action-btn" onClick={onValidate} disabled={busy}>
+          <button class="btn btn-sm btn-ghost communication-platform-action-btn" onClick={onValidate} disabled={busy}>
             {busy ? 'Working…' : 'Validate'}
           </button>
           <button class="btn btn-sm btn-danger communication-platform-action-btn" onClick={onDisable} disabled={busy}>
@@ -675,30 +671,14 @@ function CommunicationChannelRow({ channel, last }: { channel: CommunicationChan
   const lastSeen = formatLastSeen(channel.updatedAt)
 
   return (
-    <div class="settings-row communication-session-row" style={{ borderBottom: last ? 'none' : undefined }}>
+    <div class="settings-row communication-platform-row" style={{ borderBottom: last ? 'none' : undefined }}>
       <div class="communication-platform-summary">
         <PlatformLogo platform={channel.platform} />
         <div class="settings-label-col">
           <div class="communication-platform-heading">
-            <div class="settings-label">{platformLabel(channel.platform)}</div>
-            {channel.canReceiveNotifications && <span class="badge badge-green">Notifications</span>}
+            <div class="settings-label">{channel.channelName || platformLabel(channel.platform)}</div>
           </div>
-          <div class="settings-sublabel" title={lastSeen.absolute}>
-            Last seen {lastSeen.relative}
-          </div>
-        </div>
-      </div>
-      <div class="communication-session-meta">
-        {channel.channelName && (
-          <div class="settings-sublabel">
-            Chat name: {channel.channelName}
-          </div>
-        )}
-        <div class="settings-sublabel">
-          Chat ID: {channel.channelID}
-        </div>
-        <div class="settings-sublabel">
-          Conversation ID: {channel.activeConversationID}
+          <div class="settings-sublabel" title={lastSeen.absolute}>Last seen {lastSeen.relative}</div>
         </div>
       </div>
     </div>
