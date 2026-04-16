@@ -15,8 +15,18 @@ package dashboards
 
 import "sort"
 
-// sizeExtent maps a size token to (widthCols, heightRows). Unknown sizes
-// default to SizeHalf to keep the packer conservative.
+// sizeExtent maps a size token to (widthCols, heightRows).
+// The CSS grid uses `grid-auto-rows: minmax(200px, auto)` so each row is at
+// least 200px and auto-expands when content overflows. Heights here control
+// the *minimum span* — choose values that match typical content for each size:
+//
+//   quarter (3 cols)   — single metric or KPI card:     1 row  ≈ 200px+
+//   third   (4 cols)   — small metric with context:     1 row  ≈ 200px+
+//   half    (6 cols)   — chart, list, grouped metrics:  2 rows ≈ 400px+
+//   tall    (6 cols)   — large chart or long list:      4 rows ≈ 800px+
+//   full    (12 cols)  — wide table, wide chart:        2 rows ≈ 400px+
+//
+// Unknown sizes default to half.
 func sizeExtent(size string, columns int) (int, int) {
 	switch size {
 	case SizeQuarter:
@@ -24,13 +34,13 @@ func sizeExtent(size string, columns int) (int, int) {
 	case SizeThird:
 		return clampCols(4, columns), 1
 	case SizeHalf:
-		return clampCols(6, columns), 1
-	case SizeTall:
 		return clampCols(6, columns), 2
+	case SizeTall:
+		return clampCols(6, columns), 4
 	case SizeFull:
-		return columns, 1
+		return columns, 2
 	default:
-		return clampCols(6, columns), 1
+		return clampCols(6, columns), 2
 	}
 }
 

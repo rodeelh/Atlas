@@ -23,7 +23,7 @@ const (
 )
 
 func mapsHTTPGet(ctx context.Context, rawURL, userAgent string) ([]byte, error) {
-	client := &http.Client{Timeout: mapsHTTPTimeout}
+	client := newWebClient(mapsHTTPTimeout)
 	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
 	if err != nil {
 		return nil, err

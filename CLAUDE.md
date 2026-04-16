@@ -89,9 +89,23 @@ Core rule:
 | `internal/modules/communications/module.go` | Communications module — routes + bridge lifecycle |
 | `internal/modules/forge/module.go` | Forge module — proposal/install routes |
 | `internal/modules/workflows/module.go` | Workflows module — definitions + run routes |
-| `internal/modules/dashboards/module.go` | Dashboards module — list/CRUD + per-widget data resolution |
+| `internal/modules/dashboards/module.go` | Dashboards module — lifecycle, wiring, dependency injection |
+| `internal/modules/dashboards/routes.go` | HTTP handlers: list, get, delete, resolve, refresh, SSE events |
+| `internal/modules/dashboards/skills.go` | `dashboard.*` skill family — list/get/create/update/delete/add_data_source/add_widget/publish |
 | `internal/modules/dashboards/safety.go` | Runtime endpoint allowlist, web SSRF guard, SQL lexer |
-| `internal/modules/dashboards/skills.go` | `dashboard.list/get/create/delete` skill family |
+| `internal/modules/dashboards/resolve.go` | `resolveSource` dispatcher + shared resolver types |
+| `internal/modules/dashboards/resolve_skill.go` | Skill source resolver — calls registry, prefers `Artifacts` over `Summary` |
+| `internal/modules/dashboards/resolve_runtime.go` | Runtime loopback source resolver |
+| `internal/modules/dashboards/resolve_sql.go` | Read-only SQL source resolver |
+| `internal/modules/dashboards/resolve_chat.go` | Chat analytics source resolver |
+| `internal/modules/dashboards/resolve_gremlin.go` | Gremlin run history source resolver |
+| `internal/modules/dashboards/resolve_live.go` | Live-compute source resolver (dispatches to `LiveComputeRunner`) |
+| `internal/modules/dashboards/live_runner.go` | `AILiveComputeRunner` — calls AI provider, strips fences, parses JSON |
+| `internal/modules/dashboards/refresh.go` | SSE coordinator — fan-out, per-dashboard subscriptions, cache replay |
+| `internal/modules/dashboards/compile.go` | TSX/esbuild compilation for custom widget authoring |
+| `internal/modules/dashboards/pack.go` | Dashboard pack/unpack helpers |
+| `internal/modules/dashboards/store.go` | JSON persistence for dashboard definitions |
+| `internal/modules/dashboards/types.go` | All shared types: `Dashboard`, `Widget`, `DataSource`, source kind constants |
 | `internal/modules/skills/module.go` | Skills module — skills routes + fs roots |
 | `internal/modules/agents/module.go` | Agents module — DB-first CRUD routes, Team HQ snapshot, task dispatch, approval/cancel, sync/export |
 | `internal/modules/agents/agent_actions.go` | `team.*`/`agent.*` skills — delegate (single/sequence), create, update, delete, enable/disable, sequence |
@@ -100,7 +114,7 @@ Core rule:
 | `internal/skills/registry.go` | `NewRegistry` — registers all built-in skills |
 | `internal/forge/service.go` | `Propose` — AI research pipeline, in-memory researching list |
 | `internal/forge/store.go` | `forge-proposals.json` and `forge-installed.json` persistence |
-| `internal/storage/db.go` | All SQLite queries |
+| `internal/storage/db.go` | All SQLite queries; `Conn() *sql.DB` exposes the raw handle for read-only consumers |
 | `internal/validate/gate.go` | `Gate.Run` — 3-phase API validation |
 | `internal/memory/extractor.go` | `ExtractAndPersist` — two-stage memory extraction (regex + LLM) after each turn |
 | `internal/mind/reflection.go` | `ReflectNonBlocking` — two-tier MIND.md update after each turn |
@@ -209,9 +223,9 @@ DELETE /skills/:id             — remove custom skill directory
 | New credential field | `internal/creds/bundle.go` `Bundle` struct + update `domain/control.go` `storeAPIKey` mapping |
 | New web UI screen | `atlas-web/src/screens/<Name>.tsx` + route in `atlas-web/src/App.tsx` + types/methods in `atlas-web/src/api/contracts.ts` + `atlas-web/src/api/client.ts` |
 | New Forge skill type | `internal/forge/types.go` |
-| New dashboard widget kind | `atlas-web/src/screens/DashboardWidgets.tsx` (renderer) + add the constant to `internal/modules/dashboards/types.go` + relax `isAllowedGeneratedKind` in `generate.go` |
-| New dashboard starter template | `internal/modules/dashboards/templates.go` — append to the slice returned by `Templates()` |
+| New dashboard widget kind | `atlas-web/src/screens/DashboardWidgets.tsx` (renderer) + add the constant to `internal/modules/dashboards/types.go` |
 | New dashboard runtime data source | Add the path prefix to `runtimeEndpointAllowlist` in `internal/modules/dashboards/safety.go` |
+| New dashboard skill data source | Only `ActionClassRead` skills are permitted; validation happens at `dashboard.add_data_source` time via `skills.Registry.HasAction` + `GetActionClass` in `skills.go` |
 | New storage table | `internal/storage/db.go` `createSchema()` + add query methods |
 | Add a log entry | Call `logstore.Write(level, message, meta)` — visible at `GET /logs` |
 | Extend diary context | `internal/features/diary.go` — `DiaryContext` is injected into system prompt by `chat/service.go` |

@@ -82,7 +82,24 @@ Atlas/
 │       │   ├── usage/                  # Private module — usage reporting routes
 │       │   ├── apivalidation/          # Private module — API validation history routes
 │       │   ├── mind/                   # Private module — mind-thoughts HTTP surface (/mind/*)
-│       │   ├── dashboards/             # Private module — dashboard CRUD + widget data resolution
+│       │   ├── dashboards/             # Private module — schema-driven widget grid, live SSE refresh, AI authoring via dashboard.* skills
+│       │   │   ├── module.go           #   Lifecycle, wiring, dependency injection (SetDatabase, SetSkillExecutor, SetProviderResolver)
+│       │   │   ├── routes.go           #   HTTP handlers: GET /dashboards, GET/DELETE /{id}, POST /{id}/resolve, POST /{id}/refresh, GET /{id}/events
+│       │   │   ├── skills.go           #   dashboard.* skill family — list/get/create/update/delete/add_data_source/add_widget/publish
+│       │   │   ├── safety.go           #   Runtime endpoint allowlist, web SSRF guard, SQL lexer
+│       │   │   ├── resolve.go          #   resolveSource dispatcher + shared resolver deps/types
+│       │   │   ├── resolve_skill.go    #   Skill resolver — calls registry, prefers Artifacts over Summary
+│       │   │   ├── resolve_runtime.go  #   Runtime loopback resolver
+│       │   │   ├── resolve_sql.go      #   Read-only SQL resolver
+│       │   │   ├── resolve_chat.go     #   Chat analytics resolver
+│       │   │   ├── resolve_gremlin.go  #   Gremlin run history resolver
+│       │   │   ├── resolve_live.go     #   live_compute resolver (dispatches to LiveComputeRunner)
+│       │   │   ├── live_runner.go      #   AILiveComputeRunner — calls AI provider, strips fences, parses JSON
+│       │   │   ├── refresh.go          #   SSE coordinator — fan-out, per-dashboard subscriptions, cache replay
+│       │   │   ├── compile.go          #   TSX/esbuild compilation for custom widget authoring
+│       │   │   ├── pack.go             #   Dashboard pack/unpack helpers
+│       │   │   ├── store.go            #   JSON persistence (atomic temp+rename writes)
+│       │   │   └── types.go            #   Dashboard, Widget, DataSource, source kind constants
 │       │   └── agents/                 # Private module — Atlas Teams V1: DB-first agent registry, delegation engine, task orchestration
 │       │       ├── module.go           #   Routes, DB-first CRUD, Team HQ snapshot, approval/cancel, sync/export, trigger coordinator
 │       │       ├── agent_actions.go    #   team.*/agent.* skills — delegate (single/sequence), create/update/delete/enable/disable

@@ -7,6 +7,7 @@ package dashboards
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -129,21 +130,36 @@ var chatAnalyticsQueries = map[string]bool{
 }
 
 // validateAnalyticsQuery reports whether name is a known chat_analytics query.
+// On rejection, the error lists the full allowlist so the agent can pick a
+// valid one instead of guessing (chat_analytics is strictly Atlas's own
+// conversation/memory stats — it is never the right source for news, weather,
+// or other external data).
 func validateAnalyticsQuery(name string) error {
 	if name == "" {
-		return errors.New("chat_analytics query name is required")
+		return fmt.Errorf("chat_analytics query name is required (valid: %s)", listAnalyticsQueries())
 	}
 	if !chatAnalyticsQueries[name] {
-		return fmt.Errorf("unknown chat_analytics query %q", name)
+		return fmt.Errorf("unknown chat_analytics query %q (valid: %s)", name, listAnalyticsQueries())
 	}
 	return nil
 }
 
+func listAnalyticsQueries() string {
+	names := make([]string, 0, len(chatAnalyticsQueries))
+	for k := range chatAnalyticsQueries {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
 // ── live_compute validator ───────────────────────────────────────────────────
 
-// validateLiveCompute checks a live_compute spec has a non-empty prompt, at
-// least one input source, and an output schema. The spec.inputs entries must
-// each be a string (referring to another source name in the same dashboard).
+// validateLiveCompute checks a live_compute spec has a non-empty prompt and
+// an output schema. inputs is optional: omit it (or pass []) for standalone
+// AI-generated content; supply source names to feed resolved data into the
+// prompt. When inputs are provided every entry must be a non-empty string
+// referring to another source name in the same dashboard.
 func validateLiveCompute(cfg map[string]any) error {
 	promptRaw, ok := cfg["prompt"]
 	if !ok {
@@ -152,18 +168,17 @@ func validateLiveCompute(cfg map[string]any) error {
 	if prompt, ok := promptRaw.(string); !ok || strings.TrimSpace(prompt) == "" {
 		return errors.New("live_compute prompt must be a non-empty string")
 	}
-	inputsRaw, ok := cfg["inputs"]
-	if !ok {
-		return errors.New("live_compute requires inputs")
-	}
-	inputs, ok := inputsRaw.([]any)
-	if !ok || len(inputs) == 0 {
-		return errors.New("live_compute inputs must be a non-empty array of source names")
-	}
-	for i, entry := range inputs {
-		name, ok := entry.(string)
-		if !ok || strings.TrimSpace(name) == "" {
-			return fmt.Errorf("live_compute inputs[%d] must be a non-empty string", i)
+	// inputs is optional — omit entirely for standalone AI-generated sources.
+	if inputsRaw, exists := cfg["inputs"]; exists {
+		inputs, ok := inputsRaw.([]any)
+		if !ok {
+			return errors.New("live_compute inputs must be an array of source names (or omit for standalone mode)")
+		}
+		for i, entry := range inputs {
+			name, ok := entry.(string)
+			if !ok || strings.TrimSpace(name) == "" {
+				return fmt.Errorf("live_compute inputs[%d] must be a non-empty string", i)
+			}
 		}
 	}
 	if _, ok := cfg["outputSchema"]; !ok {

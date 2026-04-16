@@ -80,9 +80,21 @@ function WidgetCell({ dashboardID, widget, sourceData, sourceError, sourceAt }: 
     gridRow:    `${y + 1} / span ${h}`,
   }
 
+  // Size class lets CSS apply compact padding/font rules for narrow cards.
+  const sizeClass = w <= 3 ? 'dw-size-quarter'
+    : w <= 4 ? 'dw-size-third'
+    : w <= 6 ? 'dw-size-half'
+    : 'dw-size-full'
+
+  // Charts need height:100% on the card so the canvas has a defined size.
+  // All other presets use height:auto so the card shrinks to its content
+  // (a 2-row table shouldn't be as tall as a 10-row table).
+  const preset = widget.code?.preset || ''
+  const isChart = preset === 'line_chart' || preset === 'bar_chart'
+
   return (
-    <div class="dw-cell" style={style}>
-      <div class="dashboard-widget-card">
+    <div class={`dw-cell ${sizeClass}`} style={style}>
+      <div class={`dashboard-widget-card${isChart ? ' dw-card-chart' : ''}`}>
         {(widget.title || widget.description) && (
           <div class="dashboard-widget-header">
             <div class="dashboard-widget-header-left">
@@ -185,9 +197,9 @@ function DashboardDetail(
         actions={
           <>
             <button class="btn btn-sm" onClick={onBack}>← Back</button>
-            {def && (
-              <span class={`dashboard-status-badge ${def.status}`} title={def.committedAt ? `Committed ${formatDate(def.committedAt)}` : undefined}>
-                {def.status === 'live' ? 'Live' : 'Draft'}
+            {def && def.status === 'draft' && (
+              <span class="dashboard-status-badge draft" title={def.committedAt ? `Committed ${formatDate(def.committedAt)}` : undefined}>
+                Draft
               </span>
             )}
             {def && <button class="btn btn-sm" onClick={handleRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh'}</button>}

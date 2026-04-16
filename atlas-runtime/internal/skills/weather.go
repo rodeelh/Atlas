@@ -145,7 +145,7 @@ const (
 )
 
 func doWeatherJSON(ctx context.Context, op, u string, out any) error {
-	client := &http.Client{Timeout: weatherHTTPTimeout}
+	client := newWebClient(weatherHTTPTimeout)
 	backoff := weatherRetryInterval
 	var lastErr error
 

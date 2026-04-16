@@ -147,7 +147,6 @@ func imageEdit(_ context.Context, args json.RawMessage) (string, error) {
 	w.WriteField("model", "dall-e-2")         //nolint:errcheck
 	w.Close()
 
-	client := &http.Client{Timeout: 90 * time.Second}
 	req, err := http.NewRequest("POST", "https://api.openai.com/v1/images/edits", &body)
 	if err != nil {
 		return "", err
@@ -155,7 +154,7 @@ func imageEdit(_ context.Context, args json.RawMessage) (string, error) {
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+bundle.OpenAIAPIKey)
 
-	resp, err := client.Do(req)
+	resp, err := newWebClient(90 * time.Second).Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -206,7 +205,6 @@ func dalleGenerate(prompt, size, quality string, n int, apiKey string) (string, 
 	}
 	body, _ := json.Marshal(payload)
 
-	client := &http.Client{Timeout: 60 * time.Second}
 	req, err := http.NewRequest("POST", "https://api.openai.com/v1/images/generations", bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -214,7 +212,7 @@ func dalleGenerate(prompt, size, quality string, n int, apiKey string) (string, 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	resp, err := client.Do(req)
+	resp, err := newWebClient(60 * time.Second).Do(req)
 	if err != nil {
 		return "", err
 	}

@@ -263,8 +263,7 @@ func fetchExchangeRate(ctx context.Context, from, to string) (float64, error) {
 	}
 	req.Header.Set("User-Agent", "Atlas/1.0 currency")
 
-	client := &http.Client{Timeout: 8 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := newWebClient(8 * time.Second).Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("exchange rate fetch failed: %w", err)
 	}

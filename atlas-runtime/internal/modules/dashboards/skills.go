@@ -55,6 +55,31 @@ func (m *Module) RegisterSkills(reg *skills.Registry) {
 		FnResult:    m.skillGet,
 	})
 
+	// dashboard.create is the v1 one-shot creation skill. It was replaced in
+	// v2 by the create_draft → add_data_source → add_widget → commit workflow.
+	// This stub gives the agent a clear migration message instead of an
+	// "unknown action" error so it can self-correct.
+	reg.RegisterExternal(skills.SkillEntry{
+		Def: skills.ToolDef{
+			Name:        "dashboard.create",
+			Description: "Deprecated — use the v2 workflow: (1) dashboard.create_draft, (2) dashboard.add_data_source, (3) dashboard.add_widget, (4) dashboard.commit.",
+			Properties: map[string]skills.ToolParam{
+				"name":   {Description: "Dashboard name.", Type: "string"},
+				"prompt": {Description: "Description of the dashboard.", Type: "string"},
+			},
+		},
+		PermLevel:   "read",
+		ActionClass: skills.ActionClassRead,
+		FnResult: func(_ context.Context, _ json.RawMessage) (skills.ToolResult, error) {
+			return skills.ErrResult("dashboard.create", "deprecated", false, errors.New(
+				"dashboard.create was removed in v2. Build dashboards step-by-step: "+
+					"(1) dashboard.create_draft {name} — open a new draft; "+
+					"(2) dashboard.add_data_source {id, name, kind, config} — add data feeds (skill/runtime/sql/live_compute/chat_analytics/gremlin); "+
+					"(3) dashboard.add_widget {id, preset, size, bindings} — attach widgets; "+
+					"(4) dashboard.commit {id} — publish.")), nil
+		},
+	})
+
 	reg.RegisterExternal(skills.SkillEntry{
 		Def: skills.ToolDef{
 			Name:        "dashboard.create_draft",
@@ -88,15 +113,26 @@ func (m *Module) RegisterSkills(reg *skills.Registry) {
 
 	reg.RegisterExternal(skills.SkillEntry{
 		Def: skills.ToolDef{
-			Name:        "dashboard.add_data_source",
-			Description: "Attach a named, reusable data source to a draft dashboard. kind is one of: runtime, skill, sql, chat_analytics, gremlin, live_compute. config carries kind-specific fields.",
+			Name: "dashboard.add_data_source",
+			Description: "Attach a named, reusable data source to a draft dashboard. " +
+				"kind must be one of: runtime, skill, sql, chat_analytics, gremlin, live_compute. " +
+				"config shape per kind — " +
+				"skill: {\"action\":\"weather.current\",\"args\":{\"location\":\"Orlando\"}} (action must be a read-only skill; use canonical dot form e.g. weather.current, not weather__current); " +
+				"runtime: {\"endpoint\":\"/status\"} (must be on the runtime allowlist); " +
+				"sql: {\"sql\":\"SELECT ...\"}; " +
+				"chat_analytics: {\"query\":\"conversations_per_day\"} (Atlas conversation stats only — valid queries: conversations_per_day, messages_per_day, top_conversations, recent_conversations, message_counts_by_role, token_usage_per_day, token_usage_by_provider, memory_counts_by_category, most_important_memories, recent_memories); " +
+				"gremlin: {\"gremlinID\":\"<id>\"}; " +
+				"live_compute standalone (AI-generated, no external data): {\"prompt\":\"Write a brief AI news summary with 5 bullet points covering recent developments in artificial intelligence. Return JSON: {\\\"headline\\\":\\\"...\\\",\\\"items\\\":[{\\\"title\\\":\\\"\\\",\\\"summary\\\":\\\"\\\"}]}\",\"outputSchema\":{\"headline\":\"string\",\"items\":\"array\"}}; " +
+				"live_compute with inputs (transform other sources): {\"prompt\":\"summarise the data\",\"inputs\":[\"source1\"],\"outputSchema\":{}}. " +
+				"IMPORTANT: When external APIs are unavailable (TLS errors, no API key), use live_compute standalone — the AI model generates content from its own knowledge. No inputs array needed. " +
+				"On success the result includes resolvedSample (the live data) and shape (suggestedPreset + paths with types + sample values) — use that to pick preset and options.path for dashboard.add_widget instead of guessing.",
 			Properties: map[string]skills.ToolParam{
-				"id":                {Description: "Draft dashboard ID.", Type: "string"},
-				"name":              {Description: "Source name (unique within the dashboard).", Type: "string"},
-				"kind":              {Description: "One of runtime, skill, sql, chat_analytics, gremlin, live_compute.", Type: "string"},
-				"config":            {Description: "Kind-specific config JSON object.", Type: "string"},
-				"refreshMode":       {Description: "manual, interval, or push. Defaults to manual.", Type: "string"},
-				"intervalSeconds":   {Description: "Seconds between refreshes when refreshMode is interval.", Type: "integer"},
+				"id":              {Description: "Draft dashboard ID.", Type: "string"},
+				"name":            {Description: "Source name (unique within the dashboard).", Type: "string"},
+				"kind":            {Description: "One of: runtime, skill, sql, chat_analytics, gremlin, live_compute.", Type: "string"},
+				"config":          {Description: "Kind-specific config object. See skill description for per-kind shape.", Type: "string"},
+				"refreshMode":     {Description: "manual, interval, or push. Defaults to manual.", Type: "string"},
+				"intervalSeconds": {Description: "Seconds between refreshes when refreshMode is interval.", Type: "integer"},
 			},
 			Required: []string{"id", "name", "kind"},
 		},
@@ -122,16 +158,35 @@ func (m *Module) RegisterSkills(reg *skills.Registry) {
 
 	reg.RegisterExternal(skills.SkillEntry{
 		Def: skills.ToolDef{
-			Name:        "dashboard.add_widget",
-			Description: "Add a widget to a draft. size is one of: quarter, third, half, tall, full. preset is one of: metric, table, line_chart, bar_chart, list, markdown. bindings is an array of {source, path?, options?} entries.",
+			Name: "dashboard.add_widget",
+			Description: "Add a widget to a draft dashboard. " +
+				"SIZE (column width in a 12-col grid): quarter=3 cols, third=4 cols, half=6 cols, full=12 cols, tall=6 cols×4 rows. " +
+				"ROW-FILLING — design rows that sum to 12 cols for a clean layout: " +
+				"  • KPI strip (top row): 4×quarter or 3×third — great for 3-4 related metrics side-by-side; " +
+				"  • Split row: 2×half — two equal charts or lists; " +
+				"  • Asymmetric: half+quarter+quarter (6+3+3) or half+third+... ; " +
+				"  • Wide: 1×full — use only for tables needing many columns or wide charts. " +
+				"PRESET/SIZE pairing: " +
+				"  metric → quarter or third (single KPI number; avoid half/full — too much empty space); " +
+				"  line_chart / bar_chart → half or full (charts need width to be readable); " +
+				"  list → half or third (scrollable, compact); " +
+				"  table → half or full (multiple columns need width); " +
+				"  markdown → half or full (prose/summary content). " +
+				"OPTIONS per preset: " +
+				"  metric: {path:\"fieldName\", label:\"Display label\", format:\"integer|currency|percent|compact\"}; " +
+				"  table: {path:\"arrayField\", columns:[\"col1\",\"col2\"]}; " +
+				"  line_chart/bar_chart: {path:\"arrayField\", x:\"dateField\", y:\"valueField\"}; " +
+				"  list: {itemsPath:\"arrayField\", labelKey:\"title\", subKey:\"subtitle\"}; " +
+				"  markdown: {path:\"textField\"} or omit path to render full source as JSON. " +
+				"BINDINGS: JSON array [{source:\"sourceName\"}] — one binding per widget, referencing a source added via dashboard.add_data_source.",
 			Properties: map[string]skills.ToolParam{
 				"id":       {Description: "Draft dashboard ID.", Type: "string"},
 				"title":    {Description: "Widget title.", Type: "string"},
 				"size":     {Description: "quarter | third | half | tall | full", Type: "string"},
 				"preset":   {Description: "metric | table | line_chart | bar_chart | list | markdown", Type: "string"},
-				"group":    {Description: "Optional group name to co-locate related widgets.", Type: "string"},
-				"bindings": {Description: "JSON array of bindings: [{source:name}].", Type: "string"},
-				"options":  {Description: "JSON object of preset options.", Type: "string"},
+				"group":    {Description: "Optional group name to co-locate related widgets in the same visual section.", Type: "string"},
+				"bindings": {Description: "JSON array [{source:\"sourceName\"}].", Type: "string"},
+				"options":  {Description: "JSON object of preset-specific display options (path, columns, label, format, x, y, etc.).", Type: "string"},
 			},
 			Required: []string{"id", "size", "preset"},
 		},
@@ -337,17 +392,20 @@ func (m *Module) skillAddDataSource(ctx context.Context, raw json.RawMessage) (s
 	if err := validateSourceKindConfig(args.Kind, cfg); err != nil {
 		return skills.ErrResult("dashboard.add_data_source", "config validate", false, err), nil
 	}
-	// For skill sources: verify the action exists in the registry and is read-only.
+	// For skill sources: normalize the action name to canonical dot form, then
+	// verify the action exists in the registry and is read-only.
 	if args.Kind == SourceKindSkill && m.skillsRegistry != nil {
 		if action, _ := cfg["action"].(string); action != "" {
-			if !m.skillsRegistry.HasAction(action) {
+			canonical := m.skillsRegistry.Normalise(action)
+			if !m.skillsRegistry.HasAction(canonical) {
 				return skills.ErrResult("dashboard.add_data_source", "config validate", false,
-					fmt.Errorf("skill action %q is not registered; check the available skills with dashboard.list or skills.list", action)), nil
+					fmt.Errorf("skill action %q is not registered; use the canonical dot form (e.g. weather.current) and check available skills via skills.list", action)), nil
 			}
-			if m.skillsRegistry.GetActionClass(action) != skills.ActionClassRead {
+			if m.skillsRegistry.GetActionClass(canonical) != skills.ActionClassRead {
 				return skills.ErrResult("dashboard.add_data_source", "config validate", false,
-					fmt.Errorf("skill action %q is not read-only; only ActionClassRead skills may be used as dashboard data sources", action)), nil
+					fmt.Errorf("skill action %q is not read-only; only ActionClassRead skills may be used as dashboard data sources", canonical)), nil
 			}
+			cfg["action"] = canonical
 		}
 	}
 	// Replace by name if it already exists; append otherwise.
@@ -371,7 +429,23 @@ func (m *Module) skillAddDataSource(ctx context.Context, raw json.RawMessage) (s
 	if replaced {
 		verb = "replaced"
 	}
-	return skills.OKResult(fmt.Sprintf("%s source %q", verb, args.Name), map[string]any{"dashboard": saved}), nil
+
+	// Trial-resolve the source so the agent sees the actual data shape and a
+	// preset hint before it calls dashboard.add_widget. Without this, the
+	// agent is blind to what the source returns and has to guess widget
+	// options — the single most common cause of broken dashboards.
+	trialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	trialData, trialErr := resolveSource(trialCtx, m.resolverDeps(), newSrc, map[string]any{})
+	artifacts := map[string]any{"dashboard": saved}
+	if trialErr != nil {
+		artifacts["resolveWarning"] = trialErr.Error()
+		artifacts["hint"] = "Source saved but failed to resolve on first try. Check config args (e.g. missing 'location' for weather.*) and re-add."
+	} else {
+		artifacts["resolvedSample"] = truncateSample(trialData)
+		artifacts["shape"] = describeShape(trialData)
+	}
+	return skills.OKResult(fmt.Sprintf("%s source %q", verb, args.Name), artifacts), nil
 }
 
 func (m *Module) skillRemoveDataSource(ctx context.Context, raw json.RawMessage) (skills.ToolResult, error) {
@@ -498,7 +572,11 @@ func (m *Module) skillPreview(ctx context.Context, raw json.RawMessage) (skills.
 	if err != nil {
 		return skills.ErrResult("dashboard.preview", "resolve", false, err), nil
 	}
-	return skills.OKResult("preview ok", map[string]any{"widgetId": args.WidgetID, "data": data}), nil
+	return skills.OKResult("preview ok", map[string]any{
+		"widgetId": args.WidgetID,
+		"data":     truncateSample(data),
+		"shape":    describeShape(data),
+	}), nil
 }
 
 func (m *Module) skillCommit(ctx context.Context, raw json.RawMessage) (skills.ToolResult, error) {

@@ -227,14 +227,13 @@ func yahooHistory(symbol string, days int) (string, error) {
 // finnhubGET sends the API key in the X-Finnhub-Token header, not the URL,
 // so the key does not appear in server logs or browser history.
 func finnhubGET(url, apiKey string) (string, error) {
-	client := &http.Client{Timeout: 8 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "Atlas/1.0 finance")
 	req.Header.Set("X-Finnhub-Token", apiKey)
-	resp, err := client.Do(req)
+	resp, err := newWebClient(8 * time.Second).Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -250,13 +249,12 @@ func finnhubGET(url, apiKey string) (string, error) {
 }
 
 func financeGET(url string) (string, error) {
-	client := &http.Client{Timeout: 8 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "Atlas/1.0 finance")
-	resp, err := client.Do(req)
+	resp, err := newWebClient(8 * time.Second).Do(req)
 	if err != nil {
 		return "", err
 	}

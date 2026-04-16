@@ -25,12 +25,26 @@ func NewAILiveComputeRunner(resolver func() (providerConfig, error)) *AILiveComp
 	return &AILiveComputeRunner{resolver: resolver}
 }
 
+// liveComputeSystemPrompt is used when the spec has input sources — the AI
+// acts as a data-transformation step and must not fabricate beyond what the
+// inputs provide.
 const liveComputeSystemPrompt = `You are a data-transformation step inside a live dashboard widget.
 Given one or more named JSON data sources and a task description, produce a single JSON value.
 Rules:
 - Respond with ONLY valid JSON — no markdown fences, no explanation, no prose.
 - The output must be a JSON object or array (not a bare string or number).
 - Do not invent data that is not present in the input sources.`
+
+// liveComputeStandaloneSystemPrompt is used when the spec has NO input sources.
+// In standalone mode the AI generates content from its own knowledge — the
+// "no invention" rule does not apply; the AI IS the data source.
+const liveComputeStandaloneSystemPrompt = `You are a live dashboard content generator for a real-time dashboard widget.
+Your task is to produce informative, useful JSON content based on your knowledge.
+Rules:
+- Respond with ONLY valid JSON — no markdown fences, no explanation, no prose.
+- The output must be a JSON object or array (not a bare string or number).
+- Generate accurate, helpful content based on your training knowledge.
+- Always produce substantive content — never return empty arrays or placeholder values.`
 
 // Run executes spec: injects the resolved inputs as context, calls the AI
 // provider, strips any markdown wrapping, and returns the parsed JSON result.
@@ -47,7 +61,12 @@ func (r *AILiveComputeRunner) Run(ctx context.Context, spec LiveComputeSpec, inp
 		ExtraHeaders: cfg.ExtraHeaders,
 	}
 
+	// Choose prompt: standalone (no inputs = AI is the data source) vs
+	// transform mode (inputs provided = AI transforms existing data).
 	system := liveComputeSystemPrompt
+	if len(spec.Inputs) == 0 {
+		system = liveComputeStandaloneSystemPrompt
+	}
 	if spec.OutputSchema != nil {
 		schema, _ := json.Marshal(spec.OutputSchema)
 		system += fmt.Sprintf("\n\nExpected output JSON schema:\n%s", schema)

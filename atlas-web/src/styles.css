@@ -9936,10 +9936,14 @@ select.field-input {
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-auto-rows: 72px;
+  /* Rows are at least 100px tall and grow with content. Cards are height:auto
+     by default so a 2-row table is compact; chart cards use height:100% to
+     give the canvas a defined size (see .dw-card-chart below). */
+  grid-auto-rows: minmax(100px, auto);
+  /* Top-align cells — cards size to their content, not the row track */
+  align-items: start;
   gap: 10px;
   margin-top: 16px;
-  /* explicit placement — widgets use grid-column/grid-row starts */
   grid-auto-flow: dense;
 }
 
@@ -9981,6 +9985,15 @@ select.field-input {
 }
 .dw-cell > .dashboard-widget-card {
   width: 100%;
+  /* Default: shrink to content so short tables don't leave a sea of empty
+     space. min-height keeps metric/markdown cards from being too tiny. */
+  height: auto;
+  min-height: 120px;
+}
+
+/* Charts need a defined height so Chart.js canvas renders correctly.
+   The card fills its grid area; the chart body fills the card. */
+.dw-cell > .dashboard-widget-card.dw-card-chart {
   height: 100%;
 }
 
@@ -10094,6 +10107,17 @@ select.field-input {
 .dashboard-widget-refresh:hover { color: var(--text); }
 .dashboard-widget-refresh:disabled { opacity: 0.3 !important; cursor: default; }
 
+/* Wrapper between the card and the preset renderer — must grow to fill the
+   card so the body can flex within it. Without this the body flexes inside
+   a zero-height container and nothing renders. */
+.dashboard-widget-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
 .dashboard-widget-body {
   flex: 1 1 auto;
   padding: 10px 12px;
@@ -10102,6 +10126,25 @@ select.field-input {
   font-size: 0.85rem;
   color: var(--text);
 }
+
+/* ── compact mode for narrow (quarter / third) cards ─────────────────────── */
+
+.dw-size-quarter .dashboard-widget-header,
+.dw-size-third   .dashboard-widget-header {
+  padding: 6px 10px 5px;
+}
+
+.dw-size-quarter .dashboard-widget-header h4,
+.dw-size-third   .dashboard-widget-header h4 {
+  font-size: 0.72rem;
+}
+
+.dw-size-quarter .dashboard-widget-body,
+.dw-size-third   .dashboard-widget-body {
+  padding: 8px 10px;
+}
+
+/* ── timestamp in widget header ─────────────────────────────────────────── */
 
 /* Widget bodies */
 
@@ -10112,21 +10155,27 @@ select.field-input {
   flex-direction: column;
   justify-content: center;
   align-items: flex-start;
-  gap: 4px;
-  padding: 4px 2px;
+  gap: 3px;
+  padding: 8px 4px 6px;
 }
 
 .dw-metric-value {
-  font-size: 2rem;
+  font-size: 2.2rem;
   font-weight: 700;
-  color: var(--text-1);
+  color: var(--text);
   font-feature-settings: 'tnum';
-  letter-spacing: -0.02em;
-  line-height: 1.1;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+/* Compact: tighten value in narrow cards */
+.dw-size-quarter .dw-metric-value,
+.dw-size-third   .dw-metric-value {
+  font-size: 1.85rem;
 }
 
 .dw-metric-change {
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--text-2);
   font-feature-settings: 'tnum';
@@ -10135,9 +10184,10 @@ select.field-input {
 .dw-metric-change.down { color: #ef4444; }
 
 .dw-metric-label {
-  font-size: 0.73rem;
-  color: var(--text-2);
+  font-size: 0.72rem;
+  color: var(--text-3, var(--text-2));
   letter-spacing: 0.01em;
+  margin-top: 2px;
 }
 
 /* legacy compat */
@@ -10149,7 +10199,7 @@ select.field-input {
   position: relative;
   width: 100%;
   height: 100%;
-  min-height: 0;
+  min-height: 240px; /* canvas needs room to render */
   padding: 4px 0 2px;
 }
 .dw-chart-wrap canvas {
@@ -10201,30 +10251,47 @@ select.field-input {
 .dashboard-widget-table table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.78rem;
-}
-
-.dashboard-widget-table th,
-.dashboard-widget-table td {
-  text-align: left;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 200px;
+  font-size: 0.8rem;
+  table-layout: auto;
 }
 
 .dashboard-widget-table th {
+  position: sticky;
+  top: 0;
+  background: color-mix(in srgb, var(--theme-surface-card) 95%, var(--text) 5%);
   font-weight: 600;
   color: var(--text-2);
   text-transform: uppercase;
-  font-size: 0.68rem;
-  letter-spacing: 0.04em;
+  font-size: 0.67rem;
+  letter-spacing: 0.05em;
+  padding: 7px 10px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-border-subtle) 60%, transparent);
+  white-space: nowrap;
+  z-index: 1;
 }
 
-.dashboard-widget-table tr:last-child td {
-  border-bottom: none;
+.dashboard-widget-table td {
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-border-subtle) 30%, transparent);
+  /* Allow wrapping so summaries aren't chopped; max-width prevents runaway columns */
+  white-space: normal;
+  word-break: break-word;
+  max-width: 320px;
+  vertical-align: top;
+  color: var(--text);
+}
+
+/* First column (usually a label/name) stays on one line */
+.dashboard-widget-table td:first-child {
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.dashboard-widget-table tr:last-child td { border-bottom: none; }
+
+.dashboard-widget-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--accent, #6366f1) 5%, transparent);
 }
 
 .dashboard-widget-chart {
@@ -10248,12 +10315,23 @@ select.field-input {
 }
 
 .dashboard-widget-list li {
-  padding: 5px 0;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.82rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-border-subtle) 40%, transparent);
+  font-size: 0.83rem;
+  color: var(--text);
+  line-height: 1.4;
 }
 
 .dashboard-widget-list li:last-child { border-bottom: none; }
+
+.dashboard-list-sub {
+  font-size: 0.73rem;
+  color: var(--text-2);
+  line-height: 1.35;
+}
 
 .dashboard-widget-markdown {
   font-size: 0.85rem;

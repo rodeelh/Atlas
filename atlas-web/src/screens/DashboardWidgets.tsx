@@ -65,9 +65,15 @@ function asArray(v: unknown): unknown[] {
   if (Array.isArray(v)) return v
   if (v && typeof v === 'object') {
     const obj = v as Record<string, unknown>
-    for (const key of ['rows', 'items', 'results', 'data', 'events', 'history']) {
+    // Named array keys we see frequently across skills and runtime feeds.
+    for (const key of ['rows', 'items', 'results', 'data', 'events', 'history', 'records', 'entries']) {
       if (Array.isArray(obj[key])) return obj[key] as unknown[]
     }
+    // Fallback: if the object has exactly one array-valued field, use it.
+    // Covers skill artifacts like {memories: [...]}, {days: [...]}, {hours: [...]},
+    // {dashboards: [...]}, etc. without hard-coding every possible key.
+    const arrayEntries = Object.entries(obj).filter(([, val]) => Array.isArray(val))
+    if (arrayEntries.length === 1) return arrayEntries[0][1] as unknown[]
   }
   return []
 }
@@ -111,7 +117,16 @@ export function MetricWidget({ widget, data }: { widget: DashboardWidget; data: 
   const prefix     = (opts.prefix as string)     || ''
   const suffix     = (opts.suffix as string)     || ''
   const changePath = (opts.changePath as string) || ''
-  const raw     = path ? valueAtPath(data, path) : data
+  // When no explicit path is given and data is a flat object, fall back to
+  // the first numeric or {text} field so the metric doesn't render "[object
+  // Object]" for skill outputs the agent hasn't bound precisely.
+  let raw: unknown = path ? valueAtPath(data, path) : data
+  if (!path && raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const obj = raw as Record<string, unknown>
+    const numericKey = Object.keys(obj).find(k => typeof obj[k] === 'number')
+    if (numericKey) raw = obj[numericKey]
+    else if (typeof obj.text === 'string') raw = obj.text
+  }
   const display = formatValue(raw, format)
   const change  = changePath ? valueAtPath(data, changePath) : undefined
   const changeN = change !== undefined ? Number(change) : NaN
@@ -365,10 +380,20 @@ export function ListWidget({ widget, data }: { widget: DashboardWidget; data: un
 export function MarkdownWidget({ widget, data }: { widget: DashboardWidget; data: unknown }): JSX.Element {
   const opts = widgetOptions(widget)
   const text = (opts.text as string) || ''
+  const path = (opts.path as string) || ''
   let body = text
-  if (!body && data !== undefined) {
-    try { body = '```json\n' + JSON.stringify(data, null, 2) + '\n```' }
-    catch { body = String(data) }
+  if (!body) {
+    // Drill into a specific path if the agent specified one (e.g. path="headline"
+    // to pull a single string field out of a larger JSON object).
+    const raw = path ? valueAtPath(data, path) : data
+    if (raw !== undefined && raw !== null) {
+      if (typeof raw === 'string') {
+        body = raw
+      } else {
+        try { body = '```json\n' + JSON.stringify(raw, null, 2) + '\n```' }
+        catch { body = String(raw) }
+      }
+    }
   }
   if (!body) return <div class="dashboard-widget-body dashboard-empty">Nothing to show</div>
   const html = DOMPurify.sanitize(marked.parse(body) as string, {

@@ -205,8 +205,7 @@ func braveSearch(ctx context.Context, apiKey, query string, count int, extraPara
 	req.Header.Set("X-Subscription-Token", apiKey)
 	req.Header.Set("Accept", "application/json")
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := newWebClient(15 * time.Second).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("brave search request failed: %w", err)
 	}
@@ -257,8 +256,7 @@ func webFetchPage(ctx context.Context, args json.RawMessage) (ToolResult, error)
 	}
 	req.Header.Set("User-Agent", "Atlas/1.0 (compatible; Go HTTP client)")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := newWebClient(10 * time.Second).Do(req)
 	if err != nil {
 		return ToolResult{}, fmt.Errorf("fetch failed: %w", err)
 	}
@@ -411,8 +409,7 @@ func webCheckURL(ctx context.Context, args json.RawMessage) (ToolResult, error) 
 	}
 	req.Header.Set("User-Agent", "Atlas/1.0 (url-checker)")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := newWebClient(10 * time.Second).Do(req)
 	if err != nil {
 		return OKResult(fmt.Sprintf("%s is unreachable.", p.URL), map[string]any{
 			"source": map[string]any{
@@ -511,8 +508,7 @@ func webExtractLinks(ctx context.Context, args json.RawMessage) (string, error) 
 	}
 	req.Header.Set("User-Agent", "Atlas/1.0 (link-extractor)")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := newWebClient(10 * time.Second).Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetch failed: %w", err)
 	}
@@ -571,8 +567,7 @@ func webSummarizeURL(ctx context.Context, args json.RawMessage) (string, error) 
 	}
 	req.Header.Set("User-Agent", "Atlas/1.0 (summarizer)")
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := newWebClient(15 * time.Second).Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetch failed: %w", err)
 	}
