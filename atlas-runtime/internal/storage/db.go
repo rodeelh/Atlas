@@ -41,6 +41,12 @@ func (db *DB) Close() error {
 	return db.conn.Close()
 }
 
+// Conn returns the underlying *sql.DB for callers that need direct query access
+// (e.g. the dashboards module resolvers that run arbitrary read-only queries).
+func (db *DB) Conn() *sql.DB {
+	return db.conn
+}
+
 // migrate creates or updates the schema to match the Swift MemoryStore schema.
 // Each migration is idempotent (CREATE TABLE IF NOT EXISTS / ALTER TABLE ADD COLUMN).
 func (db *DB) migrate() error {

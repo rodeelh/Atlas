@@ -851,82 +851,129 @@ export interface VoiceTranscribeResult {
   sessionID?: string;
 }
 
-// ── Dashboards ──────────────────────────────────────────────────────────────
+// ── Dashboards v2 ────────────────────────────────────────────────────────────
+// Mirrors internal/modules/dashboards/types.go. SchemaVersion = 2.
 
-export type DashboardSourceKind = "runtime" | "skill" | "web" | "sql";
+export type DashboardStatus = "draft" | "live";
 
-export type DashboardWidgetKind =
+export const DASHBOARD_SIZES = [
+  "quarter",
+  "third",
+  "half",
+  "tall",
+  "full",
+] as const;
+export type DashboardSize = (typeof DASHBOARD_SIZES)[number];
+
+export type DashboardSourceKind =
+  | "runtime"
+  | "skill"
+  | "sql"
+  | "chat_analytics"
+  | "gremlin"
+  | "live_compute";
+
+export type DashboardRefreshMode = "manual" | "interval" | "push";
+
+export type DashboardWidgetMode = "preset" | "code";
+
+export type DashboardPreset =
   | "metric"
   | "table"
   | "line_chart"
   | "bar_chart"
-  | "markdown"
   | "list"
-  | "news"
-  | "custom_html";
+  | "markdown";
+
+export interface DashboardRefreshPolicy {
+  mode: DashboardRefreshMode;
+  intervalSeconds?: number;
+  idleSeconds?: number;
+}
 
 export interface DashboardDataSource {
+  name: string;
   kind: DashboardSourceKind;
-  endpoint?: string;
-  query?: Record<string, string>;
-  action?: string;
-  args?: Record<string, unknown>;
-  url?: string;
-  sql?: string;
+  config: Record<string, unknown>;
+  refresh: DashboardRefreshPolicy;
+}
+
+export interface DashboardDataSourceBinding {
+  source: string;
+  path?: string;
+  options?: Record<string, unknown>;
+}
+
+export interface DashboardWidgetCode {
+  mode: DashboardWidgetMode;
+  preset?: DashboardPreset;
+  options?: Record<string, unknown>;
+  tsx?: string;
+  compiled?: string;
+  hash?: string;
 }
 
 export interface DashboardWidget {
   id: string;
-  kind: DashboardWidgetKind;
   title?: string;
   description?: string;
+  size: DashboardSize;
+  group?: string;
+  bindings?: DashboardDataSourceBinding[];
+  code: DashboardWidgetCode;
   gridX: number;
   gridY: number;
   gridW: number;
   gridH: number;
-  source?: DashboardDataSource;
-  options?: Record<string, unknown>;
-  html?: string;
-  css?: string;
-  js?: string;
-  refreshIntervalSeconds?: number;
+}
+
+export interface DashboardLayoutHints {
+  columns: number;
 }
 
 export interface DashboardDefinition {
+  schemaVersion: number;
   id: string;
   name: string;
   description?: string;
-  template?: string;
+  status: DashboardStatus;
+  sources: DashboardDataSource[];
   widgets: DashboardWidget[];
+  layout: DashboardLayoutHints;
   createdAt: string;
   updatedAt: string;
+  committedAt?: string;
 }
 
 export interface DashboardSummary {
   id: string;
   name: string;
   description?: string;
-  template?: string;
+  status: DashboardStatus;
   widgetCount: number;
+  sourceCount: number;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface DashboardTemplate {
-  id: string;
-  name: string;
-  description: string;
-  definition: DashboardDefinition;
+  committedAt?: string;
 }
 
 export interface DashboardWidgetData {
   widgetId: string;
+  sourceKind?: string;
+  source?: string;
   success: boolean;
+  error?: string;
+  data?: unknown;
+  resolvedAt: string;
+  durationMs: number;
+}
+
+export interface DashboardRefreshEvent {
+  dashboardId: string;
+  source: string;
   data?: unknown;
   error?: string;
-  resolvedAt: string;
-  sourceKind: string;
-  durationMs: number;
+  at: string;
 }
 
 export interface StorageStats {

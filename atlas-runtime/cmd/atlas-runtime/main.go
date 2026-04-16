@@ -260,6 +260,7 @@ func main() {
 	dashboardsModule := dashboardsmodule.New(config.SupportDir(), dbPath)
 	dashboardsModule.SetRuntimeFetcher(dashboardsmodule.NewLoopbackFetcher(port))
 	dashboardsModule.SetSkillExecutor(skillsRegistry)
+	dashboardsModule.SetDatabase(db.Conn())
 	dashboardsModule.SetProviderResolver(func() (agent.ProviderConfig, error) {
 		return chat.ResolveProvider(cfgStore.Load())
 	})

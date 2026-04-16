@@ -1,9 +1,9 @@
-// Built-in dashboard widget renderers.
+// Built-in preset renderers for v2 dashboard widgets.
 //
-// Each component receives a Widget definition and the resolved data payload.
-// Charts use Chart.js. Metric, News, List, Table, and Markdown are custom
-// Preact components. custom_html stays for hand-authored widgets only — it
-// is not available to the AI generator.
+// Each preset receives the widget definition and the resolved data payload.
+// Charts use Chart.js. Metric, Table, List, and Markdown are Preact
+// components. Agent-authored code widgets are delegated to
+// DashboardCodeFrame (sandboxed iframe).
 
 import { JSX } from 'preact'
 import { useEffect, useMemo, useRef } from 'preact/hooks'
@@ -18,6 +18,7 @@ import {
 import type { DashboardWidget } from '../api/client'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { DashboardCodeFrame } from './DashboardCodeFrame'
 
 Chart.register(
   LineController, BarController,
@@ -27,6 +28,10 @@ Chart.register(
 )
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+function widgetOptions(widget: DashboardWidget): Record<string, unknown> {
+  return (widget.code?.options as Record<string, unknown>) || {}
+}
 
 function valueAtPath(data: unknown, path: string): unknown {
   if (!path) return data
@@ -51,6 +56,7 @@ function formatValue(v: unknown, format?: string): string {
     case 'integer':  return Math.round(n).toLocaleString()
     case 'percent':  return `${(n * 100).toFixed(1)}%`
     case 'decimal':  return n.toLocaleString(undefined, { maximumFractionDigits: 2 })
+    case 'compact':  return Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
     default:         return typeof v === 'number' ? n.toLocaleString() : String(v)
   }
 }
@@ -74,10 +80,10 @@ function asString(v: unknown): string {
 
 interface SeriesPoint { x: string; y: number }
 
-function extractSeries(widget: DashboardWidget, data: unknown): SeriesPoint[] {
-  const seriesPath = (widget.options?.seriesPath as string) || ''
-  const xKey = (widget.options?.x as string) || 'date'
-  const yKey = (widget.options?.y as string) || 'value'
+function extractSeries(opts: Record<string, unknown>, data: unknown): SeriesPoint[] {
+  const seriesPath = (opts.seriesPath as string) || ''
+  const xKey = (opts.x as string) || 'date'
+  const yKey = (opts.y as string) || 'value'
   const raw = seriesPath ? valueAtPath(data, seriesPath) : data
   const arr = Array.isArray(raw) ? raw : asArray(data)
   return arr.flatMap(item => {
@@ -89,22 +95,22 @@ function extractSeries(widget: DashboardWidget, data: unknown): SeriesPoint[] {
   })
 }
 
-// Shared Chart.js default styles
 const getChartFont = () =>
   getComputedStyle(document.documentElement).getPropertyValue('--ui-font').trim() ||
   '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif'
-const GRID_COLOR  = 'rgba(156,163,175,0.15)'
-const TICK_COLOR  = 'rgba(107,114,128,0.9)'
+const GRID_COLOR = 'rgba(156,163,175,0.15)'
+const TICK_COLOR = 'rgba(107,114,128,0.9)'
 
 // ── metric ────────────────────────────────────────────────────────────────────
 
 export function MetricWidget({ widget, data }: { widget: DashboardWidget; data: unknown }): JSX.Element {
-  const path    = (widget.options?.path as string)    || ''
-  const format  = (widget.options?.format as string)  || ''
-  const label   = (widget.options?.label as string)   || widget.description || ''
-  const prefix  = (widget.options?.prefix as string)  || ''
-  const suffix  = (widget.options?.suffix as string)  || ''
-  const changePath = (widget.options?.changePath as string) || ''
+  const opts = widgetOptions(widget)
+  const path       = (opts.path as string)       || ''
+  const format     = (opts.format as string)     || ''
+  const label      = (opts.label as string)      || widget.description || ''
+  const prefix     = (opts.prefix as string)     || ''
+  const suffix     = (opts.suffix as string)     || ''
+  const changePath = (opts.changePath as string) || ''
   const raw     = path ? valueAtPath(data, path) : data
   const display = formatValue(raw, format)
   const change  = changePath ? valueAtPath(data, changePath) : undefined
@@ -130,14 +136,14 @@ export function MetricWidget({ widget, data }: { widget: DashboardWidget; data: 
 export function LineChartWidget({ widget, data }: { widget: DashboardWidget; data: unknown }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const chartRef  = useRef<Chart | null>(null)
-  const points    = useMemo(() => extractSeries(widget, data), [data, widget.options])
-  const color     = (widget.options?.color as string) || '#3b82f6'
-  const filled    = (widget.options?.filled as boolean) ?? true
+  const opts      = widgetOptions(widget)
+  const points    = useMemo(() => extractSeries(opts, data), [data, opts])
+  const color     = (opts.color as string) || '#3b82f6'
+  const filled    = (opts.filled as boolean) ?? true
 
   useEffect(() => {
     if (!canvasRef.current) return
     chartRef.current?.destroy()
-
     const cfg: ChartConfiguration<'line'> = {
       type: 'line',
       data: {
@@ -162,16 +168,10 @@ export function LineChartWidget({ widget, data }: { widget: DashboardWidget; dat
         plugins: {
           legend: { display: false },
           tooltip: {
-            backgroundColor: '#1f2937',
-            titleColor: '#f9fafb',
-            bodyColor: '#d1d5db',
-            padding: 10,
-            cornerRadius: 8,
+            backgroundColor: '#1f2937', titleColor: '#f9fafb', bodyColor: '#d1d5db',
+            padding: 10, cornerRadius: 8,
             callbacks: {
-              label: ctx => {
-                const fmt = (widget.options?.format as string) || ''
-                return ' ' + formatValue(ctx.raw, fmt)
-              },
+              label: ctx => ' ' + formatValue(ctx.raw, (opts.format as string) || ''),
             },
           },
         },
@@ -183,9 +183,8 @@ export function LineChartWidget({ widget, data }: { widget: DashboardWidget; dat
           y: {
             grid: { color: GRID_COLOR },
             ticks: {
-              color: TICK_COLOR,
-              font: { family: getChartFont(), size: 11 },
-              callback: (v) => formatValue(v, (widget.options?.format as string) || ''),
+              color: TICK_COLOR, font: { family: getChartFont(), size: 11 },
+              callback: (v) => formatValue(v, (opts.format as string) || ''),
             },
           },
         },
@@ -210,13 +209,13 @@ export function LineChartWidget({ widget, data }: { widget: DashboardWidget; dat
 export function BarChartWidget({ widget, data }: { widget: DashboardWidget; data: unknown }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const chartRef  = useRef<Chart | null>(null)
-  const points    = useMemo(() => extractSeries(widget, data), [data, widget.options])
-  const color     = (widget.options?.color as string) || '#6366f1'
+  const opts      = widgetOptions(widget)
+  const points    = useMemo(() => extractSeries(opts, data), [data, opts])
+  const color     = (opts.color as string) || '#6366f1'
 
   useEffect(() => {
     if (!canvasRef.current) return
     chartRef.current?.destroy()
-
     const cfg: ChartConfiguration<'bar'> = {
       type: 'bar',
       data: {
@@ -237,11 +236,8 @@ export function BarChartWidget({ widget, data }: { widget: DashboardWidget; data
         plugins: {
           legend: { display: false },
           tooltip: {
-            backgroundColor: '#1f2937',
-            titleColor: '#f9fafb',
-            bodyColor: '#d1d5db',
-            padding: 10,
-            cornerRadius: 8,
+            backgroundColor: '#1f2937', titleColor: '#f9fafb', bodyColor: '#d1d5db',
+            padding: 10, cornerRadius: 8,
           },
         },
         scales: {
@@ -252,9 +248,8 @@ export function BarChartWidget({ widget, data }: { widget: DashboardWidget; data
           y: {
             grid: { color: GRID_COLOR },
             ticks: {
-              color: TICK_COLOR,
-              font: { family: getChartFont(), size: 11 },
-              callback: (v) => formatValue(v, (widget.options?.format as string) || ''),
+              color: TICK_COLOR, font: { family: getChartFont(), size: 11 },
+              callback: (v) => formatValue(v, (opts.format as string) || ''),
             },
           },
         },
@@ -274,50 +269,13 @@ export function BarChartWidget({ widget, data }: { widget: DashboardWidget; data
   )
 }
 
-// ── news / results feed ───────────────────────────────────────────────────────
-// Renders structured search results: [{title, description, url}]
-// Sourced from websearch.query (resolver parses into data.results[]).
-
-export function NewsWidget({ widget, data }: { widget: DashboardWidget; data: unknown }): JSX.Element {
-  const itemsPath   = (widget.options?.itemsPath as string) || 'results'
-  const titleKey    = (widget.options?.titleKey as string)  || 'title'
-  const bodyKey     = (widget.options?.bodyKey as string)   || 'description'
-  const urlKey      = (widget.options?.urlKey as string)    || 'url'
-  const limit       = (widget.options?.limit as number)     || 6
-
-  const raw   = valueAtPath(data, itemsPath)
-  const items = Array.isArray(raw) ? raw : asArray(data)
-
-  if (items.length === 0) {
-    return <div class="dashboard-widget-body dashboard-empty">No results</div>
-  }
-
-  return (
-    <div class="dashboard-widget-body dw-news">
-      {items.slice(0, limit).map((item, i) => {
-        if (!item || typeof item !== 'object') return null
-        const obj   = item as Record<string, unknown>
-        const title = asString(obj[titleKey] || obj.title || obj.name || `Result ${i + 1}`)
-        const body  = asString(obj[bodyKey]  || obj.description || obj.summary || '')
-        const url   = asString(obj[urlKey]   || obj.url || '')
-        return (
-          <div key={i} class="dw-news-card">
-            <div class="dw-news-title">{title}</div>
-            {body  && <div class="dw-news-body">{body}</div>}
-            {url   && <div class="dw-news-url">{url}</div>}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
 // ── table ─────────────────────────────────────────────────────────────────────
 
 export function TableWidget({ widget, data }: { widget: DashboardWidget; data: unknown }): JSX.Element {
-  const path         = (widget.options?.path as string) || ''
-  const limit        = (widget.options?.limit as number)    || 100
-  const explicitCols = widget.options?.columns as string[] | undefined
+  const opts = widgetOptions(widget)
+  const path         = (opts.path as string)    || ''
+  const limit        = (opts.limit as number)   || 100
+  const explicitCols = opts.columns as string[] | undefined
   const raw          = path ? valueAtPath(data, path) : data
   const rows         = Array.isArray(raw)
     ? raw
@@ -328,7 +286,7 @@ export function TableWidget({ widget, data }: { widget: DashboardWidget; data: u
           return { [keyCol]: key, [valueCol]: value }
         })
       : asArray(raw)
-  const trimmed      = rows.slice(0, limit)
+  const trimmed = rows.slice(0, limit)
 
   if (trimmed.length === 0) {
     return <div class="dashboard-widget-body dashboard-empty">No data</div>
@@ -365,9 +323,11 @@ export function TableWidget({ widget, data }: { widget: DashboardWidget; data: u
 // ── list ──────────────────────────────────────────────────────────────────────
 
 export function ListWidget({ widget, data }: { widget: DashboardWidget; data: unknown }): JSX.Element {
-  const itemsPath = (widget.options?.itemsPath as string) || ''
-  const labelKey  = (widget.options?.labelKey as string)  || ''
-  const limit     = (widget.options?.limit as number)     || 50
+  const opts = widgetOptions(widget)
+  const itemsPath = (opts.itemsPath as string) || ''
+  const labelKey  = (opts.labelKey as string)  || ''
+  const subKey    = (opts.subKey as string)    || ''
+  const limit     = (opts.limit as number)     || 50
   const items     = asArray(itemsPath ? valueAtPath(data, itemsPath) : data)
 
   if (items.length === 0) {
@@ -378,15 +338,22 @@ export function ListWidget({ widget, data }: { widget: DashboardWidget; data: un
       <ul>
         {items.slice(0, limit).map((item, i) => {
           let label: string
-          if (item && typeof item === 'object' && labelKey) {
-            label = asString((item as Record<string, unknown>)[labelKey])
-          } else if (item && typeof item === 'object') {
+          let sub = ''
+          if (item && typeof item === 'object') {
             const obj = item as Record<string, unknown>
-            label = asString(obj.title ?? obj.name ?? obj.message ?? JSON.stringify(item))
+            label = labelKey
+              ? asString(obj[labelKey])
+              : asString(obj.title ?? obj.name ?? obj.message ?? JSON.stringify(item))
+            if (subKey) sub = asString(obj[subKey])
           } else {
             label = asString(item)
           }
-          return <li key={i}>{label}</li>
+          return (
+            <li key={i}>
+              <div>{label}</div>
+              {sub && <div class="dashboard-list-sub">{sub}</div>}
+            </li>
+          )
         })}
       </ul>
     </div>
@@ -396,7 +363,8 @@ export function ListWidget({ widget, data }: { widget: DashboardWidget; data: un
 // ── markdown ──────────────────────────────────────────────────────────────────
 
 export function MarkdownWidget({ widget, data }: { widget: DashboardWidget; data: unknown }): JSX.Element {
-  const text = (widget.options?.text as string) || ''
+  const opts = widgetOptions(widget)
+  const text = (opts.text as string) || ''
   let body = text
   if (!body && data !== undefined) {
     try { body = '```json\n' + JSON.stringify(data, null, 2) + '\n```' }
@@ -417,88 +385,17 @@ export function MarkdownWidget({ widget, data }: { widget: DashboardWidget; data
   )
 }
 
-// ── custom html (manual / hand-authored only) ─────────────────────────────────
+// ── code (agent-authored TSX) ─────────────────────────────────────────────────
 
-function buildCustomSrcdoc(widget: DashboardWidget): string {
-  const html  = widget.html || '<div id="root"></div>'
-  const css   = widget.css  || ''
-  const js    = widget.js   || ''
-  const safeJS = js.replace(/<\/script>/gi, '<\\/script>')
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src data:;">
-<style>
-html,body{margin:0;padding:0;height:100%;box-sizing:border-box;}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;color:#e5e7eb;background:transparent;font-size:13px;line-height:1.45;padding:10px 12px;}
-*{box-sizing:border-box;}
-${css}
-</style>
-</head>
-<body>
-${html}
-<script>
-(function(){
-  var atlasData=null;
-  function tryRender(){
-    if(typeof window.atlasRender==='function'){
-      try{window.atlasRender(atlasData);}
-      catch(err){document.body.innerHTML='<pre style="color:#f87171;font-family:monospace">'+String(err&&err.message||err)+'</pre>';}
-    }
+export function CodeWidget({ widget, data }: { widget: DashboardWidget; data: unknown }): JSX.Element {
+  const compiled = widget.code?.compiled || ''
+  const hash     = widget.code?.hash     || ''
+  if (!compiled) {
+    return <div class="dashboard-widget-body dashboard-widget-error">⚠ widget has no compiled code</div>
   }
-  window.addEventListener('message',function(e){
-    if(e&&e.data&&e.data.type==='atlas:data'){atlasData=e.data.data;tryRender();}
-  });
-  try{window.parent.postMessage({type:'atlas:ready'},'*');}catch(_){}
-})();
-${safeJS}
-</script>
-</body>
-</html>`
-}
-
-export function CustomHtmlWidget({ widget, data }: { widget: DashboardWidget; data: unknown }): JSX.Element {
-  const iframeRef = useRef<HTMLIFrameElement>(null)
-  const srcdoc    = useMemo(() => buildCustomSrcdoc(widget), [widget.html, widget.css, widget.js])
-  const dataRef   = useRef<unknown>(data)
-  dataRef.current = data
-
-  useEffect(() => {
-    const iframe = iframeRef.current
-    if (!iframe) return undefined
-    function send() {
-      try { iframe?.contentWindow?.postMessage({ type: 'atlas:data', data: dataRef.current }, '*') }
-      catch { /* iframe gone */ }
-    }
-    function onMessage(e: MessageEvent) {
-      if (e.source !== iframe?.contentWindow) return
-      const payload = e.data as { type?: string } | undefined
-      if (payload?.type === 'atlas:ready') send()
-    }
-    window.addEventListener('message', onMessage)
-    iframe.addEventListener('load', send)
-    send()
-    return () => {
-      window.removeEventListener('message', onMessage)
-      iframe.removeEventListener('load', send)
-    }
-  }, [srcdoc])
-
-  useEffect(() => {
-    try { iframeRef.current?.contentWindow?.postMessage({ type: 'atlas:data', data }, '*') }
-    catch { /* ignore */ }
-  }, [data])
-
   return (
-    <div class="dashboard-widget-body dashboard-widget-custom">
-      <iframe
-        ref={iframeRef}
-        sandbox="allow-scripts"
-        srcDoc={srcdoc}
-        title={widget.title || 'Custom widget'}
-        style={{ width: '100%', height: '100%', border: 'none', background: 'transparent', display: 'block' }}
-      />
+    <div class="dashboard-widget-body dashboard-widget-code">
+      <DashboardCodeFrame hash={hash} compiled={compiled} data={data} />
     </div>
   )
 }
@@ -511,16 +408,18 @@ export function WidgetRenderer(
   if (error) {
     return <div class="dashboard-widget-body dashboard-widget-error">⚠ {error}</div>
   }
-  switch (widget.kind) {
-    case 'metric':      return <MetricWidget     widget={widget} data={data} />
-    case 'table':       return <TableWidget      widget={widget} data={data} />
-    case 'line_chart':  return <LineChartWidget  widget={widget} data={data} />
-    case 'bar_chart':   return <BarChartWidget   widget={widget} data={data} />
-    case 'markdown':    return <MarkdownWidget   widget={widget} data={data} />
-    case 'list':        return <ListWidget       widget={widget} data={data} />
-    case 'news':        return <NewsWidget       widget={widget} data={data} />
-    case 'custom_html': return <CustomHtmlWidget widget={widget} data={data} />
+  if (widget.code?.mode === 'code') {
+    return <CodeWidget widget={widget} data={data} />
+  }
+  // preset
+  switch (widget.code?.preset) {
+    case 'metric':     return <MetricWidget    widget={widget} data={data} />
+    case 'table':      return <TableWidget     widget={widget} data={data} />
+    case 'line_chart': return <LineChartWidget widget={widget} data={data} />
+    case 'bar_chart':  return <BarChartWidget  widget={widget} data={data} />
+    case 'markdown':   return <MarkdownWidget  widget={widget} data={data} />
+    case 'list':       return <ListWidget      widget={widget} data={data} />
     default:
-      return <div class="dashboard-widget-body dashboard-empty">Unknown widget: {widget.kind}</div>
+      return <div class="dashboard-widget-body dashboard-empty">Unknown preset: {widget.code?.preset || '(none)'}</div>
   }
 }

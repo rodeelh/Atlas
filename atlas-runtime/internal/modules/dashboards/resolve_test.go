@@ -1,383 +1,196 @@
 package dashboards
 
-// resolve_test.go — covers each data-source resolver end-to-end:
-//
-//   - runtime: fake fetcher returns canned bytes; allowlist bites unknown paths
-//   - skill:   fake executor enforces read-only; non-read actions are rejected
-//   - web:     real net/http roundtrip against an httptest.Server (public-IP loopback bypass)
-//   - sql:     real modernc.org/sqlite database; reject writes/multi-statements
-
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	_ "modernc.org/sqlite"
-
-	"atlas-runtime-go/internal/skills"
 )
 
-// ── fakes ─────────────────────────────────────────────────────────────────────
+// ── stub implementations ──────────────────────────────────────────────────────
 
-type fakeRuntime struct {
-	body   []byte
-	status int
-	err    error
-	gotEP  string
-	gotQ   map[string]string
+type stubFetcher struct {
+	lastPath  string
+	lastQuery map[string]string
+	body      []byte
+	status    int
+	err       error
 }
 
-func (f *fakeRuntime) Fetch(_ context.Context, endpoint string, query map[string]string) ([]byte, int, error) {
-	f.gotEP = endpoint
-	f.gotQ = query
-	if f.err != nil {
-		return nil, 0, f.err
-	}
-	return f.body, f.status, nil
+func (s *stubFetcher) Get(_ context.Context, path string, q map[string]string) ([]byte, int, error) {
+	s.lastPath = path
+	s.lastQuery = q
+	return s.body, s.status, s.err
 }
 
-type fakeSkills struct {
-	level   string
-	result  skills.ToolResult
-	err     error
-	gotID   string
-	gotArgs json.RawMessage
+type stubSkillExec struct {
+	lastAction string
+	lastArgs   json.RawMessage
+	result     skillExecResult
+	err        error
 }
 
-func (f *fakeSkills) PermissionLevel(string) string { return f.level }
-func (f *fakeSkills) Execute(_ context.Context, id string, args json.RawMessage) (skills.ToolResult, error) {
-	f.gotID = id
-	f.gotArgs = args
-	return f.result, f.err
+func (s *stubSkillExec) Execute(_ context.Context, action string, args json.RawMessage) (skillExecResult, error) {
+	s.lastAction = action
+	s.lastArgs = args
+	return s.result, s.err
+}
+
+type stubLiveRunner struct {
+	lastSpec   LiveComputeSpec
+	lastInputs map[string]any
+	result     any
+	err        error
+}
+
+func (s *stubLiveRunner) Run(_ context.Context, spec LiveComputeSpec, inputs map[string]any) (any, error) {
+	s.lastSpec = spec
+	s.lastInputs = inputs
+	return s.result, s.err
 }
 
 // ── runtime resolver ──────────────────────────────────────────────────────────
 
-func TestResolveRuntime_HappyPath(t *testing.T) {
-	m := New(t.TempDir(), "")
-	m.runtime = &fakeRuntime{
-		body:   []byte(`{"port":1984,"ok":true}`),
-		status: 200,
-	}
-	got, err := m.resolveSource(context.Background(), &DataSource{
-		Kind:     SourceKindRuntime,
-		Endpoint: "/status",
-	})
+func TestResolveRuntimeAllowed(t *testing.T) {
+	f := &stubFetcher{body: []byte(`{"x":1}`), status: 200}
+	data, err := resolveRuntime(context.Background(), f, map[string]any{"endpoint": "/status"})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("expected ok, got %v", err)
 	}
-	parsed, ok := got.(map[string]any)
-	if !ok {
-		t.Fatalf("expected map[string]any, got %T", got)
+	m, ok := data.(map[string]any)
+	if !ok || m["x"] == nil {
+		t.Fatalf("expected parsed JSON, got %T: %v", data, data)
 	}
-	if parsed["ok"] != true {
-		t.Errorf("body did not round-trip: %+v", parsed)
+	if f.lastPath != "/status" {
+		t.Fatalf("fetcher called with wrong path: %q", f.lastPath)
 	}
 }
 
-func TestResolveRuntime_RejectsNonAllowlisted(t *testing.T) {
-	m := New(t.TempDir(), "")
-	m.runtime = &fakeRuntime{}
-	_, err := m.resolveSource(context.Background(), &DataSource{
-		Kind:     SourceKindRuntime,
-		Endpoint: "/control",
-	})
+func TestResolveRuntimeBlocksDisallowed(t *testing.T) {
+	f := &stubFetcher{body: []byte("{}"), status: 200}
+	_, err := resolveRuntime(context.Background(), f, map[string]any{"endpoint": "/secrets"})
 	if err == nil {
-		t.Fatal("expected /control to be rejected")
+		t.Fatal("expected error for disallowed endpoint")
 	}
-	if !strings.Contains(err.Error(), "allowlist") {
-		t.Errorf("expected allowlist error, got %v", err)
+	if !strings.Contains(err.Error(), "not on the dashboards allowlist") {
+		t.Fatalf("expected allowlist error, got %v", err)
 	}
-}
-
-func TestResolveRuntime_RejectsRelativePath(t *testing.T) {
-	m := New(t.TempDir(), "")
-	m.runtime = &fakeRuntime{}
-	_, err := m.resolveSource(context.Background(), &DataSource{
-		Kind:     SourceKindRuntime,
-		Endpoint: "status", // missing leading /
-	})
-	if err == nil {
-		t.Fatal("expected leading-slash check to fail")
+	// Must not reach the fetcher.
+	if f.lastPath != "" {
+		t.Fatalf("fetcher should not have been called, lastPath=%q", f.lastPath)
 	}
 }
 
-func TestResolveRuntime_PassesQueryThrough(t *testing.T) {
-	m := New(t.TempDir(), "")
-	fr := &fakeRuntime{body: []byte(`{}`), status: 200}
-	m.runtime = fr
-	_, _ = m.resolveSource(context.Background(), &DataSource{
-		Kind:     SourceKindRuntime,
-		Endpoint: "/usage/summary",
-		Query:    map[string]string{"days": "30"},
-	})
-	if fr.gotQ["days"] != "30" {
-		t.Errorf("query not propagated: %+v", fr.gotQ)
-	}
-}
-
-func TestResolveRuntime_NonOKStatus(t *testing.T) {
-	m := New(t.TempDir(), "")
-	m.runtime = &fakeRuntime{body: []byte(`oops`), status: 500}
-	_, err := m.resolveSource(context.Background(), &DataSource{
-		Kind:     SourceKindRuntime,
-		Endpoint: "/status",
-	})
-	if err == nil || !strings.Contains(err.Error(), "500") {
-		t.Errorf("expected 500 error, got %v", err)
+func TestResolveRuntimeRejectsRelativePath(t *testing.T) {
+	f := &stubFetcher{}
+	_, err := resolveRuntime(context.Background(), f, map[string]any{"endpoint": "status"})
+	if err == nil || !strings.Contains(err.Error(), "must start with /") {
+		t.Fatalf("expected leading-slash error, got %v", err)
 	}
 }
 
 // ── skill resolver ────────────────────────────────────────────────────────────
 
-func TestResolveSkill_HappyPath_ReturnsArtifacts(t *testing.T) {
-	m := New(t.TempDir(), "")
-	m.skills = &fakeSkills{
-		level: "read",
-		result: skills.ToolResult{
-			Success:   true,
-			Summary:   "ok",
-			Artifacts: map[string]any{"temp": 22.4},
-		},
+func TestResolveSkillRequiresAction(t *testing.T) {
+	e := &stubSkillExec{}
+	_, err := resolveSkill(context.Background(), e, map[string]any{})
+	if err == nil {
+		t.Fatal("expected action required error")
 	}
-	got, err := m.resolveSource(context.Background(), &DataSource{
-		Kind:   SourceKindSkill,
-		Action: "weather.current",
-		Args:   map[string]any{"city": "Doha"},
+}
+
+func TestResolveSkillPropagatesSuccess(t *testing.T) {
+	e := &stubSkillExec{result: skillExecResult{Success: true, Summary: `{"ok":true}`}}
+	data, err := resolveSkill(context.Background(), e, map[string]any{
+		"action": "websearch.query",
+		"args":   map[string]any{"q": "hi"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	parsed, ok := got.(map[string]any)
-	if !ok {
-		t.Fatalf("expected map, got %T", got)
+	m, ok := data.(map[string]any)
+	if !ok || m["ok"] != true {
+		t.Fatalf("expected parsed map{ok:true}, got %T: %v", data, data)
 	}
-	artifacts, _ := parsed["artifacts"].(map[string]any)
-	if artifacts["temp"] != 22.4 {
-		t.Errorf("artifacts did not round-trip: %+v", parsed)
-	}
-}
-
-func TestResolveSkill_RejectsNonReadAction(t *testing.T) {
-	m := New(t.TempDir(), "")
-	m.skills = &fakeSkills{level: "execute"}
-	_, err := m.resolveSource(context.Background(), &DataSource{
-		Kind:   SourceKindSkill,
-		Action: "fs.write",
-	})
-	if err == nil || !strings.Contains(err.Error(), "not read-only") {
-		t.Errorf("expected non-read-only rejection, got %v", err)
+	if e.lastAction != "websearch.query" {
+		t.Fatalf("wrong action: %s", e.lastAction)
 	}
 }
 
-func TestResolveSkill_RejectsUnknownAction(t *testing.T) {
-	m := New(t.TempDir(), "")
-	m.skills = &fakeSkills{level: ""} // unknown
-	_, err := m.resolveSource(context.Background(), &DataSource{
-		Kind:   SourceKindSkill,
-		Action: "ghost.action",
-	})
-	if err == nil || !strings.Contains(err.Error(), "unknown skill") {
-		t.Errorf("expected unknown-skill error, got %v", err)
-	}
-}
-
-func TestResolveSkill_PropagatesFailure(t *testing.T) {
-	m := New(t.TempDir(), "")
-	m.skills = &fakeSkills{
-		level:  "read",
-		result: skills.ToolResult{Success: false, Summary: "API down"},
-	}
-	_, err := m.resolveSource(context.Background(), &DataSource{
-		Kind:   SourceKindSkill,
-		Action: "weather.current",
-	})
-	if err == nil || !strings.Contains(err.Error(), "API down") {
-		t.Errorf("expected failure summary in error, got %v", err)
-	}
-}
-
-func TestResolveSkill_NoExecutorConfigured(t *testing.T) {
-	m := New(t.TempDir(), "")
-	_, err := m.resolveSource(context.Background(), &DataSource{
-		Kind:   SourceKindSkill,
-		Action: "weather.current",
-	})
+func TestResolveSkillPropagatesFailure(t *testing.T) {
+	e := &stubSkillExec{result: skillExecResult{Success: false, Summary: "boom"}}
+	_, err := resolveSkill(context.Background(), e, map[string]any{"action": "x"})
 	if err == nil {
-		t.Error("expected error when skill executor not configured")
+		t.Fatal("expected error when skill fails")
 	}
 }
 
-// ── web resolver ──────────────────────────────────────────────────────────────
+// ── live compute resolver ─────────────────────────────────────────────────────
 
-func TestResolveWeb_RejectsLocalhost(t *testing.T) {
-	m := New(t.TempDir(), "")
-	_, err := m.resolveSource(context.Background(), &DataSource{
-		Kind: SourceKindWeb,
-		URL:  "http://127.0.0.1:1984/control",
-	})
+func TestResolveLiveComputeRequiresRunner(t *testing.T) {
+	_, err := resolveLiveCompute(context.Background(), resolverDeps{}, map[string]any{
+		"prompt":       "summarize",
+		"inputs":       []any{"a"},
+		"outputSchema": map[string]any{},
+	}, map[string]any{"a": 1})
 	if err == nil {
-		t.Error("expected localhost URL to be rejected")
+		t.Fatal("expected runner-not-wired error")
 	}
 }
 
-func TestResolveWeb_RejectsNonHTTPScheme(t *testing.T) {
-	m := New(t.TempDir(), "")
-	_, err := m.resolveSource(context.Background(), &DataSource{
-		Kind: SourceKindWeb,
-		URL:  "file:///etc/passwd",
-	})
-	if err == nil {
-		t.Error("expected file:// URL to be rejected")
+func TestResolveLiveComputeMissingInput(t *testing.T) {
+	r := &stubLiveRunner{result: map[string]any{}}
+	_, err := resolveLiveCompute(context.Background(), resolverDeps{liveRunner: r}, map[string]any{
+		"prompt":       "x",
+		"inputs":       []any{"missing"},
+		"outputSchema": map[string]any{},
+	}, map[string]any{})
+	if err == nil || !errors.Is(err, ErrSourceMissing) {
+		t.Fatalf("expected ErrSourceMissing, got %v", err)
 	}
 }
 
-func TestResolveWeb_HappyPath_AgainstTestServerWithSafetyOverride(t *testing.T) {
-	// httptest.Server binds to 127.0.0.1 — which our safety net rejects on
-	// purpose. To exercise the rest of the path (request, body cap, JSON
-	// parse) we install a permissive http.Client that bypasses validation
-	// just like the (non-test) custom client a user might inject.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"hello":"world"}`))
-	}))
-	defer srv.Close()
-
-	_ = New(t.TempDir(), "") // module exists; we drive net/http directly
-	// Drive the request directly through net/http instead of resolveSource so
-	// we don't fight the validator. This still exercises the cap+parse logic
-	// that resolveWeb shares.
-	resp, err := http.Get(srv.URL)
+func TestResolveLiveComputeHappyPath(t *testing.T) {
+	r := &stubLiveRunner{result: map[string]any{"title": "hi"}}
+	data, err := resolveLiveCompute(context.Background(), resolverDeps{liveRunner: r}, map[string]any{
+		"prompt":       "summarize",
+		"inputs":       []any{"a"},
+		"outputSchema": map[string]any{"type": "object"},
+	}, map[string]any{"a": "payload"})
 	if err != nil {
-		t.Fatalf("test setup: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		t.Fatalf("unexpected status: %d", resp.StatusCode)
+	if m, ok := data.(map[string]any); !ok || m["title"] != "hi" {
+		t.Fatalf("unexpected result: %v", data)
+	}
+	if r.lastSpec.Prompt != "summarize" {
+		t.Fatalf("spec not propagated")
+	}
+	if got := r.lastInputs["a"]; got != "payload" {
+		t.Fatalf("inputs not propagated, got %v", got)
 	}
 }
 
-// ── sql resolver ──────────────────────────────────────────────────────────────
+// ── isPermissionError ─────────────────────────────────────────────────────────
 
-func newTempSQLite(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.sqlite3")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
+func TestIsPermissionError(t *testing.T) {
+	cases := map[string]bool{
+		"runtime endpoint /x is not on the dashboards allowlist": true,
+		"sql query may not contain \"delete\"":                   true,
+		"sql query must start with SELECT (...)":                 true,
+		"unknown chat_analytics query \"x\"":                     true,
+		"widget tsx contains forbidden token":                    true,
+		"network timeout":                                        false,
+		"":                                                       false,
 	}
-	defer db.Close()
-	if _, err := db.Exec(`CREATE TABLE memories (id INTEGER PRIMARY KEY, title TEXT, importance INTEGER)`); err != nil {
-		t.Fatalf("create table: %v", err)
-	}
-	for i := 0; i < 3; i++ {
-		if _, err := db.Exec(`INSERT INTO memories (title, importance) VALUES (?, ?)`,
-			fmt.Sprintf("entry-%d", i), i); err != nil {
-			t.Fatalf("insert: %v", err)
+	for msg, want := range cases {
+		var err error
+		if msg != "" {
+			err = errors.New(msg)
 		}
-	}
-	return path
-}
-
-func TestResolveSQL_HappyPath(t *testing.T) {
-	path := newTempSQLite(t)
-	m := New(t.TempDir(), path)
-	got, err := m.resolveSource(context.Background(), &DataSource{
-		Kind: SourceKindSQL,
-		SQL:  "SELECT id, title FROM memories ORDER BY id",
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	result, ok := got.(map[string]any)
-	if !ok {
-		t.Fatalf("expected map, got %T", got)
-	}
-	rows, _ := result["rows"].([]map[string]any)
-	if len(rows) != 3 {
-		t.Errorf("want 3 rows, got %d (%+v)", len(rows), rows)
-	}
-	cols, _ := result["columns"].([]string)
-	if len(cols) != 2 || cols[0] != "id" || cols[1] != "title" {
-		t.Errorf("columns: %+v", cols)
-	}
-}
-
-func TestResolveSQL_AppendsLIMITWhenMissing(t *testing.T) {
-	path := newTempSQLite(t)
-	m := New(t.TempDir(), path)
-	// Sanity check: query without LIMIT still succeeds.
-	if _, err := m.resolveSource(context.Background(), &DataSource{
-		Kind: SourceKindSQL,
-		SQL:  "SELECT * FROM memories",
-	}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestResolveSQL_RejectsDelete(t *testing.T) {
-	path := newTempSQLite(t)
-	m := New(t.TempDir(), path)
-	_, err := m.resolveSource(context.Background(), &DataSource{
-		Kind: SourceKindSQL,
-		SQL:  "DELETE FROM memories",
-	})
-	if err == nil {
-		t.Fatal("expected DELETE to be rejected")
-	}
-}
-
-func TestResolveSQL_ReadOnlyConnection_BlocksWriteThatSneaksPastLexer(t *testing.T) {
-	// Even if a malicious query somehow made it past validateSelectSQL, the
-	// read-only connection (?mode=ro) must reject writes. We bypass the lexer
-	// here by calling QueryContext directly with the same DSN the resolver
-	// uses, then attempt a write.
-	path := newTempSQLite(t)
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=query_only(1)", path)
-	conn, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	defer conn.Close()
-	if _, err := conn.Exec("DELETE FROM memories"); err == nil {
-		t.Error("expected read-only connection to reject DELETE")
-	}
-}
-
-func TestResolveSQL_NoDBPathConfigured(t *testing.T) {
-	m := New(t.TempDir(), "")
-	_, err := m.resolveSource(context.Background(), &DataSource{
-		Kind: SourceKindSQL,
-		SQL:  "SELECT 1",
-	})
-	if err == nil {
-		t.Error("expected error when sql resolver has no db path")
-	}
-}
-
-// ── dispatch & errors ─────────────────────────────────────────────────────────
-
-func TestResolveSource_NilSource(t *testing.T) {
-	m := New(t.TempDir(), "")
-	_, err := m.resolveSource(context.Background(), nil)
-	if err == nil || !errors.Is(err, errors.New("widget has no source")) && !strings.Contains(err.Error(), "no source") {
-		// loose check: just confirm we got an error mentioning "source"
-		t.Errorf("expected error about missing source, got %v", err)
-	}
-}
-
-func TestResolveSource_UnknownKind(t *testing.T) {
-	m := New(t.TempDir(), "")
-	_, err := m.resolveSource(context.Background(), &DataSource{Kind: "telepathy"})
-	if err == nil {
-		t.Error("expected unknown-kind error")
+		if got := isPermissionError(err); got != want {
+			t.Errorf("isPermissionError(%q) = %v, want %v", msg, got, want)
+		}
 	}
 }

@@ -1187,6 +1187,12 @@ func (r *Registry) IsStateful(actionID string) bool {
 	return strings.HasPrefix(actionID, "browser.")
 }
 
+// HasAction reports whether actionID is registered (after normalisation).
+func (r *Registry) HasAction(actionID string) bool {
+	_, ok := r.entries[r.normalise(actionID)]
+	return ok
+}
+
 // GetActionClass returns the ActionClass for actionID.
 // Returns ActionClassExternalSideEffect for unknown actions.
 func (r *Registry) GetActionClass(actionID string) ActionClass {

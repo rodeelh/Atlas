@@ -1,18 +1,20 @@
-// Dashboards screen — list saved dashboards, open a detail view, render
-// widgets in a 12-column grid. Authoring happens elsewhere (in chat via the
-// dashboard.create skill); this screen is a viewer + template installer.
+// Dashboards screen (v2) — list saved dashboards and view widgets live.
 //
-// Stage 4: list view, detail view, template picker, widget grid with
-// per-widget data resolution. Custom HTML widgets fall through to a
-// placeholder until stage 5.
+// Authoring is agent-driven through the dashboard.* skills in chat; this
+// screen is a viewer. Widgets render in a 12-column grid at positions the
+// backend packer committed. Data is driven by per-dashboard SSE: the
+// coordinator replays the latest event for every source on subscribe and
+// pushes an event each time a source refreshes. Widgets bind to a source
+// by name via `widget.bindings[0].source`.
 
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { JSX } from 'preact'
 import {
   api,
   type DashboardDefinition,
+  type DashboardRefreshEvent,
+  type DashboardStatus,
   type DashboardSummary,
-  type DashboardTemplate,
   type DashboardWidget,
   type DashboardWidgetData,
 } from '../api/client'
@@ -33,11 +35,8 @@ const DashboardIcon = () => (
 
 function formatDate(iso?: string): string {
   if (!iso) return '—'
-  try {
-    return new Date(iso).toLocaleString()
-  } catch {
-    return iso
-  }
+  try { return new Date(iso).toLocaleString() }
+  catch { return iso }
 }
 
 // ── widget cell ───────────────────────────────────────────────────────────────
@@ -45,342 +44,120 @@ function formatDate(iso?: string): string {
 interface WidgetCellProps {
   dashboardID: string
   widget: DashboardWidget
-  editMode?: boolean
-  onDragStart?: (e: PointerEvent, widget: DashboardWidget) => void
-  onResizeStart?: (e: PointerEvent, widget: DashboardWidget) => void
+  /** Latest data for the source this widget is bound to (undefined if unbound). */
+  sourceData: unknown
+  sourceError?: string
+  sourceAt?: string
 }
 
-function WidgetCell({ dashboardID, widget, editMode, onDragStart, onResizeStart }: WidgetCellProps): JSX.Element {
-  const [resolved, setResolved] = useState<DashboardWidgetData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  async function resolve() {
-    setLoading(true)
-    setError(null)
-    try {
-      const r = await api.resolveDashboardWidget(dashboardID, widget.id)
-      setResolved(r)
-      if (!r.success && r.error) setError(r.error)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to resolve widget.')
-    } finally {
-      setLoading(false)
-    }
-  }
+function WidgetCell({ dashboardID, widget, sourceData, sourceError, sourceAt }: WidgetCellProps): JSX.Element {
+  // If the widget has no binding we fall back to a one-shot resolve when
+  // the cell mounts — this is the path for unbound widgets (e.g. static
+  // markdown with inline `text` in options).
+  const [fallback, setFallback] = useState<DashboardWidgetData | null>(null)
+  const [fallbackErr, setFallbackErr] = useState<string | null>(null)
+  const hasBinding = Array.isArray(widget.bindings) && widget.bindings.length > 0
 
   useEffect(() => {
-    if (!widget.source) { setLoading(false); return }
-    resolve()
-    if (widget.refreshIntervalSeconds && widget.refreshIntervalSeconds > 0) {
-      const interval = window.setInterval(resolve, widget.refreshIntervalSeconds * 1000)
-      return () => window.clearInterval(interval)
-    }
-    return undefined
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dashboardID, widget.id])
+    if (hasBinding) return
+    let cancelled = false
+    api.resolveDashboardWidget(dashboardID, widget.id)
+      .then(r => { if (!cancelled) { setFallback(r); if (!r.success && r.error) setFallbackErr(r.error) } })
+      .catch(e => { if (!cancelled) setFallbackErr(e instanceof Error ? e.message : 'Failed to load widget data.') })
+    return () => { cancelled = true }
+  }, [dashboardID, widget.id, hasBinding])
+
+  const data  = hasBinding ? sourceData  : fallback?.data
+  const error = hasBinding ? sourceError : (fallbackErr ?? (fallback && !fallback.success ? fallback.error : undefined))
+  const at    = hasBinding ? sourceAt    : fallback?.resolvedAt
 
   const x = Math.max(0, widget.gridX ?? 0)
   const y = Math.max(0, widget.gridY ?? 0)
   const w = Math.max(1, Math.min(12, widget.gridW || 4))
   const h = Math.max(1, Math.min(12, widget.gridH || 3))
-
   const style: JSX.CSSProperties = {
     gridColumn: `${x + 1} / span ${w}`,
     gridRow:    `${y + 1} / span ${h}`,
   }
 
   return (
-    <div class={`dw-cell${editMode ? ' dw-cell-edit' : ''}`} style={style}>
-      <div class={`dashboard-widget-card${editMode ? ' dw-edit-mode' : ''}`}>
-        <div class="dashboard-widget-header">
-          <div class="dashboard-widget-header-left">
-            {widget.title && <h4>{widget.title}</h4>}
-            {widget.description && <span class="dashboard-widget-sub">{widget.description}</span>}
+    <div class="dw-cell" style={style}>
+      <div class="dashboard-widget-card">
+        {(widget.title || widget.description) && (
+          <div class="dashboard-widget-header">
+            <div class="dashboard-widget-header-left">
+              {widget.title && <h4>{widget.title}</h4>}
+              {widget.description && <span class="dashboard-widget-sub">{widget.description}</span>}
+            </div>
+            {at && (
+              <span class="dashboard-widget-timestamp" title={`Updated ${formatDate(at)}`}>
+                {new Date(at).toLocaleTimeString()}
+              </span>
+            )}
           </div>
-          {!editMode && (
-            <button class="dashboard-widget-refresh" onClick={resolve} disabled={loading}
-              title={resolved?.resolvedAt ? `Updated ${formatDate(resolved.resolvedAt)}` : 'Refresh'}>
-              {loading ? '⟳' : '↺'}
-            </button>
-          )}
-        </div>
-        <div class={`dashboard-widget-content${editMode ? ' dw-no-interact' : ''}`}>
-          {loading
-            ? <div class="dashboard-widget-body dashboard-empty">Loading…</div>
-            : <WidgetRenderer widget={widget} data={resolved?.data} error={error ?? undefined} />}
+        )}
+        <div class="dashboard-widget-content">
+          <WidgetRenderer widget={widget} data={data} error={error} />
         </div>
       </div>
-      {editMode && (
-        <div
-          class="dw-drag-handle"
-          onPointerDown={onDragStart ? (e) => { e.stopPropagation(); onDragStart(e as unknown as PointerEvent, widget) } : undefined}
-          title="Drag to move"
-        >
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-            <circle cx="2" cy="2" r="1.4" fill="currentColor"/>
-            <circle cx="8" cy="2" r="1.4" fill="currentColor"/>
-            <circle cx="2" cy="8" r="1.4" fill="currentColor"/>
-            <circle cx="8" cy="8" r="1.4" fill="currentColor"/>
-          </svg>
-        </div>
-      )}
-      {editMode && (
-        <div
-          class="dw-resize-handle"
-          onPointerDown={onResizeStart ? (e) => { e.stopPropagation(); onResizeStart(e as unknown as PointerEvent, widget) } : undefined}
-          title="Drag to resize"
-        />
-      )}
     </div>
   )
 }
 
-// ── drag/resize constants ──────────────────────────────────────────────────────
-
-const GRID_COLS = 12
-const ROW_H     = 82  // grid-auto-rows (72px) + gap (10px)
-
-function minSize(kind: string): { w: number; h: number } {
-  switch (kind) {
-    case 'metric':     return { w: 2, h: 2 }
-    case 'line_chart':
-    case 'bar_chart':  return { w: 3, h: 4 }
-    case 'table':      return { w: 3, h: 3 }
-    case 'list':       return { w: 2, h: 3 }
-    case 'news':       return { w: 3, h: 3 }
-    case 'markdown':   return { w: 2, h: 2 }
-    default:           return { w: 2, h: 2 }
-  }
-}
-
-type Rect = { gridX: number; gridY: number; gridW: number; gridH: number }
-
-function rectsOverlap(a: Rect, b: Rect): boolean {
-  return a.gridX          < b.gridX + b.gridW &&
-         a.gridX + a.gridW > b.gridX &&
-         a.gridY          < b.gridY + b.gridH &&
-         a.gridY + a.gridH > b.gridY
-}
-
-// Gravity-compact: slide every widget (except the pinned one) as far up as
-// possible without overlapping anything already placed. Pinned widget is
-// treated as an immovable obstacle so dragging / resizing doesn't pull it.
-function compact(widgets: DashboardWidget[], pinnedId?: string): DashboardWidget[] {
-  const pinned  = widgets.find(w => w.id === pinnedId)
-  const free    = widgets.filter(w => w.id !== pinnedId)
-  // Process top-to-bottom, left-to-right so earlier widgets don't block later ones unnecessarily
-  const sorted  = [...free].sort((a, b) => a.gridY !== b.gridY ? a.gridY - b.gridY : a.gridX - b.gridX)
-  const placed: DashboardWidget[] = pinned ? [pinned] : []
-
-  for (const w of sorted) {
-    // Walk upward from y=0; take the first row where the widget fits
-    let bestY = w.gridY
-    for (let tryY = 0; tryY <= w.gridY; tryY++) {
-      const candidate = { ...w, gridY: tryY }
-      if (!placed.some(p => rectsOverlap(candidate, p))) {
-        bestY = tryY
-        break
-      }
-    }
-    placed.push({ ...w, gridY: bestY })
-  }
-  // Restore original order so React keys stay stable
-  const order = new Map(widgets.map((w, i) => [w.id, i]))
-  return placed.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
-}
-
-function centerOf(w: Rect) {
-  return { cx: w.gridX + w.gridW / 2, cy: w.gridY + w.gridH / 2 }
-}
-
-// During a drag: if the dragged widget's center lands inside another widget,
-// swap positions. Otherwise just place and compact.
-function applyDrag(
-  prev: DashboardWidget[],
-  updated: DashboardWidget,
-  origX: number,
-  origY: number,
-): DashboardWidget[] {
-  const { cx, cy } = centerOf(updated)
-  const swapTarget = prev.find(w =>
-    w.id !== updated.id &&
-    cx > w.gridX && cx < w.gridX + w.gridW &&
-    cy > w.gridY && cy < w.gridY + w.gridH,
-  )
-  if (swapTarget) {
-    // Swap: move target to dragged widget's original position
-    const swapped = prev.map(w => {
-      if (w.id === updated.id) return updated
-      if (w.id === swapTarget.id) return { ...w, gridX: origX, gridY: origY }
-      return w
-    })
-    return compact(swapped, updated.id)
-  }
-  // No swap — push any overlapping widgets down, then compact
-  const pushed = prev.map(w => {
-    if (w.id === updated.id) return updated
-    if (rectsOverlap(updated, w)) return { ...w, gridY: updated.gridY + updated.gridH }
-    return w
-  })
-  return compact(pushed, updated.id)
-}
-
-// Apply a resize to the active widget, push overlapping widgets, compact.
-function applyResize(
-  prev: DashboardWidget[],
-  updated: DashboardWidget,
-): DashboardWidget[] {
-  const pushed = prev.map(w => {
-    if (w.id === updated.id) return updated
-    if (rectsOverlap(updated, w)) return { ...w, gridY: updated.gridY + updated.gridH }
-    return w
-  })
-  return compact(pushed, updated.id)
-}
-
 // ── detail view ───────────────────────────────────────────────────────────────
+
+interface SourceEntry { data?: unknown; error?: string; at?: string }
 
 function DashboardDetail(
   { id, onBack, onDelete }: { id: string; onBack: () => void; onDelete: (id: string) => void }
 ): JSX.Element {
-  const [def, setDef] = useState<DashboardDefinition | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [editMode, setEditMode] = useState(false)
-  const [localWidgets, setLocalWidgets] = useState<DashboardWidget[]>([])
-  const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
+  const [def, setDef]           = useState<DashboardDefinition | null>(null)
+  const [loading, setLoading]   = useState(true)
+  const [error, setError]       = useState<string | null>(null)
+  const [sources, setSources]   = useState<Record<string, SourceEntry>>({})
+  const [refreshing, setRefreshing] = useState(false)
   const [pendingDelete, setPendingDelete] = useState(false)
-  const gridRef = useRef<HTMLDivElement>(null)
+  const esRef = useRef<EventSource | null>(null)
 
-  // Drag and resize state — stored in refs to avoid triggering re-renders on
-  // every pointermove. Only setLocalWidgets (React state) triggers re-renders
-  // when the snapped grid position actually changes.
-  const dragRef  = useRef<{ id: string; startX: number; startY: number; origX: number; origY: number; origW: number; colW: number } | null>(null)
-  const resizeRef = useRef<{ id: string; startX: number; startY: number; origW: number; origH: number; origX: number; colW: number } | null>(null)
-  // Snapshot of widget positions at the moment drag/resize started — used as
-  // the immutable base for every frame calculation so mutations don't compound.
-  const snapWidgets = useRef<DashboardWidget[]>([])
-  // Track last snapped value to skip redundant setLocalWidgets calls
-  const lastSnapRef = useRef<{ x?: number; y?: number; w?: number; h?: number }>({})
-
+  // Load the dashboard definition. The SSE stream replays latest source
+  // events on subscribe, so we don't need a separate initial data fetch.
   useEffect(() => {
     let cancelled = false
-    async function load() {
-      setLoading(true); setError(null)
-      try {
-        const d = await api.dashboard(id)
-        if (!cancelled) { setDef(d); setLocalWidgets(d.widgets) }
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load dashboard.')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    load()
+    setLoading(true); setError(null)
+    api.dashboard(id)
+      .then(d => { if (!cancelled) setDef(d) })
+      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load dashboard.') })
+      .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [id])
 
-  // Attach pointer listeners to window while edit mode is active
+  // Subscribe to the per-dashboard event stream. The coordinator synchronously
+  // replays the latest cached event for every source when we subscribe, so the
+  // grid paints on the first tick without a round-trip.
   useEffect(() => {
-    if (!editMode) return
-    function onMove(e: PointerEvent) {
-      if (dragRef.current) {
-        const { id: wid, startX, startY, origX, origY, origW, colW } = dragRef.current
-        const dx = Math.round((e.clientX - startX) / colW)
-        const dy = Math.round((e.clientY - startY) / ROW_H)
-        const newX = Math.max(0, Math.min(GRID_COLS - origW, origX + dx))
-        const newY = Math.max(0, origY + dy)
-        if (newX !== lastSnapRef.current.x || newY !== lastSnapRef.current.y) {
-          lastSnapRef.current = { x: newX, y: newY }
-          // Always compute from the pre-drag snapshot so each frame is independent
-          const base = snapWidgets.current
-          const dragged = base.find(w => w.id === wid)
-          if (!dragged) return
-          setLocalWidgets(applyDrag(base, { ...dragged, gridX: newX, gridY: newY }, origX, origY))
-        }
-        return
-      }
-      if (resizeRef.current) {
-        const { id: wid, startX, startY, origW, origH, origX, colW } = resizeRef.current
-        const dx = Math.round((e.clientX - startX) / colW)
-        const dy = Math.round((e.clientY - startY) / ROW_H)
-        const resized = snapWidgets.current.find(w => w.id === wid)
-        const min = resized ? minSize(resized.kind) : { w: 2, h: 2 }
-        const newW = Math.max(min.w, Math.min(GRID_COLS - origX, origW + dx))
-        const newH = Math.max(min.h, origH + dy)
-        if (newW !== lastSnapRef.current.w || newH !== lastSnapRef.current.h) {
-          lastSnapRef.current = { w: newW, h: newH }
-          const base = snapWidgets.current
-          const resized = base.find(w => w.id === wid)
-          if (!resized) return
-          setLocalWidgets(applyResize(base, { ...resized, gridW: newW, gridH: newH }))
-        }
-      }
+    const es = api.streamDashboardEvents(id)
+    esRef.current = es
+    es.onmessage = (ev: MessageEvent<string>) => {
+      try {
+        const payload = JSON.parse(ev.data) as DashboardRefreshEvent
+        setSources(prev => ({
+          ...prev,
+          [payload.source]: { data: payload.data, error: payload.error || undefined, at: payload.at },
+        }))
+      } catch { /* ignore malformed frames */ }
     }
-    function onUp() {
-      dragRef.current = null
-      resizeRef.current = null
-      lastSnapRef.current = {}
-      // Commit: update snapshot to whatever was last rendered
-      snapWidgets.current = []
-    }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
+    es.onerror = () => { /* browser auto-reconnects; nothing to do */ }
     return () => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
+      es.close()
+      esRef.current = null
     }
-  }, [editMode])
+  }, [id])
 
-  function handleDragStart(e: PointerEvent, widget: DashboardWidget) {
-    if (!gridRef.current) return
-    e.preventDefault()
-    const colW = (gridRef.current.getBoundingClientRect().width + 10) / GRID_COLS
-    dragRef.current = { id: widget.id, startX: e.clientX, startY: e.clientY, origX: widget.gridX, origY: widget.gridY, origW: widget.gridW, colW }
-    snapWidgets.current = localWidgets.map(w => ({ ...w }))
-    lastSnapRef.current = {}
-  }
-
-  function handleResizeStart(e: PointerEvent, widget: DashboardWidget) {
-    if (!gridRef.current) return
-    e.preventDefault()
-    const colW = (gridRef.current.getBoundingClientRect().width + 10) / GRID_COLS
-    resizeRef.current = { id: widget.id, startX: e.clientX, startY: e.clientY, origW: widget.gridW, origH: widget.gridH, origX: widget.gridX, colW }
-    snapWidgets.current = localWidgets.map(w => ({ ...w }))
-    lastSnapRef.current = {}
-  }
-
-  function handleEditToggle() {
-    if (editMode) {
-      // Cancel — revert to saved def
-      if (def) setLocalWidgets(def.widgets)
-      setEditMode(false)
-      setSaveError(null)
-    } else {
-      setEditMode(true)
-    }
-  }
-
-  async function handleSave() {
-    if (!def) return
-    setSaving(true); setSaveError(null)
-    try {
-      const updated = await api.updateDashboard({ ...def, widgets: localWidgets })
-      setDef(updated)
-      setLocalWidgets(updated.widgets)
-      setEditMode(false)
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : 'Failed to save layout.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  function handleDelete() {
-    if (!def) return
-    setPendingDelete(true)
+  async function handleRefresh() {
+    setRefreshing(true)
+    try { await api.refreshDashboard(id) }
+    catch (e) { setError(e instanceof Error ? e.message : 'Refresh failed.') }
+    finally { setRefreshing(false) }
   }
 
   async function confirmDelete() {
@@ -390,43 +167,55 @@ function DashboardDetail(
       await api.deleteDashboard(def.id)
       onDelete(def.id)
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : 'Failed to delete dashboard.')
+      setError(e instanceof Error ? e.message : 'Failed to delete dashboard.')
     }
   }
 
-  const displayWidgets = editMode ? localWidgets : (def?.widgets ?? [])
+  const widgets = def?.widgets ?? []
 
   return (
     <div class="screen">
       <PageHeader
         title={def?.name || 'Dashboard'}
-        subtitle={def?.description || (loading ? 'Loading…' : '')}
+        subtitle={
+          def
+            ? (def.description || (def.status === 'draft' ? 'Draft — not yet committed.' : `Updated ${formatDate(def.updatedAt)}`))
+            : (loading ? 'Loading…' : '')
+        }
         actions={
           <>
             <button class="btn btn-sm" onClick={onBack}>← Back</button>
-            {def && !editMode && <button class="btn btn-sm" onClick={handleEditToggle}>Edit Layout</button>}
-            {editMode && <button class="btn btn-sm" onClick={handleEditToggle}>Cancel</button>}
-            {editMode && <button class="btn btn-sm btn-primary" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save Layout'}</button>}
-            {def && !editMode && <button class="btn btn-sm" onClick={handleDelete}>Delete</button>}
+            {def && (
+              <span class={`dashboard-status-badge ${def.status}`} title={def.committedAt ? `Committed ${formatDate(def.committedAt)}` : undefined}>
+                {def.status === 'live' ? 'Live' : 'Draft'}
+              </span>
+            )}
+            {def && <button class="btn btn-sm" onClick={handleRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh'}</button>}
+            {def && <button class="btn btn-sm" onClick={() => setPendingDelete(true)}>Delete</button>}
           </>
         }
       />
-      {(error || saveError) && <p class="error-banner">{error || saveError}</p>}
-      {editMode && <p class="dw-edit-banner">Drag widgets to reposition · drag the ◢ handle to resize · click Save when done</p>}
+      {error && <p class="error-banner">{error}</p>}
       {loading && <p class="empty-state">Loading dashboard…</p>}
-      {!loading && displayWidgets.length === 0 && <p class="empty-state">This dashboard has no widgets.</p>}
-      {!loading && displayWidgets.length > 0 && (
-        <div class="dashboard-grid" ref={gridRef}>
-          {displayWidgets.map(w => (
-            <WidgetCell
-              key={w.id}
-              dashboardID={def!.id}
-              widget={w}
-              editMode={editMode}
-              onDragStart={handleDragStart}
-              onResizeStart={handleResizeStart}
-            />
-          ))}
+      {!loading && widgets.length === 0 && (
+        <p class="empty-state">This dashboard has no widgets yet. Ask Atlas in chat to add some.</p>
+      )}
+      {!loading && widgets.length > 0 && (
+        <div class="dashboard-grid">
+          {widgets.map(w => {
+            const srcName = w.bindings?.[0]?.source
+            const src = srcName ? sources[srcName] : undefined
+            return (
+              <WidgetCell
+                key={w.id}
+                dashboardID={id}
+                widget={w}
+                sourceData={src?.data}
+                sourceError={src?.error}
+                sourceAt={src?.at}
+              />
+            )
+          })}
         </div>
       )}
       {pendingDelete && def && (
@@ -446,23 +235,17 @@ function DashboardDetail(
 // ── list view ─────────────────────────────────────────────────────────────────
 
 export function Dashboards(): JSX.Element {
-  const [items, setItems] = useState<DashboardSummary[]>([])
-  const [templates, setTemplates] = useState<DashboardTemplate[]>([])
+  const [items, setItems]     = useState<DashboardSummary[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError]     = useState<string | null>(null)
   const [selectedID, setSelectedID] = useState<string | null>(null)
-  const [installing, setInstalling] = useState<string | null>(null)
+  const [filter, setFilter]   = useState<DashboardStatus | 'all'>('all')
 
   async function load() {
-    setLoading(true)
-    setError(null)
+    setLoading(true); setError(null)
     try {
-      const [list, tmpls] = await Promise.all([
-        api.dashboards(),
-        api.dashboardTemplates().catch(() => [] as DashboardTemplate[]),
-      ])
+      const list = await api.dashboards()
       setItems(list)
-      setTemplates(tmpls)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load dashboards.')
     } finally {
@@ -472,41 +255,44 @@ export function Dashboards(): JSX.Element {
 
   useEffect(() => { load() }, [])
 
-  async function handleInstallTemplate(tmpl: DashboardTemplate) {
-    setInstalling(tmpl.id)
-    try {
-      const created = await api.createDashboard({ template: tmpl.id })
-      await load()
-      setSelectedID(created.id)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to install template.')
-    } finally {
-      setInstalling(null)
-    }
-  }
-
   function handleDeleted(id: string) {
     setItems(prev => prev.filter(i => i.id !== id))
     setSelectedID(null)
   }
 
+  const shown = useMemo(() =>
+    filter === 'all' ? items : items.filter(i => i.status === filter),
+    [items, filter])
+
   if (selectedID) {
     return <DashboardDetail id={selectedID} onBack={() => setSelectedID(null)} onDelete={handleDeleted} />
   }
+
+  const draftCount = items.filter(i => i.status === 'draft').length
+  const liveCount  = items.filter(i => i.status === 'live').length
 
   return (
     <div class="screen">
       <PageHeader
         title="Dashboards"
-        subtitle="Live data dashboards. Ask Atlas in chat to create one, or pick a starter template below."
+        subtitle="Live data dashboards. Ask Atlas in chat to design one — this screen is a viewer."
+        actions={
+          items.length > 0 ? (
+            <div class="dashboard-filter-group">
+              <button class={`btn btn-sm ${filter === 'all'   ? 'btn-primary' : ''}`} onClick={() => setFilter('all')}>All ({items.length})</button>
+              <button class={`btn btn-sm ${filter === 'live'  ? 'btn-primary' : ''}`} onClick={() => setFilter('live')}>Live ({liveCount})</button>
+              <button class={`btn btn-sm ${filter === 'draft' ? 'btn-primary' : ''}`} onClick={() => setFilter('draft')}>Drafts ({draftCount})</button>
+            </div>
+          ) : undefined
+        }
       />
 
       {error && <p class="error-banner">{error}</p>}
       {loading && <PageSpinner />}
 
-      {!loading && items.length > 0 && (
+      {!loading && shown.length > 0 && (
         <div class="dashboard-list">
-          {items.map(item => (
+          {shown.map(item => (
             <button
               key={item.id}
               class="card dashboard-list-card"
@@ -514,10 +300,15 @@ export function Dashboards(): JSX.Element {
             >
               <div class="dashboard-list-icon"><DashboardIcon /></div>
               <div class="dashboard-list-meta">
-                <strong>{item.name}</strong>
+                <strong>
+                  {item.name}
+                  <span class={`dashboard-status-badge ${item.status}`}>
+                    {item.status === 'live' ? 'Live' : 'Draft'}
+                  </span>
+                </strong>
                 <span class="dashboard-list-sub">{item.description || 'Custom dashboard'}</span>
                 <span class="dashboard-list-stats">
-                  {item.widgetCount} widget{item.widgetCount === 1 ? '' : 's'} · updated {formatDate(item.updatedAt)}
+                  {item.widgetCount} widget{item.widgetCount === 1 ? '' : 's'} · {item.sourceCount} source{item.sourceCount === 1 ? '' : 's'} · updated {formatDate(item.updatedAt)}
                 </span>
               </div>
             </button>
@@ -528,34 +319,13 @@ export function Dashboards(): JSX.Element {
       {!loading && items.length === 0 && (
         <EmptyState
           icon={<DashboardIcon />}
-          title={'No dashboards yet'}
-          body={'Ask Atlas in chat or pick a starter template below to get started.'}
+          title="No dashboards yet"
+          body="Ask Atlas in chat to build a dashboard for you. Agents author widgets, wire data sources, and commit the layout — this screen shows the result."
         />
       )}
 
-      {!loading && templates.length > 0 && (
-        <div class="dashboard-templates">
-          <h3 class="dashboard-templates-title">Starter templates</h3>
-          <div class="dashboard-list">
-            {templates.map(tmpl => (
-              <button
-                key={tmpl.id}
-                class="card dashboard-list-card"
-                onClick={() => handleInstallTemplate(tmpl)}
-                disabled={installing === tmpl.id}
-              >
-                <div class="dashboard-list-icon"><DashboardIcon /></div>
-                <div class="dashboard-list-meta">
-                  <strong>{tmpl.name}</strong>
-                  <span class="dashboard-list-sub">{tmpl.description}</span>
-                  <span class="dashboard-list-stats">
-                    {tmpl.definition.widgets.length} widget{tmpl.definition.widgets.length === 1 ? '' : 's'} · {installing === tmpl.id ? 'installing…' : 'click to install'}
-                  </span>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
+      {!loading && items.length > 0 && shown.length === 0 && (
+        <p class="empty-state">No dashboards match this filter.</p>
       )}
     </div>
   )

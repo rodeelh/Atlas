@@ -1,50 +1,53 @@
 package dashboards
 
-// module.go — first-party "dashboards" platform module: routes, handlers, and
-// dependency wiring. This is stage 2 of the dashboards plan; it provides every
-// HTTP surface needed for the (later) frontend to render real dashboards.
-//
-// Wiring shape (will be set up from cmd/atlas-runtime/main.go in stage 2 or
-// stage 3 — module exposes setters so wiring can happen after construction):
-//
-//   m := dashboards.New(supportDir, dbPath)
-//   m.SetRuntimeFetcher(dashboards.NewLoopbackFetcher(cfg.RuntimePort))
-//   m.SetSkillExecutor(skillRegistry)
-//   registry.Register(m)
+// module.go — dashboards v2 platform module: lifecycle, wiring, and
+// dependency injection. HTTP routes live in routes.go and skills.go
+// registers the 12 granular agent-facing skills.
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
+	"atlas-runtime-go/internal/agent"
 	"atlas-runtime-go/internal/platform"
+	"atlas-runtime-go/internal/skills"
 )
 
-// Module is the platform.Module implementation for dashboards.
+// Module is the platform.Module implementation for v2 dashboards.
 type Module struct {
-	supportDir       string
-	dbPath           string
-	store            *Store
+	supportDir string
+	dbPath     string
+
+	store       *Store
+	coordinator *Coordinator
+
+	// Injected dependencies.
 	runtime          RuntimeFetcher
-	skills           SkillExecutor
-	webClient        *http.Client     // overridable in tests
-	providerResolver ProviderResolver // injected at startup; needed by dashboard.create
+	skillsRegistry   *skills.Registry
+	skillExec        SkillExecutor
+	db               *sql.DB
+	liveRunner       LiveComputeRunner
+	providerResolver func() (agent.ProviderConfig, error)
 }
 
-// New constructs a Module rooted at supportDir. dbPath is the path to the
-// runtime SQLite database (used by the SQL resolver in read-only mode).
+// New constructs a Module rooted at supportDir. dbPath is the sqlite path
+// used by the read-only SQL resolver; the open *sql.DB handle is wired
+// separately via SetDatabase for the chat_analytics and gremlin resolvers.
 func New(supportDir, dbPath string) *Module {
-	return &Module{
+	m := &Module{
 		supportDir: supportDir,
 		dbPath:     dbPath,
 		store:      NewStore(supportDir),
 	}
+	m.coordinator = NewCoordinator(
+		func(id string) (Dashboard, error) { return m.store.Get(id) },
+		m.resolveSourceByName,
+	)
+	return m
 }
 
 // ID implements platform.Module.
@@ -52,7 +55,7 @@ func (m *Module) ID() string { return "dashboards" }
 
 // Manifest implements platform.Module.
 func (m *Module) Manifest() platform.Manifest {
-	return platform.Manifest{Version: "v1"}
+	return platform.Manifest{Version: "v2"}
 }
 
 // Register implements platform.Module. Mounts protected routes onto the host.
@@ -61,276 +64,155 @@ func (m *Module) Register(host platform.Host) error {
 	return nil
 }
 
-// Start implements platform.Module.
-func (m *Module) Start(context.Context) error { return nil }
+// Start implements platform.Module. Archives any legacy v1 dashboards.json
+// on first boot, then creates the AI live_compute runner if none was injected.
+func (m *Module) Start(context.Context) error {
+	if err := m.store.ArchiveV1IfPresent(); err != nil {
+		return err
+	}
+	if m.liveRunner == nil {
+		m.liveRunner = NewAILiveComputeRunner(m.providerConfigFromAgent)
+	}
+	return nil
+}
 
 // Stop implements platform.Module.
 func (m *Module) Stop(context.Context) error { return nil }
 
-// SetRuntimeFetcher injects the loopback fetcher (or a stub in tests).
-func (m *Module) SetRuntimeFetcher(f RuntimeFetcher) { m.runtime = f }
-
-// SetSkillExecutor injects the skill registry (or a stub in tests).
-func (m *Module) SetSkillExecutor(s SkillExecutor) { m.skills = s }
-
-// SetProviderResolver injects the AI provider resolver used by dashboard.create.
-func (m *Module) SetProviderResolver(r ProviderResolver) { m.providerResolver = r }
-
-// Store returns the underlying dashboard store. Used by stage-3 skills to
-// avoid round-tripping HTTP for read-only listing/get.
+// Store returns the dashboard store (used by tests and skill handlers).
 func (m *Module) Store() *Store { return m.store }
 
-// ── routes ────────────────────────────────────────────────────────────────────
+// Coordinator returns the SSE coordinator (used by tests and SSE route).
+func (m *Module) Coordinator() *Coordinator { return m.coordinator }
 
-func (m *Module) registerRoutes(r chi.Router) {
-	r.Get("/dashboards", m.listDashboards)
-	r.Post("/dashboards", m.createDashboard)
-	r.Get("/dashboards/templates", m.listTemplates)
-	r.Get("/dashboards/{id}", m.getDashboard)
-	r.Put("/dashboards/{id}", m.updateDashboard)
-	r.Delete("/dashboards/{id}", m.deleteDashboard)
-	r.Post("/dashboards/{id}/resolve", m.resolveWidget)
-}
+// ── setters (called from cmd/atlas-runtime/main.go) ───────────────────────────
 
-// ── handlers ──────────────────────────────────────────────────────────────────
+// SetRuntimeFetcher injects the loopback fetcher.
+func (m *Module) SetRuntimeFetcher(f RuntimeFetcher) { m.runtime = f }
 
-func (m *Module) listDashboards(w http.ResponseWriter, _ *http.Request) {
-	defs := m.store.List()
-	out := make([]Summary, 0, len(defs))
-	for _, d := range defs {
-		out = append(out, SummaryFor(d))
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-func (m *Module) listTemplates(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, Templates())
-}
-
-func (m *Module) getDashboard(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	def, err := m.store.Get(id)
-	if errors.Is(err, ErrNotFound) {
-		writeError(w, http.StatusNotFound, "dashboard not found: "+id)
+// SetSkillExecutor injects the skills registry as an executor. The adapter
+// converts skills.ToolResult into the narrow skillExecResult used here.
+func (m *Module) SetSkillExecutor(reg *skills.Registry) {
+	m.skillsRegistry = reg
+	if reg == nil {
+		m.skillExec = nil
 		return
 	}
+	m.skillExec = &skillRegistryAdapter{reg: reg}
+}
+
+// SetDatabase injects the shared *sql.DB handle.
+func (m *Module) SetDatabase(db *sql.DB) { m.db = db }
+
+// SetLiveComputeRunner injects the live_compute runner.
+func (m *Module) SetLiveComputeRunner(r LiveComputeRunner) { m.liveRunner = r }
+
+// SetProviderResolver injects the AI provider resolver.
+func (m *Module) SetProviderResolver(fn func() (agent.ProviderConfig, error)) {
+	m.providerResolver = fn
+}
+
+// ── resolver wiring ───────────────────────────────────────────────────────────
+
+// resolverDeps snapshots the current wiring for use inside a resolver.
+func (m *Module) resolverDeps() resolverDeps {
+	// providerConfig snapshot is not strictly needed unless liveRunner looks
+	// it up; we keep a light fallback via the injected provider resolver.
+	return resolverDeps{
+		runtime:          m.runtime,
+		skills:           m.skillExec,
+		db:               m.db,
+		dbPath:           m.dbPath,
+		liveRunner:       m.liveRunner,
+		providerResolver: m.providerConfigFromAgent,
+	}
+}
+
+func (m *Module) providerConfigFromAgent() (providerConfig, error) {
+	if m.providerResolver == nil {
+		return providerConfig{}, errors.New("provider resolver not wired")
+	}
+	raw, err := m.providerResolver()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return providerConfig{}, err
 	}
-	writeJSON(w, http.StatusOK, def)
+	return providerConfig{
+		Type:         string(raw.Type),
+		APIKey:       raw.APIKey,
+		Model:        raw.Model,
+		BaseURL:      raw.BaseURL,
+		ExtraHeaders: raw.ExtraHeaders,
+	}, nil
 }
 
-// createDashboard accepts either { template: "<id>" } to clone a template or
-// { definition: { ... } } to install a hand-crafted definition.
-func (m *Module) createDashboard(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Template   string               `json:"template"`
-		Definition *DashboardDefinition `json:"definition"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
-		return
-	}
-
-	var def DashboardDefinition
-	switch {
-	case body.Template != "":
-		tmpl, ok := TemplateByID(body.Template)
-		if !ok {
-			writeError(w, http.StatusBadRequest, "unknown template: "+body.Template)
-			return
-		}
-		def = tmpl.Definition
-	case body.Definition != nil:
-		def = *body.Definition
-	default:
-		writeError(w, http.StatusBadRequest, "request must include either template or definition")
-		return
-	}
-
-	if def.ID == "" {
-		def.ID = newDashboardID()
-	}
-	if def.Name == "" {
-		writeError(w, http.StatusBadRequest, "dashboard name is required")
-		return
-	}
-	// Ensure widgets have IDs.
-	for i := range def.Widgets {
-		if def.Widgets[i].ID == "" {
-			def.Widgets[i].ID = fmt.Sprintf("widget-%d", i+1)
-		}
-	}
-
-	saved, err := m.store.Save(def)
+// resolveSourceByName fetches one source's fresh data.
+func (m *Module) resolveSourceByName(ctx context.Context, dashboardID, sourceName string) (any, error) {
+	d, err := m.store.Get(dashboardID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return nil, err
 	}
-	writeJSON(w, http.StatusCreated, saved)
-}
-
-func (m *Module) updateDashboard(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	var body DashboardDefinition
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
-		return
-	}
-	body.ID = id
-	if _, err := m.store.Get(id); errors.Is(err, ErrNotFound) {
-		writeError(w, http.StatusNotFound, "dashboard not found: "+id)
-		return
-	}
-	saved, err := m.store.Save(body)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, saved)
-}
-
-func (m *Module) deleteDashboard(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if err := m.store.Delete(id); errors.Is(err, ErrNotFound) {
-		writeError(w, http.StatusNotFound, "dashboard not found: "+id)
-		return
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// resolveWidget loads a single widget's data from its declared source.
-// Body: { "widgetId": "..." }
-func (m *Module) resolveWidget(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	def, err := m.store.Get(id)
-	if errors.Is(err, ErrNotFound) {
-		writeError(w, http.StatusNotFound, "dashboard not found: "+id)
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	var body struct {
-		WidgetID string `json:"widgetId"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
-		return
-	}
-	if body.WidgetID == "" {
-		writeError(w, http.StatusBadRequest, "widgetId is required")
-		return
-	}
-
-	var widget *Widget
-	for i := range def.Widgets {
-		if def.Widgets[i].ID == body.WidgetID {
-			widget = &def.Widgets[i]
+	var src *DataSource
+	for i := range d.Sources {
+		if d.Sources[i].Name == sourceName {
+			src = &d.Sources[i]
 			break
 		}
 	}
-	if widget == nil {
-		writeError(w, http.StatusNotFound, "widget not found: "+body.WidgetID)
-		return
+	if src == nil {
+		return nil, fmt.Errorf("%w: %s", ErrSourceMissing, sourceName)
 	}
 
-	// Per-resolve hard cap. Web fetches and SQL queries each apply their own
-	// tighter timeout on top of this.
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-
-	start := time.Now()
-	data, err := m.resolveSource(ctx, widget.Source)
-	dur := time.Since(start).Milliseconds()
-
-	wd := WidgetData{
-		WidgetID:   body.WidgetID,
-		ResolvedAt: time.Now().UTC().Format(time.RFC3339),
-		DurationMs: dur,
-	}
-	if widget.Source != nil {
-		wd.SourceKind = widget.Source.Kind
-	}
-	if err != nil {
-		wd.Success = false
-		wd.Error = err.Error()
-		// Surface auth/permission errors as 403, everything else 200 with
-		// success=false so the dashboard can render error tiles.
-		if isPermissionError(err) {
-			writeJSON(w, http.StatusForbidden, wd)
-			return
+	// live_compute may depend on other sources — resolve them first.
+	others := map[string]any{}
+	if src.Kind == SourceKindLiveCompute {
+		for _, other := range d.Sources {
+			if other.Name == sourceName {
+				continue
+			}
+			if val, err := resolveSource(ctx, m.resolverDeps(), other, nil); err == nil {
+				others[other.Name] = val
+			}
 		}
-		writeJSON(w, http.StatusOK, wd)
-		return
 	}
-	wd.Success = true
-	wd.Data = data
-	writeJSON(w, http.StatusOK, wd)
+	return resolveSource(ctx, m.resolverDeps(), *src, others)
 }
 
-// isPermissionError reports whether err originated from a safety/allowlist
-// rejection rather than a runtime fetch failure. Used so the resolve handler
-// returns 403 for sandbox violations.
-//
-// Keep this list aligned with the error strings produced by safety.go and the
-// per-resolver allowlist checks. Any safety rejection that is not classified
-// here would leak through as a 200/success=false, which is harmless but
-// confuses callers expecting an HTTP-level signal.
-func isPermissionError(err error) bool {
-	if err == nil {
-		return false
+// ── skill executor adapter ────────────────────────────────────────────────────
+
+type skillRegistryAdapter struct{ reg *skills.Registry }
+
+func (a *skillRegistryAdapter) Execute(ctx context.Context, actionID string, args json.RawMessage) (skillExecResult, error) {
+	res, err := a.reg.Execute(ctx, actionID, args)
+	if err != nil {
+		return skillExecResult{}, err
 	}
-	msg := err.Error()
-	switch {
-	// runtime allowlist
-	case strings.Contains(msg, "not on the dashboards allowlist"):
-		return true
-	case strings.Contains(msg, "runtime endpoint must start with /"):
-		return true
-	// skill allowlist
-	case strings.Contains(msg, "is not read-only"):
-		return true
-	case strings.Contains(msg, "unknown skill action"):
-		return true
-	// web SSRF / scheme guards
-	case strings.Contains(msg, "non-public address"):
-		return true
-	case strings.Contains(msg, "host is local"):
-		return true
-	case strings.Contains(msg, "scheme must be http or https"):
-		return true
-	case strings.Contains(msg, "invalid web url"):
-		return true
-	// SQL lexer
-	case strings.Contains(msg, "may not contain"):
-		return true
-	case strings.Contains(msg, "must start with SELECT"):
-		return true
-	case strings.Contains(msg, "must contain a single statement"):
-		return true
+	return skillExecResult{Success: res.Success, Summary: res.Summary, Artifacts: res.Artifacts}, nil
+}
+
+// ── widget resolver (for preview/resolve routes) ──────────────────────────────
+
+// resolveWidgetData loads data for a single widget by resolving each of its
+// bindings. Returns a map keyed by binding source name.
+func (m *Module) resolveWidgetData(ctx context.Context, d Dashboard, w Widget) (any, error) {
+	if len(w.Bindings) == 0 {
+		return nil, nil
 	}
-	return false
+	if len(w.Bindings) == 1 {
+		// Single binding — return its payload directly so preset renderers
+		// can consume it without a keyed envelope.
+		return m.resolveSourceByName(ctx, d.ID, w.Bindings[0].Source)
+	}
+	out := map[string]any{}
+	for _, b := range w.Bindings {
+		val, err := m.resolveSourceByName(ctx, d.ID, b.Source)
+		if err != nil {
+			return nil, fmt.Errorf("binding %q: %w", b.Source, err)
+		}
+		out[b.Source] = val
+	}
+	return out, nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-func newDashboardID() string {
-	return "dashboard-" + time.Now().UTC().Format("20060102150405.000000000")
-}
-
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
-}
-
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
-}
+func nowUTC() time.Time { return time.Now().UTC() }

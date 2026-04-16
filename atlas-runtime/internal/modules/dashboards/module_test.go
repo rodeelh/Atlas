@@ -1,314 +1,158 @@
 package dashboards
 
-// module_test.go — exercises the HTTP surface of the dashboards module via
-// httptest + chi. Routes are registered exactly the way platform.Host would
-// mount them in production, so the request paths match the real runtime.
-
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/go-chi/chi/v5"
-
-	"atlas-runtime-go/internal/skills"
 )
 
-func newTestModule(t *testing.T) (*Module, http.Handler) {
+func newTestModule(t *testing.T) *Module {
 	t.Helper()
-	m := New(t.TempDir(), "")
-	r := chi.NewRouter()
-	m.registerRoutes(r)
-	return m, r
+	dir := t.TempDir()
+	return New(dir, "")
 }
 
-func doJSON(t *testing.T, h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
-	t.Helper()
-	var buf bytes.Buffer
-	if body != nil {
-		_ = json.NewEncoder(&buf).Encode(body)
-	}
-	req := httptest.NewRequest(method, path, &buf)
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	return rec
-}
+func TestCreateDraftThenCommitFlow(t *testing.T) {
+	m := newTestModule(t)
+	ctx := context.Background()
 
-// ── list / templates ──────────────────────────────────────────────────────────
-
-func TestList_Empty(t *testing.T) {
-	_, h := newTestModule(t)
-	rec := doJSON(t, h, "GET", "/dashboards", nil)
-	if rec.Code != 200 {
-		t.Fatalf("status: %d body=%s", rec.Code, rec.Body.String())
+	// 1. create draft
+	res, err := m.skillCreateDraft(ctx, json.RawMessage(`{"name":"My Dashboard"}`))
+	if err != nil || !res.Success {
+		t.Fatalf("create_draft: err=%v success=%v summary=%s", err, res.Success, res.Summary)
 	}
-	var got []Summary
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(got) != 0 {
-		t.Errorf("want 0 dashboards, got %d", len(got))
-	}
-}
-
-func TestListTemplates_ReturnsBuiltIns(t *testing.T) {
-	_, h := newTestModule(t)
-	rec := doJSON(t, h, "GET", "/dashboards/templates", nil)
-	if rec.Code != 200 {
-		t.Fatalf("status: %d", rec.Code)
-	}
-	var got []Template
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(got) == 0 {
-		t.Error("expected at least one template")
-	}
-	seen := map[string]bool{}
-	for _, tmpl := range got {
-		seen[tmpl.ID] = true
-	}
-	for _, want := range []string{"system_health", "usage", "memory_atlas"} {
-		if !seen[want] {
-			t.Errorf("missing template %q", want)
-		}
-	}
-}
-
-// ── create from template ─────────────────────────────────────────────────────
-
-func TestCreateFromTemplate_PersistsAndAssignsID(t *testing.T) {
-	_, h := newTestModule(t)
-	rec := doJSON(t, h, "POST", "/dashboards", map[string]string{"template": "system_health"})
-	if rec.Code != 201 {
-		t.Fatalf("status: %d body=%s", rec.Code, rec.Body.String())
-	}
-	var def DashboardDefinition
-	if err := json.Unmarshal(rec.Body.Bytes(), &def); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if def.ID == "" {
-		t.Error("created dashboard should have an ID")
-	}
-	if def.Name != "System Health" {
-		t.Errorf("name: want %q, got %q", "System Health", def.Name)
-	}
-	if def.CreatedAt.IsZero() {
-		t.Error("CreatedAt should be stamped")
+	dID, _ := res.Artifacts["id"].(string)
+	if dID == "" {
+		t.Fatal("expected id in artifacts")
 	}
 
-	// Round-trip via list.
-	rec2 := doJSON(t, h, "GET", "/dashboards", nil)
-	var list []Summary
-	_ = json.Unmarshal(rec2.Body.Bytes(), &list)
-	if len(list) != 1 || list[0].ID != def.ID {
-		t.Errorf("list did not contain the created dashboard: %+v", list)
+	// 2. add a runtime data source
+	addSrc, err := m.skillAddDataSource(ctx, mustJSON(map[string]any{
+		"id":     dID,
+		"name":   "status",
+		"kind":   SourceKindRuntime,
+		"config": map[string]any{"endpoint": "/status"},
+	}))
+	if err != nil || !addSrc.Success {
+		t.Fatalf("add_data_source: err=%v summary=%s", err, addSrc.Summary)
+	}
+
+	// 3. add a widget
+	addW, err := m.skillAddWidget(ctx, mustJSON(map[string]any{
+		"id":       dID,
+		"size":     SizeHalf,
+		"preset":   PresetMetric,
+		"title":    "Status",
+		"bindings": []any{map[string]any{"source": "status"}},
+	}))
+	if err != nil || !addW.Success {
+		t.Fatalf("add_widget: err=%v summary=%s", err, addW.Summary)
+	}
+
+	// 4. commit
+	commit, err := m.skillCommit(ctx, mustJSON(map[string]any{"id": dID}))
+	if err != nil || !commit.Success {
+		t.Fatalf("commit: err=%v summary=%s", err, commit.Summary)
+	}
+
+	// Verify status flipped to live and layout was packed.
+	d, err := m.store.Get(dID)
+	if err != nil {
+		t.Fatalf("store.Get: %v", err)
+	}
+	if d.Status != StatusLive {
+		t.Fatalf("expected status=live, got %q", d.Status)
+	}
+	if d.CommittedAt == nil {
+		t.Fatal("CommittedAt should be set")
+	}
+	if len(d.Widgets) != 1 || d.Widgets[0].GridW == 0 {
+		t.Fatalf("expected packed widget, got %+v", d.Widgets)
 	}
 }
 
-func TestCreateFromTemplate_UnknownTemplate(t *testing.T) {
-	_, h := newTestModule(t)
-	rec := doJSON(t, h, "POST", "/dashboards", map[string]string{"template": "ghost"})
-	if rec.Code != 400 {
-		t.Errorf("want 400, got %d (%s)", rec.Code, rec.Body.String())
+func TestAddDataSourceRejectsBadRuntimeEndpoint(t *testing.T) {
+	m := newTestModule(t)
+	ctx := context.Background()
+	res, _ := m.skillCreateDraft(ctx, json.RawMessage(`{"name":"X"}`))
+	dID := res.Artifacts["id"].(string)
+
+	got, _ := m.skillAddDataSource(ctx, mustJSON(map[string]any{
+		"id":     dID,
+		"name":   "bad",
+		"kind":   SourceKindRuntime,
+		"config": map[string]any{"endpoint": "/not-allowed"},
+	}))
+	if got.Success {
+		t.Fatal("expected failure for non-allowlisted endpoint")
+	}
+	if !strings.Contains(got.Summary, "allowlist") {
+		t.Fatalf("expected allowlist error in summary, got %q", got.Summary)
 	}
 }
 
-func TestCreate_RequiresTemplateOrDefinition(t *testing.T) {
-	_, h := newTestModule(t)
-	rec := doJSON(t, h, "POST", "/dashboards", map[string]string{})
-	if rec.Code != 400 {
-		t.Errorf("want 400, got %d", rec.Code)
+func TestAddWidgetRejectsUnknownBinding(t *testing.T) {
+	m := newTestModule(t)
+	ctx := context.Background()
+	res, _ := m.skillCreateDraft(ctx, json.RawMessage(`{"name":"X"}`))
+	dID := res.Artifacts["id"].(string)
+
+	got, _ := m.skillAddWidget(ctx, mustJSON(map[string]any{
+		"id":       dID,
+		"size":     SizeHalf,
+		"preset":   PresetMetric,
+		"bindings": []any{map[string]any{"source": "ghost"}},
+	}))
+	if got.Success {
+		t.Fatal("expected failure for unknown source")
+	}
+	if !strings.Contains(got.Summary, "unknown source") {
+		t.Fatalf("expected unknown-source error, got %q", got.Summary)
 	}
 }
 
-func TestCreateFromDefinition_AssignsWidgetIDs(t *testing.T) {
-	_, h := newTestModule(t)
-	body := map[string]any{
-		"definition": map[string]any{
-			"name": "Custom",
-			"widgets": []map[string]any{
-				{"kind": "markdown", "title": "Hi"},
-				{"kind": "markdown", "title": "There"},
-			},
-		},
-	}
-	rec := doJSON(t, h, "POST", "/dashboards", body)
-	if rec.Code != 201 {
-		t.Fatalf("status: %d body=%s", rec.Code, rec.Body.String())
-	}
-	var def DashboardDefinition
-	_ = json.Unmarshal(rec.Body.Bytes(), &def)
-	if def.Widgets[0].ID == "" || def.Widgets[1].ID == "" {
-		t.Errorf("widget IDs not assigned: %+v", def.Widgets)
-	}
-}
-
-// ── get / update / delete ────────────────────────────────────────────────────
-
-func TestGet_NotFound(t *testing.T) {
-	_, h := newTestModule(t)
-	rec := doJSON(t, h, "GET", "/dashboards/ghost", nil)
-	if rec.Code != 404 {
-		t.Errorf("want 404, got %d", rec.Code)
-	}
-}
-
-func TestUpdate_RoundTrip(t *testing.T) {
-	_, h := newTestModule(t)
-	create := doJSON(t, h, "POST", "/dashboards", map[string]string{"template": "usage"})
-	var created DashboardDefinition
-	_ = json.Unmarshal(create.Body.Bytes(), &created)
-
-	created.Name = "Renamed"
-	rec := doJSON(t, h, "PUT", "/dashboards/"+created.ID, created)
-	if rec.Code != 200 {
-		t.Fatalf("status: %d (%s)", rec.Code, rec.Body.String())
-	}
-	get := doJSON(t, h, "GET", "/dashboards/"+created.ID, nil)
-	var reloaded DashboardDefinition
-	_ = json.Unmarshal(get.Body.Bytes(), &reloaded)
-	if reloaded.Name != "Renamed" {
-		t.Errorf("name not persisted: %q", reloaded.Name)
-	}
-}
-
-func TestUpdate_NotFound(t *testing.T) {
-	_, h := newTestModule(t)
-	rec := doJSON(t, h, "PUT", "/dashboards/ghost", DashboardDefinition{Name: "x"})
-	if rec.Code != 404 {
-		t.Errorf("want 404, got %d", rec.Code)
-	}
-}
-
-func TestDelete_RemovesAndIsIdempotent(t *testing.T) {
-	_, h := newTestModule(t)
-	create := doJSON(t, h, "POST", "/dashboards", map[string]string{"template": "memory_atlas"})
-	var def DashboardDefinition
-	_ = json.Unmarshal(create.Body.Bytes(), &def)
-
-	rec := doJSON(t, h, "DELETE", "/dashboards/"+def.ID, nil)
-	if rec.Code != 204 {
-		t.Errorf("want 204, got %d", rec.Code)
-	}
-	rec2 := doJSON(t, h, "DELETE", "/dashboards/"+def.ID, nil)
-	if rec2.Code != 404 {
-		t.Errorf("want 404 on second delete, got %d", rec2.Code)
-	}
-}
-
-// ── resolve handler ──────────────────────────────────────────────────────────
-
-func TestResolveWidget_HappyPath_Runtime(t *testing.T) {
-	m, h := newTestModule(t)
-	m.runtime = &fakeRuntime{
-		body:   []byte(`{"port":1984}`),
-		status: 200,
-	}
-	create := doJSON(t, h, "POST", "/dashboards", map[string]string{"template": "system_health"})
-	var def DashboardDefinition
-	_ = json.Unmarshal(create.Body.Bytes(), &def)
-
-	rec := doJSON(t, h, "POST", "/dashboards/"+def.ID+"/resolve", map[string]string{
-		"widgetId": def.Widgets[0].ID,
+func TestLoadDraftRefusesLive(t *testing.T) {
+	m := newTestModule(t)
+	// Save a live dashboard directly.
+	_, err := m.store.Save(Dashboard{
+		ID:     "d1",
+		Name:   "Live",
+		Status: StatusLive,
 	})
-	if rec.Code != 200 {
-		t.Fatalf("status: %d body=%s", rec.Code, rec.Body.String())
+	if err != nil {
+		t.Fatal(err)
 	}
-	var wd WidgetData
-	_ = json.Unmarshal(rec.Body.Bytes(), &wd)
-	if !wd.Success {
-		t.Errorf("expected success, got %+v", wd)
-	}
-	if wd.SourceKind != SourceKindRuntime {
-		t.Errorf("source kind: want runtime, got %q", wd.SourceKind)
+	if _, err := m.loadDraft("d1"); err == nil {
+		t.Fatal("expected loadDraft to refuse live dashboard")
 	}
 }
 
-func TestResolveWidget_PermissionError_Returns403(t *testing.T) {
-	// Build a dashboard whose widget targets a forbidden runtime endpoint and
-	// ensure /resolve returns 403, not 200-with-success-false.
-	m, h := newTestModule(t)
-	m.runtime = &fakeRuntime{}
-	body := map[string]any{
-		"definition": map[string]any{
-			"name": "Bad",
-			"widgets": []map[string]any{{
-				"id":   "w1",
-				"kind": "markdown",
-				"source": map[string]any{
-					"kind":     SourceKindRuntime,
-					"endpoint": "/control",
-				},
-			}},
-		},
+func TestCoerceObjectAcceptsJSONString(t *testing.T) {
+	out, err := coerceObject(`{"a":1}`)
+	if err != nil {
+		t.Fatal(err)
 	}
-	create := doJSON(t, h, "POST", "/dashboards", body)
-	var def DashboardDefinition
-	_ = json.Unmarshal(create.Body.Bytes(), &def)
-
-	rec := doJSON(t, h, "POST", "/dashboards/"+def.ID+"/resolve", map[string]string{
-		"widgetId": "w1",
-	})
-	if rec.Code != 403 {
-		t.Errorf("want 403, got %d (%s)", rec.Code, rec.Body.String())
+	if out["a"].(float64) != 1 {
+		t.Fatalf("unexpected: %v", out)
 	}
 }
 
-func TestResolveWidget_FetchError_Returns200WithFailure(t *testing.T) {
-	m, h := newTestModule(t)
-	m.runtime = &fakeRuntime{body: []byte(`oops`), status: 500}
-	create := doJSON(t, h, "POST", "/dashboards", map[string]string{"template": "system_health"})
-	var def DashboardDefinition
-	_ = json.Unmarshal(create.Body.Bytes(), &def)
-
-	rec := doJSON(t, h, "POST", "/dashboards/"+def.ID+"/resolve", map[string]string{
-		"widgetId": def.Widgets[0].ID,
-	})
-	if rec.Code != 200 {
-		t.Fatalf("status: %d body=%s", rec.Code, rec.Body.String())
+func TestCoerceBindingsFromString(t *testing.T) {
+	out, err := coerceBindings(`[{"source":"a"}, {"source":"b","path":"x.y"}]`)
+	if err != nil {
+		t.Fatal(err)
 	}
-	var wd WidgetData
-	_ = json.Unmarshal(rec.Body.Bytes(), &wd)
-	if wd.Success {
-		t.Error("expected success=false on upstream 500")
-	}
-	if !strings.Contains(wd.Error, "500") {
-		t.Errorf("expected error to mention status, got %q", wd.Error)
+	if len(out) != 2 || out[0].Source != "a" || out[1].Path != "x.y" {
+		t.Fatalf("unexpected bindings: %+v", out)
 	}
 }
 
-func TestResolveWidget_UnknownDashboard(t *testing.T) {
-	_, h := newTestModule(t)
-	rec := doJSON(t, h, "POST", "/dashboards/ghost/resolve", map[string]string{"widgetId": "w1"})
-	if rec.Code != 404 {
-		t.Errorf("want 404, got %d", rec.Code)
+// mustJSON is a test helper that marshals v or fails.
+func mustJSON(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
 	}
-}
-
-func TestResolveWidget_UnknownWidget(t *testing.T) {
-	_, h := newTestModule(t)
-	create := doJSON(t, h, "POST", "/dashboards", map[string]string{"template": "system_health"})
-	var def DashboardDefinition
-	_ = json.Unmarshal(create.Body.Bytes(), &def)
-	rec := doJSON(t, h, "POST", "/dashboards/"+def.ID+"/resolve", map[string]string{"widgetId": "ghost"})
-	if rec.Code != 404 {
-		t.Errorf("want 404, got %d", rec.Code)
-	}
-}
-
-// ── compile-time check that *skills.Registry would satisfy SkillExecutor ─────
-
-func TestSkillExecutor_InterfaceShape(t *testing.T) {
-	// We can't construct a real *skills.Registry here without a DB, but we can
-	// confirm the interface still type-checks against the package types we
-	// imported. This catches accidental signature drift in skills.Registry.
-	var _ SkillExecutor = (*fakeSkills)(nil)
-	_ = context.Background
-	_ = (*skills.Registry)(nil) // referenced for compile-time link
+	return b
 }

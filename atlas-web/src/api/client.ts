@@ -4,8 +4,9 @@ import type {
   Approval,
   CapabilityRecord,
   DashboardDefinition,
+  DashboardRefreshEvent,
+  DashboardStatus,
   DashboardSummary,
-  DashboardTemplate,
   DashboardWidgetData,
   EngineDownloadStatus,
   EngineModelInfo,
@@ -63,11 +64,15 @@ export type {
   AIModelRecord,
   APIKeyStatus,
   DashboardDefinition,
+  DashboardPreset,
+  DashboardRefreshEvent,
+  DashboardSize,
+  DashboardStatus,
   DashboardSummary,
-  DashboardTemplate,
   DashboardWidget,
+  DashboardWidgetCode,
   DashboardWidgetData,
-  DashboardWidgetKind,
+  DashboardWidgetMode,
   EngineModelInfo,
   EngineStatus,
   MLXStatus,
@@ -404,18 +409,19 @@ export const api = {
   approveWorkflowRun: (runID: string) => post<WorkflowRun>(`/workflows/runs/${encodeURIComponent(runID)}/approve`, {}),
   denyWorkflowRun: (runID: string) => post<WorkflowRun>(`/workflows/runs/${encodeURIComponent(runID)}/deny`, {}),
 
-  // Dashboards
-  dashboards: () => get<DashboardSummary[]>('/dashboards'),
-  dashboardTemplates: () => get<DashboardTemplate[]>('/dashboards/templates'),
-  dashboard: (id: string) => get<DashboardDefinition>(`/dashboards/${encodeURIComponent(id)}`),
-  createDashboard: (body: { template?: string; definition?: Partial<DashboardDefinition> }) =>
-    post<DashboardDefinition>('/dashboards', body),
-  updateDashboard: (def: DashboardDefinition) =>
-    put<DashboardDefinition>(`/dashboards/${encodeURIComponent(def.id)}`, def),
+  // Dashboards (v2) — agents are the primary author; UI is viewer-only.
+  dashboards: (status?: DashboardStatus) =>
+    get<DashboardSummary[]>(status ? `/dashboards?status=${encodeURIComponent(status)}` : '/dashboards'),
+  dashboard: (id: string) =>
+    get<DashboardDefinition>(`/dashboards/${encodeURIComponent(id)}`),
   deleteDashboard: (id: string) =>
     request<void>(`/dashboards/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   resolveDashboardWidget: (dashboardID: string, widgetID: string) =>
     post<DashboardWidgetData>(`/dashboards/${encodeURIComponent(dashboardID)}/resolve`, { widgetId: widgetID }),
+  refreshDashboard: (id: string) =>
+    post<DashboardRefreshEvent[]>(`/dashboards/${encodeURIComponent(id)}/refresh`, {}),
+  streamDashboardEvents: (id: string) =>
+    new EventSource(`${BASE()}/dashboards/${encodeURIComponent(id)}/events`),
 
   // Conversation History
   conversations: (limit = 50, offset = 0) =>
