@@ -6,35 +6,44 @@ It handles chat, memory, automations, skills, approvals, browser control, Telegr
 
 ## Repository Layout
 
-```
+```text
 Project Atlas/
-├── Atlas/
-│   ├── atlas-runtime/      ← Go runtime (port 1984)
-│   ├── atlas-web/          ← Preact + TypeScript web UI
-│   └── docs/               ← Architecture and API reference
+├── atlas-runtime/          ← Go runtime (default port 1984)
+├── atlas-web/              ← Preact + TypeScript web UI
+├── docs/                   ← Architecture and API reference
 ├── archive/
 │   └── swift/              ← Archived Swift packages (not built)
-│   └── MIGRATION.md        ← Archived migration history (Phases 0–9)
 └── README.md               ← This file
 ```
 
 ## Quick Start
 
 ```bash
-# Build the runtime
-cd Atlas/atlas-runtime
-go build -o Atlas ./cmd/atlas-runtime
+# 1) Build the runtime
+cd atlas-runtime
+go build -o atlas-runtime ./cmd/atlas-runtime
 
-# Build the web UI
+# 2) Build the web UI
 cd ../atlas-web
-npm install && npm run build
+npm ci
+npm run build
 
-# Run
+# 3) Run Atlas
 cd ../atlas-runtime
-./Atlas -port 1984 -web-dir ../atlas-web/dist
+./atlas-runtime -port 1984 -web-dir ../atlas-web/dist
 ```
 
 Open [http://localhost:1984/web](http://localhost:1984/web).
+
+On first run Atlas creates its state under `~/Library/Application Support/ProjectAtlas/`. You do not need a repo-local `.env` file to start the app.
+
+## Secrets And Local Config
+
+- Atlas runtime credentials should be added in the web UI under `Settings -> Credentials`.
+- Those credentials are stored in the macOS Keychain, not in repo files.
+- `config.json` is for non-secret runtime settings only. Do not put API keys, bot tokens, webhook secrets, or session material in it.
+- Repo-level `.env` files are only for optional developer scripts. Start from [.env.example](./.env.example) if you need them, and keep real values in an untracked local file such as `.env.local`.
+- Atlas does not auto-load `.env` files for runtime configuration.
 
 ### Remote Access Security Notes
 
@@ -46,11 +55,11 @@ Open [http://localhost:1984/web](http://localhost:1984/web).
 
 ```bash
 # Go runtime
-cd Atlas/atlas-runtime
+cd atlas-runtime
 go build ./... && go vet ./...
 
 # Web UI (hot reload)
-cd Atlas/atlas-web
+cd ../atlas-web
 npm run dev
 ```
 
@@ -58,10 +67,10 @@ npm run dev
 
 | Doc | Purpose |
 |-----|---------|
-| [`Atlas/CLAUDE.md`](Atlas/CLAUDE.md) | Package map, conventions, where to add things |
-| [`Atlas/docs/architecture.md`](Atlas/docs/architecture.md) | System design — packages, agent loop, skills, browser, vault |
-| [`Atlas/docs/runtime-api-v1.md`](Atlas/docs/runtime-api-v1.md) | Full HTTP API reference |
-| [`Atlas/PLAN.md`](Atlas/PLAN.md) | V1.0 product plan |
+| [`CLAUDE.md`](./CLAUDE.md) | Package map, conventions, where to add things |
+| [`docs/architecture.md`](./docs/architecture.md) | System design — packages, agent loop, skills, browser, vault |
+| [`docs/runtime-api-v1.md`](./docs/runtime-api-v1.md) | Full HTTP API reference |
+| [`PLAN.md`](./PLAN.md) | V1.0 product plan |
 | [`archive/MIGRATION.md`](archive/MIGRATION.md) | Archived migration history — Phases 0–9 |
 
 ## Runtime Configuration

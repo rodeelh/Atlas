@@ -2,6 +2,7 @@ package control
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,4 +152,117 @@ func TestSystemService_ScheduleRestartPreventsDuplicateRequests(t *testing.T) {
 		t.Fatal("expected duplicate restart to be rejected")
 	}
 	close(block)
+}
+
+func TestSystemService_UpdateConfigNormalizesLocalBaseURLs(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	cfgStore := config.NewStoreAt(filepath.Join(dir, "config.json"), filepath.Join(dir, "legacy.json"))
+	initial := config.Defaults()
+	if err := cfgStore.Save(initial); err != nil {
+		t.Fatalf("cfgStore.Save: %v", err)
+	}
+
+	svc := NewSystemService(cfgStore, runtime.NewService(1984), db)
+	next := initial
+	next.LMStudioBaseURL = " http://127.0.0.1:1234/ "
+	next.OllamaBaseURL = ""
+
+	updated, _, err := svc.UpdateConfig(next)
+	if err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+	if updated.LMStudioBaseURL != "http://127.0.0.1:1234" {
+		t.Fatalf("expected LM Studio URL to normalize, got %q", updated.LMStudioBaseURL)
+	}
+	if updated.OllamaBaseURL != "http://localhost:11434" {
+		t.Fatalf("expected Ollama fallback URL, got %q", updated.OllamaBaseURL)
+	}
+}
+
+func TestSystemService_UpdateConfigRejectsNonLoopbackLocalProviderURLs(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	cfgStore := config.NewStoreAt(filepath.Join(dir, "config.json"), filepath.Join(dir, "legacy.json"))
+	initial := config.Defaults()
+	if err := cfgStore.Save(initial); err != nil {
+		t.Fatalf("cfgStore.Save: %v", err)
+	}
+
+	svc := NewSystemService(cfgStore, runtime.NewService(1984), db)
+	next := initial
+	next.LMStudioBaseURL = "https://example.com:1234"
+
+	_, _, err = svc.UpdateConfig(next)
+	if err == nil {
+		t.Fatal("expected invalid LM Studio URL to be rejected")
+	}
+	if !strings.Contains(err.Error(), "lmStudioBaseURL") {
+		t.Fatalf("expected lmStudioBaseURL error, got %v", err)
+	}
+}
+
+func TestSystemService_UpdateConfigRejectsConfigSecretMutation(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	cfgStore := config.NewStoreAt(filepath.Join(dir, "config.json"), filepath.Join(dir, "legacy.json"))
+	initial := config.Defaults()
+	initial.TelegramWebhookSecret = "existing-secret"
+	if err := cfgStore.Save(initial); err != nil {
+		t.Fatalf("cfgStore.Save: %v", err)
+	}
+
+	svc := NewSystemService(cfgStore, runtime.NewService(1984), db)
+	next := initial
+	next.TelegramWebhookSecret = "new-secret"
+
+	_, _, err = svc.UpdateConfig(next)
+	if err == nil {
+		t.Fatal("expected webhook secret mutation to be rejected")
+	}
+	if !strings.Contains(err.Error(), "telegramWebhookSecret") {
+		t.Fatalf("expected telegramWebhookSecret error, got %v", err)
+	}
+}
+
+func TestSystemService_UpdateConfigRejectsInvalidDiscordClientID(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	cfgStore := config.NewStoreAt(filepath.Join(dir, "config.json"), filepath.Join(dir, "legacy.json"))
+	initial := config.Defaults()
+	if err := cfgStore.Save(initial); err != nil {
+		t.Fatalf("cfgStore.Save: %v", err)
+	}
+
+	svc := NewSystemService(cfgStore, runtime.NewService(1984), db)
+	next := initial
+	next.DiscordClientID = "abc123"
+
+	_, _, err = svc.UpdateConfig(next)
+	if err == nil {
+		t.Fatal("expected invalid Discord client ID to be rejected")
+	}
+	if !strings.Contains(err.Error(), "discordClientID") {
+		t.Fatalf("expected discordClientID error, got %v", err)
+	}
 }

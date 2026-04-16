@@ -9,19 +9,35 @@ xcuserdata/
 .idea/
 .vscode/
 *.swp
+.direnv/
+.env
+.env.*
+!.env.example
+*.local
+*.secret
+*.secrets
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Runtime state and local config
 atlas-config.json
 atlas-runtime/Atlas
 atlas-runtime/atlas-runtime
+atlas-runtime/atlas-location
+atlas-runtime/forge-eval
 atlas-runtime/atlas.sqlite3
 atlas-runtime/config.json
 atlas-runtime/go-runtime-config.json
 atlas-runtime/models/
+atlas-tui/atlas-tui
 
 # Web UI build artifacts
 atlas-web/node_modules/
 atlas-web/dist/
+atlas-web/playwright-report/
+atlas-web/test-results/
 
 # Legacy or accidental duplicates
 * 2.css
