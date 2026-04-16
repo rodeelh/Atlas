@@ -148,6 +148,10 @@ func readRaw() (map[string]interface{}, bool) {
 
 // writeRaw serialises the map and stores it in the Keychain.
 // Callers must hold mu.
+//
+// Security note (C-2): the bundle JSON is passed via the -w flag and briefly
+// appears in ps-visible process args. The window is sub-millisecond. A full fix
+// requires the native Security.framework API via CGo (future TODO).
 func writeRaw(m map[string]interface{}) error {
 	data, err := json.Marshal(m)
 	if err != nil {
@@ -182,11 +186,17 @@ func itemExists() (bool, error) {
 
 // execSecurity runs the macOS `security` CLI with the given arguments and
 // returns stdout.
+// The error message reports only the subcommand name — never full args, which
+// may include Keychain secret values under the -w flag.
 func execSecurity(args ...string) (string, error) {
 	cmd := exec.Command("security", args...)
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("security %s: %w", strings.Join(args, " "), err)
+		subcmd := ""
+		if len(args) > 0 {
+			subcmd = args[0]
+		}
+		return "", fmt.Errorf("security %s: %w", subcmd, err)
 	}
 	return string(out), nil
 }

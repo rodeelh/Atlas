@@ -4,12 +4,14 @@ package discord
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -138,19 +140,28 @@ type identifyData struct {
 }
 
 type messageCreateEvent struct {
-	ID        string        `json:"id"`
-	ChannelID string        `json:"channel_id"`
-	GuildID   string        `json:"guild_id"`
-	Author    discordUser   `json:"author"`
-	Content   string        `json:"content"`
-	Mentions  []discordUser `json:"mentions"`
-	Type      int           `json:"type"`
+	ID          string                 `json:"id"`
+	ChannelID   string                 `json:"channel_id"`
+	GuildID     string                 `json:"guild_id"`
+	Author      discordUser            `json:"author"`
+	Content     string                 `json:"content"`
+	Mentions    []discordUser          `json:"mentions"`
+	Type        int                    `json:"type"`
+	Attachments []discordMsgAttachment `json:"attachments"`
 }
 
 type discordUser struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
 	Bot      bool   `json:"bot"`
+}
+
+type discordMsgAttachment struct {
+	ID          string `json:"id"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	URL         string `json:"url"`
+	Size        int    `json:"size"`
 }
 
 type readyEvent struct {
@@ -333,7 +344,32 @@ func (b *Bridge) handleMessage(ev messageCreateEvent) {
 		return
 	}
 
-	if text == "" {
+	// Download image/PDF attachments — save to disk so follow-up turns can
+	// reference the file via the path embedded in the conversation history.
+	var attachments []Attachment
+	attDir := filepath.Join(config.DiscordAttachmentsDir(), ev.ID)
+	for _, att := range ev.Attachments {
+		if !strings.HasPrefix(att.ContentType, "image/") && att.ContentType != "application/pdf" {
+			continue
+		}
+		data, dlErr := b.downloadAttachment(att.URL)
+		if dlErr != nil {
+			logstore.Write("warn", "Discord: download attachment: "+dlErr.Error(), map[string]string{"platform": "discord"})
+			continue
+		}
+		if err := os.MkdirAll(attDir, 0o700); err == nil {
+			localPath := filepath.Join(attDir, sanitizeFilename(att.Filename))
+			_ = os.WriteFile(localPath, data, 0o644)
+			text = strings.TrimSpace(text + "\n\n[File saved to: " + localPath + "]")
+		}
+		attachments = append(attachments, Attachment{
+			Filename: att.Filename,
+			MimeType: att.ContentType,
+			Data:     base64.StdEncoding.EncodeToString(data),
+		})
+	}
+
+	if text == "" && len(attachments) == 0 {
 		return
 	}
 
@@ -356,7 +392,12 @@ func (b *Bridge) handleMessage(ev messageCreateEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	reply, filePaths, newConvID, err := b.handler(ctx, BridgeRequest{Text: text, ConvID: convID, Platform: "discord"})
+	reply, filePaths, newConvID, err := b.handler(ctx, BridgeRequest{
+		Text:        text,
+		ConvID:      convID,
+		Platform:    "discord",
+		Attachments: attachments,
+	})
 	if err != nil {
 		logstore.Write("error", "Discord: handler error: "+err.Error(), map[string]string{"platform": "discord"})
 		b.sendMessage(ev.ChannelID, ev.ID, "An error occurred. Please try again.")
@@ -429,7 +470,8 @@ func classifyIncomingMessage(ev messageCreateEvent, botID string) (text string, 
 		text = strings.TrimSpace(strings.ReplaceAll(text, "<@"+botID+">", ""))
 		text = strings.TrimSpace(strings.ReplaceAll(text, "<@!"+botID+">", ""))
 	}
-	return text, isDM, true
+	ok = text != "" || len(ev.Attachments) > 0
+	return text, isDM, ok
 }
 
 func (b *Bridge) handleCommand(channelID, refMsgID, text string, isDM bool) {
@@ -493,6 +535,48 @@ func (b *Bridge) handleCommand(channelID, refMsgID, text string, isDM bool) {
 			b.sendMessage(channelID, refMsgID, fmt.Sprintf("%d pending approval(s). Check the Atlas web UI.", count))
 		}
 	}
+}
+
+// downloadAttachment fetches a Discord CDN URL and returns the raw bytes.
+// Capped at 20 MB to prevent oversized uploads to the AI model.
+//
+// Discord CDN URLs (cdn.discordapp.com, media.discordapp.net) use time-limited
+// signed query params for auth — the Bot token must NOT be sent to them or
+// some CDN endpoints return 401. The token is only needed for discord.com/api/*
+// endpoints.
+func (b *Bridge) downloadAttachment(rawURL string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !isDiscordCDNURL(rawURL) {
+		req.Header.Set("Authorization", "Bot "+b.token)
+	}
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024))
+}
+
+// isDiscordCDNURL reports whether rawURL targets the Discord CDN
+// (cdn.discordapp.com or media.discordapp.net). CDN URLs carry signed query
+// params and must not receive the Bot authorization header.
+// Uses URL hostname parsing so a crafted query param like
+// "?q=cdn.discordapp.com" cannot spoof the check.
+func isDiscordCDNURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	return h == "cdn.discordapp.com" || h == "media.discordapp.net"
 }
 
 // ── Discord REST API ──────────────────────────────────────────────────────────
@@ -606,6 +690,23 @@ func (b *Bridge) SendAutomationMessage(channelID, threadID, text string) error {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// sanitizeFilename strips characters that are unsafe on macOS/Linux filesystems.
+func sanitizeFilename(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if r == '/' || r == '\x00' {
+			b.WriteRune('_')
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	s := strings.TrimSpace(b.String())
+	if s == "" {
+		return "file"
+	}
+	return s
+}
 
 func chunkText(text string, maxLen int) []string {
 	runes := []rune(text)

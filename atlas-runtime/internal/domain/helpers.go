@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -44,12 +43,20 @@ func nowRFC3339() string {
 }
 
 // execSecurityInDomain runs the macOS `security` CLI tool.
-// Returns (stdout, exitCode, error).
+// Returns (stdout, error).
+// The error message intentionally omits args to prevent Keychain secrets
+// (passed as -w VALUE) from leaking into logs via error strings.
 func execSecurityInDomain(args ...string) (string, error) {
 	cmd := exec.Command("security", args...)
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("security %s: %w", strings.Join(args, " "), err)
+		// Report only the subcommand name, never the full args which may
+		// include Keychain secret values.
+		subcmd := ""
+		if len(args) > 0 {
+			subcmd = args[0]
+		}
+		return "", fmt.Errorf("security %s: %w", subcmd, err)
 	}
 	return string(out), nil
 }
@@ -74,7 +81,9 @@ func keychainItemExists(service, account string) (bool, error) {
 // newDomainUUID generates a random UUID v4.
 func newDomainUUID() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("domain: crypto/rand failure: %v", err))
+	}
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",

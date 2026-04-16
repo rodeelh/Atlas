@@ -124,8 +124,10 @@ func newRuntimeHarness(t *testing.T) *runtimeHarness {
 		_ = registry.StopAll(context.Background())
 	})
 
+	localAuthSvc, _ := auth.NewLocalAuthService(db, 1984)
 	handler := server.BuildRouter(
 		domain.NewAuthDomain(authSvc, cfgStore, "", 1984),
+		domain.NewLocalAuthDomain(authSvc, localAuthSvc),
 		domain.NewControlDomain(cfgStore, runtimeSvc, db, nil),
 		domain.NewChatDomain(chatSvc, bc, db),
 		authSvc,

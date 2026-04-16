@@ -133,15 +133,16 @@ const FONT_FAMILIES: Record<ChatFont, string> = {
   geist:   "'Geist', -apple-system, sans-serif",
 }
 
-const FONT_SIZE_PX: Record<ChatFontSize, string> = {
-  small:   '13px',
-  default: '15px',
-  large:   '17px',
+// Font size is now driven by density — no separate FONT_SIZE_PX needed.
+const DENSITY_FONT_SIZE: Record<DensityMode, string> = {
+  compact:     '13px',
+  comfortable: '15px',
+  spacious:    '17px',
 }
 
 const RADIUS_PX: Record<ChatRadius, string> = {
   sharp:   '6px',
-  default: '12px',
+  default: '10px',  // matches RADIUS_TOKENS in theme.ts
   rounded: '18px',
 }
 
@@ -152,9 +153,9 @@ const UI_RADIUS_PX: Record<UIRadius, string> = {
 }
 
 const DENSITY_GAP: Record<DensityMode, string> = {
-  compact:     '6px',
-  comfortable: '10px',
-  spacious:    '16px',
+  compact:     '2px',   // matches --chat-msg-gap in DENSITY_TOKENS (theme.ts)
+  comfortable: '6px',
+  spacious:    '14px',
 }
 
 const PREVIEW_BUBBLE_PADDING: Record<DensityMode, [string, string]> = {
@@ -237,11 +238,19 @@ export function Theme({
 
   const presetColorTokens = PRESET_TOKENS[activePreset][resolvedMode]
 
+  // Use the preset's '--accent' override (if any) as the preview accent so the
+  // preview faithfully reflects the effective colour — e.g. Terminal light
+  // overrides the bright electric green to a dark forest green for contrast.
+  // Exclude '--accent' from the spread so it doesn't bleed into CSS rules that
+  // reference var(--accent) directly, which would fight var(--appearance-accent).
+  const { '--accent': presetAccentOverride, ...presetColorTokensWithoutAccent } = presetColorTokens
+  const effectivePreviewAccent = presetAccentOverride ?? activeAccent
+
   const previewStyle = {
-    ...presetColorTokens,
-    '--appearance-accent': activeAccent,
+    ...presetColorTokensWithoutAccent,
+    '--appearance-accent': effectivePreviewAccent,
     '--appearance-preview-font': FONT_FAMILIES[activeChatFont],
-    '--appearance-preview-font-size': FONT_SIZE_PX[activeChatFontSize],
+    '--appearance-preview-font-size': DENSITY_FONT_SIZE[activeDensity],
     '--appearance-preview-radius': RADIUS_PX[activeChatRadius],
     '--appearance-preview-gap': DENSITY_GAP[activeDensity],
     '--appearance-preview-pad-y': PREVIEW_BUBBLE_PADDING[activeDensity][0],
@@ -379,12 +388,6 @@ export function Theme({
               }))}
               activeID={activeChatFont}
               onChange={(id) => onChatFontChange(id as ChatFont)}
-            />
-            <OptionRow
-              label="Size"
-              options={fontSizes}
-              activeID={activeChatFontSize}
-              onChange={(id) => onChatFontSizeChange(id as ChatFontSize)}
             />
             <OptionRow
               label="Corners"

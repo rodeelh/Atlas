@@ -466,6 +466,11 @@ func main() {
 		platformHost,
 	)
 
+	// Always bind to all interfaces so that enabling remote access or Tailscale
+	// in the config takes effect immediately at the next request — no daemon
+	// restart required. LanGate and RequireSession middleware enforce all
+	// access-control policy at request time; a restrictive bind address would
+	// silently break the toggle without giving the user a clear error.
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
 	tlsAssets, err := server.EnsureTLSAssets()
 	if err != nil {

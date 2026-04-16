@@ -286,17 +286,6 @@ export function Settings() {
       </SettingsGroup>
 
       <SettingsGroup title="Behavior">
-        <SettingsRow label="Action safety" sublabel="When Atlas should stop and ask before taking action">
-          <select
-            class="input"
-            value={draft.actionSafetyMode}
-            onChange={(e) => update('actionSafetyMode', (e.target as HTMLSelectElement).value)}
-          >
-            <option value="always_ask_before_actions">Ask every time</option>
-            <option value="ask_only_for_risky_actions">Ask for risky actions</option>
-            <option value="more_autonomous">Auto-approve actions</option>
-          </select>
-        </SettingsRow>
         <SettingsRow label="Memory" sublabel="Extract and persist facts from conversations" mobileSplit>
           <ToggleField checked={draft.memoryEnabled} onChange={(v) => update('memoryEnabled', v)} />
         </SettingsRow>
@@ -309,6 +298,17 @@ export function Settings() {
             <option value={10}>10 — maximum</option>
           </select>
         </SettingsRow>}
+        <SettingsRow label="Action safety" sublabel="When Atlas should stop and ask before taking action">
+          <select
+            class="input"
+            value={draft.actionSafetyMode}
+            onChange={(e) => update('actionSafetyMode', (e.target as HTMLSelectElement).value)}
+          >
+            <option value="always_ask_before_actions">Ask every time</option>
+            <option value="ask_only_for_risky_actions">Ask for risky actions</option>
+            <option value="more_autonomous">Auto-approve actions</option>
+          </select>
+        </SettingsRow>
       </SettingsGroup>
 
       <SettingsGroup title="Local Access">
@@ -508,25 +508,28 @@ function InfoTip({ text }: { text: string }) {
     setPos({ top: r.top + r.height / 2, left: r.right + 8 })
   }
 
+  // Portal the tooltip into document.body so it escapes any ancestor
+  // backdrop-filter / transform stacking contexts that trap position:fixed.
+  const tooltip = pos ? createPortal(
+    <span style={{ position: 'fixed', top: pos.top, left: pos.left, transform: 'translateY(-50%)', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--ui-radius)', padding: '8px 11px', fontSize: '12px', fontFamily: 'var(--ui-font)', color: 'var(--text-2)', width: '260px', zIndex: 9999, lineHeight: 1.5, boxShadow: '0 4px 20px rgba(0,0,0,0.22)', pointerEvents: 'none' }}>
+      {text.split('\n').map((line, i) => (
+        <span key={i} style={{ display: 'block' }}>{line}</span>
+      ))}
+    </span>,
+    document.body,
+  ) : null
+
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center' }}>
       <button
         ref={btnRef}
-        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '15px', height: '15px', borderRadius: '50%', background: 'var(--text-3)', color: 'var(--bg)', fontSize: '9px', fontWeight: 700, border: 'none', cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}
+        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '15px', height: '15px', borderRadius: '50%', background: 'var(--text-3)', color: 'var(--surface-2)', fontSize: '9px', fontWeight: 700, border: 'none', cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}
         onMouseEnter={show}
         onMouseLeave={() => setPos(null)}
       >
         ?
       </button>
-      {pos && (
-        <span style={{ position: 'fixed', top: pos.top, left: pos.left, transform: 'translateY(-50%)', background: 'var(--surface, var(--bg))', border: '1px solid var(--border)', borderRadius: 'var(--ui-radius)', padding: '8px 11px', fontSize: '12px', fontFamily: 'var(--ui-font)', color: 'var(--text-2)', width: '260px', zIndex: 9999, lineHeight: 1.5, boxShadow: '0 4px 20px rgba(0,0,0,0.22)', pointerEvents: 'none' }}>
-          {text.split('\n').map((line, i) => (
-            <span key={i} style={{ display: 'block' }}>
-              {line}
-            </span>
-          ))}
-        </span>
-      )}
+      {tooltip}
     </span>
   )
 }

@@ -47,7 +47,9 @@ export function LocalAuthGate({ onAuthenticated }: Props) {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    platformAuthLabel().then(label => setWebAuthnLabel(label ?? 'Security Key')).catch(() => {})
+    platformAuthLabel().then(label => {
+      setWebAuthnLabel(label ?? 'Security Key')
+    }).catch(() => {})
   }, [])
 
   useEffect(() => {

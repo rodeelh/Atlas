@@ -290,9 +290,12 @@ func (s *Service) startBridges(cfg config.RuntimeConfigSnapshot, bundle credBund
 	if cfg.WhatsAppEnabled && s.waBridge == nil {
 		h := s.handler
 		storeDSN := "file:" + filepath.Join(config.SupportDir(), "whatsapp_auth.db") + "?_pragma=foreign_keys(ON)&_foreign_keys=on"
-		b := whatsapp.New(storeDSN, s.db, func(ctx context.Context, req whatsapp.BridgeRequest) (string, string, error) {
-			text, _, convID, err := h(ctx, BridgeRequest{Text: req.Text, ConvID: req.ConvID, Platform: req.Platform})
-			return text, convID, err
+		b := whatsapp.New(storeDSN, s.db, func(ctx context.Context, req whatsapp.BridgeRequest) (string, []string, string, error) {
+			ba := make([]BridgeAttachment, len(req.Attachments))
+			for i, a := range req.Attachments {
+				ba[i] = BridgeAttachment{Filename: a.Filename, MimeType: a.MimeType, Data: a.Data}
+			}
+			return h(ctx, BridgeRequest{Text: req.Text, ConvID: req.ConvID, Platform: req.Platform, Attachments: ba})
 		})
 		s.waBridge = b
 		b.Start()
@@ -560,6 +563,7 @@ func (s *Service) UpdatePlatform(platform string, enabled bool) (PlatformStatus,
 	}
 
 	bundle := readBundle()
+	var oldWA *whatsapp.Bridge
 	s.mu.Lock()
 	if !enabled {
 		switch platform {
@@ -579,15 +583,21 @@ func (s *Service) UpdatePlatform(platform string, enabled bool) (PlatformStatus,
 				s.slackBridge = nil
 			}
 		case "whatsapp":
-			if s.waBridge != nil {
-				s.waBridge.Stop()
-				s.waBridge = nil
-			}
+			// Steal the reference under the lock; Logout() does a network
+			// call so it must not run while the mutex is held.
+			oldWA = s.waBridge
+			s.waBridge = nil
 		}
 	} else {
 		s.startBridges(cfg, bundle)
 	}
 	s.mu.Unlock()
+
+	// Full logout outside the mutex — notifies WhatsApp servers and clears
+	// the local session DB so re-enabling always starts with a fresh QR.
+	if oldWA != nil {
+		oldWA.Logout()
+	}
 
 	return s.platformStatus(platform, cfg, bundle, false, nil, nil), nil
 }
@@ -720,8 +730,35 @@ func (s *Service) ValidatePlatform(platform string, credentials map[string]strin
 		if err := s.cfgStore.Save(cfg); err != nil {
 			log.Printf("comms: ValidatePlatform: save config: %v", err)
 		}
+		// Steal the old bridge reference under the lock so Logout() (network
+		// call) runs outside the mutex and doesn't block other comms ops.
+		var oldWAValidate *whatsapp.Bridge
 		s.mu.Lock()
+		oldWAValidate = s.waBridge
+		s.waBridge = nil
 		s.startBridges(cfg, bundle)
+		s.mu.Unlock()
+		if oldWAValidate != nil {
+			oldWAValidate.Logout()
+		}
+
+		// QR generation is async — consumeQR runs in a goroutine and
+		// WhatsApp takes a moment to send the first code over the channel.
+		// Poll outside the mutex for up to 6 seconds so we return an actual
+		// QR URL instead of an empty string that the frontend can't use.
+		for i := 0; i < 12; i++ {
+			s.mu.RLock()
+			hasQR := s.waBridge != nil && s.waBridge.QRCodeDataURL() != ""
+			isConn := s.waBridge != nil && s.waBridge.Connected()
+			hasErr := s.waBridge != nil && s.waBridge.LastError() != ""
+			s.mu.RUnlock()
+			if hasQR || isConn || hasErr {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		s.mu.RLock()
 		if s.waBridge != nil {
 			connected = s.waBridge.Connected()
 			if name := s.waBridge.AccountName(); name != "" {
@@ -731,7 +768,7 @@ func (s *Service) ValidatePlatform(platform string, credentials map[string]strin
 				lastErr = &msg
 			}
 		}
-		s.mu.Unlock()
+		s.mu.RUnlock()
 
 	default:
 		return PlatformStatus{}, fmt.Errorf("unknown platform: %s", platform)

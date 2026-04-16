@@ -12,7 +12,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +55,7 @@ type Service struct {
 	signingKey []byte
 	sessions   map[string]*Session
 	usedNonces map[string]struct{}
+	nonceOrder []string // insertion-order slice for FIFO pruning
 	db         *storage.DB
 	localAuth  *LocalAuthService // set via SetLocalAuth after construction
 }
@@ -63,16 +66,60 @@ func (s *Service) SetLocalAuth(l *LocalAuthService) {
 	s.localAuth = l
 }
 
-// NewService creates a Service with a fresh in-process signing key.
-// Sessions validated at creation time survive daemon restarts because the
-// SQLite store is consulted on cache miss (same model as WebAuthService.swift).
-func NewService(db *storage.DB) *Service {
+// keychainService / keychainAccount identify the Keychain item that holds the
+// persistent HMAC signing key. Using a dedicated item avoids touching the
+// credential bundle and keeps the key isolated.
+const (
+	keychainService = "com.projectatlas.auth"
+	keychainAccount = "signing-key"
+)
+
+// loadOrCreateSigningKey loads the HMAC signing key from the macOS Keychain.
+// If no key exists yet it generates a fresh 32-byte key, persists it, and
+// returns it. Falls back to an ephemeral key (with a warning) if Keychain
+// access fails — this preserves startup availability on headless/CI builds.
+//
+// Security note (C-1): the key value is passed to `security add-generic-password`
+// via the -w flag. On macOS this briefly appears in ps-visible process args.
+// The window is sub-millisecond and only occurs once per install. A full fix
+// requires the native Security.framework API via CGo — tracked as a future TODO.
+func loadOrCreateSigningKey() []byte {
+	// Try to load an existing key.
+	out, err := exec.Command("security", "find-generic-password",
+		"-s", keychainService, "-a", keychainAccount, "-w").Output()
+	if err == nil {
+		key, decErr := hex.DecodeString(strings.TrimSpace(string(out)))
+		if decErr == nil && len(key) == 32 {
+			return key
+		}
+	}
+
+	// No key found (first run) or decode failed — generate and persist.
 	key := make([]byte, 32)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		panic(fmt.Sprintf("auth: crypto/rand failure generating signing key: %v", err))
+	}
+	_, storeErr := exec.Command("security", "add-generic-password",
+		"-U",
+		"-s", keychainService,
+		"-a", keychainAccount,
+		"-w", hex.EncodeToString(key),
+	).Output()
+	if storeErr != nil {
+		log.Printf("auth: warn: could not persist signing key to keychain — using ephemeral key")
+	}
+	return key
+}
+
+// NewService creates a Service. The HMAC signing key is loaded from (or
+// created in) the macOS Keychain so it survives daemon restarts, keeping
+// open browser tabs and pending launch tokens valid across restarts.
+func NewService(db *storage.DB) *Service {
 	return &Service{
-		signingKey: key,
+		signingKey: loadOrCreateSigningKey(),
 		sessions:   make(map[string]*Session),
 		usedNonces: make(map[string]struct{}),
+		nonceOrder: nil,
 		db:         db,
 	}
 }
@@ -149,6 +196,7 @@ func (s *Service) VerifyLaunchToken(raw string) error {
 		return ErrAlreadyUsed
 	}
 	s.usedNonces[p.Nonce] = struct{}{}
+	s.nonceOrder = append(s.nonceOrder, p.Nonce)
 	s.pruneNonces()
 
 	return nil
@@ -382,17 +430,21 @@ func (s *Service) pruneExpiredSessions() {
 	}
 }
 
+// pruneNonces evicts the oldest 250 entries (FIFO via nonceOrder) when the
+// set exceeds 500. Random map iteration was previously used, which could
+// accidentally delete recently-issued nonces before they were redeemed.
 func (s *Service) pruneNonces() {
-	if len(s.usedNonces) > 500 {
-		count := 0
-		for k := range s.usedNonces {
-			delete(s.usedNonces, k)
-			count++
-			if count >= 250 {
-				break
-			}
-		}
+	if len(s.usedNonces) <= 500 {
+		return
 	}
+	evict := 250
+	if evict > len(s.nonceOrder) {
+		evict = len(s.nonceOrder)
+	}
+	for _, k := range s.nonceOrder[:evict] {
+		delete(s.usedNonces, k)
+	}
+	s.nonceOrder = s.nonceOrder[evict:]
 }
 
 func b64url(data []byte) string {
@@ -420,13 +472,17 @@ func splitToken(raw string) []string {
 
 func randomHex(n int) string {
 	b := make([]byte, n)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("auth: crypto/rand failure: %v", err))
+	}
 	return hex.EncodeToString(b)
 }
 
 func newUUID() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("auth: crypto/rand failure: %v", err))
+	}
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",

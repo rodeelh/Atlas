@@ -3397,6 +3397,16 @@ func (db *DB) HasLocalCredentials() bool {
 	return n > 0
 }
 
+// HasLocalCredentialOfType returns true if at least one credential of the given
+// type (e.g. "webauthn" or "pin") is stored. Used to initialise the per-type
+// atomic flags in LocalAuthService so the status endpoint never needs a live
+// DB query for the common case.
+func (db *DB) HasLocalCredentialOfType(credType string) bool {
+	var n int
+	db.conn.QueryRow(`SELECT COUNT(*) FROM local_auth_credentials WHERE type=?`, credType).Scan(&n) //nolint:errcheck
+	return n > 0
+}
+
 // UpdateLocalCredentialSignCount updates the sign count for a WebAuthn credential.
 func (db *DB) UpdateLocalCredentialSignCount(id string, credJSON string) error {
 	now := time.Now().UTC().Format(time.RFC3339)

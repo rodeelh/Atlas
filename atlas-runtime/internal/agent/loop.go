@@ -710,14 +710,35 @@ func buildToolContent(provider ProviderConfig, content string) any {
 // buildErrorContent creates an actionable error response to return to the model.
 // If ToolResult already has structured failure data, that is used directly.
 // Otherwise a minimal JSON envelope is synthesised from the raw error.
+// json.Marshal is used throughout — never fmt.Sprintf — to prevent JSON
+// injection when actionID or error strings contain quotes or backslashes.
 func buildErrorContent(actionID string, execErr error, result skills.ToolResult) string {
 	if !result.Success && len(result.Artifacts) > 0 {
 		return result.FormatForModel()
 	}
-	return fmt.Sprintf(
-		`{"success":false,"summary":"Tool execution error in %s: %s","artifacts":{"action":"%s","error_detail":"%s"}}`,
-		actionID, execErr.Error(), actionID, execErr.Error(),
-	)
+	type errArtifacts struct {
+		Action      string `json:"action"`
+		ErrorDetail string `json:"error_detail"`
+	}
+	type errEnvelope struct {
+		Success   bool         `json:"success"`
+		Summary   string       `json:"summary"`
+		Artifacts errArtifacts `json:"artifacts"`
+	}
+	env := errEnvelope{
+		Success: false,
+		Summary: "Tool execution error in " + actionID + ": " + execErr.Error(),
+		Artifacts: errArtifacts{
+			Action:      actionID,
+			ErrorDetail: execErr.Error(),
+		},
+	}
+	data, err := json.Marshal(env)
+	if err != nil {
+		// Fallback: minimal safe payload — should never happen with plain Go structs.
+		return `{"success":false,"summary":"Tool execution error (encoding failure)"}`
+	}
+	return string(data)
 }
 
 // deferToolCalls saves tool calls as deferred_executions in the DB.
@@ -1106,7 +1127,9 @@ func compactMessages(messages []OAIMessage) []OAIMessage {
 
 func newUUID() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("agent: crypto/rand failure: %v", err))
+	}
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",

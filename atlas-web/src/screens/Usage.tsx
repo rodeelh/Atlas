@@ -270,7 +270,10 @@ function readPersistedUsageSort(): { sortKey: SortKey; sortDir: SortDir } {
 }
 
 export function Usage() {
-  const [range, setRange]         = useState<Range>('30d')
+  const [range, setRange]         = useState<Range>(() => {
+    const saved = localStorage.getItem('usage-range')
+    return (RANGES.some(r => r.id === saved) ? saved : '30d') as Range
+  })
   const [summary, setSummary]     = useState<TokenUsageSummary | null>(null)
   const [events, setEvents]       = useState<TokenUsageEvent[]>([])
   const [eventsOpen, setEventsOpen] = useState(false)
@@ -459,7 +462,7 @@ export function Usage() {
                 <button
                   key={r.id}
                   class={`log-filter-tab${range === r.id ? ' active' : ''}`}
-                  onClick={() => setRange(r.id)}
+                  onClick={() => { setRange(r.id); localStorage.setItem('usage-range', r.id) }}
                 >
                   {r.label}
                 </button>

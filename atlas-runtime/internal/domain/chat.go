@@ -167,10 +167,14 @@ func (d *ChatDomain) streamMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *ChatDomain) listConversations(w http.ResponseWriter, r *http.Request) {
+	const defaultConvLimit, maxConvLimit = 20, 200
 	limitStr := r.URL.Query().Get("limit")
-	limit := 20
+	limit := defaultConvLimit
 	if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
 		limit = n
+	}
+	if limit > maxConvLimit {
+		limit = maxConvLimit
 	}
 
 	rows, err := d.db.ListConversationSummaries(limit)
@@ -211,11 +215,15 @@ func (d *ChatDomain) searchConversations(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
-	limit := 20
+	const defaultSearchLimit, maxSearchLimit = 20, 200
+	limit := defaultSearchLimit
 	if lStr := r.URL.Query().Get("limit"); lStr != "" {
 		if n, err := strconv.Atoi(lStr); err == nil && n > 0 {
 			limit = n
 		}
+	}
+	if limit > maxSearchLimit {
+		limit = maxSearchLimit
 	}
 
 	rows, err := d.db.SearchConversationSummaries(query, limit)
@@ -336,12 +344,16 @@ func rowToMemoryJSON(r storage.MemoryRow) memoryJSON {
 }
 
 func (d *ChatDomain) listMemories(w http.ResponseWriter, r *http.Request) {
+	const defaultMemLimit, maxMemLimit = 100, 500
 	category := r.URL.Query().Get("category")
-	limit := 100
+	limit := defaultMemLimit
 	if lStr := r.URL.Query().Get("limit"); lStr != "" {
 		if n, err := strconv.Atoi(lStr); err == nil && n > 0 {
 			limit = n
 		}
+	}
+	if limit > maxMemLimit {
+		limit = maxMemLimit
 	}
 
 	rows, err := d.db.ListMemories(limit, category)

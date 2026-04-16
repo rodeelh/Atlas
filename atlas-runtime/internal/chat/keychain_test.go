@@ -47,6 +47,11 @@ func TestResolveProvider_PrimaryAcrossProviders(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Defaults()
 			cfg.ActiveAIProvider = tc.provider
+			// Atlas Engine requires a model to be explicitly configured.
+			if tc.provider == "atlas_engine" {
+				cfg.SelectedAtlasEngineModel = "llama-3.2-3b.gguf"
+				cfg.AtlasEnginePort = 11434
+			}
 			p, err := ResolveProvider(cfg)
 			if err != nil {
 				t.Fatalf("ResolveProvider error: %v", err)

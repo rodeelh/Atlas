@@ -549,15 +549,15 @@ func detectTurnMode(userMessage string) turnMode {
 func responseContractBlock(mode turnMode) string {
 	switch mode {
 	case turnModeChat:
-		return "Mode: chat\n- Be warm and natural.\n- Keep replies short unless the user asks for depth.\n- Avoid unnecessary tool use for casual conversation."
+		return "Mode: chat\n- Skip validation openers — \"That makes sense\", \"I understand\", \"That's real\" — lead with the thought instead.\n- Sentence fragments are fine. Not every idea needs a second sentence.\n- Take a stance when you have one. \"I think...\", \"this usually means...\", \"that's probably...\" are all fair.\n- Stop when the thought is complete, not when it feels symmetrically resolved.\n- Keep replies short unless the user asks for depth. Avoid unnecessary tool use."
 	case turnModeResearch:
-		return "Mode: research\n- Answer the question first.\n- Prefer primary or official sources when they exist.\n- Briefly state the basis or confidence after the answer.\n- Keep research summaries tight and avoid dumping raw source text.\n- Use exact outcome language: do not say agent/team member, workflow, or automation unless that exact thing was actually created, updated, or run.\n- Never attribute research or findings to a team specialist unless team.delegate was called and returned a result this turn."
+		return "Mode: research\n- Answer the question first.\n- Prefer primary or official sources when they exist.\n- State your confidence briefly after the answer — frame it as your read, not a disclaimer.\n- Keep research summaries tight; skip the closing summary sentence.\n- Use exact outcome language: do not say agent/team member, workflow, or automation unless that exact thing was actually created, updated, or run.\n- Never attribute research or findings to a team specialist unless team.delegate was called and returned a result this turn."
 	case turnModeExecution:
 		return "Mode: execution\n- State what you changed or checked.\n- If blocked, name the blocker and the best next step.\n- Prefer decisive action over extended planning when the path is clear.\n- Use exact outcome language: call workflows workflows, automations automations, and AGENTS team members agents; do not claim one was created when you actually used another control surface.\n- Never attribute work to a team specialist unless team.delegate was called and returned a result this turn."
 	case turnModeAutomation:
 		return "Mode: automation\n- Prefer idempotent actions: update or upsert before creating duplicates.\n- Confirm the resulting schedule, destination, and enabled state in the answer.\n- Use exact outcome language: if you created or updated an automation, say automation; only say agent/team member when you actually used agent.create to write an AGENTS.md team definition.\n- An 'agent' and an 'automation' are different things: use agent.create for agent requests, automation.create for recurring scheduled tasks. Never fulfill an agent request as an automation.\n- Preserve existing user intent unless they explicitly ask to replace it."
 	default:
-		return "Mode: factual\n- Lead with the direct answer.\n- Keep wording compact and avoid filler.\n- Mention uncertainty only when it matters.\n- Use exact outcome language when referring to Atlas control surfaces."
+		return "Mode: factual\n- Lead with the direct answer.\n- Keep wording compact — skip filler and the closing summary sentence.\n- Mention uncertainty only when it matters; frame it as your read (\"I'd lean toward X\") rather than a hedge.\n- Use exact outcome language when referring to Atlas control surfaces."
 	}
 }
 
@@ -2151,6 +2151,16 @@ func (s *Service) Resume(toolCallID string, approved bool) {
 func (s *Service) recordTokenUsage(convID string, provider agent.ProviderConfig, usage agent.TokenUsage) {
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
 		return
+	}
+	// Normalize the atlas_engine router slot: background tasks (reflection,
+	// memory extraction, dream cycle) run on the router port with model="router",
+	// but that is the same physical GGUF loaded on a different port — not a
+	// separate model. Fold it into the primary model so usage groups correctly.
+	if provider.Type == agent.ProviderAtlasEngine && provider.Model == "router" {
+		cfg := s.cfgStore.Load()
+		if primary := filepath.Base(cfg.SelectedAtlasEngineModel); primary != "" && primary != "." {
+			provider.Model = primary
+		}
 	}
 	inputCost, outputCost, known := storage.ComputeCost(
 		string(provider.Type), provider.Model,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { api, CommunicationChannel, CommunicationPlatformStatus, CommunicationsSnapshot, RuntimeConfig } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { Portal } from '../components/Portal'
@@ -12,6 +12,13 @@ type SetupField = {
   placeholder: string
   inputType?: 'password' | 'text'
   storage: 'apiKey' | 'config'
+}
+
+type ConnectResult = {
+  ok: boolean
+  error?: string
+  accountName?: string
+  qrCodeDataURL?: string
 }
 
 const QUICK_SETUP_FIELDS: Record<PlatformID, SetupField[]> = {
@@ -43,7 +50,7 @@ function platformLabel(platform: PlatformID) {
 
 function platformSubtitle(platform: PlatformID) {
   switch (platform) {
-    case 'telegram': return 'Token-based chat bot integration with polling.'
+    case 'telegram': return 'Connect your Telegram bot to Atlas via BotFather.'
     case 'discord': return 'Bot gateway integration for DMs and @mentions.'
     case 'slack': return 'Socket Mode integration for DMs and @mentions.'
     case 'whatsapp': return 'Scan QR code to connect your WhatsApp account.'
@@ -59,22 +66,6 @@ function setupBadgeClass(status: CommunicationPlatformStatus) {
     case 'partial_setup': return 'badge badge-yellow'
     case 'missing_credentials': return 'badge badge-gray'
     default: return 'badge badge-gray'
-  }
-}
-
-function setupHint(status: CommunicationPlatformStatus) {
-  if (status.blockingReason) return status.blockingReason
-  switch (status.platform) {
-    case 'telegram':
-      return 'Add your Telegram bot token, enable the bridge, and validate polling.'
-    case 'discord':
-      return 'Add the Discord bot token and client ID, install the bot into your server, enable Message Content intent, and validate gateway access.'
-    case 'slack':
-      return 'Add the xoxb bot token and xapp app token, enable Socket Mode, and validate DMs plus @mentions.'
-    case 'whatsapp':
-      return 'Open Linked Devices in WhatsApp on your phone and scan the QR code.'
-    default:
-      return 'Finish setup to make this channel available.'
   }
 }
 
@@ -94,9 +85,9 @@ function platformSetupNotes(platform: PlatformID) {
   switch (platform) {
     case 'telegram':
       return [
-        'Create the bot with BotFather and paste the token exactly as given.',
-        'Send the bot one message after setup so Atlas can discover the chat.',
-        'Validate once the bot is reachable and polling is enabled.',
+        'Create the bot with BotFather and copy the token it gives you.',
+        'Send the bot one message so Atlas can discover your chat.',
+        'Hit Connect — Atlas will verify the token and start receiving messages.',
       ]
     case 'discord':
       return [
@@ -114,8 +105,7 @@ function platformSetupNotes(platform: PlatformID) {
       ]
     case 'whatsapp':
       return [
-        'Click Save & Validate to generate a QR code.',
-        'On your phone open WhatsApp > Linked Devices > Link a Device.',
+        'On your phone open WhatsApp → Linked Devices → Link a Device.',
         'Scan the code and keep Atlas running while pairing completes.',
         'Send a message to Atlas in WhatsApp to create the first session.',
       ]
@@ -193,7 +183,6 @@ export function Communications() {
   const [selectedPlatformID, setSelectedPlatformID] = useState<PlatformID | null>(null)
   const [credentialValues, setCredentialValues] = useState<Record<string, string>>(EMPTY_VALUES)
   const [initialCredentialValues, setInitialCredentialValues] = useState<Record<string, string>>(EMPTY_VALUES)
-  const [savingCredentials, setSavingCredentials] = useState(false)
 
   const mergePlatformStatus = (updatedPlatform: CommunicationPlatformStatus) => {
     setSnapshot(current => {
@@ -251,7 +240,6 @@ export function Communications() {
     if (!Number.isFinite(updatedAtMs)) return true
     return (Date.now() - updatedAtMs) <= sevenDaysMs
   })
-  const activePlatformsWithRecentSessions = new Set(recentChannels.map(channel => channel.platform))
 
   const choosePlatform = async (platform: PlatformID) => {
     const initialValues = {
@@ -274,36 +262,20 @@ export function Communications() {
       }
       setCredentialValues(loadedValues)
       setInitialCredentialValues(loadedValues)
-
-      // WhatsApp is QR-based and has no credentials; auto-trigger validation so
-      // the QR appears immediately when opening setup.
-      if (platform === 'whatsapp') {
-        setBusyPlatform(`${platform}:setup`)
-        const updated = await api.validateCommunicationPlatform(platform)
-        mergePlatformStatus(updated)
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load saved channel credentials.')
-    } finally {
-      if (platform === 'whatsapp') {
-        setBusyPlatform(null)
-      }
     }
   }
 
-  const saveAndValidate = async (platform: CommunicationPlatformStatus) => {
+  const saveAndValidate = async (platform: CommunicationPlatformStatus): Promise<ConnectResult> => {
     const fields = QUICK_SETUP_FIELDS[platform.platform]
-    setSavingCredentials(true)
-    setBusyPlatform(`${platform.platform}:setup`)
     setError(null)
 
     try {
       const credentials = fields.reduce<Record<string, string>>((result, field) => {
         if (field.storage !== 'apiKey') return result
         const value = credentialValues[field.id]?.trim()
-        if (value) {
-          result[field.id] = value
-        }
+        if (value) result[field.id] = value
         return result
       }, {})
 
@@ -317,9 +289,17 @@ export function Communications() {
       })
       mergePlatformStatus(validationResult)
 
+      // WhatsApp QR code step — validation returns the QR, not a ready state
+      if (platform.platform === 'whatsapp' && validationResult.metadata?.qrCodeDataURL) {
+        return { ok: false, qrCodeDataURL: validationResult.metadata.qrCodeDataURL }
+      }
+
       if (validationResult.setupState !== 'ready') {
         await load()
-        return
+        return {
+          ok: false,
+          error: validationResult.blockingReason ?? 'Validation failed. Check your credentials and try again.',
+        }
       }
 
       for (const field of fields) {
@@ -340,17 +320,13 @@ export function Communications() {
 
       const updatedPlatform = await api.updateCommunicationPlatform(platform.platform, true)
       mergePlatformStatus(updatedPlatform)
-      setError(null)
-      await waitForPlatformReady(platform.platform)
-      setSelectedPlatformID(null)
-      setCredentialValues(EMPTY_VALUES)
-      setInitialCredentialValues(EMPTY_VALUES)
+
+      // Non-blocking background poll — keep UI responsive
+      waitForPlatformReady(platform.platform).then(() => load())
+
+      return { ok: true, accountName: updatedPlatform.connectedAccountName ?? undefined }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to complete setup.')
-      await load()
-    } finally {
-      setSavingCredentials(false)
-      setBusyPlatform(null)
+      return { ok: false, error: err instanceof Error ? err.message : 'Failed to complete setup.' }
     }
   }
 
@@ -364,20 +340,6 @@ export function Communications() {
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to disable platform.')
-    } finally {
-      setBusyPlatform(null)
-    }
-  }
-
-  const revalidatePlatform = async (platform: PlatformID) => {
-    setBusyPlatform(`${platform}:validate`)
-    try {
-      const validatedPlatform = await api.validateCommunicationPlatform(platform)
-      mergePlatformStatus(validatedPlatform)
-      setError(null)
-      await load()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Validation failed.')
     } finally {
       setBusyPlatform(null)
     }
@@ -410,9 +372,8 @@ export function Communications() {
               key={platform.id}
               platform={platform}
               last={index === readyPlatforms.length - 1 && addablePlatforms.length === 0}
-              busy={busyPlatform === `${platform.platform}:disable` || busyPlatform === `${platform.platform}:validate`}
+              busy={busyPlatform === `${platform.platform}:disable`}
               onDisable={() => disablePlatform(platform.platform)}
-              onValidate={() => revalidatePlatform(platform.platform)}
             />
           ))}
           {addablePlatforms.length > 0 && (
@@ -428,8 +389,10 @@ export function Communications() {
                     <PlatformLogo platform={platform.platform} />
                     <div class="settings-label-col">
                       <div class="settings-label">
-                        {platformLabel(platform.platform)}
-                        {platform.platform === 'telegram' && <span class="badge badge-blue" style="margin-left:6px">Recommended</span>}
+                        <span style="display:inline-flex;align-items:center;gap:6px">
+                          {platformLabel(platform.platform)}
+                          {platform.platform === 'telegram' && <span class="badge badge-blue">Recommended</span>}
+                        </span>
                       </div>
                       <div class="settings-sublabel">{platformSubtitle(platform.platform)}</div>
                     </div>
@@ -495,15 +458,14 @@ export function Communications() {
         <QuickSetupModal
           platform={selectedPlatform}
           values={credentialValues}
-          saving={savingCredentials}
-          busy={busyPlatform === `${selectedPlatform.platform}:setup`}
           onChange={(id, value) => setCredentialValues(current => ({ ...current, [id]: value }))}
           onCancel={() => {
             setSelectedPlatformID(null)
             setCredentialValues(EMPTY_VALUES)
             setInitialCredentialValues(EMPTY_VALUES)
+            void load()
           }}
-          onValidate={() => saveAndValidate(selectedPlatform)}
+          onConnect={() => saveAndValidate(selectedPlatform)}
         />
       )}
     </div>
@@ -515,13 +477,11 @@ function ConnectedPlatformRow({
   last,
   busy,
   onDisable,
-  onValidate,
 }: {
   platform: CommunicationPlatformStatus
   last: boolean
   busy: boolean
   onDisable: () => void
-  onValidate: () => void
 }) {
   return (
     <div class="settings-row communication-platform-row" style={{ borderBottom: last ? 'none' : undefined }}>
@@ -538,11 +498,8 @@ function ConnectedPlatformRow({
       </div>
       <div class="communication-platform-controls">
         <div class="communication-platform-actions">
-          <button class="btn btn-sm btn-ghost communication-platform-action-btn" onClick={onValidate} disabled={busy}>
-            {busy ? 'Working…' : 'Validate'}
-          </button>
           <button class="btn btn-sm btn-danger communication-platform-action-btn" onClick={onDisable} disabled={busy}>
-            Disable
+            {busy ? 'Working…' : 'Disable'}
           </button>
         </div>
       </div>
@@ -550,119 +507,214 @@ function ConnectedPlatformRow({
   )
 }
 
+type SetupPhase = 'credentials' | 'connecting' | 'qr' | 'success' | 'error'
+
 function QuickSetupModal({
   platform,
   values,
-  saving,
-  busy,
   onChange,
   onCancel,
-  onValidate,
+  onConnect,
 }: {
   platform: CommunicationPlatformStatus
   values: Record<string, string>
-  saving: boolean
-  busy: boolean
   onChange: (id: string, value: string) => void
   onCancel: () => void
-  onValidate: () => void
+  onConnect: () => Promise<ConnectResult>
 }) {
-  const fields = QUICK_SETUP_FIELDS[platform.platform]
-  const hasPendingInput = fields.some(field => values[field.id]?.trim())
-  const isDiscord = platform.platform === 'discord'
   const isWhatsApp = platform.platform === 'whatsapp'
-  const installURL = platform.metadata.installURL
+  const isDiscord = platform.platform === 'discord'
+  const fields = QUICK_SETUP_FIELDS[platform.platform]
   const notes = platformSetupNotes(platform.platform)
   const docsURL = platformDocsURL(platform.platform)
-  const qrCodeDataURL = platform.platform === 'whatsapp' ? platform.metadata.qrCodeDataURL : ''
+  const installURL = platform.metadata.installURL
+
+  const [phase, setPhase] = useState<SetupPhase>(isWhatsApp ? 'connecting' : 'credentials')
+  const [errorMsg, setErrorMsg] = useState('')
+  const [qrDataURL, setQrDataURL] = useState('')
+  const [accountName, setAccountName] = useState('')
+
+  const hasPendingInput = fields.some(f => values[f.id]?.trim())
+  const connectDisabled = fields.length > 0 && !platform.credentialConfigured && !hasPendingInput
+
+  // Keep a ref to the latest callbacks so effects with stable deps can always
+  // call the current version without being re-triggered on every parent render.
+  const onConnectRef = useRef(onConnect)
+  const onCancelRef  = useRef(onCancel)
+  onConnectRef.current = onConnect
+  onCancelRef.current  = onCancel
+
+  const connect = useCallback(async () => {
+    setPhase('connecting')
+    const result = await onConnectRef.current()
+    if (result.ok) {
+      setAccountName(result.accountName ?? '')
+      setPhase('success')
+      window.setTimeout(() => onCancelRef.current(), 1600)
+    } else if (result.qrCodeDataURL) {
+      setQrDataURL(result.qrCodeDataURL)
+      setPhase('qr')
+    } else {
+      setErrorMsg(result.error ?? 'Connection failed. Check your credentials and try again.')
+      setPhase('error')
+    }
+  }, []) // stable — reads latest callbacks via refs
+
+  // WhatsApp: auto-trigger QR generation exactly once on mount.
+  // Empty deps intentional: isWhatsApp is constant for the lifetime of this
+  // modal, and connect is stable (useCallback with []).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (isWhatsApp) connect()
+  }, [])
+
+  // WhatsApp: poll for connection after QR is shown; also detect QR expiry
+  useEffect(() => {
+    if (phase !== 'qr') return
+    const interval = window.setInterval(async () => {
+      try {
+        const snap = await api.communications()
+        const status = snap.platforms.find(p => p.platform === platform.platform)
+        if (status?.setupState === 'ready') {
+          setAccountName(status.connectedAccountName ?? '')
+          setPhase('success')
+          window.setTimeout(() => onCancelRef.current(), 1600)
+        } else if (status?.setupState === 'validation_failed') {
+          // QR timed out or bridge errored — show error with retry option
+          setErrorMsg(status.blockingReason ?? status.lastError ?? 'QR code expired. Try again.')
+          setPhase('error')
+        }
+      } catch {
+        // silently ignore transient polling errors
+      }
+    }, 2000)
+    return () => window.clearInterval(interval)
+  }, [phase, platform.platform])
 
   return (
     <Portal>
-    <div class="modal-overlay" onClick={(event) => { if ((event.target as HTMLElement).classList.contains('modal-overlay')) onCancel() }}>
-      <div class="modal communication-setup-modal">
-        <div class="modal-header communication-modal-header">
-          <div class="communication-modal-title-wrap">
-            <PlatformLogo platform={platform.platform} />
-            <div class="communication-modal-title-block">
-              <div class="surface-eyebrow">Quick Setup</div>
-              <h3 class="communication-modal-title">{platformLabel(platform.platform)}</h3>
+      <div
+        class="communication-setup-overlay"
+        onClick={e => { if ((e.target as HTMLElement).classList.contains('communication-setup-overlay')) onCancel() }}
+      >
+        <div class="card settings-group communication-setup-card">
+
+          {/* Card header — logo + name only */}
+          <div class="communication-setup-card-header">
+            <div class="communication-platform-summary">
+              <PlatformLogo platform={platform.platform} />
+              <div class="settings-label">{platformLabel(platform.platform)}</div>
             </div>
-          </div>
-          <div class="communication-modal-header-actions">
-            <button class="btn btn-sm btn-ghost" onClick={onCancel}>Cancel</button>
-          </div>
-        </div>
-
-        <div class={`modal-body communication-modal-body ${isWhatsApp ? 'communication-modal-body-whatsapp' : ''}`}>
-          <div class="communication-modal-panel">
-            <div class="communication-panel-label">{isWhatsApp ? 'Scan QR Code' : 'Required Credentials'}</div>
-            {fields.length > 0 && (
-              <div class="communication-setup-fields">
-                {fields.map(field => (
-                  <label key={field.id} class="communication-secret-field">
-                    <span>{field.label}</span>
-                    <input
-                      class="input"
-                      type={field.inputType ?? 'password'}
-                      value={values[field.id] ?? ''}
-                      placeholder={field.placeholder}
-                      onInput={event => onChange(field.id, (event.target as HTMLInputElement).value)}
-                    />
-                  </label>
-                ))}
-              </div>
-            )}
-            {platform.platform === 'whatsapp' && (
-              <div class="communication-whatsapp-qr-block">
-                {qrCodeDataURL ? (
-                  <>
-                    <img src={qrCodeDataURL} alt="WhatsApp login QR code" class="communication-whatsapp-qr-image" />
-                    <div class="communication-setup-note communication-whatsapp-qr-note">Scan with WhatsApp Linked Devices to connect.</div>
-                  </>
-                ) : (
-                  <div class="communication-setup-note communication-whatsapp-qr-note">Generate QR code by clicking Save & Validate.</div>
-                )}
-              </div>
-            )}
-            {isDiscord && (
-              <div class="communication-setup-inline-action">
-                {installURL ? (
-                  <a class="btn btn-sm" href={installURL} target="_blank" rel="noreferrer">
-                    Install Bot in Discord
-                  </a>
-                ) : (
-                  <div class="communication-setup-note">Add the Discord Client ID to unlock the install link.</div>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div class="communication-setup-guide-column">
-            <div class="communication-panel-label">Setup Tips</div>
-            <div class="communication-setup-checklist communication-setup-checklist-tight">
-              {notes.map(note => (
-                <div key={note} class="communication-setup-check">{note}</div>
-              ))}
-            </div>
-            {docsURL && (
-              <div class="communication-setup-docs">
-                <a class="btn btn-sm btn-ghost" href={docsURL} target="_blank" rel="noreferrer">
-                  Open official setup guide
-                </a>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div class="modal-footer communication-setup-footer">
-          <div class="communication-setup-footer-actions">
-            <button class="btn btn-primary btn-sm" onClick={onValidate} disabled={saving || busy || (fields.length > 0 && !platform.credentialConfigured && !hasPendingInput)}>
-              {saving || busy ? 'Validating…' : 'Save & Validate'}
+            <button class="communication-setup-dismiss" onClick={onCancel} aria-label="Cancel">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                <line x1="3" y1="3" x2="13" y2="13" /><line x1="13" y1="3" x2="3" y2="13" />
+              </svg>
             </button>
           </div>
+
+          {/* Credentials phase */}
+          {phase === 'credentials' && (
+            <div class="communication-setup-card-body">
+              {fields.length > 0 && (
+                <div class="communication-setup-fields">
+                  {fields.map(field => (
+                    <label key={field.id} class="communication-secret-field">
+                      <span>{field.label}</span>
+                      <input
+                        class="input"
+                        type={field.inputType ?? 'password'}
+                        value={values[field.id] ?? ''}
+                        placeholder={field.placeholder}
+                        onInput={e => onChange(field.id, (e.target as HTMLInputElement).value)}
+                      />
+                    </label>
+                  ))}
+                </div>
+              )}
+              {isDiscord && (
+                <div class="communication-setup-inline-action">
+                  {installURL ? (
+                    <a class="btn btn-sm" href={installURL} target="_blank" rel="noreferrer">
+                      Install Bot in Discord
+                    </a>
+                  ) : (
+                    <div class="communication-setup-note">Add the Discord Client ID above to unlock the install link.</div>
+                  )}
+                </div>
+              )}
+              <details class="communication-setup-guide">
+                <summary>Setup guide</summary>
+                <div class="communication-setup-guide-body">
+                  {notes.map(note => (
+                    <div key={note} class="communication-setup-check">{note}</div>
+                  ))}
+                  {docsURL && (
+                    <a class="communication-setup-docs-link" href={docsURL} target="_blank" rel="noreferrer">
+                      Official docs ↗
+                    </a>
+                  )}
+                </div>
+              </details>
+              <div class="communication-setup-card-footer">
+                <button class="btn btn-sm btn-ghost" onClick={onCancel}>Cancel</button>
+                <button class="btn btn-primary btn-sm communication-setup-connect-btn" onClick={connect} disabled={connectDisabled}>
+                  Connect
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Connecting phase */}
+          {phase === 'connecting' && (
+            <div class="communication-setup-card-status">
+              <div class="communication-setup-status-spinner" />
+              <div class="communication-setup-status-title">Connecting to {platformLabel(platform.platform)}…</div>
+            </div>
+          )}
+
+          {/* QR phase (WhatsApp) */}
+          {phase === 'qr' && (
+            <div class="communication-setup-card-status">
+              <img src={qrDataURL} alt="WhatsApp QR code" class="communication-whatsapp-qr-image" />
+              <div class="communication-setup-status-title">Scan with your phone</div>
+              <div class="communication-setup-status-body">WhatsApp → Linked Devices → Link a Device</div>
+              <button class="btn btn-sm btn-ghost" onClick={onCancel}>Cancel</button>
+            </div>
+          )}
+
+          {/* Success phase */}
+          {phase === 'success' && (
+            <div class="communication-setup-card-status">
+              <div class="communication-setup-status-icon communication-setup-status-success">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </div>
+              <div class="communication-setup-status-title">Connected</div>
+              {accountName && <div class="communication-setup-status-body">{accountName}</div>}
+            </div>
+          )}
+
+          {/* Error phase */}
+          {phase === 'error' && (
+            <div class="communication-setup-card-status">
+              <div class="communication-setup-status-icon communication-setup-status-error">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </div>
+              <div class="communication-setup-status-title">Connection failed</div>
+              <div class="communication-setup-status-body">{errorMsg}</div>
+              <div class="communication-setup-card-footer">
+                <button class="btn btn-sm btn-ghost" onClick={onCancel}>Cancel</button>
+                <button class="btn btn-primary btn-sm" onClick={() => setPhase('credentials')}>Try Again</button>
+              </div>
+            </div>
+          )}
+
         </div>
       </div>
-    </div>
     </Portal>
   )
 }

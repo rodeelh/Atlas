@@ -215,6 +215,13 @@ func (d *AuthDomain) getToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *AuthDomain) bootstrap(w http.ResponseWriter, r *http.Request) {
+	// Bootstrap must originate from the local machine. The launch token alone is
+	// not sufficient protection — a LAN attacker who sniffs or guesses the token
+	// within its 60-second window could otherwise establish a local session.
+	if !auth.IsLocalRequest(r) {
+		writeError(w, http.StatusForbidden, "Bootstrap is local-only.")
+		return
+	}
 	token := r.URL.Query().Get("token")
 	if token == "" {
 		writeError(w, http.StatusBadRequest, "Missing 'token' query parameter.")
@@ -224,7 +231,9 @@ func (d *AuthDomain) bootstrap(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	sess := d.svc.CreateSession(false)
+	// CreateLocalSession produces an 8-hour local session (not the legacy
+	// 7-day CreateSession which is remote-tier lifetime by mistake).
+	sess := d.svc.CreateLocalSession()
 	w.Header().Set("Set-Cookie", auth.SessionSetCookieValueForRequest(sess, r))
 	http.Redirect(w, r, "/web", http.StatusFound)
 }

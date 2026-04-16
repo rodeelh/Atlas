@@ -79,11 +79,15 @@ func (d *ControlDomain) getStatus(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (d *ControlDomain) getLogs(w http.ResponseWriter, r *http.Request) {
-	limit := 200
+	const defaultLimit, maxLimit = 200, 1000
+	limit := defaultLimit
 	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
 		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
 			limit = n
 		}
+	}
+	if limit > maxLimit {
+		limit = maxLimit
 	}
 	writeJSON(w, http.StatusOK, d.system.Logs(limit))
 }

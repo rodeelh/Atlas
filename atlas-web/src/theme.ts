@@ -7,7 +7,7 @@
  */
 
 export type ThemeMode = 'system' | 'light' | 'dark'
-export type ThemePreset = 'atlas' | 'studio' | 'terminal'
+export type ThemePreset = 'atlas' | 'studio' | 'terminal' | 'ember'
 
 export type DensityMode     = 'compact' | 'comfortable' | 'spacious'
 export type ChatFontSize    = 'small' | 'default' | 'large'
@@ -102,14 +102,31 @@ export const THEME_PRESETS: ThemePresetOption[] = [
     description: 'Operator',
     preview: {
       light: {
-        surface: '#d0d0e8',
-        surfaceAlt: '#e0e0f4',
+        surface: '#d8dce6',
+        surfaceAlt: '#eef0f6',
         accent: '#00CC7A',
       },
       dark: {
         surface: '#0A0A1A',
         surfaceAlt: '#151525',
         accent: '#00FF99',
+      },
+    },
+  },
+  {
+    id: 'ember',
+    label: 'Ember',
+    description: 'Warm',
+    preview: {
+      light: {
+        surface: '#ddd0b8',
+        surfaceAlt: '#faf5ec',
+        accent: '#c87820',
+      },
+      dark: {
+        surface: '#151008',
+        surfaceAlt: '#1f1810',
+        accent: '#e89030',
       },
     },
   },
@@ -161,26 +178,73 @@ export const PRESET_TOKENS: Record<ThemePreset, { light: PresetModeTokens; dark:
       '--theme-shadow-pop': '0 24px 48px rgba(0,0,0,0.20)',
     },
   },
-  terminal: {
-    // Operator — cyber ops dark: deep navy-black + electric cyan-mint accent + off-white blue-tinted text
+  ember: {
+    // Ember — cognac dark, warm parchment light
+    // Surfaces are low-saturation warm cream — amber identity comes from the
+    // accent colour, not the surfaces. Same approach as Studio's stone palette.
     light: {
-      '--bg': '#b8b8d4',
-      '--surface': '#d0d0e8',
-      '--surface-2': '#e0e0f4',
-      '--surface-3': '#a4a4c4',
-      '--hover': 'rgba(10,10,40,0.08)',
-      '--active-bg': 'rgba(0,204,122,0.14)',
-      '--border': 'rgba(10,10,40,0.18)',
-      '--border-2': 'rgba(10,10,40,0.30)',
+      // Warmth lives in the lower layers; content surfaces are near-paper-white
+      // so text reads cleanly while the amber identity stays visible in the chrome.
+      '--bg': '#c8b898',           // warm mid-tone — sidebar, outer shell
+      '--surface': '#ddd0b8',      // card shells, panels
+      '--surface-2': '#faf5ec',    // content areas: L≈97%, near-white warm paper
+      '--surface-3': '#bcac90',    // inset / recessed
+      '--hover': 'rgba(28,18,4,0.06)',
+      '--active-bg': 'rgba(28,18,4,0.10)',
+      '--border': 'rgba(28,18,4,0.10)',
+      '--border-2': 'rgba(28,18,4,0.18)',
+      '--text': '#1c1208',         // deep warm brown — ~16:1 on surface-2
+      '--text-2': '#5a3a18',       // ~8:1 on surface-2
+      '--text-3': '#886040',       // ~4.6:1 on surface-2
+      '--shadow-bubble-ai': '0 10px 24px rgba(28,18,4,0.07), 0 2px 6px rgba(28,18,4,0.03)',
+      '--shadow-bubble-user': '0 12px 28px color-mix(in srgb, var(--accent) 20%, transparent), 0 3px 8px rgba(28,18,4,0.07)',
+      '--shadow-avatar': '0 8px 18px rgba(28,18,4,0.07), 0 1px 4px rgba(28,18,4,0.03)',
+      '--theme-shadow-card': '0 20px 44px rgba(28,18,4,0.07), 0 4px 14px rgba(28,18,4,0.03)',
+      '--theme-shadow-soft': '0 10px 22px rgba(28,18,4,0.04)',
+      '--theme-shadow-pop': '0 26px 50px rgba(28,18,4,0.09)',
+    },
+    dark: {
+      '--bg': '#0a0704',
+      '--surface': '#151008',
+      '--surface-2': '#1f1810',
+      '--surface-3': '#2c221a',
+      '--hover': 'rgba(245,220,175,0.05)',
+      '--active-bg': 'rgba(245,220,175,0.09)',
+      '--border': 'rgba(245,220,175,0.09)',
+      '--border-2': 'rgba(245,220,175,0.17)',
+      '--text': '#f4e8d4',
+      '--text-2': '#a88058',
+      '--text-3': '#685040',
+      '--shadow-bubble-ai': '0 0 20px rgba(232,144,48,0.07)',
+      '--shadow-bubble-user': '0 0 26px color-mix(in srgb, var(--accent) 32%, transparent)',
+      '--shadow-avatar': '0 0 14px rgba(232,144,48,0.09)',
+      '--theme-shadow-card': '0 16px 40px rgba(0,0,0,0.48)',
+      '--theme-shadow-soft': '0 4px 14px rgba(0,0,0,0.12)',
+      '--theme-shadow-pop': '0 24px 48px rgba(0,0,0,0.24)',
+    },
+  },
+  terminal: {
+    // Operator — cyber ops dark: deep navy-black + electric green accent + off-white blue-tinted text
+    // Light: surfaces are very low-saturation cool grey — Terminal identity comes from the
+    // electric green accent and deep navy text, not from saturated purple surfaces.
+    light: {
+      '--bg': '#c4c8d2',
+      '--surface': '#d8dce6',
+      '--surface-2': '#eef0f6',
+      '--surface-3': '#b2b6c2',
+      '--hover': 'rgba(8,8,26,0.06)',
+      '--active-bg': 'color-mix(in srgb, var(--accent) 11%, transparent)',
+      '--border': 'rgba(8,8,26,0.12)',
+      '--border-2': 'rgba(8,8,26,0.22)',
       '--text': '#08081a',
       '--text-2': '#2a2a4a',
-      '--text-3': '#4a4a6a',
-      '--shadow-bubble-ai': '0 8px 18px rgba(10,10,40,0.12), 0 2px 5px rgba(10,10,40,0.06)',
-      '--shadow-bubble-user': '0 10px 22px color-mix(in srgb, var(--accent) 30%, transparent), 0 2px 6px rgba(10,10,40,0.08)',
-      '--shadow-avatar': '0 5px 14px rgba(10,10,40,0.12), 0 1px 3px rgba(10,10,40,0.06)',
-      '--theme-shadow-card': '0 14px 32px rgba(10,10,40,0.12), 0 2px 8px rgba(10,10,40,0.06)',
-      '--theme-shadow-soft': '0 6px 16px rgba(10,10,40,0.06)',
-      '--theme-shadow-pop': '0 20px 38px rgba(10,10,40,0.14)',
+      '--text-3': '#5a5a7a',
+      '--shadow-bubble-ai': '0 10px 24px rgba(8,8,26,0.08), 0 2px 6px rgba(8,8,26,0.04)',
+      '--shadow-bubble-user': '0 12px 28px color-mix(in srgb, var(--accent) 20%, transparent), 0 3px 8px rgba(8,8,26,0.08)',
+      '--shadow-avatar': '0 8px 18px rgba(8,8,26,0.08), 0 1px 4px rgba(8,8,26,0.04)',
+      '--theme-shadow-card': '0 20px 44px rgba(8,8,26,0.08), 0 4px 14px rgba(8,8,26,0.04)',
+      '--theme-shadow-soft': '0 10px 22px rgba(8,8,26,0.04)',
+      '--theme-shadow-pop': '0 26px 50px rgba(8,8,26,0.10)',
     },
     dark: {
       '--bg': '#060612',
@@ -260,9 +324,9 @@ function resolveMode(mode: ThemeMode): 'dark' | 'light' {
 //   comfortable → 28 + 6  = 34px
 //   spacious → 28 + 14 = 42px
 const DENSITY_TOKENS: Record<DensityMode, Record<string, string>> = {
-  compact:     { '--bubble-pad-v': '8px',  '--bubble-pad-h': '13px', '--chat-msg-gap': '2px'  },
-  comfortable: { '--bubble-pad-v': '12px', '--bubble-pad-h': '18px', '--chat-msg-gap': '6px'  },
-  spacious:    { '--bubble-pad-v': '16px', '--bubble-pad-h': '24px', '--chat-msg-gap': '14px' },
+  compact:     { '--bubble-pad-v': '8px',  '--bubble-pad-h': '13px', '--chat-msg-gap': '2px',  '--bubble-font-size': '13px' },
+  comfortable: { '--bubble-pad-v': '12px', '--bubble-pad-h': '18px', '--chat-msg-gap': '6px',  '--bubble-font-size': '15px' },
+  spacious:    { '--bubble-pad-v': '16px', '--bubble-pad-h': '24px', '--chat-msg-gap': '14px', '--bubble-font-size': '17px' },
 }
 
 const FONT_SIZE_TOKENS: Record<ChatFontSize, Record<string, string>> = {
@@ -320,8 +384,36 @@ function clearTokens(keys: string[]): void {
   })
 }
 
+/**
+ * relativeLuminance — WCAG 2.1 relative luminance of a #rrggbb hex colour.
+ * Returns a value in [0, 1] where 0 = black and 1 = white.
+ */
+function relativeLuminance(hex: string): number {
+  const toLinear = (c: number) =>
+    c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  const r = toLinear(parseInt(hex.slice(1, 3), 16) / 255)
+  const g = toLinear(parseInt(hex.slice(3, 5), 16) / 255)
+  const b = toLinear(parseInt(hex.slice(5, 7), 16) / 255)
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+/**
+ * accentTextColor — returns '#ffffff' or a near-black depending on which gives
+ * better contrast against the accent colour. Uses the WCAG equal-contrast
+ * crossover point (L ≈ 0.2) so the switch happens at the mathematically
+ * optimal threshold rather than an arbitrary magic number.
+ */
+function accentTextColor(accent: string): string {
+  // Only works on 7-char #rrggbb strings; fall back to white for anything else.
+  if (!/^#[0-9a-fA-F]{6}$/.test(accent)) return '#ffffff'
+  return relativeLuminance(accent) > 0.2 ? '#111111' : '#ffffff'
+}
+
 function semanticAccentTokens(accent: string): Record<string, string> {
+  const accentText = accentTextColor(accent)
   return {
+    '--accent-text': accentText,
+    '--accent-dim': `color-mix(in srgb, ${accent} 12%, transparent)`,
     '--theme-accent-fill': accent,
     '--theme-accent-fill-strong': accent,
     '--theme-accent-outline': `color-mix(in srgb, ${accent} 12%, transparent)`,
@@ -330,6 +422,7 @@ function semanticAccentTokens(accent: string): Record<string, string> {
     '--theme-surface-accent': `color-mix(in srgb, ${accent} 9%, var(--surface-2))`,
     '--theme-surface-accent-strong': `color-mix(in srgb, ${accent} 12%, var(--surface-2))`,
     '--theme-shadow-accent': `color-mix(in srgb, ${accent} 24%, transparent)`,
+    '--theme-text-on-accent': accentText,
     '--control-focus-ring': `color-mix(in srgb, ${accent} 26%, transparent)`,
     '--control-selected-bg': `color-mix(in srgb, ${accent} 9%, var(--surface-2))`,
     '--control-selected-bg-strong': `color-mix(in srgb, ${accent} 12%, var(--surface-2))`,
@@ -349,9 +442,14 @@ export function applyTheme(config: ThemeConfig): void {
   document.documentElement.setAttribute('data-theme', resolvedMode)
   document.documentElement.setAttribute('data-chat-avatar-style', config.chatAvatarStyle)
   clearTokens(PRESET_TOKEN_KEYS)
-  writeTokens(PRESET_TOKENS[config.preset][resolvedMode])
-  document.documentElement.style.setProperty('--accent', config.accent)
-  writeTokens(semanticAccentTokens(config.accent))
+  const presetTokens = PRESET_TOKENS[config.preset][resolvedMode]
+  writeTokens(presetTokens)
+  // Allow a preset to define '--accent' in its light/dark tokens to override the user's
+  // accent for that mode — needed when the user's chosen colour lacks contrast on the
+  // preset's surface (e.g. electric green on a light background).
+  const effectiveAccent = presetTokens['--accent'] ?? config.accent
+  document.documentElement.style.setProperty('--accent', effectiveAccent)
+  writeTokens(semanticAccentTokens(effectiveAccent))
 
   const densityTokens = DENSITY_TOKENS[config.density]
   writeTokens({
@@ -359,12 +457,7 @@ export function applyTheme(config: ThemeConfig): void {
     '--theme-chat-gap': densityTokens['--chat-msg-gap'],
     '--theme-chat-pad-y': densityTokens['--bubble-pad-v'],
     '--theme-chat-pad-x': densityTokens['--bubble-pad-h'],
-  })
-
-  const fontSizeTokens = FONT_SIZE_TOKENS[config.chatFontSize]
-  writeTokens({
-    ...fontSizeTokens,
-    '--theme-chat-font-size': fontSizeTokens['--bubble-font-size'],
+    '--theme-chat-font-size': densityTokens['--bubble-font-size'],
   })
 
   const radiusTokens = RADIUS_TOKENS[config.chatRadius]

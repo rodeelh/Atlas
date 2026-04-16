@@ -15,7 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -55,6 +55,13 @@ type LocalAuthService struct {
 	// exists. Updated on every write/delete so the middleware hot-path never
 	// needs a DB round-trip (eliminates the TOCTOU window).
 	hasCredsFlag atomic.Bool
+
+	// hasWebAuthnFlag is an atomic bool that mirrors whether at least one
+	// WebAuthn credential exists. Kept in sync alongside hasCredsFlag so the
+	// /auth/local/status handler never returns a stale hasWebAuthn: false due
+	// to a transient DB read error (which would lock the user into PIN-only
+	// mode with no escape hatch).
+	hasWebAuthnFlag atomic.Bool
 
 	// pinAttempts tracks failed PIN attempts per client IP for rate limiting.
 	pinAttempts map[string]*pinAttemptEntry
@@ -106,9 +113,10 @@ func NewLocalAuthService(db *storage.DB, _ int) (*LocalAuthService, error) {
 		pinAttempts: make(map[string]*pinAttemptEntry),
 	}
 
-	// Initialise the atomic flag from the DB so the middleware hot-path is
+	// Initialise the atomic flags from the DB so the middleware hot-path is
 	// accurate from the first request after a daemon restart.
 	svc.hasCredsFlag.Store(db.HasLocalCredentials())
+	svc.hasWebAuthnFlag.Store(db.HasLocalCredentialOfType("webauthn"))
 
 	return svc, nil
 }
@@ -120,17 +128,9 @@ func (s *LocalAuthService) HasCredentials() bool {
 }
 
 // HasWebAuthnCredentials returns true if any WebAuthn credential is registered.
+// Uses an atomic flag as the fast path — no DB round-trip, no TOCTOU window.
 func (s *LocalAuthService) HasWebAuthnCredentials() bool {
-	rows, err := s.db.LoadLocalCredentials()
-	if err != nil {
-		return false
-	}
-	for _, r := range rows {
-		if r.Type == "webauthn" {
-			return true
-		}
-	}
-	return false
+	return s.hasWebAuthnFlag.Load()
 }
 
 // HasPINCredential returns true if a PIN credential is registered.
@@ -166,13 +166,15 @@ func (s *LocalAuthService) ListCredentials() ([]CredentialInfo, error) {
 	return out, nil
 }
 
-// DeleteCredential removes a credential by ID and refreshes the atomic flag.
+// DeleteCredential removes a credential by ID and refreshes the atomic flags.
 func (s *LocalAuthService) DeleteCredential(id string) error {
 	if err := s.db.DeleteLocalCredential(id); err != nil {
 		return err
 	}
-	// Refresh atomic flag — it may now be false if this was the last credential.
+	// Refresh both atomic flags — they may now be false if this was the last
+	// credential of each type.
 	s.hasCredsFlag.Store(s.db.HasLocalCredentials())
+	s.hasWebAuthnFlag.Store(s.db.HasLocalCredentialOfType("webauthn"))
 	return nil
 }
 
@@ -205,6 +207,9 @@ func (s *LocalAuthService) BeginRegistration(_ string) ([]byte, string, error) {
 		webauthn.WithAuthenticatorSelection(protocol.AuthenticatorSelection{
 			// No attachment restriction — browser picks best available:
 			// Touch ID on macOS, Windows Hello on Windows, key/PIN on Linux.
+			// Preferred (not Required) keeps FIDO U2F / legacy security keys
+			// compatible — some physical keys don't support user verification
+			// and return NotSupportedError when Required is set.
 			ResidentKey:      protocol.ResidentKeyRequirementPreferred,
 			UserVerification: protocol.VerificationPreferred,
 		}),
@@ -289,9 +294,10 @@ func (s *LocalAuthService) FinishRegistration(sessionID, credName string, body [
 		return fmt.Errorf("save credential: %w", err)
 	}
 
-	// Credential is committed — flip the atomic flag immediately so subsequent
-	// middleware checks see the credential without a DB round-trip.
+	// Credential is committed — flip both atomic flags immediately so subsequent
+	// middleware and status checks see the credential without a DB round-trip.
 	s.hasCredsFlag.Store(true)
+	s.hasWebAuthnFlag.Store(true)
 	return nil
 }
 
@@ -501,12 +507,19 @@ func originFromWebAuthnBody(body []byte) (string, error) {
 	return cd.Origin, nil
 }
 
-// isLocalhostWebAuthnOrigin returns true if origin is a localhost origin that
-// is safe to accept for WebAuthn. The RPID is "localhost" so any
-// http://localhost:* or http://127.0.0.1:* origin is spec-valid.
+// isLocalhostWebAuthnOrigin reports whether origin is a safe localhost origin
+// for WebAuthn. Parses the URL and compares the hostname exactly — a prefix
+// check alone would accept "http://localhost.evil.com" as matching "localhost".
+// The RPID is "localhost", so origins with hostname "localhost" or "127.0.0.1"
+// are spec-valid under both http and https schemes.
 func isLocalhostWebAuthnOrigin(origin string) bool {
-	return strings.HasPrefix(origin, "http://localhost") ||
-		strings.HasPrefix(origin, "http://127.0.0.1")
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	host := u.Hostname() // strips port bracket-notation for IPv6 and port suffix
+	return (host == "localhost" || host == "127.0.0.1") &&
+		(u.Scheme == "http" || u.Scheme == "https")
 }
 
 // wauthForOrigin returns a WebAuthn instance configured to accept exactly the

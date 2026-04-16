@@ -101,3 +101,17 @@ func TelegramAttachmentsDir() string {
 	_ = os.MkdirAll(dir, 0o755)
 	return dir
 }
+
+// DiscordAttachmentsDir returns the directory where files received over Discord are saved.
+func DiscordAttachmentsDir() string {
+	dir := filepath.Join(FilesDir(), "Discord")
+	_ = os.MkdirAll(dir, 0o755)
+	return dir
+}
+
+// WhatsAppAttachmentsDir returns the directory where files received over WhatsApp are saved.
+func WhatsAppAttachmentsDir() string {
+	dir := filepath.Join(FilesDir(), "WhatsApp")
+	_ = os.MkdirAll(dir, 0o755)
+	return dir
+}

@@ -417,7 +417,7 @@ func resolveFastProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig
 			model = filepath.Base(cfg.SelectedAtlasEngineModel)
 		}
 		if model == "" || model == "." {
-			model = "atlas-engine-model"
+			return agent.ProviderConfig{}, fmt.Errorf("no model configured for Engine LM — select a model in Settings → Engine")
 		}
 		port := cfg.AtlasEnginePort
 		if port == 0 {
@@ -544,7 +544,7 @@ func resolveProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, er
 		// Normalize to basename — old config values may store full paths.
 		model := filepath.Base(cfg.SelectedAtlasEngineModel)
 		if model == "" || model == "." {
-			model = "atlas-engine-model"
+			return agent.ProviderConfig{}, fmt.Errorf("no model configured for Engine LM — select a model in Settings → Engine")
 		}
 		port := cfg.AtlasEnginePort
 		if port == 0 {

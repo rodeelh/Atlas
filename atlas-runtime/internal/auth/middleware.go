@@ -46,23 +46,46 @@ func RequireSession(svc *Service, tailscaleEnabled func() bool) func(http.Handle
 			// If no credentials are configured yet, pass through so the web UI can
 			// render the setup flow (GET /auth/local/status drives this decision).
 			if isLocalReq && (origin == "" || isLocalhostOrigin(origin)) {
-				if !svc.HasLocalCredentials() {
-					// Not yet configured — let the web UI show the setup screen.
-					next.ServeHTTP(w, r)
-					return
-				}
+				// A valid local session always wins — check it first so that
+				// existing sessions are not revoked by the setup-window guard.
 				sessionID := SessionIDFromCookie(r.Header.Get("Cookie"))
 				if svc.ValidateLocalSession(sessionID) {
 					next.ServeHTTP(w, r)
 					return
 				}
+
+				if !svc.HasLocalCredentials() {
+					// Before any credential is enrolled only auth and web-asset routes
+					// are accessible without a session. Everything else returns 401 so
+					// a malicious local process cannot reach the full API during the
+					// setup window.
+					p := r.URL.Path
+					if strings.HasPrefix(p, "/auth/") ||
+						strings.HasPrefix(p, "/web/") ||
+						p == "/" {
+						next.ServeHTTP(w, r)
+						return
+					}
+					writeError(w, http.StatusUnauthorized,
+						"Setup required. Open Atlas in your browser to configure access.")
+					return
+				}
+
 				writeError(w, http.StatusUnauthorized,
 					"Local authentication required. Open Atlas in your browser to sign in.")
 				return
 			}
 
 			// Tailscale devices bypass Atlas session auth when Tailscale is enabled.
+			// Browser-sourced mutating requests still require a same-host Origin so a
+			// page on another Tailscale node cannot CSRF-POST to Atlas.
 			if tailscaleEnabled != nil && tailscaleEnabled() && isTailscaleRequest(r) {
+				if requiresCSRF(r.Method) {
+					if o := r.Header.Get("Origin"); o != "" && !isSameHostOrigin(o, r.Host) {
+						writeError(w, http.StatusForbidden, "Cross-origin request blocked.")
+						return
+					}
+				}
 				next.ServeHTTP(w, r)
 				return
 			}

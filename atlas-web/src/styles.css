@@ -69,9 +69,8 @@ button, input, select, textarea {
   --blue:         #3b82f6;
   --blue-dim:     rgba(59,130,246,0.12);
 
-  /* Accent — V2 extensibility hook */
+  /* Accent — V2 extensibility hook; overwritten at runtime by applyTheme() */
   --accent:       #6366f1;
-  --accent-dim:   rgba(99,102,241,0.12);
 
   /* Badge colours — fixed palette (Forge, Custom, Dashboard) */
   --badge-forge-bg:         rgba(139,92,246,0.15);
@@ -207,6 +206,10 @@ button, input, select, textarea {
   --theme-shadow-soft:             0 2px 8px rgba(0, 0, 0, 0.04);
   --theme-shadow-pop:              0 18px 38px rgba(0,0,0,0.08);
   --theme-focus-ring:              var(--control-focus-ring);
+  /* Aliases for tokens that were missing and caused fallback to inherit */
+  --theme-text-tertiary:           var(--text-3);
+  --theme-surface-overlay:         var(--surface-2);
+  --fg-muted:                      var(--text-3);
 }
 
 /* ── Light theme ─────────────────────────────────────────────── */
@@ -314,6 +317,10 @@ button, input, select, textarea {
   --theme-shadow-soft:             0 8px 18px rgba(32, 24, 16, 0.05);
   --theme-shadow-pop:              0 18px 38px rgba(32,24,16,0.08);
   --theme-focus-ring:              var(--control-focus-ring);
+  /* Aliases for tokens that were missing and caused fallback to inherit */
+  --theme-text-tertiary:           var(--text-3);
+  --theme-surface-overlay:         var(--surface-2);
+  --fg-muted:                      var(--text-3);
 }
 
 html, body {
@@ -7929,75 +7936,216 @@ select.field-input {
   border-bottom: none;
 }
 
-.communication-setup-modal {
-  width: min(960px, 94vw);
-}
+/* ─── Channel setup overlay ─────────────────────────────── */
 
-.communication-modal-header {
-  align-items: center;
-}
-
-.communication-modal-title-wrap {
+.communication-setup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
   display: flex;
   align-items: center;
-  gap: 14px;
-}
-
-.communication-modal-title-block {
-  display: flex;
-  flex-direction: column;
   justify-content: center;
-  gap: 4px;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg) 48%, transparent);
+  backdrop-filter: blur(16px) saturate(1.6);
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  animation: comm-overlay-in 180ms ease both;
 }
 
-.communication-modal-title {
-  margin: 0;
-  font-size: 24px;
-  line-height: 1.1;
+@keyframes comm-overlay-in {
+  from { opacity: 0 }
+  to   { opacity: 1 }
 }
 
-.communication-modal-header-actions {
+/* The card inherits .card .settings-group — same visual as the channels card */
+.communication-setup-card {
+  width: min(460px, 100%);
+  animation: comm-card-in 220ms cubic-bezier(0.34, 1.4, 0.64, 1) both;
+  overflow: hidden;
+}
+
+@keyframes comm-card-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98) }
+  to   { opacity: 1; transform: translateY(0) scale(1) }
+}
+
+/* Header row — logo + name only */
+.communication-setup-card-header {
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: space-between;
+  padding: 12px 12px 12px 16px;
 }
 
-.communication-modal-body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.82fr);
-  gap: 24px;
-  align-items: start;
+.communication-setup-card-header .communication-platform-summary {
+  gap: 10px;
+  align-items: center;
 }
 
-.communication-modal-body-whatsapp {
-  grid-template-columns: minmax(320px, 0.96fr) minmax(280px, 1.04fr);
-  align-items: stretch;
+.communication-setup-card-header .communication-platform-logo {
+  width: 35px;
+  height: 35px;
+  border-radius: 9px;
+  flex-shrink: 0;
 }
 
-.communication-modal-panel {
-  border: 1px solid var(--border);
+/* X dismiss button */
+.communication-setup-dismiss {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--theme-text-tertiary);
   border-radius: var(--ui-radius);
-  background: color-mix(in srgb, var(--surface-2) 96%, transparent);
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  flex-shrink: 0;
+  transition: background 120ms, color 120ms;
 }
 
-.communication-panel-label {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--text-2);
+.communication-setup-dismiss:hover {
+  background: var(--theme-bg-subtle);
+  color: var(--theme-text-primary);
 }
 
-.communication-setup-guide-column {
+.communication-setup-dismiss svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Credential fields + tips + action — padded body section */
+.communication-setup-card-body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 12px 2px 6px;
-  max-width: 380px;
+  padding: 16px;
+  background: color-mix(in srgb, var(--theme-bg-subtle) 60%, transparent);
+  border-top: 1px solid var(--border);
+}
+
+.communication-setup-connect-btn {
+  justify-content: center;
+}
+
+/* Footer row inside the body — used for error phase actions */
+.communication-setup-card-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+/* Status phases — centered content */
+.communication-setup-card-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 36px 24px 28px;
+  text-align: center;
+}
+
+.communication-setup-status-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--border);
+  border-top-color: var(--text-2);
+  border-radius: 50%;
+  animation: comm-spin 0.8s linear infinite;
+}
+
+@keyframes comm-spin {
+  to { transform: rotate(360deg); }
+}
+
+.communication-setup-status-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.communication-setup-status-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.communication-setup-status-success {
+  background: var(--green-dim);
+  color: var(--green);
+}
+
+.communication-setup-status-error {
+  background: var(--red-dim);
+  color: var(--red);
+}
+
+.communication-setup-status-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.communication-setup-status-body {
+  font-size: 13px;
+  color: var(--text-2);
+  max-width: 280px;
+  line-height: 1.5;
+}
+
+.communication-setup-guide {
+  border-top: 1px solid var(--border);
+  margin: 0 -16px;
+}
+
+.communication-setup-guide > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  font-size: 13px;
+  color: var(--theme-text-secondary);
+  user-select: none;
+}
+
+.communication-setup-guide > summary::-webkit-details-marker {
+  display: none;
+}
+
+.communication-setup-guide > summary::after {
+  content: '+';
+  color: var(--theme-text-tertiary);
+  font-weight: 400;
+}
+
+.communication-setup-guide[open] > summary::after {
+  content: '−';
+}
+
+.communication-setup-guide-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 16px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.communication-setup-docs-link {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--theme-text-tertiary);
+  text-decoration: none;
+}
+
+.communication-setup-docs-link:hover {
+  color: var(--theme-text-secondary);
 }
 
 .communication-bot-label {
@@ -8048,8 +8196,9 @@ select.field-input {
 }
 
 .communication-secret-field span {
-  color: var(--text);
+  font-size: 12px;
   font-weight: 500;
+  color: var(--theme-text-secondary);
 }
 
 .communication-secret-field .input {

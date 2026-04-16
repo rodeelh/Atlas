@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/storage"
 
@@ -23,13 +26,21 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type BridgeRequest struct {
-	Text     string
-	ConvID   string
-	Platform string
+type BridgeAttachment struct {
+	Filename  string
+	MimeType  string
+	Data      string // raw base64, no data-URL prefix
+	LocalPath string // absolute path where the file was saved on disk
 }
 
-type ChatHandler func(ctx context.Context, req BridgeRequest) (string, string, error)
+type BridgeRequest struct {
+	Text        string
+	ConvID      string
+	Platform    string
+	Attachments []BridgeAttachment
+}
+
+type ChatHandler func(ctx context.Context, req BridgeRequest) (string, []string, string, error)
 
 type Bridge struct {
 	db      *storage.DB
@@ -109,6 +120,54 @@ func (b *Bridge) Stop() {
 		b.client = nil
 	}
 	b.connected = false
+}
+
+// Logout fully revokes the WhatsApp session: notifies WhatsApp servers,
+// deletes the device entry from the local auth store, and removes the
+// database file so the next Start() always begins with a fresh QR scan.
+// Use this when the user explicitly disables WhatsApp; use Stop() for
+// graceful shutdown where the session should be preserved.
+func (b *Bridge) Logout() {
+	b.mu.Lock()
+	client := b.client
+	b.client = nil
+	b.connected = false
+	b.qrDataURL = ""
+	b.account = ""
+	b.lastErr = ""
+	b.mu.Unlock()
+
+	if client != nil {
+		// Notify WhatsApp servers and delete the device from the store.
+		// Logout() calls client.Store.Delete() internally on success.
+		if err := client.Logout(context.Background()); err != nil {
+			logstore.Write("warn",
+				fmt.Sprintf("whatsapp: logout: %v — local session will still be cleared", err),
+				map[string]string{"platform": "whatsapp"})
+		}
+		client.Disconnect()
+	}
+
+	// Belt-and-suspenders: remove the DB file so that even if Logout()
+	// failed (e.g. bridge was stopped before Logout was called), the next
+	// Start() finds no stored session and generates a fresh QR.
+	if dbPath := waDBPath(b.storeDSN); dbPath != "" {
+		if err := os.Remove(dbPath); err != nil && !os.IsNotExist(err) {
+			logstore.Write("warn",
+				fmt.Sprintf("whatsapp: remove auth db: %v", err),
+				map[string]string{"platform": "whatsapp"})
+		}
+	}
+}
+
+// waDBPath extracts the filesystem path from a SQLite DSN of the form
+// "file:/path/to/file.db?params".
+func waDBPath(dsn string) string {
+	path := strings.TrimPrefix(dsn, "file:")
+	if idx := strings.Index(path, "?"); idx >= 0 {
+		path = path[:idx]
+	}
+	return strings.TrimSpace(path)
 }
 
 func (b *Bridge) Connected() bool {
@@ -220,8 +279,19 @@ func (b *Bridge) handleMessage(ev *events.Message) {
 	if ev.Info.IsFromMe && b.wasSentByBridge(ev.Info.ID) {
 		return
 	}
+
 	text := extractMessageText(ev.Message)
-	if strings.TrimSpace(text) == "" {
+	attachments := b.extractAttachments(ev)
+
+	// Embed local file paths in the text so conversation history retains a
+	// resolvable reference for follow-up turns (base64 is never stored in SQLite).
+	for _, att := range attachments {
+		if att.LocalPath != "" {
+			text = strings.TrimSpace(text + "\n\n[File saved to: " + att.LocalPath + "]")
+		}
+	}
+
+	if strings.TrimSpace(text) == "" && len(attachments) == 0 {
 		return
 	}
 	logstore.Write("info", fmt.Sprintf("WhatsApp: message received in chat=%s", ev.Info.Chat.String()), map[string]string{"platform": "whatsapp"})
@@ -237,10 +307,11 @@ func (b *Bridge) handleMessage(ev *events.Message) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	reply, newConvID, err := b.handler(ctx, BridgeRequest{
-		Text:     text,
-		ConvID:   convID,
-		Platform: "whatsapp",
+	reply, filePaths, newConvID, err := b.handler(ctx, BridgeRequest{
+		Text:        text,
+		ConvID:      convID,
+		Platform:    "whatsapp",
+		Attachments: attachments,
 	})
 	if err != nil {
 		b.setError(fmt.Sprintf("whatsapp: handler: %v", err))
@@ -268,12 +339,99 @@ func (b *Bridge) handleMessage(ev *events.Message) {
 	if client == nil {
 		return
 	}
-	out := &waProto.Message{
-		Conversation: proto.String(reply),
+
+	// Send any generated files (images, charts, etc.) before the text reply.
+	for _, fp := range filePaths {
+		b.sendImageFile(ev.Info.Chat, fp)
 	}
-	resp, err := client.SendMessage(context.Background(), ev.Info.Chat, out)
+
+	// Send text reply, stripping raw file paths the model may have included.
+	cleanReply := reply
+	for _, fp := range filePaths {
+		cleanReply = strings.ReplaceAll(cleanReply, fp, filepath.Base(fp))
+	}
+	if strings.TrimSpace(cleanReply) != "" {
+		out := &waProto.Message{
+			Conversation: proto.String(cleanReply),
+		}
+		resp, err := client.SendMessage(context.Background(), ev.Info.Chat, out)
+		if err != nil {
+			b.setError(fmt.Sprintf("whatsapp: send: %v", err))
+			return
+		}
+		b.markSentByBridge(resp.ID)
+	}
+}
+
+// sendImageFile uploads a local file to WhatsApp as an image or document.
+func (b *Bridge) sendImageFile(jid types.JID, filePath string) {
+	data, err := os.ReadFile(filePath)
 	if err != nil {
-		b.setError(fmt.Sprintf("whatsapp: send: %v", err))
+		logstore.Write("warn", fmt.Sprintf("whatsapp: read file: %v", err), map[string]string{"platform": "whatsapp"})
+		return
+	}
+
+	mime := "image/jpeg"
+	switch strings.ToLower(filepath.Ext(filePath)) {
+	case ".png":
+		mime = "image/png"
+	case ".gif":
+		mime = "image/gif"
+	case ".webp":
+		mime = "image/webp"
+	case ".pdf":
+		mime = "application/pdf"
+	}
+
+	b.mu.RLock()
+	client := b.client
+	b.mu.RUnlock()
+	if client == nil {
+		return
+	}
+
+	mediaType := whatsmeow.MediaImage
+	if mime == "application/pdf" {
+		mediaType = whatsmeow.MediaDocument
+	}
+
+	uploaded, err := client.Upload(context.Background(), data, mediaType)
+	if err != nil {
+		logstore.Write("warn", fmt.Sprintf("whatsapp: upload media: %v", err), map[string]string{"platform": "whatsapp"})
+		return
+	}
+
+	var out *waProto.Message
+	if mediaType == whatsmeow.MediaImage {
+		out = &waProto.Message{
+			ImageMessage: &waProto.ImageMessage{
+				URL:           proto.String(uploaded.URL),
+				DirectPath:    proto.String(uploaded.DirectPath),
+				MediaKey:      uploaded.MediaKey,
+				Mimetype:      proto.String(mime),
+				FileEncSHA256: uploaded.FileEncSHA256,
+				FileSHA256:    uploaded.FileSHA256,
+				FileLength:    proto.Uint64(uint64(len(data))),
+			},
+		}
+	} else {
+		out = &waProto.Message{
+			DocumentMessage: &waProto.DocumentMessage{
+				URL:           proto.String(uploaded.URL),
+				DirectPath:    proto.String(uploaded.DirectPath),
+				MediaKey:      uploaded.MediaKey,
+				Mimetype:      proto.String(mime),
+				FileEncSHA256: uploaded.FileEncSHA256,
+				FileSHA256:    uploaded.FileSHA256,
+				FileLength:    proto.Uint64(uint64(len(data))),
+				FileName:      proto.String(filepath.Base(filePath)),
+			},
+		}
+	}
+
+	resp, err := client.SendMessage(context.Background(), jid, out)
+	if err != nil {
+		logstore.Write("warn", fmt.Sprintf("whatsapp: send media: %v", err), map[string]string{"platform": "whatsapp"})
 		return
 	}
 	b.markSentByBridge(resp.ID)
@@ -289,7 +447,106 @@ func extractMessageText(msg *waProto.Message) string {
 	if ext := msg.GetExtendedTextMessage(); ext != nil {
 		return ext.GetText()
 	}
+	if img := msg.GetImageMessage(); img != nil {
+		return img.GetCaption()
+	}
+	if vid := msg.GetVideoMessage(); vid != nil {
+		return vid.GetCaption()
+	}
+	if doc := msg.GetDocumentMessage(); doc != nil {
+		return doc.GetCaption()
+	}
 	return ""
+}
+
+// extractAttachments downloads media from an inbound WhatsApp message.
+// Files are saved to disk so follow-up turns can reference them by path.
+// Only images and PDFs are forwarded to the AI model.
+func (b *Bridge) extractAttachments(ev *events.Message) []BridgeAttachment {
+	b.mu.RLock()
+	client := b.client
+	b.mu.RUnlock()
+	if client == nil || ev.Message == nil {
+		return nil
+	}
+	msg := ev.Message
+	msgID := ev.Info.ID
+
+	if img := msg.GetImageMessage(); img != nil {
+		data, err := client.Download(context.Background(), img)
+		if err != nil {
+			logstore.Write("warn", fmt.Sprintf("whatsapp: download image: %v", err), map[string]string{"platform": "whatsapp"})
+			return nil
+		}
+		mime := img.GetMimetype()
+		if mime == "" {
+			mime = "image/jpeg"
+		}
+		filename := "image" + mimeToExt(mime)
+		localPath := b.saveAttachment(msgID, filename, data)
+		return []BridgeAttachment{{
+			Filename:  filename,
+			MimeType:  mime,
+			Data:      base64.StdEncoding.EncodeToString(data),
+			LocalPath: localPath,
+		}}
+	}
+
+	if doc := msg.GetDocumentMessage(); doc != nil {
+		mime := doc.GetMimetype()
+		if !strings.HasPrefix(mime, "image/") && mime != "application/pdf" {
+			return nil
+		}
+		data, err := client.Download(context.Background(), doc)
+		if err != nil {
+			logstore.Write("warn", fmt.Sprintf("whatsapp: download document: %v", err), map[string]string{"platform": "whatsapp"})
+			return nil
+		}
+		filename := doc.GetFileName()
+		if filename == "" {
+			filename = "document" + mimeToExt(mime)
+		}
+		localPath := b.saveAttachment(msgID, filename, data)
+		return []BridgeAttachment{{
+			Filename:  filename,
+			MimeType:  mime,
+			Data:      base64.StdEncoding.EncodeToString(data),
+			LocalPath: localPath,
+		}}
+	}
+
+	return nil
+}
+
+// saveAttachment writes attachment bytes to disk under WhatsAppAttachmentsDir/<msgID>/<filename>.
+// Returns the absolute path, or "" on error.
+func (b *Bridge) saveAttachment(msgID, filename string, data []byte) string {
+	dir := filepath.Join(config.WhatsAppAttachmentsDir(), msgID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return ""
+	}
+	localPath := filepath.Join(dir, filename)
+	if err := os.WriteFile(localPath, data, 0o644); err != nil {
+		return ""
+	}
+	return localPath
+}
+
+func mimeToExt(mime string) string {
+	switch mime {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "application/pdf":
+		return ".pdf"
+	default:
+		return ""
+	}
 }
 
 func (b *Bridge) setError(message string) {

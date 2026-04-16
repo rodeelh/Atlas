@@ -10,6 +10,7 @@ import (
 	"io"
 	"math/rand"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -175,12 +176,23 @@ type Bridge struct {
 
 // New creates a new Telegram bridge.
 func New(token string, db *storage.DB, cfgFn func() config.RuntimeConfigSnapshot, handler ChatHandler) *Bridge {
+	// Force IPv4 to avoid "no route to host" errors on networks where IPv6
+	// routing to Telegram's API servers is unavailable.
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "tcp4", addr)
+		},
+	}
 	return &Bridge{
 		token:   token,
 		db:      db,
 		cfgFn:   cfgFn,
 		handler: handler,
-		client:  &http.Client{Timeout: 45 * time.Second},
+		client:  &http.Client{Timeout: 45 * time.Second, Transport: transport},
 		stopCh:  make(chan struct{}),
 		doneCh:  make(chan struct{}),
 	}
