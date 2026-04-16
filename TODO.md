@@ -1,5 +1,22 @@
 # TODO
 
+## Security
+
+### C-1/C-2 — Keychain write ps-visibility (CGo fix required)
+
+`security add-generic-password -w VALUE` briefly exposes secret values in ps-visible process args. The window is sub-millisecond and restricted to same-user processes on macOS — low practical risk but should be fixed properly.
+
+**Proper fix:** Replace `security` CLI write calls with the native Security.framework API via CGo. The `github.com/keybase/go-keychain` package provides a clean Go wrapper with no CLI subprocess.
+
+**Affected files:**
+- `internal/auth/service.go` — `loadOrCreateSigningKey` (HMAC signing key, written once on first run)
+- `internal/creds/bundle.go` — `writeRaw` (full API credential bundle, written on each key change)
+- `internal/domain/auth.go` — `generateAndStoreRemoteKey` (remote access key, written on rotation)
+
+Read operations (`security find-generic-password -w`) are safe — the secret is output to stdout, not a CLI arg.
+
+---
+
 ## Recurring Maintenance
 
 ### Monthly — Engine LM Currency Check
