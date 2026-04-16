@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	keychain "github.com/keybase/go-keychain"
 
 	"atlas-runtime-go/internal/auth"
 	"atlas-runtime-go/internal/config"
@@ -464,7 +465,8 @@ func readRemoteAccessKey(_ config.RuntimeConfigSnapshot) string {
 }
 
 // generateAndStoreRemoteKey creates a cryptographically random 32-byte (64-char hex)
-// key and stores it in the Keychain. Overwrites any existing key.
+// key and stores it in the Keychain via the native Security.framework API.
+// The key value never appears in process args (fixes C-1).
 func generateAndStoreRemoteKey() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -472,13 +474,25 @@ func generateAndStoreRemoteKey() (string, error) {
 	}
 	key := hex.EncodeToString(b)
 
-	// -U updates the item if it already exists.
-	_, err := execSecurityInDomain("add-generic-password",
-		"-s", "com.projectatlas.remotekey",
-		"-a", "remoteAccessKey",
-		"-w", key,
-		"-U",
-	)
+	const svc, acct = "com.projectatlas.remotekey", "remoteAccessKey"
+	item := keychain.NewItem()
+	item.SetSecClass(keychain.SecClassGenericPassword)
+	item.SetService(svc)
+	item.SetAccount(acct)
+	item.SetData([]byte(key))
+	item.SetSynchronizable(keychain.SynchronizableNo)
+	item.SetAccessible(keychain.AccessibleWhenUnlocked)
+
+	query := keychain.NewItem()
+	query.SetSecClass(keychain.SecClassGenericPassword)
+	query.SetService(svc)
+	query.SetAccount(acct)
+	query.SetMatchLimit(keychain.MatchLimitOne)
+
+	err := keychain.UpdateItem(query, item)
+	if err == keychain.ErrorItemNotFound {
+		err = keychain.AddItem(item)
+	}
 	if err != nil {
 		return "", fmt.Errorf("keychain write: %w", err)
 	}

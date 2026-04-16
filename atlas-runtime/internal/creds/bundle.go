@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	keychain "github.com/keybase/go-keychain"
 )
 
 // Bundle holds all API credentials from the shared Keychain bundle.
@@ -146,24 +148,40 @@ func readRaw() (map[string]interface{}, bool) {
 	return m, true
 }
 
-// writeRaw serialises the map and stores it in the Keychain.
+// writeRaw serialises the map and stores it in the Keychain via the native
+// Security.framework API (no subprocess — value never appears in ps args).
 // Callers must hold mu.
-//
-// Security note (C-2): the bundle JSON is passed via the -w flag and briefly
-// appears in ps-visible process args. The window is sub-millisecond. A full fix
-// requires the native Security.framework API via CGo (future TODO).
 func writeRaw(m map[string]interface{}) error {
 	data, err := json.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("marshal bundle: %w", err)
 	}
-	_, err = execSecurity(
-		"add-generic-password",
-		"-U",
-		"-s", bundleService,
-		"-a", bundleAccount,
-		"-w", string(data),
-	)
+	return writeKeychainItem(bundleService, bundleAccount, data)
+}
+
+// writeKeychainItem upserts a generic-password Keychain item using the native
+// Security.framework API. The value is passed directly to the kernel — it
+// never appears in process args or shell command lines (fixes C-1/C-2).
+func writeKeychainItem(service, account string, value []byte) error {
+	item := keychain.NewItem()
+	item.SetSecClass(keychain.SecClassGenericPassword)
+	item.SetService(service)
+	item.SetAccount(account)
+	item.SetData(value)
+	item.SetSynchronizable(keychain.SynchronizableNo)
+	item.SetAccessible(keychain.AccessibleWhenUnlocked)
+
+	// Try to update an existing item first.
+	query := keychain.NewItem()
+	query.SetSecClass(keychain.SecClassGenericPassword)
+	query.SetService(service)
+	query.SetAccount(account)
+	query.SetMatchLimit(keychain.MatchLimitOne)
+
+	err := keychain.UpdateItem(query, item)
+	if err == keychain.ErrorItemNotFound {
+		return keychain.AddItem(item)
+	}
 	return err
 }
 

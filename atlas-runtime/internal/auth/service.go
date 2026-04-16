@@ -14,10 +14,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
+
+	keychain "github.com/keybase/go-keychain"
 
 	"atlas-runtime-go/internal/storage"
 )
@@ -74,21 +75,23 @@ const (
 	keychainAccount = "signing-key"
 )
 
-// loadOrCreateSigningKey loads the HMAC signing key from the macOS Keychain.
-// If no key exists yet it generates a fresh 32-byte key, persists it, and
-// returns it. Falls back to an ephemeral key (with a warning) if Keychain
-// access fails — this preserves startup availability on headless/CI builds.
-//
-// Security note (C-1): the key value is passed to `security add-generic-password`
-// via the -w flag. On macOS this briefly appears in ps-visible process args.
-// The window is sub-millisecond and only occurs once per install. A full fix
-// requires the native Security.framework API via CGo — tracked as a future TODO.
+// loadOrCreateSigningKey loads the HMAC signing key from the macOS Keychain
+// via the native Security.framework API (no subprocess — key never appears
+// in ps-visible process args). If no key exists yet it generates a fresh
+// 32-byte key, persists it, and returns it. Falls back to an ephemeral key
+// (with a warning) if Keychain access fails, preserving availability on
+// headless/CI builds.
 func loadOrCreateSigningKey() []byte {
-	// Try to load an existing key.
-	out, err := exec.Command("security", "find-generic-password",
-		"-s", keychainService, "-a", keychainAccount, "-w").Output()
-	if err == nil {
-		key, decErr := hex.DecodeString(strings.TrimSpace(string(out)))
+	// Try to load an existing key via native API.
+	query := keychain.NewItem()
+	query.SetSecClass(keychain.SecClassGenericPassword)
+	query.SetService(keychainService)
+	query.SetAccount(keychainAccount)
+	query.SetMatchLimit(keychain.MatchLimitOne)
+	query.SetReturnData(true)
+	results, err := keychain.QueryItem(query)
+	if err == nil && len(results) > 0 {
+		key, decErr := hex.DecodeString(strings.TrimSpace(string(results[0].Data)))
 		if decErr == nil && len(key) == 32 {
 			return key
 		}
@@ -99,13 +102,15 @@ func loadOrCreateSigningKey() []byte {
 	if _, err := rand.Read(key); err != nil {
 		panic(fmt.Sprintf("auth: crypto/rand failure generating signing key: %v", err))
 	}
-	_, storeErr := exec.Command("security", "add-generic-password",
-		"-U",
-		"-s", keychainService,
-		"-a", keychainAccount,
-		"-w", hex.EncodeToString(key),
-	).Output()
-	if storeErr != nil {
+	keyHex := []byte(hex.EncodeToString(key))
+	item := keychain.NewItem()
+	item.SetSecClass(keychain.SecClassGenericPassword)
+	item.SetService(keychainService)
+	item.SetAccount(keychainAccount)
+	item.SetData(keyHex)
+	item.SetSynchronizable(keychain.SynchronizableNo)
+	item.SetAccessible(keychain.AccessibleWhenUnlocked)
+	if addErr := keychain.AddItem(item); addErr != nil {
 		log.Printf("auth: warn: could not persist signing key to keychain — using ephemeral key")
 	}
 	return key
