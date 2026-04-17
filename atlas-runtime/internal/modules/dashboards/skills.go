@@ -120,12 +120,12 @@ func (m *Module) RegisterSkills(reg *skills.Registry) {
 				"skill: {\"action\":\"weather.current\",\"args\":{\"location\":\"Orlando\"}} (action must be a read-only skill; use canonical dot form e.g. weather.current, not weather__current); " +
 				"runtime: {\"endpoint\":\"/status\"} (must be on the runtime allowlist); " +
 				"sql: {\"sql\":\"SELECT ...\"}; " +
-				"chat_analytics: {\"query\":\"conversations_per_day\"} (Atlas conversation stats only — valid queries: conversations_per_day, messages_per_day, top_conversations, recent_conversations, message_counts_by_role, token_usage_per_day, token_usage_by_provider, memory_counts_by_category, most_important_memories, recent_memories); " +
-				"gremlin: {\"gremlinID\":\"<id>\"}; " +
-				"live_compute standalone (AI-generated, no external data): {\"prompt\":\"Write a brief AI news summary with 5 bullet points covering recent developments in artificial intelligence. Return JSON: {\\\"headline\\\":\\\"...\\\",\\\"items\\\":[{\\\"title\\\":\\\"\\\",\\\"summary\\\":\\\"\\\"}]}\",\"outputSchema\":{\"headline\":\"string\",\"items\":\"array\"}}; " +
-				"live_compute with inputs (transform other sources): {\"prompt\":\"summarise the data\",\"inputs\":[\"source1\"],\"outputSchema\":{}}. " +
-				"IMPORTANT: When external APIs are unavailable (TLS errors, no API key), use live_compute standalone — the AI model generates content from its own knowledge. No inputs array needed. " +
-				"On success the result includes resolvedSample (the live data) and shape (suggestedPreset + paths with types + sample values) — use that to pick preset and options.path for dashboard.add_widget instead of guessing.",
+					"chat_analytics: {\"query\":\"conversations_per_day\"} (Atlas conversation stats only — valid queries: conversations_per_day, messages_per_day, top_conversations, recent_conversations, message_counts_by_role, token_usage_per_day, token_usage_by_provider, memory_counts_by_category, most_important_memories, recent_memories); " +
+					"gremlin: {\"gremlinID\":\"<id>\"}; " +
+					"live_compute standalone (static synthesis only): {\"prompt\":\"Summarise this fixed glossary into a short markdown note\",\"outputSchema\":{\"text\":\"string\"}}; " +
+					"live_compute with inputs (transform other sources): {\"prompt\":\"Summarise the fetched feed into a short briefing\",\"inputs\":[\"source1\"],\"outputSchema\":{}}. " +
+					"IMPORTANT: Do not use zero-input live_compute for freshness-sensitive prompts like latest/current/today/news/weather. First add a real source (runtime/skill/sql/etc.), then summarise it via live_compute inputs. " +
+					"On success the result includes resolvedSample (the live data) and shape (suggestedPreset + paths with types + sample values) — use that to pick preset and options.path for dashboard.add_widget instead of guessing.",
 			Properties: map[string]skills.ToolParam{
 				"id":              {Description: "Draft dashboard ID.", Type: "string"},
 				"name":            {Description: "Source name (unique within the dashboard).", Type: "string"},
@@ -175,7 +175,7 @@ func (m *Module) RegisterSkills(reg *skills.Registry) {
 				"OPTIONS per preset: " +
 				"  metric: {path:\"fieldName\", label:\"Display label\", format:\"integer|currency|percent|compact\"}; " +
 				"  table: {path:\"arrayField\", columns:[\"col1\",\"col2\"]}; " +
-				"  line_chart/bar_chart: {path:\"arrayField\", x:\"dateField\", y:\"valueField\"}; " +
+					"  line_chart/bar_chart: {seriesPath:\"arrayField\", x:\"dateField\", y:\"valueField\"} (path is accepted as an alias for seriesPath); " +
 				"  list: {itemsPath:\"arrayField\", labelKey:\"title\", subKey:\"subtitle\"}; " +
 				"  markdown: {path:\"textField\"} or omit path to render full source as JSON. " +
 				"BINDINGS: JSON array [{source:\"sourceName\"}] — one binding per widget, referencing a source added via dashboard.add_data_source.",
@@ -249,7 +249,7 @@ func (m *Module) RegisterSkills(reg *skills.Registry) {
 	reg.RegisterExternal(skills.SkillEntry{
 		Def: skills.ToolDef{
 			Name:        "dashboard.commit",
-			Description: "Pack the layout and flip a draft dashboard to live. Fails if widgets have invalid code or bindings.",
+				Description: "Pack the layout and flip a draft dashboard to live. Fails if widgets have invalid code/bindings, if sources fail validation, or if sampled source shape does not match widget schema.",
 			Properties: map[string]skills.ToolParam{
 				"id": {Description: "Draft dashboard ID.", Type: "string"},
 			},
@@ -593,12 +593,15 @@ func (m *Module) skillCommit(ctx context.Context, raw json.RawMessage) (skills.T
 		}
 	}
 	// Verify every binding points at a known source.
-	for _, w := range d.Widgets {
-		if err := validateBindings(d, w.Bindings); err != nil {
-			return skills.ErrResult("dashboard.commit", fmt.Sprintf("widget %s bindings", w.ID), false, err), nil
+		for _, w := range d.Widgets {
+			if err := validateBindings(d, w.Bindings); err != nil {
+				return skills.ErrResult("dashboard.commit", fmt.Sprintf("widget %s bindings", w.ID), false, err), nil
+			}
 		}
-	}
-	columns := d.Layout.Columns
+		if err := m.validateCommitReadiness(ctx, d); err != nil {
+			return skills.ErrResult("dashboard.commit", "validation", false, err), nil
+		}
+		columns := d.Layout.Columns
 	if columns <= 0 {
 		columns = 12
 		d.Layout.Columns = columns

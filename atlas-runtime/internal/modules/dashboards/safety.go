@@ -165,15 +165,18 @@ func validateLiveCompute(cfg map[string]any) error {
 	if !ok {
 		return errors.New("live_compute requires prompt")
 	}
-	if prompt, ok := promptRaw.(string); !ok || strings.TrimSpace(prompt) == "" {
+	prompt, ok := promptRaw.(string)
+	if !ok || strings.TrimSpace(prompt) == "" {
 		return errors.New("live_compute prompt must be a non-empty string")
 	}
+	inputCount := 0
 	// inputs is optional — omit entirely for standalone AI-generated sources.
 	if inputsRaw, exists := cfg["inputs"]; exists {
 		inputs, ok := inputsRaw.([]any)
 		if !ok {
 			return errors.New("live_compute inputs must be an array of source names (or omit for standalone mode)")
 		}
+		inputCount = len(inputs)
 		for i, entry := range inputs {
 			name, ok := entry.(string)
 			if !ok || strings.TrimSpace(name) == "" {
@@ -181,10 +184,34 @@ func validateLiveCompute(cfg map[string]any) error {
 			}
 		}
 	}
+	if inputCount == 0 && promptNeedsFreshInputs(prompt) {
+		return errors.New("live_compute prompts about latest/current/news data must declare inputs from a real source first")
+	}
 	if _, ok := cfg["outputSchema"]; !ok {
 		return errors.New("live_compute requires outputSchema")
 	}
 	return nil
+}
+
+func promptNeedsFreshInputs(prompt string) bool {
+	lower := strings.ToLower(prompt)
+	keywords := []string{
+		"latest",
+		"current",
+		"today",
+		"recent",
+		"news",
+		"breaking",
+		"now",
+		"this week",
+		"this month",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // ── generated TSX validator ──────────────────────────────────────────────────

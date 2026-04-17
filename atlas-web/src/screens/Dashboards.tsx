@@ -24,6 +24,19 @@ import { EmptyState } from '../components/EmptyState'
 import { WidgetRenderer } from './DashboardWidgets'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 
+const SOURCE_TIMEOUT_MS = 6000
+
+type DashboardClient = Pick<typeof api,
+  'dashboard' |
+  'dashboards' |
+  'deleteDashboard' |
+  'refreshDashboard' |
+  'resolveDashboardWidget' |
+  'streamDashboardEvents'
+>
+
+type SourceHealth = 'loading' | 'ok' | 'error' | 'timeout'
+
 const DashboardIcon = () => (
   <svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <rect x="5" y="5" width="11" height="11" rx="1.5" />
@@ -42,15 +55,17 @@ function formatDate(iso?: string): string {
 // ── widget cell ───────────────────────────────────────────────────────────────
 
 interface WidgetCellProps {
+  client: DashboardClient
   dashboardID: string
   widget: DashboardWidget
   /** Latest data for the source this widget is bound to (undefined if unbound). */
   sourceData: unknown
   sourceError?: string
   sourceAt?: string
+  sourceHealth?: SourceHealth
 }
 
-function WidgetCell({ dashboardID, widget, sourceData, sourceError, sourceAt }: WidgetCellProps): JSX.Element {
+function WidgetCell({ client, dashboardID, widget, sourceData, sourceError, sourceAt, sourceHealth }: WidgetCellProps): JSX.Element {
   // If the widget has no binding we fall back to a one-shot resolve when
   // the cell mounts — this is the path for unbound widgets (e.g. static
   // markdown with inline `text` in options).
@@ -61,15 +76,17 @@ function WidgetCell({ dashboardID, widget, sourceData, sourceError, sourceAt }: 
   useEffect(() => {
     if (hasBinding) return
     let cancelled = false
-    api.resolveDashboardWidget(dashboardID, widget.id)
+    client.resolveDashboardWidget(dashboardID, widget.id)
       .then(r => { if (!cancelled) { setFallback(r); if (!r.success && r.error) setFallbackErr(r.error) } })
       .catch(e => { if (!cancelled) setFallbackErr(e instanceof Error ? e.message : 'Failed to load widget data.') })
     return () => { cancelled = true }
-  }, [dashboardID, widget.id, hasBinding])
+  }, [client, dashboardID, widget.id, hasBinding])
 
   const data  = hasBinding ? sourceData  : fallback?.data
   const error = hasBinding ? sourceError : (fallbackErr ?? (fallback && !fallback.success ? fallback.error : undefined))
   const at    = hasBinding ? sourceAt    : fallback?.resolvedAt
+  const showLoading = hasBinding && !error && data === undefined && sourceHealth === 'loading'
+  const showTimeout = hasBinding && !error && data === undefined && sourceHealth === 'timeout'
 
   const x = Math.max(0, widget.gridX ?? 0)
   const y = Math.max(0, widget.gridY ?? 0)
@@ -91,6 +108,15 @@ function WidgetCell({ dashboardID, widget, sourceData, sourceError, sourceAt }: 
   // (a 2-row table shouldn't be as tall as a 10-row table).
   const preset = widget.code?.preset || ''
   const isChart = preset === 'line_chart' || preset === 'bar_chart'
+  const healthLabel = sourceHealth === 'loading'
+    ? 'Loading'
+    : sourceHealth === 'ok'
+      ? 'OK'
+      : sourceHealth === 'error'
+        ? 'Failed'
+        : sourceHealth === 'timeout'
+          ? 'Slow'
+          : ''
 
   return (
     <div class={`dw-cell ${sizeClass}`} style={style}>
@@ -101,15 +127,22 @@ function WidgetCell({ dashboardID, widget, sourceData, sourceError, sourceAt }: 
               {widget.title && <h4>{widget.title}</h4>}
               {widget.description && <span class="dashboard-widget-sub">{widget.description}</span>}
             </div>
-            {at && (
-              <span class="dashboard-widget-timestamp" title={`Updated ${formatDate(at)}`}>
-                {new Date(at).toLocaleTimeString()}
-              </span>
-            )}
+            <div class="dashboard-widget-meta">
+              {healthLabel && <span class={`dashboard-widget-health ${sourceHealth}`}>{healthLabel}</span>}
+              {at && (
+                <span class="dashboard-widget-timestamp" title={`Updated ${formatDate(at)}`}>
+                  {new Date(at).toLocaleTimeString()}
+                </span>
+              )}
+            </div>
           </div>
         )}
         <div class="dashboard-widget-content">
-          <WidgetRenderer widget={widget} data={data} error={error} />
+          {showLoading
+            ? <div class="dashboard-widget-body dashboard-empty">Loading source…</div>
+            : showTimeout
+              ? <div class="dashboard-widget-body dashboard-empty dashboard-empty-warning">Source is taking longer than expected.</div>
+              : <WidgetRenderer widget={widget} data={data} error={error} />}
         </div>
       </div>
     </div>
@@ -118,10 +151,66 @@ function WidgetCell({ dashboardID, widget, sourceData, sourceError, sourceAt }: 
 
 // ── detail view ───────────────────────────────────────────────────────────────
 
-interface SourceEntry { data?: unknown; error?: string; at?: string }
+interface SourceEntry {
+  data?: unknown
+  error?: string
+  at?: string
+  health: SourceHealth
+  requestedAt?: number
+}
 
-function DashboardDetail(
-  { id, onBack, onDelete }: { id: string; onBack: () => void; onDelete: (id: string) => void }
+function uniqueBoundSources(widgets: DashboardWidget[]): string[] {
+  const seen = new Set<string>()
+  for (const widget of widgets) {
+    const name = widget.bindings?.[0]?.source
+    if (name) seen.add(name)
+  }
+  return [...seen]
+}
+
+function seedSourceEntries(names: string[], previous: Record<string, SourceEntry>): Record<string, SourceEntry> {
+  const requestedAt = Date.now()
+  const next: Record<string, SourceEntry> = {}
+  for (const name of names) {
+    const existing = previous[name]
+    next[name] = existing
+      ? existing
+      : { health: 'loading', requestedAt }
+  }
+  return next
+}
+
+function markSourcesLoading(previous: Record<string, SourceEntry>, names: string[]): Record<string, SourceEntry> {
+  const requestedAt = Date.now()
+  const next = { ...previous }
+  for (const name of names) {
+    const existing = previous[name]
+    next[name] = {
+      ...existing,
+      health: 'loading',
+      requestedAt,
+    }
+  }
+  return next
+}
+
+function markTimedOut(previous: Record<string, SourceEntry>): Record<string, SourceEntry> {
+  const now = Date.now()
+  let changed = false
+  const next: Record<string, SourceEntry> = {}
+  for (const [name, entry] of Object.entries(previous)) {
+    if (entry.health === 'loading' && entry.requestedAt && now-entry.requestedAt >= SOURCE_TIMEOUT_MS) {
+      next[name] = { ...entry, health: 'timeout' }
+      changed = true
+    } else {
+      next[name] = entry
+    }
+  }
+  return changed ? next : previous
+}
+
+export function DashboardDetail(
+  { id, onBack, onDelete, client = api }: { id: string; onBack: () => void; onDelete: (id: string) => void; client?: DashboardClient }
 ): JSX.Element {
   const [def, setDef]           = useState<DashboardDefinition | null>(null)
   const [loading, setLoading]   = useState(true)
@@ -136,25 +225,39 @@ function DashboardDetail(
   useEffect(() => {
     let cancelled = false
     setLoading(true); setError(null)
-    api.dashboard(id)
+    client.dashboard(id)
       .then(d => { if (!cancelled) setDef(d) })
       .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load dashboard.') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [id])
+  }, [client, id])
+
+  const widgets = def?.widgets ?? []
+  const boundSourceNames = useMemo(() => uniqueBoundSources(widgets), [widgets])
+
+  useEffect(() => {
+    setSources(prev => seedSourceEntries(boundSourceNames, prev))
+  }, [boundSourceNames])
 
   // Subscribe to the per-dashboard event stream. The coordinator synchronously
   // replays the latest cached event for every source when we subscribe, so the
   // grid paints on the first tick without a round-trip.
   useEffect(() => {
-    const es = api.streamDashboardEvents(id)
+    const es = client.streamDashboardEvents(id)
     esRef.current = es
     es.onmessage = (ev: MessageEvent<string>) => {
       try {
         const payload = JSON.parse(ev.data) as DashboardRefreshEvent
         setSources(prev => ({
           ...prev,
-          [payload.source]: { data: payload.data, error: payload.error || undefined, at: payload.at },
+          [payload.source]: {
+            ...(prev[payload.source] ?? { requestedAt: Date.now() }),
+            data: payload.data,
+            error: payload.error || undefined,
+            at: payload.at,
+            health: payload.error ? 'error' : 'ok',
+            requestedAt: undefined,
+          },
         }))
       } catch { /* ignore malformed frames */ }
     }
@@ -163,11 +266,19 @@ function DashboardDetail(
       es.close()
       esRef.current = null
     }
-  }, [id])
+  }, [client, id])
+
+  useEffect(() => {
+    const handle = window.setInterval(() => {
+      setSources(prev => markTimedOut(prev))
+    }, 250)
+    return () => window.clearInterval(handle)
+  }, [])
 
   async function handleRefresh() {
     setRefreshing(true)
-    try { await api.refreshDashboard(id) }
+    setSources(prev => markSourcesLoading(prev, boundSourceNames))
+    try { await client.refreshDashboard(id) }
     catch (e) { setError(e instanceof Error ? e.message : 'Refresh failed.') }
     finally { setRefreshing(false) }
   }
@@ -176,14 +287,12 @@ function DashboardDetail(
     if (!def) return
     setPendingDelete(false)
     try {
-      await api.deleteDashboard(def.id)
+      await client.deleteDashboard(def.id)
       onDelete(def.id)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete dashboard.')
     }
   }
-
-  const widgets = def?.widgets ?? []
 
   return (
     <div class="screen">
@@ -220,11 +329,13 @@ function DashboardDetail(
             return (
               <WidgetCell
                 key={w.id}
+                client={client}
                 dashboardID={id}
                 widget={w}
                 sourceData={src?.data}
                 sourceError={src?.error}
                 sourceAt={src?.at}
+                sourceHealth={src?.health}
               />
             )
           })}
@@ -246,7 +357,7 @@ function DashboardDetail(
 
 // ── list view ─────────────────────────────────────────────────────────────────
 
-export function Dashboards(): JSX.Element {
+export function Dashboards({ client = api }: { client?: DashboardClient } = {}): JSX.Element {
   const [items, setItems]     = useState<DashboardSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
@@ -256,7 +367,7 @@ export function Dashboards(): JSX.Element {
   async function load() {
     setLoading(true); setError(null)
     try {
-      const list = await api.dashboards()
+      const list = await client.dashboards()
       setItems(list)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load dashboards.')
@@ -265,7 +376,7 @@ export function Dashboards(): JSX.Element {
     }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [client])
 
   function handleDeleted(id: string) {
     setItems(prev => prev.filter(i => i.id !== id))
@@ -277,7 +388,7 @@ export function Dashboards(): JSX.Element {
     [items, filter])
 
   if (selectedID) {
-    return <DashboardDetail id={selectedID} onBack={() => setSelectedID(null)} onDelete={handleDeleted} />
+    return <DashboardDetail id={selectedID} onBack={() => setSelectedID(null)} onDelete={handleDeleted} client={client} />
   }
 
   const draftCount = items.filter(i => i.status === 'draft').length

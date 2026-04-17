@@ -157,21 +157,27 @@ func (c *Coordinator) ForceRefresh(ctx context.Context, dashboardID string) []Re
 	if err != nil {
 		return nil
 	}
-	out := make([]RefreshEvent, 0, len(d.Sources))
-	for _, src := range d.Sources {
-		data, rerr := c.resolve(ctx, dashboardID, src.Name)
-		c.Push(dashboardID, src.Name, data, rerr)
-		ev := RefreshEvent{
-			DashboardID: dashboardID,
-			Source:      src.Name,
-			Data:        data,
-			At:          time.Now().UTC().Format(time.RFC3339),
-		}
-		if rerr != nil {
-			ev.Error = rerr.Error()
-		}
-		out = append(out, ev)
+	out := make([]RefreshEvent, len(d.Sources))
+	var wg sync.WaitGroup
+	for i, src := range d.Sources {
+		wg.Add(1)
+		go func(idx int, source DataSource) {
+			defer wg.Done()
+			data, rerr := c.resolve(ctx, dashboardID, source.Name)
+			c.Push(dashboardID, source.Name, data, rerr)
+			ev := RefreshEvent{
+				DashboardID: dashboardID,
+				Source:      source.Name,
+				Data:        data,
+				At:          time.Now().UTC().Format(time.RFC3339),
+			}
+			if rerr != nil {
+				ev.Error = rerr.Error()
+			}
+			out[idx] = ev
+		}(i, src)
 	}
+	wg.Wait()
 	return out
 }
 

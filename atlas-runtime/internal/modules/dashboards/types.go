@@ -26,7 +26,7 @@ const (
 	SizeQuarter = "quarter" // 3 columns wide
 	SizeThird   = "third"   // 4 columns wide
 	SizeHalf    = "half"    // 6 columns wide
-	SizeTall    = "tall"    // 6 wide × 2 rows
+	SizeTall    = "tall"    // 6 wide × 4 rows
 	SizeFull    = "full"    // 12 columns wide
 )
 

@@ -87,7 +87,7 @@ function asString(v: unknown): string {
 interface SeriesPoint { x: string; y: number }
 
 function extractSeries(opts: Record<string, unknown>, data: unknown): SeriesPoint[] {
-  const seriesPath = (opts.seriesPath as string) || ''
+  const seriesPath = (opts.seriesPath as string) || (opts.path as string) || ''
   const xKey = (opts.x as string) || 'date'
   const yKey = (opts.y as string) || 'value'
   const raw = seriesPath ? valueAtPath(data, seriesPath) : data

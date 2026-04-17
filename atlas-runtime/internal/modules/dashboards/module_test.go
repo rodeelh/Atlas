@@ -10,7 +10,9 @@ import (
 func newTestModule(t *testing.T) *Module {
 	t.Helper()
 	dir := t.TempDir()
-	return New(dir, "")
+	m := New(dir, "")
+	m.SetRuntimeFetcher(&stubFetcher{body: []byte(`{"count":1}`), status: 200})
+	return m
 }
 
 func TestCreateDraftThenCommitFlow(t *testing.T) {

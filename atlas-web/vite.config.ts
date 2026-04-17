@@ -22,6 +22,9 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(version),
   },
+  test: {
+    exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
+  },
   base: '/web/',
   build: {
     // Output to dist/ — served by the Go binary via -web-dir flag.

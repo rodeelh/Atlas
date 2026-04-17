@@ -41,7 +41,7 @@ func assertWithinColumns(t *testing.T, widgets []Widget, columns int) {
 func TestPackSingleFullWidget(t *testing.T) {
 	in := []Widget{{ID: "a", Size: SizeFull}}
 	out := packGrid(in, 12)
-	if out[0].GridX != 0 || out[0].GridY != 0 || out[0].GridW != 12 || out[0].GridH != 1 {
+	if out[0].GridX != 0 || out[0].GridY != 0 || out[0].GridW != 12 || out[0].GridH != 2 {
 		t.Fatalf("unexpected geometry: %+v", out[0])
 	}
 }
@@ -77,14 +77,14 @@ func TestPackMixedFlowsToSecondRow(t *testing.T) {
 	if out[0].GridY != 0 || out[1].GridY != 0 {
 		t.Fatalf("first two halves should be on row 0: %+v", out)
 	}
-	if out[2].GridY != 1 || out[3].GridY != 1 {
-		t.Fatalf("next two should flow to row 1: %+v", out)
+		if out[2].GridY != 2 || out[3].GridY != 2 {
+			t.Fatalf("next two should flow to row 2 after the half-height cards: %+v", out)
+		}
 	}
-}
 
-func TestPackTallWidgetOccupiesTwoRows(t *testing.T) {
+func TestPackTallWidgetOccupiesFourRows(t *testing.T) {
 	in := []Widget{
-		{ID: "tall", Size: SizeTall},    // 6 wide × 2 rows at row 0 col 0
+		{ID: "tall", Size: SizeTall},    // 6 wide × 4 rows at row 0 col 0
 		{ID: "q1", Size: SizeQuarter},   // row 0 col 6
 		{ID: "q2", Size: SizeQuarter},   // row 0 col 9
 		{ID: "q3", Size: SizeQuarter},   // row 1 col 6
@@ -99,8 +99,8 @@ func TestPackTallWidgetOccupiesTwoRows(t *testing.T) {
 			tall = w
 		}
 	}
-	if tall.GridW != 6 || tall.GridH != 2 {
-		t.Fatalf("tall widget should be 6x2, got %dx%d", tall.GridW, tall.GridH)
+	if tall.GridW != 6 || tall.GridH != 4 {
+		t.Fatalf("tall widget should be 6x4, got %dx%d", tall.GridW, tall.GridH)
 	}
 }
 
@@ -165,8 +165,8 @@ func TestPackFullIsTopOfItsRow(t *testing.T) {
 			wideRow = w.GridY
 		}
 	}
-	if wideRow != 1 {
-		t.Fatalf("wide widget should be on row 1, got %d", wideRow)
+	if wideRow != 2 {
+		t.Fatalf("wide widget should be on row 2 after the first half-height row, got %d", wideRow)
 	}
 }
 
