@@ -1,6 +1,6 @@
 # Atlas Agent Boundary
 
-**Last updated: 2026-04-12**
+**Last updated: 2026-04-17**
 
 This document defines the architectural boundary for the Atlas `Agent` subsystem.
 
@@ -32,14 +32,30 @@ We do **not** want to fragment it across unrelated packages just to make file bo
 
 ## Current Code Mapping
 
-Today the Agent boundary is primarily represented by:
-- `atlas-runtime/internal/chat/service.go`
-- `atlas-runtime/internal/chat/tool_router.go`
-- `atlas-runtime/internal/chat/keychain.go`
-- `atlas-runtime/internal/chat/broadcaster.go`
-- `atlas-runtime/internal/domain/chat.go`
+The Agent boundary is represented by:
 
-The package name may still be `chat`, but architecturally this subsystem should be understood as **Agent**.
+**Turn orchestration (`internal/chat/`)**
+- `pipeline.go` — `Pipeline` struct: ordered turn stages (buildInput → selectTools → execute → postTurn)
+- `service.go` — `HandleMessage`, `RegenerateMind`, `ResolveProvider`, `Resume`; `selectTurnTools`
+- `hooks.go` — `HookRegistry`: post-turn hook adapters for memory, MIND reflection, skills learning
+- `selector.go` — `NewSelector` factory; `scopedSelector` for policy-filtered tool sets
+- `selector_lazy.go` / `selector_heuristic.go` / `selector_llm.go` — mode-specific `ToolSelector` implementations
+- `tool_router.go` — `selectToolsWithLLM` — background LLM call + capability-group manifest
+- `keychain.go` — `resolveProvider` — config + Keychain → ProviderConfig
+- `broadcaster.go` — SSE fan-out to connected clients
+
+**Agent loop + adapters (`internal/agent/`)**
+- `loop.go` — `Loop.Run`: streaming FSM (drain → tool-exec → upgrade → next-turn)
+- `adapter.go` — `ProviderAdapter` interface, `TurnEvent` / `TurnRequest` types
+- `adapter_factory.go` — `NewAdapter(ProviderConfig)`
+- `adapter_openai.go` / `adapter_anthropic.go` / `adapter_oaicompat.go` / `adapter_mlx.go` / `adapter_local.go` — per-provider stream adapters
+- `selector.go` — `ToolSelector` interface + `IdentitySelector` zero-value default
+- `stream/` — stdlib-only SSE primitives (`Scanner`, `Assembler`, `ParseOAICompatStream`)
+
+**HTTP surface**
+- `internal/domain/chat.go` — `/message`, `/conversations`, `/memories`, `/mind`, `/skills-memory`
+
+The package names are still `chat` and `agent`, but architecturally this whole assembly should be understood as the **Agent** subsystem.
 
 ---
 

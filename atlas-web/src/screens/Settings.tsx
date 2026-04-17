@@ -472,20 +472,17 @@ export function Settings() {
           <div class="settings-label-col" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <AtlasIcon size={36} />
             <div>
-              <div class="settings-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: "'Geist Mono', ui-monospace, monospace", fontWeight: 500 }}>
+              <div class="settings-label" style={{ fontFamily: "'Geist Mono', ui-monospace, monospace", fontWeight: 500 }}>
                 atlas
-                {updateResult.kind === 'available' && (
-                  <span class="badge badge-yellow" style={{ fontSize: 11, padding: '1px 6px' }}>Update</span>
-                )}
               </div>
               <div class="settings-sublabel">
                 {updateResult.kind === 'available'
-                  ? `v${__APP_VERSION__} — Update available: v${updateResult.latest}`
+                  ? `v${__APP_VERSION__} — v${updateResult.latest} available`
                   : updateResult.kind === 'current'
-                  ? `v${__APP_VERSION__} — Up to date.`
+                  ? `v${__APP_VERSION__} — Up to date`
                   : updateResult.kind === 'error'
                   ? `v${__APP_VERSION__} — Check failed: ${updateResult.message}`
-                  : `v${__APP_VERSION__} — Check for the latest release on GitHub.`}
+                  : `v${__APP_VERSION__}`}
               </div>
             </div>
           </div>

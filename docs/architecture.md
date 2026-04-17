@@ -1,6 +1,6 @@
 # Atlas Architecture
 
-**Last updated: 2026-04-14** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md) · Internal modules: [`docs/internal-modules.md`](internal-modules.md) · Agent boundary: [`docs/agent-boundary.md`](agent-boundary.md) · Migration verification: [`docs/migration-verification.md`](migration-verification.md) · Manual smoke: [`docs/manual-smoke-checklist.md`](manual-smoke-checklist.md) · Teams spec: [`docs/teams-v1-implementation-spec.md`](teams-v1-implementation-spec.md)
+**Last updated: 2026-04-17** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md) · Internal modules: [`docs/internal-modules.md`](internal-modules.md) · Agent boundary: [`docs/agent-boundary.md`](agent-boundary.md) · Migration verification: [`docs/migration-verification.md`](migration-verification.md) · Manual smoke: [`docs/manual-smoke-checklist.md`](manual-smoke-checklist.md) · Teams spec: [`docs/teams-v1-implementation-spec.md`](teams-v1-implementation-spec.md)
 
 Atlas is a local AI operator. A Go binary runs as a launchd daemon (`Atlas`), serves a web UI, and connects to any supported AI provider. No Swift required.
 
@@ -22,12 +22,21 @@ Atlas/
 │   ├── Makefile                        # build, install, daemon-*, daemon-logs
 │   └── internal/
 │       ├── agent/
-│       │   ├── loop.go                 # Multi-turn agent execution loop
-│       │   └── provider.go             # AI provider dispatch — all providers in one file:
-│       │                               #   OpenAI → Responses API (/v1/responses)
-│       │                               #   Anthropic → Messages API (/v1/messages) + prompt caching
-│       │                               #   Gemini / OpenRouter → OAI-compat (/chat/completions)
-│       │                               #   LM Studio / Ollama / Atlas Engine / Atlas MLX → OAI-compat (local)
+│       │   ├── loop.go                 # Multi-turn agent execution loop (FSM: stream → tool-exec → upgrade → next-turn)
+│       │   ├── provider.go             # Non-streaming helpers, message conversion, shared HTTP plumbing
+│       │   ├── adapter.go              # ProviderAdapter interface + TurnEvent/TurnRequest types + parseProviderErrorBody
+│       │   ├── adapter_factory.go      # NewAdapter(ProviderConfig) → concrete adapter
+│       │   ├── adapter_oaicompat.go    # OAI-compat adapter (Gemini, OpenRouter, LMStudio, Ollama, AtlasEngine)
+│       │   ├── adapter_openai.go       # OpenAI Responses API adapter (stream via SSE)
+│       │   ├── adapter_anthropic.go    # Anthropic Messages API adapter (stream via SSE + prompt caching)
+│       │   ├── adapter_mlx.go          # Atlas MLX adapter (stream → non-stream fallback, 503 retry loop)
+│       │   ├── adapter_local.go        # Local non-streaming adapter (LMStudio/Ollama coalesce path)
+│       │   ├── selector.go             # ToolSelector interface + IdentitySelector (zero-value default)
+│       │   └── stream/                 # stdlib-only SSE parsing primitives (no agent imports)
+│       │       ├── types.go            # Chunk, ToolDelta, StreamUsage
+│       │       ├── sse.go              # Scanner — bufio wrapper, strips data: prefix, stops at [DONE]
+│       │       ├── tool_assembly.go    # Assembler — accumulates ToolDelta fragments by index
+│       │       └── oaicompat.go        # ParseOAICompatStream(ctx, r) <-chan Chunk
 │       ├── auth/
 │       │   ├── service.go              # HMAC-SHA256 session tokens, bootstrap, middleware
 │       │   └── ratelimit.go            # Per-IP rate limiting
@@ -36,7 +45,14 @@ Atlas/
 │       │   ├── loginwall.go            # Login wall heuristics (URL, title, DOM)
 │       │   └── twofa.go                # 2FA challenge detection
 │       ├── chat/
-│       │   ├── service.go              # HandleMessage, RegenerateMind, ResolveProvider, Resume
+│       │   ├── service.go              # HandleMessage, RegenerateMind, ResolveProvider, Resume; selectTurnTools
+│       │   ├── pipeline.go             # Pipeline — ordered turn stages: buildInput→selectTools→execute→postTurn
+│       │   ├── hooks.go                # HookRegistry — post-turn TurnHook adapter (memory, mind, skills learning)
+│       │   ├── selector.go             # NewSelector factory + scopedSelector (policy-filtered "off" mode)
+│       │   ├── selector_lazy.go        # lazySelector — smart/lazy mode: LLM router → stage-1 short → stage-2 broad
+│       │   ├── selector_llm.go         # llmSelector — full LLM routing for explicit "llm" mode
+│       │   ├── selector_heuristic.go   # heuristicSelector — signal-scoring SelectiveToolDefs
+│       │   ├── tool_router.go          # selectToolsWithLLM — background provider call + capability-group manifest
 │       │   ├── broadcaster.go          # SSE fan-out to connected clients
 │       │   ├── keychain.go             # resolveProvider — config + Keychain → ProviderConfig
 │       │   ├── thought_surfacing.go    # [T-NN] marker detection → pending surfacing records
@@ -223,61 +239,119 @@ Atlas/
 
 ## 3. Agent Loop
 
-One message turn in `internal/agent/loop.go`:
+### 3.1 Turn pipeline (`internal/chat/pipeline.go`)
+
+`HandleMessage` runs a `Pipeline` — an ordered sequence of named stages. Each stage reads from and writes to a `TurnState` struct:
 
 ```
-Incoming message
+HandleMessage(req)
     │
     ▼
-Build messages array (system prompt + history + new user message)
+Pipeline.Run(ctx, req)
+    ├── buildInput     — build OAI message array (system + history + user); resolve CapabilityPlan
+    ├── selectTools    — selectTurnTools: resolve mode + NewSelector → sel.Initial() → SelectedTools
+    ├── execute        — agent.Loop.Run (streaming FSM, see §3.2)
+    └── postTurn       — HookRegistry: memory extraction, MIND reflection, skills learning (non-blocking)
     │
     ▼
-AI provider call (streaming or non-streaming)
-    │
-    ├── text delta  → emit SSE token → accumulate
-    │
-    └── tool_calls  → look up each in skills.Registry
-                         │
-                         ├── needs approval? → defer ALL, emit approvalRequired SSE
-                         │                     resolved via POST /approvals/:id/approve
-                         │
-                         └── auto-approve?  → three-pass parallel execution:
-                                                │
-                                                ├── Pass 1 (concurrent) — stateless tools
-                                                │     goroutine per call, WaitGroup
-                                                │     results[i] written at original index
-                                                │
-                                                ├── Pass 2 (serial) — stateful tools
-                                                │     browser.* share go-rod Chrome session
-                                                │     run in original call order
-                                                │
-                                                └── Pass 3 (ordered assembly)
-                                                      emit SSE events + append tool messages
-                                                      strictly in original index order
-                                                      (OpenAI protocol requirement)
-    │
-    ▼
-assistant message assembled → store in SQLite → emit done SSE
+Pipeline.BuildResponse → MessageResponse (text, tool summaries, usage, etc.)
 ```
 
-**Timeouts:** 30s for standard skills, 90s for `browser.*`.
-**Concurrency:** stateless tools (weather, web, finance, fs, etc.) run in parallel per turn,
-cutting multi-tool latency by 40–70%. `browser.*` are serialised via `IsStateful()`.
-**Max iterations:** configurable per provider (default 10).
-**Vision:** screenshots from `browser.screenshot` are routed through vision content blocks —
-OpenAI gets `image_url`, Anthropic gets `base64`.
+### 3.2 Agent loop FSM (`internal/agent/loop.go`)
 
-**Provider dispatch** (`internal/agent/provider.go`):
+Each iteration of `Loop.Run` is a single streaming call through a `ProviderAdapter`:
+
+```
+Loop.Run(ctx, LoopConfig, messages, convID)
+    │
+    ├── if Selector == nil → IdentitySelector{}  (zero-value default, full tool list)
+    │
+    ▼  (up to maxIter times)
+drainAdapter(ctx, cfg, messages, tools)     ← calls ProviderAdapter.Stream()
+    │
+    ├── EventTextDelta  → emit SSE assistant_delta token → accumulate FinalText
+    ├── EventToolCall   → collect into sr.ToolCalls
+    └── EventDone       → sr populated (FinalText, ToolCalls, Usage, timing)
+    │
+    ▼
+emit assistant_done SSE
+    │
+    ├── no tool calls → return RunResult{Status: "complete"}
+    │
+    ├── request_tools call?
+    │       └── cfg.Selector.Upgrade(tc) → upgraded tools + summary
+    │           appendRequestToolsDef → capToolsForProvider → re-enter loop
+    │
+    └── real tool calls
+            │
+            ├── ToolPolicy.blockedByToolPolicy? → inject blocked result
+            │
+            ├── needs approval? → defer ALL, emit approvalRequired SSE
+            │                     resolved via POST /approvals/:id/approve
+            │
+            └── auto-approve → three-pass parallel execution:
+                    ├── Pass 1 (concurrent) — stateless tools (goroutine per call, WaitGroup)
+                    ├── Pass 2 (serial)     — stateful tools (browser.* share go-rod session)
+                    └── Pass 3 (ordered)    — emit SSE events + append tool messages in original order
+```
+
+### 3.3 Provider adapters (`internal/agent/adapter_*.go`)
+
+Each adapter owns its full HTTP + SSE lifecycle. All emit typed `TurnEvent` values on a channel; the loop drains them via `drainAdapter`:
+
+```
+ProviderAdapter.Stream(ctx, TurnRequest) (<-chan TurnEvent, error)
+    │  goroutine
+    │
+    ├── build request body
+    ├── HTTP POST → provider endpoint
+    ├── stream response body through internal/agent/stream primitives
+    └── emit:  EventTextDelta | EventToolCall | EventDone | EventError
+```
+
+| Adapter | Provider(s) | Stream path |
+|---------|-------------|-------------|
+| `adapter_openai.go` | `openai` | Responses API SSE (`response.output_text.delta`, `response.completed`) |
+| `adapter_anthropic.go` | `anthropic` | Messages SSE (`content_block_delta`, `message_delta`) + prompt caching |
+| `adapter_oaicompat.go` | `gemini`, `openrouter`, `lm_studio`, `ollama`, `atlas_engine` | OAI-compat `/chat/completions` SSE via `stream.ParseOAICompatStream` |
+| `adapter_mlx.go` | `atlas_mlx` | OAI-compat with 503-retry loop + non-streaming fallback when model is loading |
+| `adapter_local.go` | `lm_studio` (non-streaming path) | `callOpenAICompatNonStreaming` → single delta + done |
+
+**`internal/agent/stream/`** — stdlib-only SSE parsing (no imports from `internal/agent`):
+- `Scanner` — `bufio.Scanner` wrapper, strips `data:` prefix, stops at `[DONE]`
+- `Assembler` — accumulates `ToolDelta` fragments by index, emits complete `OAIToolCall` values
+- `ParseOAICompatStream(ctx, r io.Reader) <-chan Chunk` — goroutine-based OAI SSE parser
+
+**Error parsing:** `parseProviderErrorBody` (in `adapter.go`) decodes HTTP error responses in priority order: `error.metadata.raw` (OpenRouter upstream message) → `error.message` → raw body. Applied by all four adapters.
+
+### 3.4 Tool selection (`internal/chat/selector*.go`)
+
+`NewSelector(mode, policy, ...)` returns a `ToolSelector` appropriate for the configured mode. The policy's `AllowedToolPrefixes` pre-filters the registry before any selector receives it.
+
+| Mode | Selector | `Initial()` behavior | `Upgrade()` behavior |
+|------|----------|----------------------|----------------------|
+| `lazy` | `lazySelector` | LLM router → `request_tools` only | stage 1: short list; stage 2: broad/categories |
+| `llm` | `llmSelector` | Full LLM routing (explicit mode) | same as initial |
+| `heuristic` | `heuristicSelector` | Signal-score `SelectiveToolDefs` | same as initial |
+| `off` / unknown (no policy) | `IdentitySelector` | nil (loop uses full registry) | nil (no upgrade) |
+| `off` / unknown (with policy) | `scopedSelector` | filtered `ToolDefinitions()` | filtered `ToolDefinitions()` |
+
+**Tool cap:** `capToolsForProvider` enforces a 128-tool limit for `openai`, `openrouter`, `lm_studio`, `atlas_engine`. Anthropic has no documented limit. Priority order when trimming: `forge.*` → `atlas.*` / `info.*` / `request_tools` → `vault.*` / `gremlin.*` / `diary.*` / `image.*` → everything else.
+
+**Provider dispatch:**
 
 | Provider | API | Endpoint | Notes |
 |---|---|---|---|
-| `openai` | Responses API | `POST /v1/responses` | `store: false`, `max_output_tokens: 4096`, system prompt → `instructions` field, assistant content type `output_text` |
-| `anthropic` | Messages API | `POST /v1/messages` | `max_tokens: 4096`, prompt caching on system + tools (`anthropic-beta: prompt-caching-2024-07-31`) |
+| `openai` | Responses API | `POST /v1/responses` | `store: false`, `max_output_tokens: 4096`, system prompt → `instructions` field |
+| `anthropic` | Messages API | `POST /v1/messages` | `max_tokens: 4096`, prompt caching on system + tools |
 | `gemini` | OAI-compat | `POST /v1beta/openai/chat/completions` | `max_tokens: 4096`, `stream_options: {include_usage: true}` |
-| `openrouter` | OAI-compat | `POST /api/v1/chat/completions` | `max_tokens: 4096`, `HTTP-Referer` + `X-Title` headers |
-| `lm_studio` / `ollama` / `atlas_engine` / `atlas_mlx` | OAI-compat (local) | `POST /v1/chat/completions` | No `max_tokens` cap (model controls context); local providers coalesce adjacent same-role messages |
+| `openrouter` | OAI-compat | `POST /api/v1/chat/completions` | `max_tokens: 4096`, `HTTP-Referer` + `X-Title` headers; 128-tool cap |
+| `lm_studio` / `ollama` / `atlas_engine` | OAI-compat (local) | `POST /v1/chat/completions` | coalesce adjacent same-role messages |
+| `atlas_mlx` | OAI-compat (local) | `POST /v1/chat/completions` | 503-retry loop while model loads; non-streaming tool fallback |
 
-Health check probes mirror each provider's live chat endpoint and format. Model lists are fetched live from each provider's `/models` endpoint with a curated fallback for all providers including OpenRouter.
+**Timeouts:** 30s standard, 90s `browser.*`. **Concurrency:** stateless tools run in parallel per turn (40–70% latency reduction). `browser.*` serialised via `IsStateful()`. **Max iterations:** configurable, default 10.
+
+Health checks mirror each provider's live endpoint. Model lists fetched live from `/models` with curated fallback for all providers including OpenRouter.
 
 ---
 
@@ -338,7 +412,7 @@ Process is spawned fresh per call with a 30s deadline. Output is capped at 1 MB.
 See **[`docs/custom-skills.md`](custom-skills.md)** for the full authoring guide, manifest
 reference, credential patterns, and worked examples (Linear, GitHub, shell, Slack).
 
-**Built-in skills (17 groups, 90+ actions):**
+**Built-in + module skills (~147 actions across 18 capability groups):**
 
 | Group | Key actions |
 |-------|-------------|
@@ -357,8 +431,11 @@ reference, credential patterns, and worked examples (Linear, GitHub, shell, Slac
 | automation | create, update, delete, list, get, enable, disable, run, run_history, next_run, duplicate, validate_schedule |
 | workflow | create, update, delete, list, get, run, run_history, duplicate, validate, explain |
 | communication | list_channels, send_message |
+| **team** | **`team.*`** (list, get, delegate) + **`agent.*`** (create, update, delete, enable, disable, pause, resume, sequence, assign) — all routed to the "team" capability group |
 | forge | orchestration.propose |
 | atlas | info, list_skills, capabilities |
+
+**Capability group routing:** `toolCapabilityGroup()` in `registry.go` maps action IDs to groups for `SelectiveToolDefs`. Both `team.*` and `agent.*` prefixes resolve to the "team" group so all agent management skills surface together when team-related intent is detected.
 
 **Action classes** control the approval gate:
 - `read` — auto-approved, no user prompt

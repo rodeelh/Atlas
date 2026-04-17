@@ -3,12 +3,14 @@ module atlas-runtime-go
 go 1.25.0
 
 require (
+	github.com/evanw/esbuild v0.28.0
 	github.com/go-chi/chi/v5 v5.1.0
 	github.com/go-chi/cors v1.2.1
 	github.com/go-rod/rod v0.116.2
 	github.com/go-rod/stealth v0.4.9
 	github.com/go-webauthn/webauthn v0.16.4
 	github.com/gorilla/websocket v1.5.3
+	github.com/keybase/go-keychain v0.0.1
 	github.com/pquerna/otp v1.5.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	go.mau.fi/whatsmeow v0.0.0-20260327181659-02ec817e7cf4
@@ -17,13 +19,11 @@ require (
 )
 
 require (
-	github.com/evanw/esbuild v0.28.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/go-webauthn/x v0.2.3 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
-	github.com/keybase/go-keychain v0.0.1 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/tinylib/msgp v1.6.3 // indirect
 	github.com/x448/float16 v0.8.4 // indirect

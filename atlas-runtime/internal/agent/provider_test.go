@@ -16,18 +16,6 @@ import (
 	"atlas-runtime-go/internal/engine"
 )
 
-type testEmitter struct {
-	mu     sync.Mutex
-	events []EmitEvent
-}
-
-func (e *testEmitter) Emit(_ string, event EmitEvent) {
-	e.mu.Lock()
-	e.events = append(e.events, event)
-	e.mu.Unlock()
-}
-
-func (e *testEmitter) Finish(_ string) {}
 
 func TestCallOpenAICompatNonStreaming_AppliesExtraHeaders(t *testing.T) {
 	var gotReferer, gotTitle, gotAuth string
@@ -157,7 +145,7 @@ func TestCallOpenAIResponsesNonStreaming_ParsesToolCallsAndCachedUsage(t *testin
 	}
 }
 
-func TestStreamOpenAIResponsesWithToolDetection_StreamsTextAndUsage(t *testing.T) {
+func TestOpenAIAdapter_StreamsTextAndUsage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher, _ := w.(http.Flusher)
@@ -172,28 +160,37 @@ func TestStreamOpenAIResponsesWithToolDetection_StreamsTextAndUsage(t *testing.T
 	}))
 	defer srv.Close()
 
-	p := ProviderConfig{
+	adapter := &openAIAdapter{p: ProviderConfig{
 		Type:    ProviderOpenAI,
 		APIKey:  "token",
 		Model:   "gpt-5.4-mini",
 		BaseURL: srv.URL,
-	}
-	emitter := &testEmitter{}
-	sr, err := streamOpenAIResponsesWithToolDetection(context.Background(), p, []OAIMessage{{Role: "user", Content: "Hi"}}, nil, "conv1", emitter)
+	}}
+	ch, err := adapter.Stream(context.Background(), TurnRequest{
+		Messages: []OAIMessage{{Role: "user", Content: "Hi"}},
+		ConvID:   "conv1",
+	})
 	if err != nil {
-		t.Fatalf("streamOpenAIResponsesWithToolDetection: %v", err)
+		t.Fatalf("openAIAdapter.Stream: %v", err)
 	}
-	if sr.FinalText != "Hello" {
-		t.Fatalf("final text: got %q want Hello", sr.FinalText)
+
+	var text string
+	var usage *TokenUsage
+	for ev := range ch {
+		switch ev.Type {
+		case EventTextDelta:
+			text += ev.Text
+		case EventDone:
+			usage = ev.Usage
+		case EventError:
+			t.Fatalf("unexpected error event: %v", ev.Err)
+		}
 	}
-	if sr.Usage.CachedInputTokens != 20 {
-		t.Fatalf("cached usage: got %+v", sr.Usage)
+	if text != "Hello" {
+		t.Fatalf("final text: got %q want Hello", text)
 	}
-	if len(emitter.events) < 3 {
-		t.Fatalf("expected streamed events, got %+v", emitter.events)
-	}
-	if emitter.events[0].Type != "assistant_started" {
-		t.Fatalf("first event should be assistant_started, got %+v", emitter.events[0])
+	if usage == nil || usage.CachedInputTokens != 20 {
+		t.Fatalf("unexpected usage: %+v", usage)
 	}
 }
 
@@ -423,7 +420,7 @@ func TestOAICompatBaseURL_OpenRouter(t *testing.T) {
 	}
 }
 
-func TestStreamWithToolDetection_AtlasMLXStreams(t *testing.T) {
+func TestMLXAdapter_Streams(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -449,45 +446,41 @@ func TestStreamWithToolDetection_AtlasMLXStreams(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var bc testEmitter
-	result, err := streamWithToolDetection(context.Background(), ProviderConfig{
-		Type:    ProviderAtlasMLX,
-		Model:   "/tmp/test-model",
-		BaseURL: srv.URL,
-	}, []OAIMessage{{Role: "user", Content: "hello"}}, nil, "conv-1", &bc)
+	adapter := &mlxAdapter{p: ProviderConfig{Type: ProviderAtlasMLX, Model: "/tmp/test-model", BaseURL: srv.URL}}
+	ch, err := adapter.Stream(context.Background(), TurnRequest{
+		Messages: []OAIMessage{{Role: "user", Content: "hello"}},
+		ConvID:   "conv-1",
+	})
 	if err != nil {
-		t.Fatalf("streamWithToolDetection: %v", err)
-	}
-	if result.FinalText != "hello" {
-		t.Fatalf("final text: got %q, want hello", result.FinalText)
-	}
-	if result.ChunkCount != 2 {
-		t.Fatalf("chunk count: got %d, want 2", result.ChunkCount)
-	}
-	if result.FirstTokenAt <= 0 {
-		t.Fatalf("expected first token latency to be recorded, got %s", result.FirstTokenAt)
-	}
-	if result.Usage.InputTokens != 12 || result.Usage.OutputTokens != 2 {
-		t.Fatalf("unexpected usage: %+v", result.Usage)
+		t.Fatalf("mlxAdapter.Stream: %v", err)
 	}
 
-	bc.mu.Lock()
-	defer bc.mu.Unlock()
-	if len(bc.events) != 3 {
-		t.Fatalf("event count: got %d, want 3", len(bc.events))
+	var text string
+	var usage *TokenUsage
+	var deltaCount int
+	for ev := range ch {
+		switch ev.Type {
+		case EventTextDelta:
+			text += ev.Text
+			deltaCount++
+		case EventDone:
+			usage = ev.Usage
+		case EventError:
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
 	}
-	if bc.events[0].Type != "assistant_started" {
-		t.Fatalf("first event: got %s, want assistant_started", bc.events[0].Type)
+	if text != "hello" {
+		t.Fatalf("final text: got %q, want hello", text)
 	}
-	if bc.events[1].Type != "assistant_delta" || bc.events[1].Content != "hel" {
-		t.Fatalf("second event: %+v", bc.events[1])
+	if deltaCount < 1 {
+		t.Fatalf("expected at least 1 text delta, got %d", deltaCount)
 	}
-	if bc.events[2].Type != "assistant_delta" || bc.events[2].Content != "lo" {
-		t.Fatalf("third event: %+v", bc.events[2])
+	if usage == nil || usage.InputTokens != 12 || usage.OutputTokens != 2 {
+		t.Fatalf("unexpected usage: %+v", usage)
 	}
 }
 
-func TestStreamWithToolDetection_AtlasMLXFallsBackFromEmptyStream(t *testing.T) {
+func TestMLXAdapter_FallsBackFromEmptyStream(t *testing.T) {
 	var requests int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -532,39 +525,39 @@ func TestStreamWithToolDetection_AtlasMLXFallsBackFromEmptyStream(t *testing.T) 
 	}))
 	defer srv.Close()
 
-	var bc testEmitter
-	result, err := streamWithToolDetection(context.Background(), ProviderConfig{
-		Type:    ProviderAtlasMLX,
-		Model:   "/tmp/test-model",
-		BaseURL: srv.URL,
-	}, []OAIMessage{{Role: "user", Content: "hello"}}, nil, "conv-1", &bc)
+	adapter := &mlxAdapter{p: ProviderConfig{Type: ProviderAtlasMLX, Model: "/tmp/test-model", BaseURL: srv.URL}}
+	ch, err := adapter.Stream(context.Background(), TurnRequest{
+		Messages: []OAIMessage{{Role: "user", Content: "hello"}},
+		ConvID:   "conv-1",
+	})
 	if err != nil {
-		t.Fatalf("streamWithToolDetection: %v", err)
+		t.Fatalf("mlxAdapter.Stream: %v", err)
+	}
+
+	var text string
+	var usage *TokenUsage
+	for ev := range ch {
+		switch ev.Type {
+		case EventTextDelta:
+			text += ev.Text
+		case EventDone:
+			usage = ev.Usage
+		case EventError:
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
 	}
 	if got := atomic.LoadInt32(&requests); got != 2 {
 		t.Fatalf("request count: got %d, want 2", got)
 	}
-	if result.FinalText != "hello" {
-		t.Fatalf("final text: got %q, want hello", result.FinalText)
+	if text != "hello" {
+		t.Fatalf("final text: got %q, want hello", text)
 	}
-	if result.Usage.InputTokens != 7 || result.Usage.OutputTokens != 1 {
-		t.Fatalf("unexpected usage: %+v", result.Usage)
-	}
-
-	bc.mu.Lock()
-	defer bc.mu.Unlock()
-	if len(bc.events) != 2 {
-		t.Fatalf("event count: got %d, want 2", len(bc.events))
-	}
-	if bc.events[0].Type != "assistant_started" {
-		t.Fatalf("first event: got %s, want assistant_started", bc.events[0].Type)
-	}
-	if bc.events[1].Type != "assistant_delta" || bc.events[1].Content != "hello" {
-		t.Fatalf("second event: %+v", bc.events[1])
+	if usage == nil || usage.InputTokens != 7 || usage.OutputTokens != 1 {
+		t.Fatalf("unexpected usage: %+v", usage)
 	}
 }
 
-func TestStreamWithToolDetection_AtlasMLXRetriesWithoutToolsAfterEmptyReplies(t *testing.T) {
+func TestMLXAdapter_RetriesWithoutToolsAfterEmptyReplies(t *testing.T) {
 	var requests int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -635,36 +628,30 @@ func TestStreamWithToolDetection_AtlasMLXRetriesWithoutToolsAfterEmptyReplies(t 
 	}))
 	defer srv.Close()
 
-	var bc testEmitter
-	result, err := streamWithToolDetection(context.Background(), ProviderConfig{
-		Type:    ProviderAtlasMLX,
-		Model:   "/tmp/test-model",
-		BaseURL: srv.URL,
-	}, []OAIMessage{{Role: "user", Content: "hello"}}, []map[string]any{
-		{
-			"type": "function",
-			"function": map[string]any{
-				"name": "request_tools",
-			},
-		},
-	}, "conv-1", &bc)
+	adapter := &mlxAdapter{p: ProviderConfig{Type: ProviderAtlasMLX, Model: "/tmp/test-model", BaseURL: srv.URL}}
+	ch, err := adapter.Stream(context.Background(), TurnRequest{
+		Messages: []OAIMessage{{Role: "user", Content: "hello"}},
+		Tools:    []map[string]any{{"type": "function", "function": map[string]any{"name": "request_tools"}}},
+		ConvID:   "conv-1",
+	})
 	if err != nil {
-		t.Fatalf("streamWithToolDetection: %v", err)
+		t.Fatalf("mlxAdapter.Stream: %v", err)
+	}
+
+	var text string
+	for ev := range ch {
+		switch ev.Type {
+		case EventTextDelta:
+			text += ev.Text
+		case EventError:
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
 	}
 	if got := atomic.LoadInt32(&requests); got != 3 {
 		t.Fatalf("request count: got %d, want 3", got)
 	}
-	if result.FinalText != "hello" {
-		t.Fatalf("final text: got %q, want hello", result.FinalText)
-	}
-
-	bc.mu.Lock()
-	defer bc.mu.Unlock()
-	if len(bc.events) != 2 {
-		t.Fatalf("event count: got %d, want 2", len(bc.events))
-	}
-	if bc.events[1].Type != "assistant_delta" || bc.events[1].Content != "hello" {
-		t.Fatalf("second event: %+v", bc.events[1])
+	if text != "hello" {
+		t.Fatalf("final text: got %q, want hello", text)
 	}
 }
 

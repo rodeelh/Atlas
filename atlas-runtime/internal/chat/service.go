@@ -3,7 +3,6 @@ package chat
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -130,11 +129,15 @@ type Service struct {
 	greetingTelemetry GreetingTelemetry              // optional — set via SetGreetingTelemetry
 	surfacingRec      SurfacingRecorder              // optional — phase 7b test seam
 	turnCancels       sync.Map                       // convID → context.CancelFunc for in-flight turns
+	pipeline          *Pipeline
+	hooks             *HookRegistry
 }
 
 // NewService returns a ready chat Service.
 func NewService(db *storage.DB, cfgStore *config.Store, bc *Broadcaster, reg *skills.Registry) *Service {
 	s := &Service{db: db, cfgStore: cfgStore, broadcaster: bc, registry: reg, summaryCache: make(map[string]conversationSummary)}
+	s.hooks = NewHookRegistry()
+	s.pipeline = newPipeline(s, s.hooks)
 	// Wire the async follow-up sender so async_assignment goroutines (agents module)
 	// can push task-completion messages back to the originating conversation.
 	AsyncFollowUpSender = s.SendProactive
@@ -150,6 +153,13 @@ func NewService(db *storage.DB, cfgStore *config.Store, bc *Broadcaster, reg *sk
 // can auto-start the model when a message arrives and the engine isn't running.
 func (s *Service) SetEngineManager(e EngineAutoStarter) {
 	s.engine = e
+}
+
+// RegisterHook appends a post-turn hook to the pipeline's hook registry.
+// Called by main.go to register memory extraction and mind reflection hooks
+// without creating a direct dependency from the chat package on those packages.
+func (s *Service) RegisterHook(h TurnHook) {
+	s.hooks.Register(h)
 }
 
 // lookupThoughtBody returns the current body of a thought by id, or ""
@@ -693,24 +703,21 @@ func (s *Service) buildTurnMessages(
 
 // selectTurnTools selects the tool set for this turn based on ToolSelectionMode.
 // Also auto-starts the local router engine when mode is "llm".
-// Returns the selected tools and the resolved mode string (for logging).
+// Returns the ToolSelector (for loop upgrades), the initial tool list, and the resolved mode.
 func (s *Service) selectTurnTools(
 	ctx context.Context,
 	cfg config.RuntimeConfigSnapshot,
 	req MessageRequest,
 	turn *turnContext,
 	capabilityPlan capabilities.Analysis,
-) (selectedTools []map[string]any, toolMode string) {
+) (sel agent.ToolSelector, selectedTools []map[string]any, toolMode string) {
 	toolMode = cfg.ToolSelectionMode
 	if toolMode == "" {
 		toolMode = "heuristic"
 	}
-	switch toolMode {
-	case "lazy":
-		selectedTools = appendRequestToolsMeta(selectToolsWithLLM(ctx, cfg, turn, req.Message, s.registry))
-		logstore.Write("debug", "Tool selection: smart mode — compact router + request_tools",
-			map[string]string{"mode": "lazy"})
-	case "llm":
+
+	// LLM mode: ensure the router engine is running before selection.
+	if toolMode == "llm" {
 		switch agent.ProviderType(cfg.ActiveAIProvider) {
 		case agent.ProviderAtlasMLX:
 			if s.mlxRouterEngine != nil && !s.mlxRouterEngine.IsRunning() {
@@ -753,470 +760,34 @@ func (s *Service) selectTurnTools(
 				}
 			}
 		}
-		selectedTools = selectToolsWithLLM(ctx, cfg, turn, req.Message, s.registry)
+	}
+
+	sel = NewSelector(toolMode, req.ToolPolicy, ctx, cfg, turn, req.Message, s.registry)
+	selectedTools = applyCapabilityPlanToolHints(s.registry, sel.Initial(), req.Message, capabilityPlan)
+
+	// LLM mode: record activity after selection so the engine idle-timer resets.
+	if toolMode == "llm" {
 		if cfg.ActiveAIProvider == string(agent.ProviderAtlasMLX) && s.mlxRouterEngine != nil {
 			s.mlxRouterEngine.RecordActivity()
 		} else if s.routerEngine != nil {
 			s.routerEngine.RecordActivity()
 		}
-	case "heuristic":
-		selectedTools = s.registry.SelectiveToolDefs(req.Message)
-		// "off" → selectedTools stays nil → agent uses full tool list
 	}
-	selectedTools = applyCapabilityPlanToolHints(s.registry, selectedTools, req.Message, capabilityPlan)
+
+	if toolMode == "lazy" {
+		logstore.Write("debug", "Tool selection: smart mode — compact router + request_tools",
+			map[string]string{"mode": "lazy"})
+	}
 	return
 }
 
-// HandleMessage processes a message request end-to-end:
-//  1. Resolves or creates the conversation.
-//  2. Persists the user message.
-//  3. Calls the AI provider via the agent loop.
-//  4. Emits SSE events to the broadcaster.
-//  5. Returns the final MessageResponse.
+// HandleMessage processes a message request end-to-end via the turn pipeline.
 func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (MessageResponse, error) {
-	cfg := s.cfgStore.Load()
-	turn := &turnContext{}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	turnID := newUUID()
-
-	// Resolve conversation ID.
-	convID := req.ConversationID
-	if convID == "" {
-		convID = newUUID()
-	}
-
-	// Ensure conversation exists.
-	platform := req.Platform
-	if platform == "" {
-		platform = "web"
-	}
-	if err := s.db.SaveConversation(convID, now, now, platform, nil); err != nil {
-		return MessageResponse{}, fmt.Errorf("chat: save conversation: %w", err)
-	}
-
-	// Persist user message.
-	userMsgID := newUUID()
-	if err := s.db.SaveMessage(userMsgID, convID, "user", req.Message, now); err != nil {
-		return MessageResponse{}, fmt.Errorf("chat: save user message: %w", err)
-	}
-
-	// Phase 7c: engagement classifier. If Atlas raised a thought in a
-	// previous turn on this conversation, the pending surfacing row is
-	// waiting. Classify the user's reply against the thought body and
-	// rewrite the sidecar row. Runs on a detached goroutine so it
-	// never blocks the main turn.
-	classifierCtx := context.WithoutCancel(ctx)
-	s.classifyPendingIfAny(classifierCtx, convID, req.Message, func(id string) string {
-		return s.lookupThoughtBody(id)
-	})
-
-	// Load conversation history for context window.
-	history, err := s.db.ListMessages(convID)
+	state, err := s.pipeline.Run(ctx, req)
 	if err != nil {
-		return MessageResponse{}, fmt.Errorf("chat: list messages: %w", err)
+		return MessageResponse{}, err
 	}
-
-	// Resolve primary provider config.
-	provider, provErr := resolveProvider(cfg)
-	if provErr != nil {
-		errMsg := provErr.Error()
-		logstore.Write("error", "Provider unavailable", map[string]string{"error": errMsg})
-		s.broadcaster.Emit(convID, SSEEvent{
-			Type:           "error",
-			Error:          errMsg,
-			ConversationID: convID,
-			TurnID:         turnID,
-		})
-		s.broadcaster.Finish(convID)
-
-		var resp MessageResponse
-		resp.Conversation.ID = convID
-		for _, m := range history {
-			resp.Conversation.Messages = append(resp.Conversation.Messages, MessageItem{
-				ID:        m.ID,
-				Role:      m.Role,
-				Content:   m.Content,
-				Timestamp: m.Timestamp,
-				Blocks:    HydrateStoredBlocks(firstNonNilString(m.BlocksJSON)),
-			})
-		}
-		resp.Response.Status = "error"
-		resp.Response.ErrorMessage = errMsg
-		return resp, nil
-	}
-
-	s.ensureEngineRunning(cfg, provider)
-
-	// Resolve heavy background provider for quality-sensitive background tasks
-	// (memory extraction, MIND reflection, SKILLS learning). Defaults to the
-	// cloud fast model; routes to Engine LM router only when AtlasEngineRouterForAll
-	// is explicitly enabled. Falls back to the primary provider on any error.
-	heavyBgProvider, heavyBgErr := resolveHeavyBackgroundProvider(cfg)
-	if heavyBgErr != nil {
-		heavyBgProvider = provider
-	}
-
-	// Local providers (LM Studio, Ollama, Engine LM) do not support image attachments.
-	// Return a degradation message immediately without calling the model.
-	// PDFs-only messages pass through since hasImageAttachments ignores PDFs.
-	if (provider.Type == agent.ProviderLMStudio || provider.Type == agent.ProviderOllama || provider.Type == agent.ProviderAtlasEngine || provider.Type == agent.ProviderAtlasMLX) && hasImageAttachments(req.Attachments) {
-		const degradeMsg = "Vision is not available with local models. " +
-			"Switch to OpenAI, Anthropic, or Gemini to analyse images."
-		replyAt := time.Now().UTC().Format(time.RFC3339Nano)
-		assistantMsgID := newUUID()
-		_ = s.db.SaveMessage(assistantMsgID, convID, "assistant", degradeMsg, replyAt)
-		s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_started", Role: "assistant", ConversationID: convID, TurnID: turnID})
-		s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_delta", Content: degradeMsg, Role: "assistant", ConversationID: convID, TurnID: turnID})
-		s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_done", Role: "assistant", ConversationID: convID, TurnID: turnID})
-		s.broadcaster.Emit(convID, SSEEvent{Type: "done", Status: "completed", ConversationID: convID, TurnID: turnID})
-		s.broadcaster.Finish(convID)
-		allMessages := make([]MessageItem, 0, len(history)+1)
-		for _, m := range history {
-			allMessages = append(allMessages, MessageItem{ID: m.ID, Role: m.Role, Content: m.Content, Timestamp: m.Timestamp, Blocks: HydrateStoredBlocks(firstNonNilString(m.BlocksJSON))})
-		}
-		allMessages = append(allMessages, MessageItem{ID: assistantMsgID, Role: "assistant", Content: degradeMsg, Timestamp: replyAt})
-		var resp MessageResponse
-		resp.Conversation.ID = convID
-		resp.Conversation.Messages = allMessages
-		resp.Response.AssistantMessage = degradeMsg
-		resp.Response.Status = "complete"
-		return resp, nil
-	}
-
-	// OpenRouter image turns: the free auto-router and many text models do not
-	// support image input and return 404 "No endpoints found that support image input".
-	// Fallback to OpenRouter auto-router for this turn when the selected model is
-	// known text-only, instead of hard-failing the turn.
-	if provider.Type == agent.ProviderOpenRouter && hasImageAttachments(req.Attachments) {
-		origModel := strings.TrimSpace(provider.Model)
-		if origModel == "" {
-			origModel = "openrouter/auto:free"
-		}
-		if origModel == "openrouter/auto:free" {
-			provider.Model = "openrouter/auto"
-			logstore.Write("info", "OpenRouter image turn fallback", map[string]string{
-				"from_model": origModel,
-				"to_model":   provider.Model,
-				"reason":     "free_router_text_only",
-				"conv":       convID[:8],
-			})
-		} else {
-			supportsImage, known, err := openRouterModelSupportsImage(provider.APIKey, origModel)
-			if err != nil {
-				logstore.Write("warn", "OpenRouter image capability check failed", map[string]string{
-					"model": origModel,
-					"error": err.Error(),
-					"conv":  convID[:8],
-				})
-			}
-			if known && !supportsImage {
-				provider.Model = "openrouter/auto"
-				logstore.Write("info", "OpenRouter image turn fallback", map[string]string{
-					"from_model": origModel,
-					"to_model":   provider.Model,
-					"reason":     "selected_model_text_only",
-					"conv":       convID[:8],
-				})
-			}
-		}
-	}
-
-	capabilityPlan, policy := capabilityPolicy(req.Message, config.SupportDir(), s.db, s.db)
-	oaiMessages, historyChars, systemPrompt := s.buildTurnMessages(cfg, req, history, convID, userMsgID, policy.PromptBlock)
-
-	maxIter := resolveMaxIter(cfg)
-
-	selectedTools, toolMode := s.selectTurnTools(ctx, cfg, req, turn, capabilityPlan)
-
-	loopCfg := agent.LoopConfig{
-		Provider:      provider,
-		MaxIterations: maxIter,
-		SupportDir:    config.SupportDir(),
-		ConvID:        convID,
-		TurnID:        turnID,
-		Tools:         selectedTools, // nil → loop uses full ToolDefinitions()
-		UserMessage:   req.Message,   // used by lazy tool upgrade in the agent loop
-		ToolPolicy:    req.ToolPolicy,
-	}
-
-	loopConvID := convID
-	loopProvider := provider
-	agentLoop := &agent.Loop{
-		Skills: s.registry,
-		BC:     &broadcasterEmitter{bc: s.broadcaster},
-		DB:     s.db,
-		OnUsage: func(ctx context.Context, p agent.ProviderConfig, usage agent.TokenUsage) {
-			s.recordTokenUsage(loopConvID, loopProvider, usage)
-		},
-	}
-
-	toolCount := len(selectedTools)
-	if toolCount == 0 {
-		toolCount = s.registry.ToolCount()
-	}
-	// Use the base name for local path models (atlas_mlx uses full path as model ID).
-	logModel := provider.Model
-	if provider.Type == agent.ProviderAtlasMLX {
-		logModel = filepath.Base(provider.Model)
-	}
-	logstore.Write("info",
-		fmt.Sprintf("Turn started: %s via %s (%d tools, mode=%s)", logModel, provider.Type, toolCount, toolMode),
-		map[string]string{"conv": convID[:8], "mode": toolMode})
-
-	// Run the agent loop on a context that is NOT tied to the HTTP request.
-	// This ensures an in-flight AI call is not interrupted when the client
-	// disconnects (e.g. page refresh) before the response arrives. The
-	// broadcaster delivers the response to the reconnected client.
-	// A separate cancellable context allows the user to stop a turn mid-flight
-	// via POST /message/cancel without disrupting the HTTP lifecycle.
-	agentCtx, agentCancel := context.WithCancel(context.Background())
-	s.turnCancels.Store(convID, agentCancel)
-	defer func() {
-		agentCancel()
-		s.turnCancels.Delete(convID)
-	}()
-	// Inject proactive sender so skills can deliver follow-up messages to this
-	// conversation asynchronously (e.g. terminal.run_background completion).
-	agentCtx = skills.WithProactiveSender(agentCtx, func(text string) {
-		s.SendProactive(convID, text)
-	})
-	// Inject originating convID so async_assignment tasks can push completion
-	// notifications back to this conversation when they finish.
-	agentCtx = WithOriginConvID(agentCtx, convID)
-	turnStart := time.Now()
-	result := agentLoop.Run(agentCtx, loopCfg, oaiMessages, convID)
-
-	// Reset idle timers after each turn so the active model isn't ejected mid-session.
-	switch provider.Type {
-	case agent.ProviderAtlasEngine:
-		if s.engine != nil {
-			s.engine.RecordActivity()
-		}
-	case agent.ProviderAtlasMLX:
-		if s.mlxEngine != nil {
-			s.mlxEngine.RecordActivity()
-			// Record per-turn inference stats if the engine supports it.
-			if rec, ok := s.mlxEngine.(InferenceRecorder); ok {
-				rec.RecordInference(
-					result.TotalUsage.InputTokens,
-					result.TotalUsage.CachedInputTokens,
-					result.TotalUsage.OutputTokens,
-					time.Since(turnStart),
-					result.FirstTokenAt,
-					result.StreamChunkCount,
-					result.StreamChars,
-				)
-			}
-		}
-	}
-
-	var resp MessageResponse
-	resp.Conversation.ID = convID
-
-	switch result.Status {
-	case "error":
-		// If the error is a context cancellation triggered by the user (via
-		// POST /message/cancel), emit a clean "cancelled" event instead of an
-		// error so the client can show a neutral stopped state.
-		if result.Error != nil && errors.Is(result.Error, context.Canceled) {
-			logstore.Write("info", "Turn cancelled by user",
-				map[string]string{"conv": convID[:8]})
-			s.broadcaster.Emit(convID, SSEEvent{
-				Type:           "cancelled",
-				ConversationID: convID,
-				TurnID:         turnID,
-			})
-			s.broadcaster.Finish(convID)
-			resp.Response.Status = "cancelled"
-			return resp, nil
-		}
-		errMsg := "Agent loop error"
-		if result.Error != nil {
-			errMsg = result.Error.Error()
-		}
-		if provider.Type == agent.ProviderOpenRouter &&
-			hasImageAttachments(req.Attachments) &&
-			strings.Contains(strings.ToLower(errMsg), "no endpoints found that support image input") {
-			errMsg = "The selected OpenRouter model could not accept image input. Atlas tried an automatic image route, but no compatible endpoint is currently available."
-		}
-		logstore.Write("error", "Turn error: "+errMsg,
-			map[string]string{
-				"conv":    convID[:8],
-				"elapsed": fmt.Sprintf("%.1fs", time.Since(turnStart).Seconds()),
-				"in":      fmt.Sprintf("%d", result.TotalUsage.InputTokens),
-				"out":     fmt.Sprintf("%d", result.TotalUsage.OutputTokens),
-			})
-		s.broadcaster.Emit(convID, SSEEvent{
-			Type:           "error",
-			Error:          errMsg,
-			ConversationID: convID,
-			TurnID:         turnID,
-		})
-		s.broadcaster.Finish(convID)
-
-		for _, m := range history {
-			resp.Conversation.Messages = append(resp.Conversation.Messages, MessageItem{
-				ID:        m.ID,
-				Role:      m.Role,
-				Content:   m.Content,
-				Timestamp: m.Timestamp,
-				Blocks:    HydrateStoredBlocks(firstNonNilString(m.BlocksJSON)),
-			})
-		}
-		resp.Response.Status = "error"
-		resp.Response.ErrorMessage = errMsg
-		return resp, nil
-
-	case "pendingApproval":
-		// Emit the done event with waitingForApproval status so the web UI
-		// enters awaitingResume mode. Do NOT call Finish() here — the channel
-		// must stay open so Resume() can stream the continuation after approval.
-		s.broadcaster.Emit(convID, SSEEvent{
-			Type:           "done",
-			ConversationID: convID,
-			Status:         "waitingForApproval",
-			TurnID:         turnID,
-		})
-
-		for _, m := range history {
-			resp.Conversation.Messages = append(resp.Conversation.Messages, MessageItem{
-				ID:        m.ID,
-				Role:      m.Role,
-				Content:   m.Content,
-				Timestamp: m.Timestamp,
-				Blocks:    HydrateStoredBlocks(firstNonNilString(m.BlocksJSON)),
-			})
-		}
-		resp.Response.Status = "pendingApproval"
-		return resp, nil
-
-	default: // "complete"
-		replyAt := time.Now().UTC().Format(time.RFC3339Nano)
-		assistantText := result.FinalText
-
-		// Persist assistant reply.
-		assistantMsgID := newUUID()
-		if err := s.db.SaveMessageWithBlocks(assistantMsgID, convID, "assistant", assistantText, replyAt, messageBlocksJSON(result.MessageBlocks)); err != nil {
-			return MessageResponse{}, fmt.Errorf("chat: save assistant message: %w", err)
-		}
-
-		// Phase 7b: detect any [T-NN] engagement markers the agent wrote
-		// into its reply and write pending surfacings to the sidecar.
-		// Synchronous because the next user turn's classifier needs to
-		// see these rows before it runs.
-		s.detectAndRecordSurfacings(convID, assistantMsgID, assistantText, time.Now().UTC())
-
-		logstore.Write("info", "Turn complete",
-			map[string]string{
-				"conv":     convID[:8],
-				"elapsed":  fmt.Sprintf("%.1fs", time.Since(turnStart).Seconds()),
-				"in":       fmt.Sprintf("%d", result.TotalUsage.InputTokens),
-				"out":      fmt.Sprintf("%d", result.TotalUsage.OutputTokens),
-				"sys_est":  fmt.Sprintf("~%d", len(systemPrompt)/4),
-				"hist_est": fmt.Sprintf("~%d", historyChars/4),
-			})
-
-		// Post-turn background tasks use a detached context so they are not
-		// canceled when the HTTP request context closes after the response is sent.
-		bgCtx := context.WithoutCancel(ctx)
-
-		// Post-turn memory extraction (non-blocking).
-		// Passes provider + assistant text for LLM-based extraction alongside regex.
-		go memory.ExtractAndPersist(bgCtx, cfg, heavyBgProvider, req.Message, assistantText,
-			result.ToolCallSummaries, result.ToolResultSummaries, convID, s.db)
-
-		// Post-turn MIND reflection and DIARY entry (non-blocking).
-		// Skip if the assistant produced no text — a pure tool-call turn with
-		// no narrative would produce a meaningless Today's Read.
-		if assistantText != "" {
-			turn := mind.TurnRecord{
-				ConversationID:      convID,
-				UserMessage:         req.Message,
-				AssistantResponse:   assistantText,
-				ToolCallSummaries:   result.ToolCallSummaries,
-				ToolResultSummaries: result.ToolResultSummaries,
-				Timestamp:           time.Now(),
-			}
-			mind.ReflectNonBlocking(heavyBgProvider, turn, config.SupportDir())
-			mind.LearnFromTurnNonBlocking(heavyBgProvider, turn, config.SupportDir())
-		}
-
-		// Reset the nap idle timer after every completed turn. Safe to call
-		// unconditionally — the scheduler is a no-op if naps are disabled or
-		// if no scheduler has been registered (tests, dormant config).
-		mind.NotifyTurnNonBlocking()
-
-		// Collect all generated files for this turn: start from what the loop
-		// already tracked (tool artifacts + tool summaries), then scan FinalText
-		// for any additional paths the model mentioned in its narrative.
-		generatedFiles := append([]string(nil), result.GeneratedFiles...)
-		emittedSet := map[string]bool{}
-		for _, p := range generatedFiles {
-			emittedSet[p] = true
-		}
-		if result.FinalText != "" {
-			for _, filePath := range agent.ExtractPathsFromText(result.FinalText) {
-				if emittedSet[filePath] {
-					continue
-				}
-				emittedSet[filePath] = true
-				token := agent.RegisterArtifact(filePath)
-				if token == "" {
-					continue
-				}
-				info, statErr := os.Stat(filePath)
-				var size int64
-				if statErr == nil {
-					size = info.Size()
-				}
-				s.broadcaster.Emit(convID, SSEEvent{
-					Type:           "file_generated",
-					ConversationID: convID,
-					TurnID:         turnID,
-					Filename:       filepath.Base(filePath),
-					MimeType:       agent.MimeTypeForPath(filePath),
-					FileSize:       size,
-					FileToken:      token,
-				})
-				generatedFiles = append(generatedFiles, filePath)
-			}
-		}
-
-		// Emit done event with status="completed" so the web UI can trigger
-		// post-turn work (e.g. link preview fetching) gated on this status.
-		s.broadcaster.Emit(convID, SSEEvent{
-			Type:           "done",
-			Status:         "completed",
-			ConversationID: convID,
-			TurnID:         turnID,
-		})
-		s.broadcaster.Finish(convID)
-
-		// Build the full response message list.
-		allMessages := make([]MessageItem, 0, len(history)+1)
-		for _, m := range history {
-			allMessages = append(allMessages, MessageItem{
-				ID:        m.ID,
-				Role:      m.Role,
-				Content:   m.Content,
-				Timestamp: m.Timestamp,
-				Blocks:    HydrateStoredBlocks(firstNonNilString(m.BlocksJSON)),
-			})
-		}
-		allMessages = append(allMessages, MessageItem{
-			ID:        assistantMsgID,
-			Role:      "assistant",
-			Content:   assistantText,
-			Timestamp: replyAt,
-			Blocks:    result.MessageBlocks,
-		})
-
-		resp.Conversation.Messages = allMessages
-		resp.Response.AssistantMessage = assistantText
-		resp.Response.Status = "complete"
-		resp.GeneratedFiles = generatedFiles
-		return resp, nil
-	}
+	return s.pipeline.BuildResponse(state), nil
 }
 
 // RegenerateMind builds a context-aware prompt from the current MIND.md,
@@ -1369,154 +940,9 @@ func (s *Service) ResolveFastProvider() (agent.ProviderConfig, error) {
 	return resolveFastProvider(cfg)
 }
 
-// Resume is called after an approval is resolved. It loads the deferred
-// execution from the DB, executes or denies the tool call, and continues
-// the agent loop to completion.
+// Resume is called after an approval is resolved. It delegates to the pipeline.
 func (s *Service) Resume(toolCallID string, approved bool) {
-	ctx := context.Background()
-	turnID := newUUID()
-
-	row, err := s.db.FetchDeferredByToolCallID(toolCallID)
-	if err != nil || row == nil {
-		return
-	}
-
-	// Parse the saved deferral state.
-	var state struct {
-		Messages  []agent.OAIMessage  `json:"messages"`
-		ToolCalls []agent.OAIToolCall `json:"tool_calls"`
-		ConvID    string              `json:"conv_id"`
-	}
-	if err := json.Unmarshal([]byte(row.NormalizedInputJSON), &state); err != nil {
-		return
-	}
-
-	convID := state.ConvID
-	if convID == "" && row.ConversationID != nil {
-		convID = *row.ConversationID
-	}
-
-	// Find the tool call in the saved state.
-	var targetTC *agent.OAIToolCall
-	for i := range state.ToolCalls {
-		if state.ToolCalls[i].ID == toolCallID {
-			targetTC = &state.ToolCalls[i]
-			break
-		}
-	}
-	if targetTC == nil {
-		return
-	}
-
-	// Build the tool result message.
-	var toolResult string
-	if approved {
-		toolCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		result, execErr := s.registry.Execute(toolCtx, targetTC.Function.Name, json.RawMessage(targetTC.Function.Arguments))
-		cancel()
-		if execErr != nil {
-			toolResult = fmt.Sprintf("Tool execution error: %v", execErr)
-		} else {
-			toolResult = result.FormatForModel()
-		}
-	} else {
-		toolResult = "Action denied by user."
-	}
-
-	// Add tool result to messages.
-	messages := append(state.Messages, agent.OAIMessage{
-		Role:       "tool",
-		Content:    toolResult,
-		ToolCallID: toolCallID,
-		Name:       targetTC.Function.Name,
-	})
-
-	// Also handle other tool calls that were deferred at the same time.
-	// Check for other pending approvals in this conversation.
-	pending, _ := s.db.FetchDeferredsByConversationID(convID, "pending_approval")
-	for _, p := range pending {
-		if p.ToolCallID == toolCallID {
-			continue // already handled
-		}
-		// Other tool calls from the same batch — add denied result.
-		actionID := ""
-		if p.ActionID != nil {
-			actionID = *p.ActionID
-		}
-		messages = append(messages, agent.OAIMessage{
-			Role:       "tool",
-			Content:    "Action deferred (separate approval required).",
-			ToolCallID: p.ToolCallID,
-			Name:       actionID,
-		})
-	}
-
-	cfg := s.cfgStore.Load()
-	provider, provErr := resolveProvider(cfg)
-	if provErr != nil {
-		return
-	}
-
-	maxIter := resolveMaxIter(cfg)
-
-	loopCfg := agent.LoopConfig{
-		Provider:      provider,
-		MaxIterations: maxIter,
-		SupportDir:    config.SupportDir(),
-		ConvID:        convID,
-		TurnID:        turnID,
-	}
-
-	resumeConvID := convID
-	resumeProvider := provider
-	agentLoop := &agent.Loop{
-		Skills: s.registry,
-		BC:     &broadcasterEmitter{bc: s.broadcaster},
-		DB:     s.db,
-		OnUsage: func(ctx context.Context, p agent.ProviderConfig, usage agent.TokenUsage) {
-			s.recordTokenUsage(resumeConvID, resumeProvider, usage)
-		},
-	}
-
-	// Emit assistant_started so the web UI opens a new bubble for the resumed turn.
-	s.broadcaster.Emit(convID, SSEEvent{
-		Type:           "assistant_started",
-		ConversationID: convID,
-		TurnID:         turnID,
-	})
-
-	resumeStart := time.Now()
-	result := agentLoop.Run(ctx, loopCfg, messages, convID)
-
-	if result.Status == "complete" && (result.FinalText != "" || len(result.MessageBlocks) > 0) {
-		replyAt := time.Now().UTC().Format(time.RFC3339Nano)
-		assistantMsgID := newUUID()
-		if err := s.db.SaveMessageWithBlocks(assistantMsgID, convID, "assistant", result.FinalText, replyAt, messageBlocksJSON(result.MessageBlocks)); err != nil {
-			logstore.Write("warn", "Resume: failed to persist assistant message: "+err.Error(),
-				map[string]string{"conv": convID})
-		}
-
-		// Phase 7b: resume-path surfacing detection. Same hook as the
-		// main HandleMessage path so thoughts raised in an approval
-		// resume still produce pending engagement rows.
-		s.detectAndRecordSurfacings(convID, assistantMsgID, result.FinalText, time.Now().UTC())
-
-		logstore.Write("info", "Resume complete",
-			map[string]string{
-				"conv":    convID[:8],
-				"elapsed": fmt.Sprintf("%.1fs", time.Since(resumeStart).Seconds()),
-				"in":      fmt.Sprintf("%d", result.TotalUsage.InputTokens),
-				"out":     fmt.Sprintf("%d", result.TotalUsage.OutputTokens),
-			})
-
-		s.broadcaster.Emit(convID, SSEEvent{
-			Type:           "done",
-			Status:         "completed",
-			ConversationID: convID,
-			TurnID:         turnID,
-		})
-		s.broadcaster.Finish(convID)
-	}
+	s.pipeline.Resume(context.Background(), toolCallID, approved)
 }
 
 // recordTokenUsage computes cost and persists a token usage event for one turn.

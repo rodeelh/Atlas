@@ -204,6 +204,12 @@ type LoopConfig struct {
 	UserMessage string
 	// ToolPolicy optionally constrains tool calls for workflow/trust-bound runs.
 	ToolPolicy *ToolPolicy
+	// Selector handles tool selection and lazy upgrade for this turn.
+	// Nil is treated as IdentitySelector (full tool list, no upgrade).
+	Selector ToolSelector
+	// Adapter is the ProviderAdapter to use for streaming calls.
+	// Must be non-nil; use agent.NewAdapter(provider) to construct.
+	Adapter ProviderAdapter
 }
 
 // ToolPolicy constrains tools available to a trust-bounded agent run.
@@ -251,7 +257,7 @@ const openAIToolLimit = 128
 func capToolsForProvider(tools []map[string]any, providerType ProviderType) []map[string]any {
 	limit := 0
 	switch providerType {
-	case ProviderOpenAI, ProviderLMStudio, ProviderAtlasEngine:
+	case ProviderOpenAI, ProviderOpenRouter, ProviderLMStudio, ProviderAtlasEngine:
 		limit = openAIToolLimit
 	}
 	if limit == 0 || len(tools) <= limit {
@@ -296,6 +302,9 @@ func capToolsForProvider(tools []map[string]any, providerType ProviderType) []ma
 // and tool-call turns — no separate probe call is needed.
 // messages should include system + history + user message(s).
 func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, convID string) RunResult {
+	if cfg.Selector == nil {
+		cfg.Selector = IdentitySelector{}
+	}
 	emitter := &turnEmitter{base: l.BC, turnID: cfg.TurnID}
 	tools := cfg.Tools
 	if tools == nil {
@@ -328,7 +337,6 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		allResultSummaries []string
 		allGeneratedFiles  []string
 		allMessageBlocks   []map[string]any
-		toolUpgradeStage   int  // lazy mode: 0 meta only, 1 short list, 2 broad/category list
 		compacted          bool // overflow recovery: compact at most once per turn
 		itersUsed          int  // real iterations consumed (excludes tool upgrades / compaction retries)
 	)
@@ -344,8 +352,9 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 
 	for i := 0; i < maxIter; i++ {
 		itersUsed++
+		// ── stateStreaming ───────────────────────────────────────────────────
 		// Single streaming call — detects tool calls and emits text in one pass.
-		sr, err := streamWithToolDetection(ctx, cfg.Provider, messages, tools, convID, emitter)
+		sr, err := l.drainAdapter(ctx, cfg, messages, tools, convID, emitter)
 		if err != nil {
 			// If the model's context window was exceeded and we haven't yet
 			// compacted this turn, trim old messages and retry immediately.
@@ -403,15 +412,14 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		// request returns a short local tool list; a later request can expand to
 		// requested categories or the broad/full tool surface.
 		if tc, ok := firstRequestToolsCall(sr.ToolCalls); ok {
-			upgraded, stage, summary := l.resolveToolUpgrade(cfg, tc, toolUpgradeStage)
+			upgraded, summary := cfg.Selector.Upgrade(tc)
 			upgraded = appendRequestToolsDef(upgraded)
 			upgraded = capToolsForProvider(upgraded, cfg.Provider.Type)
 			tools = upgraded
-			toolUpgradeStage = stage
 
 			logstore.Write("info",
-				fmt.Sprintf("Smart tools: %d selected (stage %d)", len(tools), toolUpgradeStage),
-				map[string]string{"conv": shortConv, "mode": "smart", "stage": fmt.Sprintf("%d", toolUpgradeStage), "tools": fmt.Sprintf("%d", len(tools)), "msg": fmt.Sprintf("%.80s", cfg.UserMessage)})
+				fmt.Sprintf("Smart tools: %d selected", len(tools)),
+				map[string]string{"conv": shortConv, "mode": "smart", "tools": fmt.Sprintf("%d", len(tools)), "msg": fmt.Sprintf("%.80s", cfg.UserMessage)})
 
 			// Protocol: the assistant message must contain the tool_call,
 			// and we must send a tool result before the next model turn.
@@ -945,11 +953,6 @@ type toolPolicyBlock struct {
 	Reason     string
 }
 
-type requestToolsArgs struct {
-	Broad      bool     `json:"broad"`
-	Categories []string `json:"categories"`
-}
-
 func (b toolPolicyBlock) message() OAIMessage {
 	result := skills.ErrResult("run "+b.ActionID, "workflow trust scope", false, errors.New(b.Reason))
 	return OAIMessage{
@@ -1005,20 +1008,6 @@ func firstRequestToolsCall(calls []OAIToolCall) (OAIToolCall, bool) {
 	return OAIToolCall{}, false
 }
 
-func (l *Loop) resolveToolUpgrade(cfg LoopConfig, tc OAIToolCall, currentStage int) ([]map[string]any, int, string) {
-	var args requestToolsArgs
-	_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
-	if len(args.Categories) > 0 {
-		tools := l.Skills.ToolDefsForGroupsForMessage(args.Categories, cfg.UserMessage)
-		return tools, 2, fmt.Sprintf("Tool capabilities are now expanded for categories: %s. Proceed using the appropriate tools. If these are still insufficient, call request_tools again with broad=true.", strings.Join(args.Categories, ", "))
-	}
-	if args.Broad || currentStage >= 1 {
-		tools := l.Skills.ToolDefinitions()
-		return tools, 2, "The broad tool surface is now available. Proceed using the appropriate tools; do not ask the user to paste a spec if a tool can perform the action."
-	}
-	tools := l.Skills.SelectiveToolDefs(cfg.UserMessage)
-	return tools, 1, "A short relevant tool list is now available. Proceed using those tools. If the short list is not enough, call request_tools again with broad=true or with categories."
-}
 
 func appendRequestToolsDef(tools []map[string]any) []map[string]any {
 	for _, tool := range tools {
@@ -1156,6 +1145,79 @@ func compactMessages(messages []OAIMessage) []OAIMessage {
 	result = append(result, notice)
 	result = append(result, kept...)
 	return result
+}
+
+// ── drainAdapter ─────────────────────────────────────────────────────────────
+
+// drainAdapter calls cfg.Adapter.Stream and drains the TurnEvent channel into
+// a streamResult, forwarding text deltas to the emitter in real time.
+// This is the Phase 4 adapter path; the legacy streamWithToolDetection path
+// is kept for backward compatibility (Resume, tests without adapter).
+func (l *Loop) drainAdapter(
+	ctx context.Context,
+	cfg LoopConfig,
+	messages []OAIMessage,
+	tools []map[string]any,
+	convID string,
+	emitter Emitter,
+) (*streamResult, error) {
+	req := TurnRequest{
+		Messages: messages,
+		Tools:    tools,
+		ConvID:   convID,
+	}
+
+	ch, err := cfg.Adapter.Stream(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	emitter.Emit(convID, EmitEvent{
+		Type:   "assistant_started",
+		Role:   "assistant",
+		ConvID: convID,
+		TurnID: cfg.TurnID,
+	})
+
+	sr := &streamResult{}
+	start := time.Now()
+	var textBuf strings.Builder
+
+	for ev := range ch {
+		switch ev.Type {
+		case EventTextDelta:
+			textBuf.WriteString(ev.Text)
+			if sr.FirstTokenAt <= 0 {
+				sr.FirstTokenAt = time.Since(start)
+			}
+			sr.ChunkCount++
+			emitter.Emit(convID, EmitEvent{
+				Type:    "assistant_delta",
+				Content: ev.Text,
+				Role:    "assistant",
+				ConvID:  convID,
+				TurnID:  cfg.TurnID,
+			})
+		case EventToolCall:
+			if ev.ToolCall != nil {
+				sr.ToolCalls = append(sr.ToolCalls, *ev.ToolCall)
+			}
+		case EventDone:
+			if ev.Usage != nil {
+				sr.Usage = TokenUsage{
+					InputTokens:       ev.Usage.InputTokens,
+					OutputTokens:      ev.Usage.OutputTokens,
+					CachedInputTokens: ev.Usage.CachedInputTokens,
+				}
+			}
+		case EventError:
+			return nil, ev.Err
+		}
+	}
+
+	sr.FinalText = textBuf.String()
+	sr.StreamChars = textBuf.Len()
+	return sr, nil
 }
 
 // ── UUID generation ───────────────────────────────────────────────────────────

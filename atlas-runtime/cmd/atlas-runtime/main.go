@@ -32,6 +32,7 @@ import (
 	"atlas-runtime-go/internal/forge"
 	"atlas-runtime-go/internal/location"
 	"atlas-runtime-go/internal/logstore"
+	"atlas-runtime-go/internal/memory"
 	"atlas-runtime-go/internal/mind"
 	mindtelemetry "atlas-runtime-go/internal/mind/telemetry"
 	apivalidationmodule "atlas-runtime-go/internal/modules/apivalidation"
@@ -194,6 +195,36 @@ func main() {
 	chatSvc.SetRouterEngineManager(routerMgr)
 	chatSvc.SetMLXEngineManager(mlxMgr)
 	chatSvc.SetMLXRouterEngineManager(mlxRouterMgr)
+
+	// Post-turn hooks — registered here so chat/pipeline.go has no direct
+	// import of memory or mind.
+	chatSvc.RegisterHook(func(ctx context.Context, rec chat.TurnRecord) {
+		go memory.ExtractAndPersist(ctx, rec.Cfg, rec.HeavyBgProvider,
+			rec.UserMessage, rec.AssistantResponse,
+			rec.ToolCallSummaries, rec.ToolResultSummaries,
+			rec.ConvID, db)
+	})
+	chatSvc.RegisterHook(func(ctx context.Context, rec chat.TurnRecord) {
+		if rec.AssistantResponse == "" {
+			return
+		}
+		turn := mind.TurnRecord{
+			ConversationID:      rec.ConvID,
+			UserMessage:         rec.UserMessage,
+			AssistantResponse:   rec.AssistantResponse,
+			ToolCallSummaries:   rec.ToolCallSummaries,
+			ToolResultSummaries: rec.ToolResultSummaries,
+			Timestamp:           time.Now(),
+		}
+		// ReflectNonBlocking and LearnFromTurnNonBlocking each spawn their own
+		// goroutine internally; call them directly here without wrapping.
+		mind.ReflectNonBlocking(rec.HeavyBgProvider, turn, config.SupportDir())
+		mind.LearnFromTurnNonBlocking(rec.HeavyBgProvider, turn, config.SupportDir())
+	})
+	chatSvc.RegisterHook(func(_ context.Context, _ chat.TurnRecord) {
+		mind.NotifyTurnNonBlocking()
+	})
+
 	commsSvc := comms.New(cfgStore, db)
 	commsSvc.SetWebChatSender(chatSvc.InjectAssistantMessage)
 	forgeSvc := forge.NewService(config.SupportDir())

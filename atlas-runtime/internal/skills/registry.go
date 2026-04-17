@@ -641,7 +641,7 @@ func (r *Registry) toolCapabilityGroup(name string) string {
 		return "workflow"
 	case strings.HasPrefix(name, "automation."), strings.HasPrefix(name, "gremlin."):
 		return "automation"
-	case strings.HasPrefix(name, "team."):
+	case strings.HasPrefix(name, "team."), strings.HasPrefix(name, "agent."):
 		return "team"
 	case strings.HasPrefix(name, "forge."):
 		return "forge"
@@ -874,7 +874,7 @@ func (r *Registry) registerBuiltInRoutingContracts() {
 			contract: RoutingContract{Group: "automation", Description: "Automations, recurring runs, and gremlin scheduling.", Threshold: 1},
 		},
 		{
-			prefixes: []string{"team."},
+			prefixes: []string{"team.", "agent."},
 			contract: RoutingContract{Group: "team", Description: "Agent roster management, agent state changes, and delegation.", Threshold: 1},
 		},
 		{
