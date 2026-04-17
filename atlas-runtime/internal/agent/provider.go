@@ -232,37 +232,94 @@ func callAINonStreaming(
 // present in the request body. For those providers we fall back to a non-streaming
 // call and emit the complete response as a single token event so the rest of the
 // loop is unchanged.
-func streamWithToolDetection(
-	ctx context.Context,
-	p ProviderConfig,
-	messages []OAIMessage,
-	tools []map[string]any,
-	convID string,
-	bc Emitter,
-) (streamResult, error) {
+// ProviderStreamer is the per-provider streaming strategy. Each implementation
+// owns exactly one provider family's retry/fallback logic.
+type ProviderStreamer interface {
+	Stream(ctx context.Context, p ProviderConfig, messages []OAIMessage, tools []map[string]any, convID string, bc Emitter) (streamResult, error)
+}
+
+// newStreamer returns the correct ProviderStreamer for p.
+func newStreamer(p ProviderConfig) ProviderStreamer {
 	switch p.Type {
 	case ProviderAnthropic:
-		return streamAnthropicWithToolDetection(ctx, p, messages, tools, convID, bc)
+		return anthropicStreamer{}
 	case ProviderAtlasEngine, ProviderLMStudio, ProviderOllama:
-		// These providers do not reliably support stream:true + tools. Use non-streaming
-		// and emit the full response text as one token event.
-		return nonStreamingAsStream(ctx, p, messages, tools, convID, bc)
+		return localStreamer{}
 	case ProviderOpenAI:
-		return streamOpenAIResponsesWithToolDetection(ctx, p, messages, tools, convID, bc)
-	default: // gemini, atlas_mlx
-		sr, err := streamOpenAICompatWithToolDetection(ctx, p, messages, tools, convID, bc)
-		if err != nil {
-			return streamResult{}, err
+		return openAIStreamer{}
+	case ProviderAtlasMLX:
+		return mlxStreamer{}
+	default: // gemini, openrouter, etc.
+		return oaiCompatStreamer{}
+	}
+}
+
+type anthropicStreamer struct{}
+
+func (anthropicStreamer) Stream(ctx context.Context, p ProviderConfig, messages []OAIMessage, tools []map[string]any, convID string, bc Emitter) (streamResult, error) {
+	return streamAnthropicWithToolDetection(ctx, p, messages, tools, convID, bc)
+}
+
+// localStreamer handles providers that do not reliably support stream:true + tools
+// (llama.cpp engine, LM Studio, Ollama). Uses non-streaming and emits the full
+// response text as a single token event so the loop behaves identically.
+type localStreamer struct{}
+
+func (localStreamer) Stream(ctx context.Context, p ProviderConfig, messages []OAIMessage, tools []map[string]any, convID string, bc Emitter) (streamResult, error) {
+	return nonStreamingAsStream(ctx, p, messages, tools, convID, bc)
+}
+
+type openAIStreamer struct{}
+
+func (openAIStreamer) Stream(ctx context.Context, p ProviderConfig, messages []OAIMessage, tools []map[string]any, convID string, bc Emitter) (streamResult, error) {
+	return streamOpenAIResponsesWithToolDetection(ctx, p, messages, tools, convID, bc)
+}
+
+type oaiCompatStreamer struct{}
+
+func (oaiCompatStreamer) Stream(ctx context.Context, p ProviderConfig, messages []OAIMessage, tools []map[string]any, convID string, bc Emitter) (streamResult, error) {
+	return streamOpenAICompatWithToolDetection(ctx, p, messages, tools, convID, bc)
+}
+
+// mlxStreamer handles the MLX-LM provider with a two-level fallback:
+// streaming → non-streaming with tools → non-streaming without tools.
+type mlxStreamer struct{}
+
+func (mlxStreamer) Stream(ctx context.Context, p ProviderConfig, messages []OAIMessage, tools []map[string]any, convID string, bc Emitter) (streamResult, error) {
+	sr, err := streamOpenAICompatWithToolDetection(ctx, p, messages, tools, convID, bc)
+	if err != nil {
+		return streamResult{}, err
+	}
+	log.Printf("mlx stream result: text_len=%d tool_calls=%d finish=%q tools_in=%d", len(sr.FinalText), len(sr.ToolCalls), sr.FinishReason, len(tools))
+	if sr.FinalText == "" && len(sr.ToolCalls) == 0 {
+		start := time.Now()
+		msg, finishReason, usage, err := callOpenAICompatNonStreaming(ctx, p, messages, tools)
+		if err == nil {
+			text, _ := msg.Content.(string)
+			log.Printf("mlx retry with tools: text_len=%d tool_calls=%d finish=%q", len(text), len(msg.ToolCalls), finishReason)
+			if text != "" {
+				sr.FinalText = text
+				sr.ChunkCount++
+				sr.StreamChars = len(text)
+				if sr.FirstTokenAt <= 0 {
+					sr.FirstTokenAt = time.Since(start)
+				}
+				bc.Emit(convID, EmitEvent{Type: "assistant_delta", Content: text, Role: "assistant", ConvID: convID})
+			}
+			if len(msg.ToolCalls) > 0 {
+				sr.ToolCalls = msg.ToolCalls
+			}
+			sr.FinishReason = finishReason
+			sr.Usage = usage
+		} else {
+			log.Printf("mlx retry with tools failed: %v", err)
 		}
-		if p.Type == ProviderAtlasMLX {
-			log.Printf("mlx stream result: text_len=%d tool_calls=%d finish=%q tools_in=%d", len(sr.FinalText), len(sr.ToolCalls), sr.FinishReason, len(tools))
-		}
-		if p.Type == ProviderAtlasMLX && sr.FinalText == "" && len(sr.ToolCalls) == 0 {
-			start := time.Now()
-			msg, finishReason, usage, err := callOpenAICompatNonStreaming(ctx, p, messages, tools)
+		if sr.FinalText == "" && len(sr.ToolCalls) == 0 && len(tools) > 0 {
+			start = time.Now()
+			msg, finishReason, usage, err = callOpenAICompatNonStreaming(ctx, p, messages, nil)
 			if err == nil {
 				text, _ := msg.Content.(string)
-				log.Printf("mlx retry with tools: text_len=%d tool_calls=%d finish=%q", len(text), len(msg.ToolCalls), finishReason)
+				log.Printf("mlx retry without tools: text_len=%d tool_calls=%d finish=%q", len(text), len(msg.ToolCalls), finishReason)
 				if text != "" {
 					sr.FinalText = text
 					sr.ChunkCount++
@@ -278,35 +335,23 @@ func streamWithToolDetection(
 				sr.FinishReason = finishReason
 				sr.Usage = usage
 			} else {
-				log.Printf("mlx retry with tools failed: %v", err)
-			}
-			if sr.FinalText == "" && len(sr.ToolCalls) == 0 && len(tools) > 0 {
-				start = time.Now()
-				msg, finishReason, usage, err = callOpenAICompatNonStreaming(ctx, p, messages, nil)
-				if err == nil {
-					text, _ := msg.Content.(string)
-					log.Printf("mlx retry without tools: text_len=%d tool_calls=%d finish=%q", len(text), len(msg.ToolCalls), finishReason)
-					if text != "" {
-						sr.FinalText = text
-						sr.ChunkCount++
-						sr.StreamChars = len(text)
-						if sr.FirstTokenAt <= 0 {
-							sr.FirstTokenAt = time.Since(start)
-						}
-						bc.Emit(convID, EmitEvent{Type: "assistant_delta", Content: text, Role: "assistant", ConvID: convID})
-					}
-					if len(msg.ToolCalls) > 0 {
-						sr.ToolCalls = msg.ToolCalls
-					}
-					sr.FinishReason = finishReason
-					sr.Usage = usage
-				} else {
-					log.Printf("mlx retry without tools failed: %v", err)
-				}
+				log.Printf("mlx retry without tools failed: %v", err)
 			}
 		}
-		return sr, nil
 	}
+	return sr, nil
+}
+
+// streamWithToolDetection dispatches to the correct ProviderStreamer for p.
+func streamWithToolDetection(
+	ctx context.Context,
+	p ProviderConfig,
+	messages []OAIMessage,
+	tools []map[string]any,
+	convID string,
+	bc Emitter,
+) (streamResult, error) {
+	return newStreamer(p).Stream(ctx, p, messages, tools, convID, bc)
 }
 
 // nonStreamingAsStream calls callOpenAICompatNonStreaming and wraps the result

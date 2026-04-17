@@ -1224,8 +1224,14 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
   // activeMsgId: tracks which assistant bubble is the active one this turn.
   // Used to keep typing dots visible even after assistant_done fires (tool-only turns
   // produce no text, so assistant_done fires before tools run, yet the turn continues).
-  const activeMsgId = useRef<string | null>(null)
-  const activeTurnIdRef = useRef<string | null>(null)
+  const activeMsgId        = useRef<string | null>(null)
+  const activeTurnIdRef    = useRef<string | null>(null)
+  // bgActiveMsgIdRef tracks the typing bubble created by the background SSE so
+  // it can be cleaned up independently of the foreground bubble.
+  const bgActiveMsgIdRef   = useRef<string | null>(null)
+  // foregroundActiveRef is set true the moment the user initiates a send,
+  // closing the race window before activeTurnIdRef is populated from the stream.
+  const foregroundActiveRef = useRef(false)
 
   // Code block copy — event-delegated so it works on DOMPurify-rendered HTML
   const handleCodeCopy = useCallback((e: MouseEvent) => {
@@ -1390,26 +1396,43 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       es.onmessage = (evt) => {
         try {
           const data = JSON.parse(evt.data) as ChatStreamEvent
-          const foregroundTurnID = activeTurnIdRef.current
-          if (esRef.current && foregroundTurnID && data.turnID === foregroundTurnID) return
+          // Skip events that belong to an active foreground turn.
+          // foregroundActiveRef is set before the SSE opens, closing the race window
+          // where activeTurnIdRef has not yet been populated from the first event.
+          if (foregroundActiveRef.current) {
+            const fgTurnID = activeTurnIdRef.current
+            if (!fgTurnID || data.turnID === fgTurnID) return
+          }
           if (data.type === 'assistant_started') {
             setProactiveComposing(false)
             const msg: Message = { id: uuid(), role: 'assistant', content: '', isTyping: true, createdAt: Date.now() }
+            bgActiveMsgIdRef.current = msg.id
             activeMsgId.current = msg.id
             setMessages(prev => [...prev, msg])
           } else if (data.type === 'assistant_delta') {
             const delta = data.content ?? ''
             setMessages(prev => prev.map(m =>
-              m.id === activeMsgId.current
+              m.id === bgActiveMsgIdRef.current
                 ? { ...m, content: m.content + delta, isTyping: true }
                 : m
             ))
           } else if (data.type === 'assistant_done') {
             setMessages(prev => prev.map(m =>
-              m.id === activeMsgId.current ? { ...m, isTyping: false } : m
+              m.id === bgActiveMsgIdRef.current ? { ...m, isTyping: false } : m
             ))
-            activeMsgId.current = null
+            if (activeMsgId.current === bgActiveMsgIdRef.current) activeMsgId.current = null
+            bgActiveMsgIdRef.current = null
             setProactiveComposing(false)
+          } else if (data.type === 'done') {
+            // Clean up an empty typing bubble left by a tool-only or silent turn.
+            const bgID = bgActiveMsgIdRef.current
+            if (bgID) {
+              setMessages(prev => prev.map(m =>
+                m.id === bgID ? { ...m, isTyping: false } : m
+              ).filter(m => !(m.id === bgID && !m.content && !(m.blocks?.length ?? 0))))
+              if (activeMsgId.current === bgID) activeMsgId.current = null
+              bgActiveMsgIdRef.current = null
+            }
           } else if (data.type === 'tool_finished') {
             const blocks = parseToolBlocks(data.toolName, data.result)
             if (blocks.length > 0) {
@@ -1448,6 +1471,16 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       }
 
       es.onerror = () => {
+        // Clean up any typing bubble this connection was actively streaming when
+        // the server closed it (Finish() fires after every turn).
+        const bgID = bgActiveMsgIdRef.current
+        if (bgID) {
+          setMessages(prev => prev.map(m =>
+            m.id === bgID ? { ...m, isTyping: false } : m
+          ).filter(m => !(m.id === bgID && !m.content && !(m.blocks?.length ?? 0))))
+          if (activeMsgId.current === bgID) activeMsgId.current = null
+          bgActiveMsgIdRef.current = null
+        }
         es.close()
         pushEsRef.current = null
         // Reopen after 1 s to survive daemon restarts and post-turn close.
@@ -2196,6 +2229,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     setError(null)
     setPendingApproval(null)
     setSending(true)
+    foregroundActiveRef.current = true
 
     const userContent = pendingAttachments.length > 0
       ? `${text}${text ? '\n' : ''}📎 ${pendingAttachments.map(a => a.filename).join(', ')}`
@@ -2349,6 +2383,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
             turnCompleted = true
             activeMsgId.current = null
             activeTurnIdRef.current = null
+            foregroundActiveRef.current = false
             if (data.status === 'waitingForApproval') {
               setMessages(prev => prev.map(m => m.id === assistantMsg.id ? { ...m, content: accumulatedContent || m.content, isTyping: false } : m))
               awaitingResume = true
@@ -2402,6 +2437,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
             turnCompleted = true
             activeMsgId.current = null
             activeTurnIdRef.current = null
+            foregroundActiveRef.current = false
             setError(extractStreamError(data))
             const targetID = resumedMsgID ?? assistantMsg.id
             setMessages(prev => prev.map(m => m.id === targetID ? { ...m, content: resumedContent || accumulatedContent || 'Failed to get response.', isTyping: false } : m))
@@ -2412,6 +2448,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
             turnCompleted = true
             activeMsgId.current = null
             activeTurnIdRef.current = null
+            foregroundActiveRef.current = false
             // Remove the empty typing bubble; keep any partial content that arrived.
             setMessages(prev => {
               const cancelTargetID = resumedMsgID ?? assistantMsg.id
@@ -2432,6 +2469,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       if (turnCompleted) return
       activeMsgId.current = null
       activeTurnIdRef.current = null
+      foregroundActiveRef.current = false
       setSending(false)
       es.close()
       const reconciled = await reconcileConversationState(conversationID.current)
