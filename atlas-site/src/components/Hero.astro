@@ -1,0 +1,73 @@
+---
+import Wordmark from './Wordmark.astro';
+import Terminal from './Terminal.astro';
+---
+<section class="relative overflow-hidden border-b border-border">
+  <div class="pointer-events-none absolute inset-0 opacity-[0.04]" aria-hidden="true"
+       style="background-image: linear-gradient(rgba(0,255,153,1) 1px, transparent 1px), linear-gradient(90deg, rgba(0,255,153,1) 1px, transparent 1px); background-size: 40px 40px;"></div>
+  <div class="pointer-events-none absolute -left-40 -top-40 h-[480px] w-[480px] rounded-full opacity-30 blur-[120px]" aria-hidden="true"
+       style="background: radial-gradient(closest-side, rgba(0,255,153,0.45), transparent);"></div>
+
+  <div class="relative mx-auto grid max-w-6xl gap-16 px-6 pb-28 pt-24 md:pb-40 md:pt-32 lg:grid-cols-[1.1fr_1fr] lg:items-center lg:gap-12">
+    <div>
+      <div class="mb-8 flex items-center gap-3 font-mono text-xs text-text-2" data-status-pill>
+        <span class="inline-block h-1.5 w-1.5 rounded-full bg-accent shadow-glow-soft animate-pulse"></span>
+        <span data-status-text>ready when you are</span>
+      </div>
+
+      <Wordmark size={72} animated class="mb-10" />
+
+      <h1 class="max-w-3xl font-mono text-3xl leading-tight text-text md:text-5xl md:leading-[1.1]">
+        A companion,
+        <br />
+        <span class="text-text-2">not a tool.</span>
+      </h1>
+
+      <p class="mt-8 max-w-2xl text-lg leading-relaxed text-text-2">
+        Atlas is a companion who remembers you, grows with you, and is there
+        when you need to think, write, plan, or just talk things through. Yours alone.
+      </p>
+
+      <div class="mt-10 flex flex-wrap items-center gap-4">
+        <a
+          href="https://github.com/rodeelh/Atlas/releases/latest"
+          class="group inline-flex items-center gap-2 rounded bg-accent px-5 py-3 font-mono text-sm font-medium text-bg shadow-glow hover:shadow-[0_0_32px_rgba(0,255,153,0.35)] transition"
+          target="_blank" rel="noreferrer"
+        >
+          <span aria-hidden="true">▸</span>
+          get atlas
+        </a>
+        <a
+          href="#features"
+          class="inline-flex items-center gap-2 rounded border border-border-2 px-5 py-3 font-mono text-sm text-text hover:border-accent/40 hover:text-accent transition"
+        >see what it does →</a>
+      </div>
+    </div>
+
+    <div class="lg:pl-4">
+      <Terminal />
+    </div>
+  </div>
+</section>
+
+<script>
+  const statusEl = document.querySelector('[data-status-text]') as HTMLElement | null;
+  if (statusEl) {
+    const lines = [
+      'ready when you are',
+      'remembers what matters',
+      'learns new skills on its own',
+      'stays on your machine',
+    ];
+    let i = 0;
+    statusEl.style.transition = 'opacity 220ms ease';
+    setInterval(() => {
+      statusEl.style.opacity = '0';
+      setTimeout(() => {
+        i = (i + 1) % lines.length;
+        statusEl.textContent = lines[i];
+        statusEl.style.opacity = '1';
+      }, 220);
+    }, 3800);
+  }
+</script>

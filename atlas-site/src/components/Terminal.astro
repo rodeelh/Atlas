@@ -1,0 +1,294 @@
+---
+---
+<div
+  class="term group relative rounded-lg border border-border bg-surface/80 shadow-glow-soft backdrop-blur-sm"
+  data-term
+>
+  <div class="flex items-center justify-between border-b border-border px-4 py-2.5">
+    <div class="flex items-center gap-2">
+      <span class="h-2.5 w-2.5 rounded-full bg-accent/70"></span>
+      <span class="h-2.5 w-2.5 rounded-full bg-text-3"></span>
+      <span class="h-2.5 w-2.5 rounded-full bg-text-3"></span>
+    </div>
+    <span class="font-mono text-[11px] text-text-3">~ a moment with atlas</span>
+    <span class="font-mono text-[11px] text-accent" data-term-hint>type · help</span>
+  </div>
+
+  <div
+    class="term-body max-h-[380px] min-h-[260px] overflow-y-auto px-5 py-4 font-mono text-[13px] leading-relaxed"
+    data-term-body
+    role="log"
+    aria-live="polite"
+  ></div>
+
+  <form class="flex items-center gap-2 border-t border-border px-5 py-3 font-mono text-[13px]" data-term-form>
+    <span class="text-accent">›</span>
+    <input
+      type="text"
+      class="flex-1 bg-transparent text-text outline-none placeholder:text-text-3"
+      placeholder="say hi · ask what i can do · try a sample · type help"
+      autocomplete="off"
+      spellcheck="false"
+      data-term-input
+    />
+    <span class="cursor-blink text-accent" aria-hidden="true">▌</span>
+  </form>
+</div>
+
+<script>
+  type Reply = string | { line: string; cls?: string; pause?: number };
+  type Cmd = { run: () => Reply[] };
+
+  const COMMANDS: Record<string, Cmd> = {
+    hi: {
+      run: () => [
+        { line: 'hey. i\'m atlas.', cls: 'text-text' },
+        { line: 'whenever you\'re ready.', cls: 'text-text-2' },
+      ],
+    },
+
+    who: {
+      run: () => [
+        { line: 'a companion. one that lives on your machine,', cls: 'text-text' },
+        { line: 'remembers what you tell me, and grows with you.', cls: 'text-text' },
+        { line: '', cls: 'text-text-2' },
+        { line: 'i\'m here to help you think, write, plan, and do —', cls: 'text-text-2' },
+        { line: 'and to be around when you just want to talk.', cls: 'text-text-2' },
+      ],
+    },
+
+    'what can you do': {
+      run: () => [
+        { line: 'a few of the things, in plain words:', cls: 'text-text' },
+        { line: '', cls: 'text-text-2' },
+        { line: '  · talk things through with you',                     cls: 'text-text-2' },
+        { line: '  · remember the things you tell me',                  cls: 'text-text-2' },
+        { line: '  · draft, edit, summarise — writing of any kind',     cls: 'text-text-2' },
+        { line: '  · search the web · read your files · run scripts',   cls: 'text-text-2' },
+        { line: '  · drive your browser · use your apps',               cls: 'text-text-2' },
+        { line: '  · learn new skills as you ask for them',             cls: 'text-text-2' },
+      ],
+    },
+
+    try: {
+      run: () => [
+        { line: 'a small sample of what a moment with me looks like:', cls: 'text-text-3' },
+        { line: '', cls: 'text-text-2' },
+        { line: '› remind me to call sarah tomorrow at 2', cls: 'text-text' },
+        { line: '  ✓ ok. i\'ll nudge you at 1:55pm tomorrow.', cls: 'text-accent' },
+        { line: '', cls: 'text-text-2' },
+        { line: '› what was that book you mentioned last week?', cls: 'text-text' },
+        { line: '  ✓ "the courage to be disliked" — kishimi & koga.', cls: 'text-accent' },
+        { line: '', cls: 'text-text-2' },
+        { line: '› summarise today\'s emails into 3 bullets', cls: 'text-text' },
+        { line: '  ✓ done — and i flagged the one from your bank.', cls: 'text-accent' },
+      ],
+    },
+
+    remember: {
+      run: () => [
+        { line: 'i remember what you tell me. things like:', cls: 'text-text' },
+        { line: '', cls: 'text-text-2' },
+        { line: '  · your name, your work, your projects',     cls: 'text-text-2' },
+        { line: '  · people who matter to you',                cls: 'text-text-2' },
+        { line: '  · how you like things written',             cls: 'text-text-2' },
+        { line: '  · the boring details so you don\'t have to', cls: 'text-text-2' },
+        { line: '', cls: 'text-text-2' },
+        { line: 'all of it stays on your machine. always.',    cls: 'text-accent' },
+      ],
+    },
+
+    privacy: {
+      run: () => [
+        { line: 'your conversations live in a database on your mac.',     cls: 'text-text-2' },
+        { line: 'your secrets live in your keychain.',                    cls: 'text-text-2' },
+        { line: 'i don\'t phone home. there\'s no telemetry. no account.', cls: 'text-text' },
+      ],
+    },
+
+    download: {
+      run: () => {
+        setTimeout(() => {
+          window.open('https://github.com/rodeelh/Atlas/releases/latest', '_blank');
+        }, 400);
+        return [
+          { line: '→ opening github.com/rodeelh/Atlas/releases …', cls: 'text-accent' },
+        ];
+      },
+    },
+
+    help: {
+      run: () => [
+        { line: 'things you can try:', cls: 'text-text' },
+        { line: '', cls: 'text-text-2' },
+        { line: '  hi              say hello',           cls: 'text-text-2' },
+        { line: '  who             who is atlas',        cls: 'text-text-2' },
+        { line: '  what can you do  the short answer',   cls: 'text-text-2' },
+        { line: '  try             see a sample moment', cls: 'text-text-2' },
+        { line: '  remember        what i remember',     cls: 'text-text-2' },
+        { line: '  privacy         where your data lives', cls: 'text-text-2' },
+        { line: '  download        get the latest release', cls: 'text-text-2' },
+        { line: '  clear           clear the screen',    cls: 'text-text-2' },
+      ],
+    },
+
+    clear: {
+      run: () => {
+        const body = document.querySelector('[data-term-body]') as HTMLElement | null;
+        if (body) body.innerHTML = '';
+        return [];
+      },
+    },
+  };
+
+  // Aliases — both single-word and multi-word
+  const ALIASES: Record<string, string> = {
+    'hello':         'hi',
+    'hey':           'hi',
+    'sup':           'hi',
+    '?':             'help',
+    'ls':            'help',
+    'man':           'help',
+    'commands':      'help',
+    'who are you':   'who',
+    'about':         'who',
+    'whoami':        'who',
+    'what':          'what can you do',
+    'capabilities':  'what can you do',
+    'features':      'what can you do',
+    'sample':        'try',
+    'demo':          'try',
+    'memory':        'remember',
+    'install':       'download',
+    'get':           'download',
+    'cls':           'clear',
+  };
+
+  const term = document.querySelector('[data-term]') as HTMLElement | null;
+  if (term) {
+    const body  = term.querySelector('[data-term-body]') as HTMLElement;
+    const form  = term.querySelector('[data-term-form]') as HTMLFormElement;
+    const input = term.querySelector('[data-term-input]') as HTMLInputElement;
+    const hint  = term.querySelector('[data-term-hint]') as HTMLElement;
+
+    let userTouched = false;
+
+    const writeLine = (text: string, cls = 'text-text-2') => {
+      const div = document.createElement('div');
+      div.className = cls || 'text-text-2';
+      div.textContent = text;
+      if (text === '') div.innerHTML = '&nbsp;';
+      body.appendChild(div);
+      body.scrollTop = body.scrollHeight;
+    };
+
+    const writePrompt = (cmd: string) => {
+      const div = document.createElement('div');
+      div.innerHTML = `<span class="text-accent">›</span> <span class="text-text">${cmd}</span>`;
+      body.appendChild(div);
+      body.scrollTop = body.scrollHeight;
+    };
+
+    const writeBlank = () => writeLine('', 'text-text-2');
+
+    const resolve = (raw: string): { key: string; cmd?: Cmd } => {
+      const lc = raw.trim().toLowerCase();
+      if (!lc) return { key: '' };
+      if (COMMANDS[lc]) return { key: lc, cmd: COMMANDS[lc] };
+      if (ALIASES[lc]) {
+        const k = ALIASES[lc];
+        return { key: k, cmd: COMMANDS[k] };
+      }
+      const first = lc.split(/\s+/)[0];
+      if (COMMANDS[first]) return { key: first, cmd: COMMANDS[first] };
+      if (ALIASES[first]) {
+        const k = ALIASES[first];
+        return { key: k, cmd: COMMANDS[k] };
+      }
+      return { key: lc };
+    };
+
+    const renderReplies = (replies: Reply[]) => {
+      for (const r of replies) {
+        if (typeof r === 'string') writeLine(r);
+        else writeLine(r.line, r.cls);
+      }
+    };
+
+    const exec = (raw: string) => {
+      const trimmed = raw.trim();
+      if (!trimmed) return;
+      writePrompt(trimmed);
+      const { cmd } = resolve(trimmed);
+      if (!cmd) {
+        writeLine('hmm — i don\'t know that one. try `help`.', 'text-accent');
+      } else {
+        renderReplies(cmd.run());
+      }
+      writeBlank();
+    };
+
+    // ── Auto-demo ─────────────────────────────────────
+    const typeInto = (text: string, speed = 60): Promise<void> =>
+      new Promise((resolve) => {
+        let i = 0;
+        input.value = '';
+        const tick = () => {
+          if (userTouched) return resolve();
+          if (i < text.length) {
+            input.value += text[i++];
+            setTimeout(tick, speed);
+          } else {
+            resolve();
+          }
+        };
+        tick();
+      });
+
+    const demo = async () => {
+      const script = ['hi', 'what can you do', 'try'];
+      for (const cmd of script) {
+        if (userTouched) return;
+        await typeInto(cmd);
+        if (userTouched) return;
+        await new Promise((r) => setTimeout(r, 420));
+        if (userTouched) return;
+        exec(cmd);
+        input.value = '';
+        await new Promise((r) => setTimeout(r, 1900));
+      }
+      if (!userTouched) {
+        hint.textContent = 'your turn ›';
+        hint.classList.add('cursor-blink');
+      }
+    };
+
+    setTimeout(demo, 2200);
+
+    // ── User input ────────────────────────────────────
+    const markTouched = () => {
+      if (userTouched) return;
+      userTouched = true;
+      input.value = '';
+      hint.textContent = 'live';
+      hint.classList.remove('cursor-blink');
+    };
+
+    input.addEventListener('focus', markTouched);
+    input.addEventListener('keydown', markTouched);
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      markTouched();
+      const v = input.value;
+      input.value = '';
+      exec(v);
+    });
+  }
+</script>
+
+<style>
+  .term-body::-webkit-scrollbar { width: 6px; }
+  .term-body::-webkit-scrollbar-thumb { background: rgba(0, 255, 153, 0.18); border-radius: 3px; }
+  .term-body::-webkit-scrollbar-track { background: transparent; }
+</style>

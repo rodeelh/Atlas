@@ -1,0 +1,29 @@
+---
+const points = [
+  { title: 'Local-first', body: 'Conversations, memories, and logs live in SQLite on your machine. Nothing is synced by default.' },
+  { title: 'Keychain-only secrets', body: 'API keys sit in the macOS Keychain. Atlas reads them on demand; they never touch disk in plaintext.' },
+  { title: 'No telemetry', body: 'Zero analytics, zero phone-home. The only network calls are the AI provider and skills you explicitly invoke.' },
+];
+---
+<section id="privacy" class="border-b border-border">
+  <div class="mx-auto max-w-6xl px-6 py-24 md:py-32">
+    <div class="mb-16 flex items-baseline gap-4" data-reveal>
+      <span class="font-mono text-sm text-accent">// 04</span>
+      <h2 class="font-mono text-2xl text-text md:text-3xl"><span data-typed-heading>privacy &amp; control</span></h2>
+    </div>
+
+    <div class="grid gap-6 md:grid-cols-3">
+      {points.map((p, i) => (
+        <div
+          class="rounded border border-border bg-surface p-6 transition hover:border-accent/30 hover:shadow-glow-soft"
+          data-reveal
+          style={`--reveal-delay: ${i * 90}ms;`}
+        >
+          <div class="mb-3 font-mono text-xs text-accent">$ {p.title.toLowerCase().replace(/ /g, '-')}</div>
+          <h3 class="mb-2 font-mono text-base text-text">{p.title}</h3>
+          <p class="text-sm leading-relaxed text-text-2">{p.body}</p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>

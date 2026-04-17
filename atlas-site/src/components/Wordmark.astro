@@ -1,0 +1,72 @@
+---
+interface Props {
+  size?: number;
+  animated?: boolean;
+  blink?: boolean;
+  class?: string;
+}
+const { size = 28, animated = false, blink = false, class: cls = '' } = Astro.props;
+const blockW = Math.round(size * 0.55);
+const blockH = size;
+const uid = 'wm-' + Math.random().toString(36).slice(2, 8);
+---
+<span
+  class={`wm inline-flex items-baseline font-mono font-medium leading-none ${animated ? 'wm-animated' : ''} ${blink ? 'wm-blink' : ''} ${cls}`}
+  style={`font-size:${size}px; --wm-block-w:${blockW}px; --wm-block-h:${blockH}px;`}
+  id={uid}
+>
+  <span class="wm-cursor" aria-hidden="true"></span>
+  <span class="wm-gap" aria-hidden="true"></span>
+  <span class="wm-text text-text tracking-tight">atlas</span>
+</span>
+
+<style>
+  .wm { gap: 0; }
+  .wm-cursor {
+    display: inline-block;
+    width: var(--wm-block-w);
+    height: var(--wm-block-h);
+    background: #00FF99;
+    box-shadow: 0 0 14px rgba(0, 255, 153, 0.35);
+    transform: translateY(0.08em);
+  }
+  .wm-gap {
+    display: inline-block;
+    width: 0.35em;
+  }
+  .wm-text {
+    display: inline-block;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  /* Static by default: solid cursor, no animation. Add `blink` prop to opt-in. */
+  .wm:not(.wm-animated):not(.wm-blink) .wm-cursor { animation: none; }
+  .wm.wm-blink:not(.wm-animated) .wm-cursor { animation: wm-blink 1.05s steps(1, end) infinite; }
+
+  /* Animated variant: cursor blinks for 0.8s, then text types in over 0.9s, cursor resumes blinking */
+  .wm-animated .wm-text {
+    width: 0;
+    animation: wm-type 0.9s steps(5, end) 0.8s forwards;
+  }
+  .wm-animated .wm-cursor {
+    animation:
+      wm-blink 0.55s steps(1, end) 0s 2 forwards,
+      wm-blink 1.05s steps(1, end) 1.8s infinite;
+  }
+
+  @keyframes wm-type {
+    from { width: 0; }
+    to   { width: 5ch; }
+  }
+  @keyframes wm-blink {
+    0%, 49%   { opacity: 1; }
+    50%, 100% { opacity: 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wm-animated .wm-text { width: 5ch; animation: none; }
+    .wm-animated .wm-cursor,
+    .wm:not(.wm-animated) .wm-cursor { animation: none; opacity: 1; }
+  }
+</style>

@@ -1,0 +1,27 @@
+---
+import Wordmark from './Wordmark.astro';
+---
+<header class="sticky top-0 z-50 border-b border-border bg-bg/80 backdrop-blur-md">
+  <nav class="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+    <a href="/" class="flex items-center" aria-label="atlas home">
+      <Wordmark size={22} />
+    </a>
+    <ul class="hidden items-center gap-8 font-mono text-sm text-text-2 md:flex">
+      <li><a href="#features" class="hover:text-text transition-colors">features</a></li>
+      <li><a href="#architecture" class="hover:text-text transition-colors">architecture</a></li>
+      <li><a href="#privacy" class="hover:text-text transition-colors">privacy</a></li>
+      <li>
+        <a
+          href="https://github.com/rodeelh/Atlas"
+          class="hover:text-text transition-colors"
+          target="_blank" rel="noreferrer"
+        >github</a>
+      </li>
+    </ul>
+    <a
+      href="https://github.com/rodeelh/Atlas/releases/latest"
+      class="rounded border border-accent/40 bg-accent/10 px-3.5 py-1.5 font-mono text-sm text-accent hover:bg-accent/20 hover:shadow-glow-soft transition"
+      target="_blank" rel="noreferrer"
+    >download</a>
+  </nav>
+</header>

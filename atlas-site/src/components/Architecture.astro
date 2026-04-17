@@ -1,0 +1,78 @@
+---
+const diagram = String.raw`
+            ┌─────────────────────────────────────────┐
+            │           atlas-web  (React UI)         │
+            │   chat · skills · approvals · forge     │
+            │       dashboards · teams · settings     │
+            └────────────────────┬────────────────────┘
+                                 │  http + sse
+                                 ▼
+   ┌───────────────────────────────────────────────────────────┐
+   │           atlas-runtime  (Go daemon · port 1984)          │
+   │                                                           │
+   │   chat svc ── agent loop ── provider dispatch             │
+   │       │           │              │                        │
+   │       │           │              ├── openai               │
+   │       │           │              ├── anthropic            │
+   │       │           │              ├── gemini               │
+   │       │           │              └── lm studio            │
+   │       │           ▼                                       │
+   │       │      skills registry  (read · write · execute)    │
+   │       │           │                                       │
+   │       ▼           ▼                                       │
+   │   sqlite     keychain      mind.md / diary.md             │
+   └───────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+                ┌──────────────────────────────┐
+                │  telegram   discord   ...    │
+                └──────────────────────────────┘
+`;
+---
+<section id="architecture" class="border-b border-border">
+  <div class="mx-auto max-w-6xl px-6 py-24 md:py-32">
+    <div class="mb-16 flex items-baseline gap-4" data-reveal>
+      <span class="font-mono text-sm text-accent">// 02</span>
+      <h2 class="font-mono text-2xl text-text md:text-3xl"><span data-typed-heading>how it works</span></h2>
+    </div>
+
+    <div class="grid gap-12 lg:grid-cols-[1fr_auto] lg:items-center">
+      <div class="arch-frame relative overflow-x-auto rounded border border-border bg-surface p-6 shadow-glow-soft" data-reveal>
+        <span class="pointer-events-none absolute -inset-px rounded border border-accent/0 transition-[border-color] duration-700"></span>
+        <span class="arch-scan pointer-events-none absolute inset-x-0 top-0 h-12 opacity-30" aria-hidden="true"></span>
+        <pre class="font-mono text-[11px] leading-snug text-text-2 md:text-xs"><code>{diagram}</code></pre>
+      </div>
+
+      <div class="max-w-md space-y-5 text-sm leading-relaxed text-text-2" data-reveal style="--reveal-delay: 180ms;">
+        <p>
+          The runtime is a single Go binary installed as a launchd LaunchAgent. It serves the
+          web UI, brokers AI provider calls, and dispatches skills.
+        </p>
+        <p>
+          Everything that matters — conversations, memories, agent definitions, skill state — lives
+          in <span class="text-text font-mono">~/Library/Application Support/ProjectAtlas/</span>.
+        </p>
+        <p>
+          Secrets sit in the macOS Keychain. No <code class="font-mono text-text">.env</code> files.
+          No telemetry. The daemon stops when you tell it to.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .arch-scan {
+    background: linear-gradient(180deg, rgba(0,255,153,0.18), transparent);
+    animation: arch-scan 4.5s ease-in-out infinite;
+  }
+  @keyframes arch-scan {
+    0%   { transform: translateY(0);  opacity: 0; }
+    20%  { opacity: 0.6; }
+    100% { transform: translateY(360px); opacity: 0; }
+  }
+  .arch-frame:hover > span:first-of-type { border-color: rgba(0,255,153,0.35); }
+  @media (prefers-reduced-motion: reduce) {
+    .arch-scan { display: none; }
+  }
+</style>

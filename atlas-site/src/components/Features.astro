@@ -1,0 +1,62 @@
+---
+const features = [
+  {
+    cmd: 'atlas.providers',
+    title: 'Multi-provider AI',
+    body: 'OpenAI, Anthropic, Gemini, and LM Studio out of the box. Per-task primary/fast model selection. Switch providers without losing your conversation.',
+  },
+  {
+    cmd: 'atlas.skills',
+    title: 'Skills & Forge',
+    body: 'A registry of capabilities — filesystem, browser, terminal, web search, finance, image, system. Forge lets the agent research and install new skills on its own.',
+  },
+  {
+    cmd: 'atlas.memory',
+    title: 'Memory & MIND',
+    body: 'Per-turn memory extraction into SQLite. A self-updating MIND.md system prompt. Nightly dream cycles consolidate what mattered.',
+  },
+  {
+    cmd: 'atlas.dashboards',
+    title: 'Dashboards',
+    body: 'Schema-driven widget grid backed by skills, SQL, runtime endpoints, or live AI compute. Authored by the agent on request.',
+  },
+  {
+    cmd: 'atlas.teams',
+    title: 'Teams',
+    body: 'Spawn worker agents with scoped skill allowlists. Sequence or single delegation, sync or async. Approvals route back to chat.',
+  },
+  {
+    cmd: 'atlas.comms',
+    title: 'Comms bridges',
+    body: 'Telegram and Discord bridges run inside the daemon. Talk to Atlas from anywhere; it talks back through the same chat surface.',
+  },
+];
+---
+<section id="features" class="border-b border-border">
+  <div class="mx-auto max-w-6xl px-6 py-24 md:py-32">
+    <div class="mb-16 flex items-baseline gap-4" data-reveal>
+      <span class="font-mono text-sm text-accent">// 01</span>
+      <h2 class="font-mono text-2xl text-text md:text-3xl"><span data-typed-heading>what it does</span></h2>
+    </div>
+
+    <div class="grid gap-px overflow-hidden rounded border border-border bg-border md:grid-cols-2 lg:grid-cols-3">
+      {features.map((f, i) => (
+        <article
+          class="feat-card group relative overflow-hidden bg-surface p-7 transition hover:bg-surface-2 hover:shadow-glow-soft"
+          data-reveal
+          style={`--reveal-delay: ${i * 70}ms;`}
+        >
+          <div class="mb-4 font-mono text-xs text-accent">{f.cmd}</div>
+          <h3 class="mb-3 font-mono text-lg text-text">{f.title}</h3>
+          <p class="text-sm leading-relaxed text-text-2">{f.body}</p>
+          <div class="mt-5 h-5 overflow-hidden font-mono text-[11px] text-text-3">
+            <span class="block translate-y-5 opacity-0 transition duration-300 group-hover:translate-y-0 group-hover:opacity-100 group-hover:text-accent">
+              ▸ {f.cmd}.invoke()
+            </span>
+          </div>
+          <span class="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-accent/40 to-transparent opacity-0 transition group-hover:opacity-100"></span>
+        </article>
+      ))}
+    </div>
+  </div>
+</section>
