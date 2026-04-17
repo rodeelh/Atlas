@@ -10,71 +10,26 @@
       <stop offset="60%" stop-color="#7CFFC4" stop-opacity="0.6"/>
       <stop offset="100%" stop-color="#7CFFC4" stop-opacity="0"/>
     </linearGradient>
-    <filter id="blockGlow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="1.1" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-    <filter id="haloGlow" x="-75%" y="-75%" width="250%" height="250%">
-      <feGaussianBlur stdDeviation="1.8" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
   </defs>
 
-  <rect width="32" height="32" rx="7" fill="#000000"/>
-
-  <!-- Outer halo (begin +0.4s) -->
   <g transform-origin="16 16">
-    <rect x="3" y="3" width="26" height="26" rx="5.7" fill="#00D985" opacity="0.14" filter="url(#haloGlow)">
-      <animate attributeName="opacity" values="0.08;0.20;0.08" dur="2.6s" begin="0.4s" repeatCount="indefinite"
+    <rect width="32" height="32" rx="7" fill="url(#grad)"/>
+    <rect width="32" height="32" rx="7" fill="#FFFFFF" opacity="0">
+      <animate attributeName="opacity" values="0;0.15;0" dur="2.6s" repeatCount="indefinite"
                calcMode="spline" keySplines="0.4 0 0.2 1; 0.4 0 0.2 1" keyTimes="0;0.5;1"/>
     </rect>
-    <animateTransform attributeName="transform" type="scale" values="1;1.03;1" dur="2.6s" begin="0.4s"
+    <animateTransform attributeName="transform" type="scale" values="1;1.025;1" dur="2.6s"
                       repeatCount="indefinite" calcMode="spline"
                       keySplines="0.4 0 0.2 1; 0.4 0 0.2 1" keyTimes="0;0.5;1" additive="sum"/>
   </g>
 
-  <!-- Inner halo (begin +0.2s) -->
-  <g transform-origin="16 16">
-    <rect x="5.35" y="5.35" width="21.3" height="21.3" rx="4.65" fill="#00D985" opacity="0.26" filter="url(#haloGlow)">
-      <animate attributeName="opacity" values="0.16;0.36;0.16" dur="2.6s" begin="0.2s" repeatCount="indefinite"
-               calcMode="spline" keySplines="0.4 0 0.2 1; 0.4 0 0.2 1" keyTimes="0;0.5;1"/>
-    </rect>
-    <animateTransform attributeName="transform" type="scale" values="1;1.03;1" dur="2.6s" begin="0.2s"
-                      repeatCount="indefinite" calcMode="spline"
-                      keySplines="0.4 0 0.2 1; 0.4 0 0.2 1" keyTimes="0;0.5;1" additive="sum"/>
-  </g>
+  <path d="M 5.33 5.82 L 11.34 8.82 L 5.33 11.83" fill="none" stroke="#060612" stroke-width="3.02"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 26.47 12.51 L 12.90 19.88 L 26.47 27.24" fill="none" stroke="#060612" stroke-width="4.66"
+        stroke-linecap="round" stroke-linejoin="round"/>
 
-  <!-- Block (breath-in glow, no delay) -->
-  <g transform-origin="16 16">
-    <rect x="7.75" y="7.75" width="16.5" height="16.5" rx="3.6" fill="url(#grad)" filter="url(#blockGlow)"/>
-    <rect x="7.75" y="7.75" width="16.5" height="16.5" rx="3.6" fill="#FFFFFF" opacity="0">
-      <animate attributeName="opacity" values="0;0.18;0" dur="2.6s" repeatCount="indefinite"
-               calcMode="spline" keySplines="0.4 0 0.2 1; 0.4 0 0.2 1" keyTimes="0;0.5;1"/>
-    </rect>
-    <animateTransform attributeName="transform" type="scale" values="1;1.03;1" dur="2.6s"
-                      repeatCount="indefinite" calcMode="spline"
-                      keySplines="0.4 0 0.2 1; 0.4 0 0.2 1" keyTimes="0;0.5;1" additive="sum"/>
-  </g>
-
-  <!-- Top `>` chevron — glows on breath-out (second half) -->
-  <path d="M 10.5 10.5 L 14.75 13 L 10.5 15.5" fill="none" stroke="#000000" stroke-width="2.1"
-        stroke-linecap="round" stroke-linejoin="round" opacity="0.9">
-    <animate attributeName="opacity" values="0.9;0.9;0.3;0.6;0.9" keyTimes="0;0.55;0.75;0.95;1"
-             dur="2.6s" repeatCount="indefinite"
-             calcMode="spline" keySplines="0.4 0 0.6 1; 0.4 0 0.6 1; 0.4 0 0.6 1; 0.4 0 0.6 1"/>
-  </path>
-
-  <!-- Bottom `<` chevron — glows on breath-in (first half) -->
-  <path d="M 21.5 16.5 L 17.25 19 L 21.5 21.5" fill="none" stroke="#000000" stroke-width="2.3"
-        stroke-linecap="round" stroke-linejoin="round" opacity="0.9">
-    <animate attributeName="opacity" values="0.9;0.3;0.6;0.9;0.9" keyTimes="0;0.25;0.45;0.55;1"
-             dur="2.6s" repeatCount="indefinite"
-             calcMode="spline" keySplines="0.4 0 0.6 1; 0.4 0 0.6 1; 0.4 0 0.6 1; 0.4 0 0.6 1"/>
-  </path>
-
-  <!-- Occasional specular flash -->
-  <rect x="7.75" y="7.75" width="16.5" height="16.5" rx="3.6" fill="url(#flash)" opacity="0">
-    <animate attributeName="opacity" values="0;0;0.55;0;0" keyTimes="0;0.45;0.60;0.85;1"
+  <rect width="32" height="32" rx="7" fill="url(#flash)" opacity="0">
+    <animate attributeName="opacity" values="0;0;0.5;0;0" keyTimes="0;0.45;0.60;0.85;1"
              dur="3.8s" repeatCount="indefinite"
              calcMode="spline"
              keySplines="0.4 0 0.6 1; 0.25 0.8 0.3 1; 0.4 0 0.6 1; 0.4 0 0.6 1"/>
