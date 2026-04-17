@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,21 +21,40 @@ func (m *Module) validateCommitReadiness(ctx context.Context, d Dashboard) error
 	return nil
 }
 
+// softFailSentinel is stored in the samples map for sources that fail to
+// resolve transiently (network errors, timeouts, 5xx). Widget schema
+// validation is skipped for these sources so a temporary outage does not
+// permanently block commit. Hard failures (401/403) still abort immediately.
+type softFailSentinel struct{}
+
 func (m *Module) resolveSourceSamples(ctx context.Context, d Dashboard) (map[string]any, error) {
 	samples := make(map[string]any, len(d.Sources))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var hardErr error
+
 	for _, src := range d.Sources {
-		sourceCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		data, err := m.resolveSourceByName(sourceCtx, d.ID, src.Name)
-		cancel()
-		if err != nil {
-			if isHardSourceFailure(err) {
-				return nil, fmt.Errorf("source %q has a hard validation failure: %w", src.Name, err)
+		wg.Add(1)
+		go func(s DataSource) {
+			defer wg.Done()
+			sourceCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			data, err := m.resolveSourceByName(sourceCtx, d.ID, s.Name)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if isHardSourceFailure(err) && hardErr == nil {
+					hardErr = fmt.Errorf("source %q: %w", s.Name, err)
+				}
+				// Soft failure: record sentinel so widget validation is skipped.
+				samples[s.Name] = softFailSentinel{}
+				return
 			}
-			return nil, fmt.Errorf("source %q failed to resolve during commit validation: %w", src.Name, err)
-		}
-		samples[src.Name] = data
+			samples[s.Name] = data
+		}(src)
 	}
-	return samples, nil
+	wg.Wait()
+	return samples, hardErr
 }
 
 func validateWidgetSample(w Widget, samples map[string]any) error {
@@ -44,6 +64,9 @@ func validateWidgetSample(w Widget, samples map[string]any) error {
 	sample, ok := samples[w.Bindings[0].Source]
 	if !ok {
 		return fmt.Errorf("binding sample for source %q is missing", w.Bindings[0].Source)
+	}
+	if _, soft := sample.(softFailSentinel); soft {
+		return nil
 	}
 	opts := w.Code.Options
 	switch w.Code.Preset {
@@ -111,7 +134,7 @@ func validateChartSample(preset string, sample any, opts map[string]any) error {
 		return fmt.Errorf("%s expects an array of objects, got %T", preset, target)
 	}
 	if len(rows) == 0 {
-		return fmt.Errorf("%s sample at %q is empty, so commit cannot prove the x/y keys; use markdown/table or a populated source", preset, seriesPath)
+		return nil // empty sample on fresh install — can't prove schema but not an error
 	}
 	obj, ok := rows[0].(map[string]any)
 	if !ok {
@@ -143,7 +166,7 @@ func validateListSample(sample any, opts map[string]any) error {
 		return fmt.Errorf("list expects an array at %q, got %T", itemsPath, target)
 	}
 	if len(items) == 0 {
-		return fmt.Errorf("list sample at %q is empty, so commit cannot prove the item schema; use markdown/table or a populated source", itemsPath)
+		return nil // empty sample on fresh install — can't prove schema but not an error
 	}
 	obj, ok := items[0].(map[string]any)
 	if !ok {

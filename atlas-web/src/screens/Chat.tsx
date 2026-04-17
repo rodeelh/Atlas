@@ -54,6 +54,60 @@ interface FileAttachment {
   fileToken: string
 }
 
+interface SearchResultCardData {
+  rank?: number
+  title: string
+  url: string
+  domain?: string
+  snippet?: string
+  provider?: string
+  confidence?: string
+  publishedAt?: string
+  sourceType?: string
+  contentPreview?: string
+}
+
+interface SourceListGroup {
+  query?: string
+  provider?: string
+  fetchedAt?: string
+  results: SearchResultCardData[]
+}
+
+type MessageBlock =
+  | {
+      type: 'source-list'
+      title: string
+      query?: string
+      provider?: string
+      fetchedAt?: string
+      results: SearchResultCardData[]
+    }
+  | {
+      type: 'multi-source-list'
+      title: string
+      groups: SourceListGroup[]
+    }
+  | {
+      type: 'source-summary'
+      title?: string
+      url: string
+      domain?: string
+      description?: string
+      summary?: string
+      headings?: string[]
+      publishedAt?: string
+      canonicalURL?: string
+    }
+  | {
+      type: 'map'
+      card: MapCardData
+    }
+  | {
+      type: 'file'
+      file: FileAttachment
+    }
+
 interface Message {
   id: string
   role: 'user' | 'assistant'
@@ -66,7 +120,11 @@ interface Message {
   fileAttachments?: FileAttachment[]
   /** Structured map data from maps.* tool calls — rendered as inline map cards. */
   mapCards?: MapCardData[]
+  /** Rich structured blocks rendered below the message body. */
+  blocks?: MessageBlock[]
 }
+
+type ConversationMessage = ConversationDetail['messages'][number]
 
 interface MapCardData {
   type: 'point' | 'directions' | 'places'
@@ -180,15 +238,27 @@ function loadMessages(): Message[] {
   try {
     const raw = localStorage.getItem(STORAGE_MSG_KEY)
     if (!raw) return []
-    return (JSON.parse(raw) as Message[]).map(m => ({ ...m, isTyping: false, createdAt: m.createdAt ?? Date.now() }))
+    return (JSON.parse(raw) as Message[]).map(m => ({
+      ...m,
+      isTyping: false,
+      createdAt: typeof m.createdAt === 'number' ? m.createdAt : Number(m.createdAt) || Date.now(),
+    }))
   } catch { return [] }
 }
 
 function saveMessages(msgs: Message[]) {
   try {
     const toSave = msgs
-      .filter(m => m.content.length > 0 && !m.isTyping)
-      .map(({ id, role, content, createdAt, fileAttachments }) => ({ id, role, content, createdAt, fileAttachments }))
+      .filter(m => (m.content.length > 0 || (m.blocks?.length ?? 0) > 0 || (m.fileAttachments?.length ?? 0) > 0) && !m.isTyping)
+      .map(({ id, role, content, createdAt, fileAttachments, mapCards, blocks }) => ({
+        id,
+        role,
+        content,
+        createdAt,
+        fileAttachments,
+        mapCards,
+        blocks,
+      }))
     localStorage.setItem(STORAGE_MSG_KEY, JSON.stringify(toSave))
   } catch {
     // QuotaExceededError — storage full; skip silently
@@ -248,6 +318,231 @@ function formatDateLabel(ts: number): string {
     month: 'short', day: 'numeric',
     ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {})
   })
+}
+
+function hydrateConversationMessages(messages: ConversationMessage[]): Message[] {
+  return messages
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .map(m => ({
+      id: m.id,
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+      createdAt: new Date(m.timestamp).getTime(),
+      blocks: Array.isArray(m.blocks) ? m.blocks as MessageBlock[] : undefined,
+    }))
+}
+
+function mergeHydratedMessages(messages: Message[], existing: Message[]): Message[] {
+  const existingByID = new Map(existing.map(msg => [msg.id, msg]))
+  return messages.map(msg => {
+    const local = existingByID.get(msg.id)
+    if (!local) return msg
+    return {
+      ...msg,
+      linkPreviews: local.linkPreviews ?? msg.linkPreviews,
+      fileAttachments: local.fileAttachments ?? msg.fileAttachments,
+      mapCards: local.mapCards ?? msg.mapCards,
+      blocks: local.blocks ?? msg.blocks,
+    }
+  })
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map(item => asString(item))
+    .filter((item): item is string => Boolean(item))
+}
+
+function domainFromURL(rawURL: string): string {
+  try {
+    return new URL(rawURL).hostname.replace(/^www\./, '')
+  } catch {
+    return rawURL
+  }
+}
+
+function normalizeSearchResult(value: unknown): SearchResultCardData | null {
+  const data = asRecord(value)
+  if (!data) return null
+  const url = asString(data.url)
+  if (!url) return null
+  const title = asString(data.resolved_title) ?? asString(data.title) ?? domainFromURL(url)
+  return {
+    rank: asNumber(data.rank),
+    title,
+    url,
+    domain: asString(data.domain) ?? domainFromURL(url),
+    snippet: asString(data.snippet),
+    provider: asString(data.provider),
+    confidence: asString(data.confidence),
+    publishedAt: asString(data.published_at),
+    sourceType: asString(data.source_type),
+    contentPreview: asString(data.content_preview),
+  }
+}
+
+function sourceBlockTitle(toolName?: string): string {
+  switch (toolName) {
+    case 'web.news':
+      return 'Recent coverage'
+    case 'web.search_latest':
+      return 'Latest sources'
+    case 'web.search_docs':
+      return 'Documentation sources'
+    case 'web.search_entities':
+      return 'Entity sources'
+    case 'web.research':
+      return 'Research sources'
+    case 'web.multi_search':
+      return 'Searches'
+    default:
+      return 'Sources'
+  }
+}
+
+function parseMapCard(value: Record<string, unknown>): MapCardData | null {
+  const mapType = asString(value.map_type)
+  if (!mapType) return null
+  return {
+    type: mapType as MapCardData['type'],
+    latitude: asNumber(value.latitude),
+    longitude: asNumber(value.longitude),
+    label: asString(value.label),
+    origin: asString(value.origin),
+    destination: asString(value.destination),
+    mode: asString(value.mode),
+    distance: asString(value.distance),
+    duration: asString(value.duration),
+    query: asString(value.query),
+    places: Array.isArray(value.places) ? value.places as MapCardData['places'] : undefined,
+  }
+}
+
+function parseToolBlocks(toolName: string | undefined, rawResult: string | undefined): MessageBlock[] {
+  if (!rawResult) return []
+  let artifacts: unknown
+  try {
+    artifacts = JSON.parse(rawResult)
+  } catch {
+    return []
+  }
+  const data = asRecord(artifacts)
+  if (!data) return []
+
+  const mapCard = parseMapCard(data)
+  if (mapCard) {
+    return [{ type: 'map', card: mapCard }]
+  }
+
+  const queries = Array.isArray(data.queries) ? data.queries : null
+  if (queries) {
+    const groups = queries
+      .map(item => {
+        const group = asRecord(item)
+        if (!group) return null
+        const results = Array.isArray(group.results)
+          ? group.results.map(normalizeSearchResult).filter((entry): entry is SearchResultCardData => Boolean(entry))
+          : []
+        if (results.length === 0) return null
+        const normalizedGroup: SourceListGroup = {
+          query: asString(group.query),
+          provider: asString(group.provider),
+          fetchedAt: asString(group.fetched_at),
+          results,
+        }
+        return normalizedGroup
+      })
+      .filter((entry): entry is SourceListGroup => Boolean(entry))
+    return groups.length > 0
+      ? [{ type: 'multi-source-list', title: sourceBlockTitle(toolName), groups }]
+      : []
+  }
+
+  const results = Array.isArray(data.results)
+    ? data.results.map(normalizeSearchResult).filter((entry): entry is SearchResultCardData => Boolean(entry))
+    : []
+  if (results.length > 0) {
+    return [{
+      type: 'source-list',
+      title: sourceBlockTitle(toolName),
+      query: asString(data.query),
+      provider: asString(data.provider),
+      fetchedAt: asString(data.fetched_at),
+      results,
+    }]
+  }
+
+  const source = asRecord(data.source)
+  const sourceURL = asString(data.url) ?? asString(source?.url) ?? asString(data.canonical_url)
+  const sourceSummary = asString(data.summary) ?? asString(data.preview)
+  const sourceTitle = asString(data.title) ?? asString(source?.title)
+  const headings = asStringArray(data.headings)
+  if (sourceURL && (sourceTitle || sourceSummary || headings.length > 0)) {
+    return [{
+      type: 'source-summary',
+      title: sourceTitle,
+      url: sourceURL,
+      domain: asString(source?.domain) ?? domainFromURL(sourceURL),
+      description: asString(data.description) ?? asString(source?.snippet),
+      summary: sourceSummary,
+      headings,
+      publishedAt: asString(data.published_at) ?? asString(source?.published_at),
+      canonicalURL: asString(data.canonical_url) ?? asString(source?.canonical_url),
+    }]
+  }
+
+  return []
+}
+
+function renderBlockList(blocks: MessageBlock[]): JSX.Element | null {
+  if (blocks.length === 0) return null
+  return (
+    <div class="chat-rich-blocks">
+      {blocks.map((block, index) => {
+        switch (block.type) {
+          case 'source-list':
+            return <SourceListBlock key={`block-${index}`} block={block} />
+          case 'multi-source-list':
+            return <MultiSourceListBlock key={`block-${index}`} block={block} />
+          case 'source-summary':
+            return <SourceSummaryBlock key={`block-${index}`} block={block} />
+          case 'map':
+            return <MapCard key={`block-${index}`} card={block.card} />
+          case 'file':
+            return <FileAttachmentCard key={`block-${index}`} file={block.file} />
+          default:
+            return null
+        }
+      })}
+    </div>
+  )
+}
+
+function messageRenderableBlocks(message: Message): MessageBlock[] {
+  if (message.blocks && message.blocks.length > 0) return message.blocks
+  const fallbackBlocks: MessageBlock[] = []
+  if (message.mapCards) {
+    fallbackBlocks.push(...message.mapCards.map(card => ({ type: 'map', card } satisfies MessageBlock)))
+  }
+  if (message.fileAttachments) {
+    fallbackBlocks.push(...message.fileAttachments.map(file => ({ type: 'file', file } satisfies MessageBlock)))
+  }
+  return fallbackBlocks
 }
 
 // ── URL detection & link previews ──────────────────────────────────────────────
@@ -359,6 +654,119 @@ const LinkPreviewCard = ({ preview }: { preview: LinkPreview }) => {
     </a>
   )
 }
+
+function formatPublishedLabel(value?: string): string | null {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+const SourceResultCard = ({ result }: { result: SearchResultCardData }) => {
+  const publishedLabel = formatPublishedLabel(result.publishedAt)
+  return (
+    <a
+      href={result.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      class="source-card"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div class="source-card-topline">
+        {result.rank != null && <span class="source-card-rank">{result.rank}</span>}
+        <span class="source-card-domain">{result.domain ?? domainFromURL(result.url)}</span>
+        {publishedLabel && <span class="source-card-meta">{publishedLabel}</span>}
+        {result.provider && <span class="source-card-meta">{result.provider}</span>}
+      </div>
+      <span class="source-card-title">{result.title}</span>
+      {result.snippet && <span class="source-card-snippet">{result.snippet}</span>}
+      {!result.snippet && result.contentPreview && <span class="source-card-snippet">{result.contentPreview}</span>}
+      <div class="source-card-footer">
+        {result.sourceType && <span class="source-card-chip">{result.sourceType}</span>}
+        {result.confidence && <span class="source-card-chip">{result.confidence} confidence</span>}
+      </div>
+    </a>
+  )
+}
+
+const SourceListBlock = ({ block }: { block: Extract<MessageBlock, { type: 'source-list' }> }) => (
+  <div class="chat-rich-card source-list-block">
+    <div class="chat-rich-card-header">
+      <div>
+        <span class="chat-rich-card-kicker">{block.title}</span>
+        {block.query && <h4 class="chat-rich-card-title">{block.query}</h4>}
+      </div>
+      {(block.provider || block.fetchedAt) && (
+        <span class="chat-rich-card-meta">
+          {[block.provider, formatPublishedLabel(block.fetchedAt)].filter(Boolean).join(' · ')}
+        </span>
+      )}
+    </div>
+    <div class="source-card-list">
+      {block.results.map(result => (
+        <SourceResultCard key={`${result.url}-${result.rank ?? 0}`} result={result} />
+      ))}
+    </div>
+  </div>
+)
+
+const MultiSourceListBlock = ({ block }: { block: Extract<MessageBlock, { type: 'multi-source-list' }> }) => (
+  <div class="chat-rich-card source-list-block">
+    <div class="chat-rich-card-header">
+      <div>
+        <span class="chat-rich-card-kicker">{block.title}</span>
+      </div>
+    </div>
+    <div class="source-group-list">
+      {block.groups.map(group => (
+        <section key={`${group.query ?? 'group'}-${group.provider ?? ''}`} class="source-group">
+          <div class="source-group-header">
+            <h4 class="source-group-title">{group.query ?? 'Search'}</h4>
+            {(group.provider || group.fetchedAt) && (
+              <span class="chat-rich-card-meta">
+                {[group.provider, formatPublishedLabel(group.fetchedAt)].filter(Boolean).join(' · ')}
+              </span>
+            )}
+          </div>
+          <div class="source-card-list">
+            {group.results.map(result => (
+              <SourceResultCard key={`${group.query ?? 'group'}-${result.url}-${result.rank ?? 0}`} result={result} />
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  </div>
+)
+
+const SourceSummaryBlock = ({ block }: { block: Extract<MessageBlock, { type: 'source-summary' }> }) => (
+  <a
+    href={block.canonicalURL ?? block.url}
+    target="_blank"
+    rel="noopener noreferrer"
+    class="chat-rich-card source-summary-card"
+    onClick={(e) => e.stopPropagation()}
+  >
+    <div class="chat-rich-card-header">
+      <div>
+        <span class="chat-rich-card-kicker">Source summary</span>
+        <h4 class="chat-rich-card-title">{block.title ?? block.domain ?? block.url}</h4>
+      </div>
+      <span class="chat-rich-card-meta">
+        {[block.domain, formatPublishedLabel(block.publishedAt)].filter(Boolean).join(' · ')}
+      </span>
+    </div>
+    {block.description && <p class="source-summary-description">{block.description}</p>}
+    {block.summary && <p class="source-summary-body">{block.summary}</p>}
+    {block.headings && block.headings.length > 0 && (
+      <div class="source-summary-headings">
+        {block.headings.slice(0, 4).map(heading => (
+          <span key={heading} class="source-card-chip">{heading}</span>
+        ))}
+      </div>
+    )}
+  </a>
+)
 
 // ── File attachment card ───────────────────────────────────────────────────────
 
@@ -785,6 +1193,27 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     'What\'s the weather like?',
   ]
 
+  const appendBlocksToMessage = useCallback((messageID: string, blocks: MessageBlock[]) => {
+    if (blocks.length === 0) return
+    setMessages(prev => prev.map(message =>
+      message.id === messageID
+        ? { ...message, blocks: [...(message.blocks ?? []), ...blocks] }
+        : message
+    ))
+  }, [])
+
+  const appendFileToMessage = useCallback((messageID: string, attachment: FileAttachment) => {
+    setMessages(prev => prev.map(message =>
+      message.id === messageID
+        ? {
+            ...message,
+            fileAttachments: [...(message.fileAttachments ?? []), attachment],
+            blocks: [...(message.blocks ?? []), { type: 'file', file: attachment }],
+          }
+        : message
+    ))
+  }, [])
+
   useEffect(() => {
     if (messages.length > 0) return
     const t = setInterval(() => setPromptIndex(i => i + 1), 3500)
@@ -796,6 +1225,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
   // Used to keep typing dots visible even after assistant_done fires (tool-only turns
   // produce no text, so assistant_done fires before tools run, yet the turn continues).
   const activeMsgId = useRef<string | null>(null)
+  const activeTurnIdRef = useRef<string | null>(null)
 
   // Code block copy — event-delegated so it works on DOMPurify-rendered HTML
   const handleCodeCopy = useCallback((e: MouseEvent) => {
@@ -958,10 +1388,10 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       pushEsRef.current = es
 
       es.onmessage = (evt) => {
-        // If a regular turn is active, its own EventSource is handling events.
-        if (esRef.current) return
         try {
           const data = JSON.parse(evt.data) as ChatStreamEvent
+          const foregroundTurnID = activeTurnIdRef.current
+          if (esRef.current && foregroundTurnID && data.turnID === foregroundTurnID) return
           if (data.type === 'assistant_started') {
             setProactiveComposing(false)
             const msg: Message = { id: uuid(), role: 'assistant', content: '', isTyping: true, createdAt: Date.now() }
@@ -980,6 +1410,19 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
             ))
             activeMsgId.current = null
             setProactiveComposing(false)
+          } else if (data.type === 'tool_finished') {
+            const blocks = parseToolBlocks(data.toolName, data.result)
+            if (blocks.length > 0) {
+              setMessages(prev => {
+                const last = [...prev].reverse().find((m: Message) => m.role === 'assistant')
+                if (!last) return prev
+                return prev.map(m =>
+                  m.id === last.id
+                    ? { ...m, blocks: [...(m.blocks ?? []), ...blocks] }
+                    : m
+                )
+              })
+            }
           } else if (data.type === 'file_generated' && data.fileToken && data.filename) {
             const attachment: FileAttachment = {
               filename:  data.filename,
@@ -992,7 +1435,11 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
               if (!last) return prev
               return prev.map(m =>
                 m.id === last.id
-                  ? { ...m, fileAttachments: [...(m.fileAttachments ?? []), attachment] }
+                  ? {
+                      ...m,
+                      fileAttachments: [...(m.fileAttachments ?? []), attachment],
+                      blocks: [...(m.blocks ?? []), { type: 'file', file: attachment }],
+                    }
                   : m
               )
             })
@@ -1027,15 +1474,12 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       try {
         const detail = await api.conversationDetail(convID)
         if (cancelled) return
-        const serverMsgs = detail.messages
-          .filter((m: { role: string }) => m.role === 'user' || m.role === 'assistant')
+        const serverMsgs = hydrateConversationMessages(detail.messages)
         // Only update if the server has more messages than what's cached locally.
         // This avoids clobbering an active in-progress turn or a fresh session.
         setMessages(prev => {
           if (serverMsgs.length > prev.filter(m => !m.isTyping).length) {
-            return serverMsgs.map((m: { id: string; role: string; content: string }) => ({
-              id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
-            }))
+            return mergeHydratedMessages(serverMsgs, prev)
           }
           return prev
         })
@@ -1102,6 +1546,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     scrollToBottom(false)
     return () => {
       esRef.current?.close()
+      activeTurnIdRef.current = null
       speechSessionRef.current?.stop()
       if (voiceStreamAbortRef.current) {
         try { voiceStreamAbortRef.current() } catch { /* ignore */ }
@@ -1276,13 +1721,12 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     setHistoryDropdownVisible(false)
     setAttachments([])
     activeMsgId.current = null
+    activeTurnIdRef.current = null
     setHistoryOpen(false)
     setHistoryQuery('')
     try {
       const detail: ConversationDetail = await api.conversationDetail(id)
-      const loaded: Message[] = detail.messages
-        .filter(m => m.role === 'user' || m.role === 'assistant')
-        .map(m => ({ id: m.id, role: m.role as 'user' | 'assistant', content: m.content }))
+      const loaded = mergeHydratedMessages(hydrateConversationMessages(detail.messages), loadMessages())
       setMessages(loaded)
     } catch (err) {
       setMessages([])
@@ -1293,16 +1737,13 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
   const reconcileConversationState = useCallback(async (convID: string) => {
     try {
       const detail = await api.conversationDetail(convID)
-      const loaded: Message[] = detail.messages
-        .filter(m => m.role === 'user' || m.role === 'assistant')
-        .map(m => ({
-          id: m.id,
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-          createdAt: new Date(m.timestamp).getTime(),
-        }))
-      setMessages(loaded)
-      return loaded
+      const loaded = hydrateConversationMessages(detail.messages)
+      let merged = loaded
+      setMessages(prev => {
+        merged = mergeHydratedMessages(loaded, prev)
+        return merged
+      })
+      return merged
     } catch {
       return null
     }
@@ -1774,10 +2215,17 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     let awaitingResume = false
     let hasReceivedText = false   // tracks first text delta this turn
     let turnCompleted = false
+    let streamTurnID: string | null = null
 
     es.onmessage = (evt) => {
       try {
         const data = JSON.parse(evt.data) as ChatStreamEvent
+        if (data.type === 'assistant_started') {
+          streamTurnID = data.turnID ?? streamTurnID
+          activeTurnIdRef.current = streamTurnID
+        } else if (streamTurnID && data.turnID && data.turnID !== streamTurnID) {
+          return
+        }
         switch (data.type) {
 
           // ── Streaming text events ──────────────────────────────────────────────
@@ -1841,33 +2289,10 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
             break
 
           case 'tool_finished': {
-            if (data.toolName?.startsWith('maps.') && data.result) {
-              try {
-                const artifacts = JSON.parse(data.result) as Record<string, unknown>
-                const mapType = artifacts?.map_type as string | undefined
-                if (mapType) {
-                  const card: MapCardData = {
-                    type: mapType as MapCardData['type'],
-                    latitude: artifacts.latitude as number | undefined,
-                    longitude: artifacts.longitude as number | undefined,
-                    label: artifacts.label as string | undefined,
-                    origin: artifacts.origin as string | undefined,
-                    destination: artifacts.destination as string | undefined,
-                    mode: artifacts.mode as string | undefined,
-                    distance: artifacts.distance as string | undefined,
-                    duration: artifacts.duration as string | undefined,
-                    query: artifacts.query as string | undefined,
-                    places: artifacts.places as MapCardData['places'],
-                  }
-                  const targetId = awaitingResume ? resumedMsgID : assistantMsg.id
-                  if (targetId) {
-                    setMessages(prev => prev.map(m => m.id === targetId
-                      ? { ...m, mapCards: [...(m.mapCards ?? []), card] }
-                      : m
-                    ))
-                  }
-                }
-              } catch { /* malformed JSON — skip */ }
+            const blocks = parseToolBlocks(data.toolName, data.result)
+            const targetId = awaitingResume ? resumedMsgID : assistantMsg.id
+            if (targetId && blocks.length > 0) {
+              appendBlocksToMessage(targetId, blocks)
             }
             break
           }
@@ -1882,11 +2307,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
             }
             const targetId = awaitingResume ? resumedMsgID : assistantMsg.id
             if (targetId) {
-              setMessages(prev => prev.map(m =>
-                m.id === targetId
-                  ? { ...m, fileAttachments: [...(m.fileAttachments ?? []), attachment] }
-                  : m
-              ))
+              appendFileToMessage(targetId, attachment)
             }
             break
           }
@@ -1927,6 +2348,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
           case 'done':
             turnCompleted = true
             activeMsgId.current = null
+            activeTurnIdRef.current = null
             if (data.status === 'waitingForApproval') {
               setMessages(prev => prev.map(m => m.id === assistantMsg.id ? { ...m, content: accumulatedContent || m.content, isTyping: false } : m))
               awaitingResume = true
@@ -1979,6 +2401,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
           case 'error':
             turnCompleted = true
             activeMsgId.current = null
+            activeTurnIdRef.current = null
             setError(extractStreamError(data))
             const targetID = resumedMsgID ?? assistantMsg.id
             setMessages(prev => prev.map(m => m.id === targetID ? { ...m, content: resumedContent || accumulatedContent || 'Failed to get response.', isTyping: false } : m))
@@ -1988,6 +2411,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
           case 'cancelled':
             turnCompleted = true
             activeMsgId.current = null
+            activeTurnIdRef.current = null
             // Remove the empty typing bubble; keep any partial content that arrived.
             setMessages(prev => {
               const cancelTargetID = resumedMsgID ?? assistantMsg.id
@@ -2007,6 +2431,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     es.onerror = async () => {
       if (turnCompleted) return
       activeMsgId.current = null
+      activeTurnIdRef.current = null
       setSending(false)
       es.close()
       const reconciled = await reconcileConversationState(conversationID.current)
@@ -2021,6 +2446,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       await api.sendMessage(conversationID.current, text, pendingAttachments.length > 0 ? pendingAttachments : undefined)
     } catch (err) {
       activeMsgId.current = null
+      activeTurnIdRef.current = null
       setError(err instanceof Error ? err.message : 'Failed to send message.')
       setMessages(prev => prev.map(m => m.id === assistantMsg.id ? { ...m, content: 'Failed to send message.', isTyping: false } : m))
       setSending(false); es.close()
@@ -2061,6 +2487,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     speechSessionRef.current = null
     setSpeechListening(false)
     activeMsgId.current = null
+    activeTurnIdRef.current = null
   }
 
   // Derived — model name shown as header subtitle.
@@ -2284,12 +2711,16 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
           )}
 
           {messages.map((msg, i) => {
+            const hasBlocks = (messageRenderableBlocks(msg).length > 0)
             // Skip ghost bubbles — empty assistant messages that are no longer typing.
             // These can appear on tool-only approval turns where no text was produced.
-            if (!msg.content && !msg.isTyping && msg.id !== activeMsgId.current) return null
+            if (!msg.content && !hasBlocks && !msg.isTyping && msg.id !== activeMsgId.current) return null
             const prevMsg = messages[i - 1]
             const msgDate = formatDateLabel(msg.createdAt ?? Date.now())
             const showDateSep = !prevMsg || formatDateLabel(prevMsg.createdAt ?? Date.now()) !== msgDate
+            const isLatestVisibleMessage = !messages.slice(i + 1).some(nextMsg =>
+              nextMsg.content || nextMsg.isTyping || nextMsg.id === activeMsgId.current
+            )
             return (
             <>
               {showDateSep && (
@@ -2300,13 +2731,15 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
             <div
               key={msg.id}
               data-msg-id={msg.id}
-              class={`chat-message-group ${msg.role}${msg.isTyping ? ' typing' : ''}${revealedCopyId === msg.id ? ' meta-visible' : ''}`}
+              class={`chat-message-group ${msg.role}${msg.isTyping ? ' typing' : ''}${revealedCopyId === msg.id ? ' meta-visible' : ''}${isLatestVisibleMessage ? ' is-latest' : ''}`}
             >
               <div class="chat-message-row">
                 <div class={`chat-avatar chat-avatar-${msg.role}`}>
                   <span class="chat-avatar-content chat-avatar-content-glyph"><AvatarGlyph /></span>
                   <span class="chat-avatar-content chat-avatar-content-initial">{msg.role === 'assistant' ? agentName[0]?.toUpperCase() ?? 'A' : userName[0]?.toUpperCase() ?? 'Y'}</span>
-                  <span class="chat-avatar-content chat-avatar-content-minimal"><span class="chat-avatar-minimal-dot" /></span>
+                  <span class="chat-avatar-content chat-avatar-content-minimal">
+                    <span class="chat-avatar-minimal-chevron" aria-hidden="true">{msg.role === 'assistant' ? '>' : '<'}</span>
+                  </span>
                 </div>
                 <div class="chat-bubble-wrap">
                   <div
@@ -2325,22 +2758,9 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                           ? <TypingDots />
                           : null
                     }
-                    {msg.mapCards && msg.mapCards.length > 0 && (
-                      <div class="map-card-list">
-                        {msg.mapCards.map((card, i) => (
-                          <MapCard key={i} card={card} />
-                        ))}
-                      </div>
-                    )}
-                    {msg.fileAttachments && msg.fileAttachments.length > 0 && (
-                      <div class="file-attachment-list">
-                        {msg.fileAttachments.map(f => (
-                          <FileAttachmentCard key={f.fileToken} file={f} />
-                        ))}
-                      </div>
-                    )}
+                    {renderBlockList(messageRenderableBlocks(msg))}
                   </div>
-                  {!msg.isTyping && (msg.content || msg.createdAt) && (
+                  {!msg.isTyping && (msg.content || hasBlocks || msg.createdAt) && (
                     <div class="chat-message-meta">
                       {msg.content && (() => {
                         const copyState = copyFeedback?.id === msg.id ? copyFeedback.status : 'idle'

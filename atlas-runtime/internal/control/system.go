@@ -156,7 +156,7 @@ func normalizeLocalBaseURL(raw, fallback, field string) (string, error) {
 		return "", fmt.Errorf("%s must point to a local loopback host", field)
 	}
 	if u.Path != "" && u.Path != "/" {
-		return "", fmt.Errorf("%s must not include a path", field)
+		return "", fmt.Errorf("%s must not include a path (do not add /v1 — it is appended automatically)", field)
 	}
 	if u.RawQuery != "" || u.Fragment != "" {
 		return "", fmt.Errorf("%s must not include query strings or fragments", field)
@@ -178,8 +178,8 @@ func isLoopbackHost(host string) bool {
 }
 
 func validatePort(name string, value int) error {
-	if value < 1 || value > 65535 {
-		return fmt.Errorf("%s must be between 1 and 65535", name)
+	if value < 1024 || value > 65535 {
+		return fmt.Errorf("%s must be between 1024 and 65535 (privileged ports 1–1023 cannot be bound by a user-level launchd agent)", name)
 	}
 	return nil
 }

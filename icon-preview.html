@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Atlas Icon Preview</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0e0e1a;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+    padding: 48px;
+    min-height: 100vh;
+  }
+
+  h1 {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #555;
+    margin-bottom: 40px;
+  }
+
+  section { margin-bottom: 52px; }
+
+  .label {
+    font-size: 10px;
+    color: #444;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+  }
+
+  .row {
+    display: flex;
+    align-items: flex-end;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+
+  .cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .cell .sz {
+    font-size: 10px;
+    color: #444;
+  }
+
+  .bg-dark   { background: #0e0e1a; padding: 16px; border-radius: 12px; }
+  .bg-light  { background: #f0f0f5; padding: 16px; border-radius: 12px; }
+  .bg-dock   { background: rgba(255,255,255,0.10); padding: 16px; border-radius: 12px; backdrop-filter: blur(20px); }
+  .bg-bar    { background: #1c1c2e; padding: 10px; border-radius: 8px; }
+
+  .tab-strip {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    background: #2a2a3e;
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-size: 12px;
+    color: #ccc;
+    width: 200px;
+  }
+
+  .badge-wrap { position: relative; display: inline-flex; }
+  .badge {
+    position: absolute;
+    top: -4px; right: -4px;
+    width: 14px; height: 14px;
+    background: #ff3b30;
+    border-radius: 50%;
+    border: 2px solid #1c1c2e;
+    font-size: 7px;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+  }
+
+  .compare-row  { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+  .compare-card {
+    background: #161625;
+    border: 1px solid #22223a;
+    border-radius: 14px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+  }
+  .compare-card .card-label { font-size: 10px; color: #555; }
+
+  hr { border: none; border-top: 1px solid #181828; margin: 48px 0; }
+
+  svg { display: block; }
+</style>
+</head>
+<body>
+
+<h1>Atlas · Icon Design Preview</h1>
+
+<!-- ============================================================
+  INLINE SVG DEFINITIONS
+  app-icon  = dark rounded square with nested glow rings + chevrons
+  favicon   = green rounded square + chevrons (for browser / light contexts)
+============================================================ -->
+
+<template id="tpl-app-icon">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+    <defs>
+      <linearGradient id="ai-grad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%"   stop-color="#7CFFC4"/>
+        <stop offset="55%"  stop-color="#00FF99"/>
+        <stop offset="100%" stop-color="#00C97A"/>
+      </linearGradient>
+      <filter id="ai-blockGlow" x="-50%" y="-50%" width="200%" height="200%">
+        <feGaussianBlur stdDeviation="1.1" result="blur"/>
+        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+      <filter id="ai-haloGlow" x="-75%" y="-75%" width="250%" height="250%">
+        <feGaussianBlur stdDeviation="1.8" result="blur"/>
+        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <defs>
+      <clipPath id="ai-iconClip"><rect width="32" height="32" rx="7"/></clipPath>
+    </defs>
+    <g clip-path="url(#ai-iconClip)">
+    <rect width="32" height="32" rx="7" fill="#060612"/>
+    <rect x="0"    y="0"    width="32"    height="32"    rx="7"    fill="#00D985" opacity="0.14" filter="url(#ai-haloGlow)"/>
+    <rect x="2.89" y="2.89" width="26.22" height="26.22" rx="5.72" fill="#00D985" opacity="0.26" filter="url(#ai-haloGlow)"/>
+    <rect x="5.85" y="5.85" width="20.31" height="20.31" rx="4.43" fill="url(#ai-grad)" filter="url(#ai-blockGlow)"/>
+    <path d="M 9.23 9.54  L 13.05 11.45 L 9.23 13.35"  fill="none" stroke="#060612" stroke-width="1.92" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 22.65 13.78 L 14.03 18.46 L 22.65 23.14" fill="none" stroke="#060612" stroke-width="2.95" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+  </svg>
+</template>
+
+<template id="tpl-favicon">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+    <defs>
+      <linearGradient id="fv-grad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%"   stop-color="#7CFFC4"/>
+        <stop offset="55%"  stop-color="#00FF99"/>
+        <stop offset="100%" stop-color="#00C97A"/>
+      </linearGradient>
+    </defs>
+    <rect width="32" height="32" rx="7" fill="url(#fv-grad)"/>
+    <path d="M  5.33  5.82 L 11.34  8.82 L  5.33 11.83" fill="none" stroke="#060612" stroke-width="3.02" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 26.47 12.51 L 12.90 19.88 L 26.47 27.24" fill="none" stroke="#060612" stroke-width="4.66" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</template>
+
+<script>
+  /* Stamp a copy of a <template> into every .icon-slot[data-icon] */
+  function stamp(selector, templateId, width, height) {
+    const tpl = document.getElementById(templateId);
+    document.querySelectorAll(selector).forEach(el => {
+      const clone = tpl.content.cloneNode(true);
+      const svg = clone.querySelector('svg');
+      svg.setAttribute('width',  width  ?? el.dataset.w ?? 32);
+      svg.setAttribute('height', height ?? el.dataset.h ?? 32);
+      el.appendChild(clone);
+    });
+  }
+</script>
+
+<!-- ============================================================
+  APP ICON — SIZES
+============================================================ -->
+<section>
+  <div class="label">App Icon — Sizes</div>
+  <div class="row">
+    <div class="cell"><div class="app-icon" data-w="16"  data-h="16"></div> <span class="sz">16</span></div>
+    <div class="cell"><div class="app-icon" data-w="32"  data-h="32"></div> <span class="sz">32</span></div>
+    <div class="cell"><div class="app-icon" data-w="64"  data-h="64"></div> <span class="sz">64</span></div>
+    <div class="cell"><div class="app-icon" data-w="128" data-h="128"></div><span class="sz">128</span></div>
+    <div class="cell"><div class="app-icon" data-w="256" data-h="256"></div><span class="sz">256</span></div>
+    <div class="cell"><div class="app-icon" data-w="512" data-h="512"></div><span class="sz">512</span></div>
+  </div>
+</section>
+
+<hr>
+
+<!-- ============================================================
+  FAVICON — SIZES on LIGHT + DARK
+============================================================ -->
+<section>
+  <div class="label">Favicon — Light & Dark backgrounds</div>
+  <div class="row">
+    <div class="cell"><div class="bg-light"><div class="favicon" data-w="16"  data-h="16"></div></div> <span class="sz">16 light</span></div>
+    <div class="cell"><div class="bg-dark"> <div class="favicon" data-w="16"  data-h="16"></div></div> <span class="sz">16 dark</span></div>
+    <div class="cell"><div class="bg-light"><div class="favicon" data-w="32"  data-h="32"></div></div> <span class="sz">32 light</span></div>
+    <div class="cell"><div class="bg-dark"> <div class="favicon" data-w="32"  data-h="32"></div></div> <span class="sz">32 dark</span></div>
+    <div class="cell"><div class="bg-light"><div class="favicon" data-w="64"  data-h="64"></div></div> <span class="sz">64 light</span></div>
+    <div class="cell"><div class="bg-dark"> <div class="favicon" data-w="64"  data-h="64"></div></div> <span class="sz">64 dark</span></div>
+    <div class="cell"><div class="bg-dark"> <div class="favicon" data-w="128" data-h="128"></div></div><span class="sz">128 dark</span></div>
+  </div>
+</section>
+
+<hr>
+
+<!-- ============================================================
+  FAVICON — BROWSER TAB
+============================================================ -->
+<section>
+  <div class="label">Favicon — Browser Tab</div>
+  <div class="row">
+    <div class="tab-strip">
+      <div class="favicon" data-w="16" data-h="16"></div>
+      Atlas
+    </div>
+  </div>
+</section>
+
+<hr>
+
+<!-- ============================================================
+  APP ICON — CONTEXT
+============================================================ -->
+<section>
+  <div class="label">App Icon — Context</div>
+  <div class="row">
+    <div class="cell">
+      <div class="bg-dark"><div class="app-icon" data-w="80" data-h="80"></div></div>
+      <span class="sz">Dark bg</span>
+    </div>
+    <div class="cell">
+      <div class="bg-light"><div class="app-icon" data-w="80" data-h="80"></div></div>
+      <span class="sz">Light bg</span>
+    </div>
+    <div class="cell">
+      <div class="bg-dock"><div class="app-icon" data-w="80" data-h="80"></div></div>
+      <span class="sz">Dock</span>
+    </div>
+    <div class="cell">
+      <div class="bg-bar">
+        <div class="badge-wrap">
+          <div class="app-icon" data-w="32" data-h="32"></div>
+          <div class="badge">3</div>
+        </div>
+      </div>
+      <span class="sz">Menu bar</span>
+    </div>
+  </div>
+</section>
+
+<hr>
+
+<!-- ============================================================
+  SIDE-BY-SIDE — APP ICON vs FAVICON
+============================================================ -->
+<section>
+  <div class="label">App Icon vs Favicon — 128px</div>
+  <div class="compare-row">
+    <div class="compare-card">
+      <div class="app-icon" data-w="128" data-h="128"></div>
+      <div class="card-label">app-icon</div>
+    </div>
+    <div class="compare-card">
+      <div style="background:#f0f0f5; padding:16px; border-radius:8px;">
+        <div class="favicon" data-w="128" data-h="128"></div>
+      </div>
+      <div class="card-label">favicon — light</div>
+    </div>
+    <div class="compare-card">
+      <div style="background:#0e0e1a; padding:16px; border-radius:8px;">
+        <div class="favicon" data-w="128" data-h="128"></div>
+      </div>
+      <div class="card-label">favicon — dark</div>
+    </div>
+  </div>
+</section>
+
+<hr>
+
+<!-- ============================================================
+  WORDMARK / LOGO
+============================================================ -->
+<section>
+  <div class="label">Wordmark</div>
+  <div class="row">
+    <!-- Dark bg -->
+    <div class="cell">
+      <div style="background:#0e0e1a; padding:16px 20px; border-radius:10px; display:flex; align-items:center; gap:10px;">
+        <div class="app-icon" data-w="32" data-h="32"></div>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 40" width="140" height="40">
+          <text x="0" y="30" font-family="'Geist Mono', ui-monospace, 'SF Mono', monospace" font-size="32" font-weight="500" fill="#E0E0FF" letter-spacing="-1">atlas</text>
+        </svg>
+      </div>
+      <span class="sz">Dark</span>
+    </div>
+    <!-- Light bg -->
+    <div class="cell">
+      <div style="background:#f0f0f5; padding:16px 20px; border-radius:10px; display:flex; align-items:center; gap:10px;">
+        <div class="favicon" data-w="32" data-h="32"></div>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 40" width="140" height="40">
+          <text x="0" y="30" font-family="'Geist Mono', ui-monospace, 'SF Mono', monospace" font-size="32" font-weight="500" fill="#0e0e1a" letter-spacing="-1">atlas</text>
+        </svg>
+      </div>
+      <span class="sz">Light</span>
+    </div>
+  </div>
+</section>
+
+<script>
+  document.querySelectorAll('.app-icon').forEach(el => {
+    const tpl = document.getElementById('tpl-app-icon');
+    const clone = tpl.content.cloneNode(true);
+    const svg = clone.querySelector('svg');
+    svg.setAttribute('width',  el.dataset.w || 32);
+    svg.setAttribute('height', el.dataset.h || 32);
+    el.appendChild(clone);
+  });
+
+  document.querySelectorAll('.favicon').forEach(el => {
+    const tpl = document.getElementById('tpl-favicon');
+    const clone = tpl.content.cloneNode(true);
+    const svg = clone.querySelector('svg');
+    svg.setAttribute('width',  el.dataset.w || 32);
+    svg.setAttribute('height', el.dataset.h || 32);
+    el.appendChild(clone);
+  });
+</script>
+
+</body>
+</html>

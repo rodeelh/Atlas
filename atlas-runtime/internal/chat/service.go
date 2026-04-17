@@ -68,6 +68,7 @@ type MessageItem struct {
 	Role      string `json:"role"`
 	Content   string `json:"content"`
 	Timestamp string `json:"timestamp"`
+	Blocks    any    `json:"blocks,omitempty"`
 }
 
 // Service handles chat message processing: stores messages, calls the AI
@@ -110,6 +111,7 @@ type conversationSummary struct {
 
 // summaryTTL is how long a cached conversation summary stays valid.
 const summaryTTL = 10 * time.Minute
+
 // compactHistoryChars caps how much prior conversation is replayed in compact
 // mode. 1200 was far too low — a single PDF summary easily exceeds it, causing
 // the agent to lose all document context on the very next turn. 8000 chars
@@ -199,13 +201,14 @@ func (s *Service) CancelTurn(convID string) {
 func (s *Service) SendProactive(convID, text string) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	msgID := newUUID()
+	turnID := newUUID()
 	if err := s.db.SaveMessage(msgID, convID, "assistant", text, now); err != nil {
 		logstore.Write("warn", "SendProactive: failed to save message",
 			map[string]string{"conv": convID, "error": err.Error()})
 	}
-	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_started", ConversationID: convID})
-	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_delta", Content: text, ConversationID: convID})
-	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_done", ConversationID: convID})
+	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_started", ConversationID: convID, TurnID: turnID})
+	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_delta", Content: text, ConversationID: convID, TurnID: turnID})
+	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_done", ConversationID: convID, TurnID: turnID})
 }
 
 // SetRouterEngineManager wires in the tool-router Engine LM manager so the chat
@@ -241,6 +244,7 @@ func (be *broadcasterEmitter) Emit(convID string, e agent.EmitEvent) {
 		Content:        e.Content,
 		Role:           e.Role,
 		ConversationID: e.ConvID,
+		TurnID:         e.TurnID,
 		ToolName:       e.ToolName,
 		ToolCallID:     e.ToolCallID,
 		ApprovalID:     e.ApprovalID,
@@ -1138,6 +1142,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 	cfg := s.cfgStore.Load()
 	turn := &turnContext{}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	turnID := newUUID()
 
 	// Resolve conversation ID.
 	convID := req.ConversationID
@@ -1185,6 +1190,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 			Type:           "error",
 			Error:          errMsg,
 			ConversationID: convID,
+			TurnID:         turnID,
 		})
 		s.broadcaster.Finish(convID)
 
@@ -1196,6 +1202,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 				Role:      m.Role,
 				Content:   m.Content,
 				Timestamp: m.Timestamp,
+				Blocks:    HydrateStoredBlocks(firstNonNilString(m.BlocksJSON)),
 			})
 		}
 		resp.Response.Status = "error"
@@ -1296,14 +1303,14 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		replyAt := time.Now().UTC().Format(time.RFC3339Nano)
 		assistantMsgID := newUUID()
 		_ = s.db.SaveMessage(assistantMsgID, convID, "assistant", degradeMsg, replyAt)
-		s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_started", Role: "assistant", ConversationID: convID})
-		s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_delta", Content: degradeMsg, Role: "assistant", ConversationID: convID})
-		s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_done", Role: "assistant", ConversationID: convID})
-		s.broadcaster.Emit(convID, SSEEvent{Type: "done", Status: "completed", ConversationID: convID})
+		s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_started", Role: "assistant", ConversationID: convID, TurnID: turnID})
+		s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_delta", Content: degradeMsg, Role: "assistant", ConversationID: convID, TurnID: turnID})
+		s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_done", Role: "assistant", ConversationID: convID, TurnID: turnID})
+		s.broadcaster.Emit(convID, SSEEvent{Type: "done", Status: "completed", ConversationID: convID, TurnID: turnID})
 		s.broadcaster.Finish(convID)
 		allMessages := make([]MessageItem, 0, len(history)+1)
 		for _, m := range history {
-			allMessages = append(allMessages, MessageItem{ID: m.ID, Role: m.Role, Content: m.Content, Timestamp: m.Timestamp})
+			allMessages = append(allMessages, MessageItem{ID: m.ID, Role: m.Role, Content: m.Content, Timestamp: m.Timestamp, Blocks: HydrateStoredBlocks(firstNonNilString(m.BlocksJSON))})
 		}
 		allMessages = append(allMessages, MessageItem{ID: assistantMsgID, Role: "assistant", Content: degradeMsg, Timestamp: replyAt})
 		var resp MessageResponse
@@ -1562,6 +1569,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 		MaxIterations: maxIter,
 		SupportDir:    config.SupportDir(),
 		ConvID:        convID,
+		TurnID:        turnID,
 		Tools:         selectedTools, // nil → loop uses full ToolDefinitions()
 		UserMessage:   req.Message,   // used by lazy tool upgrade in the agent loop
 		ToolPolicy:    req.ToolPolicy,
@@ -1652,6 +1660,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 			s.broadcaster.Emit(convID, SSEEvent{
 				Type:           "cancelled",
 				ConversationID: convID,
+				TurnID:         turnID,
 			})
 			s.broadcaster.Finish(convID)
 			resp.Response.Status = "cancelled"
@@ -1677,6 +1686,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 			Type:           "error",
 			Error:          errMsg,
 			ConversationID: convID,
+			TurnID:         turnID,
 		})
 		s.broadcaster.Finish(convID)
 
@@ -1686,6 +1696,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 				Role:      m.Role,
 				Content:   m.Content,
 				Timestamp: m.Timestamp,
+				Blocks:    HydrateStoredBlocks(firstNonNilString(m.BlocksJSON)),
 			})
 		}
 		resp.Response.Status = "error"
@@ -1700,6 +1711,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 			Type:           "done",
 			ConversationID: convID,
 			Status:         "waitingForApproval",
+			TurnID:         turnID,
 		})
 
 		for _, m := range history {
@@ -1708,6 +1720,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 				Role:      m.Role,
 				Content:   m.Content,
 				Timestamp: m.Timestamp,
+				Blocks:    HydrateStoredBlocks(firstNonNilString(m.BlocksJSON)),
 			})
 		}
 		resp.Response.Status = "pendingApproval"
@@ -1719,7 +1732,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 
 		// Persist assistant reply.
 		assistantMsgID := newUUID()
-		if err := s.db.SaveMessage(assistantMsgID, convID, "assistant", assistantText, replyAt); err != nil {
+		if err := s.db.SaveMessageWithBlocks(assistantMsgID, convID, "assistant", assistantText, replyAt, messageBlocksJSON(result.MessageBlocks)); err != nil {
 			return MessageResponse{}, fmt.Errorf("chat: save assistant message: %w", err)
 		}
 
@@ -1795,6 +1808,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 				s.broadcaster.Emit(convID, SSEEvent{
 					Type:           "file_generated",
 					ConversationID: convID,
+					TurnID:         turnID,
 					Filename:       filepath.Base(filePath),
 					MimeType:       agent.MimeTypeForPath(filePath),
 					FileSize:       size,
@@ -1810,6 +1824,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 			Type:           "done",
 			Status:         "completed",
 			ConversationID: convID,
+			TurnID:         turnID,
 		})
 		s.broadcaster.Finish(convID)
 
@@ -1821,6 +1836,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 				Role:      m.Role,
 				Content:   m.Content,
 				Timestamp: m.Timestamp,
+				Blocks:    HydrateStoredBlocks(firstNonNilString(m.BlocksJSON)),
 			})
 		}
 		allMessages = append(allMessages, MessageItem{
@@ -1828,6 +1844,7 @@ func (s *Service) HandleMessage(ctx context.Context, req MessageRequest) (Messag
 			Role:      "assistant",
 			Content:   assistantText,
 			Timestamp: replyAt,
+			Blocks:    result.MessageBlocks,
 		})
 
 		resp.Conversation.Messages = allMessages
@@ -1993,6 +2010,7 @@ func (s *Service) ResolveFastProvider() (agent.ProviderConfig, error) {
 // the agent loop to completion.
 func (s *Service) Resume(toolCallID string, approved bool) {
 	ctx := context.Background()
+	turnID := newUUID()
 
 	row, err := s.db.FetchDeferredByToolCallID(toolCallID)
 	if err != nil || row == nil {
@@ -2094,6 +2112,7 @@ func (s *Service) Resume(toolCallID string, approved bool) {
 		MaxIterations: maxIter,
 		SupportDir:    config.SupportDir(),
 		ConvID:        convID,
+		TurnID:        turnID,
 	}
 
 	resumeConvID := convID
@@ -2111,15 +2130,16 @@ func (s *Service) Resume(toolCallID string, approved bool) {
 	s.broadcaster.Emit(convID, SSEEvent{
 		Type:           "assistant_started",
 		ConversationID: convID,
+		TurnID:         turnID,
 	})
 
 	resumeStart := time.Now()
 	result := agentLoop.Run(ctx, loopCfg, messages, convID)
 
-	if result.Status == "complete" && result.FinalText != "" {
+	if result.Status == "complete" && (result.FinalText != "" || len(result.MessageBlocks) > 0) {
 		replyAt := time.Now().UTC().Format(time.RFC3339Nano)
 		assistantMsgID := newUUID()
-		if err := s.db.SaveMessage(assistantMsgID, convID, "assistant", result.FinalText, replyAt); err != nil {
+		if err := s.db.SaveMessageWithBlocks(assistantMsgID, convID, "assistant", result.FinalText, replyAt, messageBlocksJSON(result.MessageBlocks)); err != nil {
 			logstore.Write("warn", "Resume: failed to persist assistant message: "+err.Error(),
 				map[string]string{"conv": convID})
 		}
@@ -2141,6 +2161,7 @@ func (s *Service) Resume(toolCallID string, approved bool) {
 			Type:           "done",
 			Status:         "completed",
 			ConversationID: convID,
+			TurnID:         turnID,
 		})
 		s.broadcaster.Finish(convID)
 	}
@@ -2196,13 +2217,14 @@ func (s *Service) InjectAssistantMessage(text string) error {
 	convID := convs[0].ID
 	msgID := newUUID()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	turnID := newUUID()
 	if err := s.db.SaveMessage(msgID, convID, "assistant", text, now); err != nil {
 		return fmt.Errorf("webchat inject: save message: %w", err)
 	}
-	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_started", Role: "assistant", ConversationID: convID})
-	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_delta", Content: text, Role: "assistant", ConversationID: convID})
-	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_done", Role: "assistant", ConversationID: convID})
-	s.broadcaster.Emit(convID, SSEEvent{Type: "done", Status: "completed", ConversationID: convID})
+	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_started", Role: "assistant", ConversationID: convID, TurnID: turnID})
+	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_delta", Content: text, Role: "assistant", ConversationID: convID, TurnID: turnID})
+	s.broadcaster.Emit(convID, SSEEvent{Type: "assistant_done", Role: "assistant", ConversationID: convID, TurnID: turnID})
+	s.broadcaster.Emit(convID, SSEEvent{Type: "done", Status: "completed", ConversationID: convID, TurnID: turnID})
 	logstore.Write("info", "Webchat inject: delivered automation result", map[string]string{"conv": convID[:8]})
 	return nil
 }

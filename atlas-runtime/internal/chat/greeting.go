@@ -184,6 +184,7 @@ func (s *Service) HandleGreeting(ctx context.Context, convIDHint string) (Greeti
 	// column or a schema change if the UI needs to distinguish greetings
 	// in historical scroll.
 	msgID := newUUID()
+	turnID := newUUID()
 	ts := time.Now().UTC()
 	tsStr := ts.Format(time.RFC3339Nano)
 	if err := s.db.SaveMessage(msgID, convID, "assistant", content, tsStr); err != nil {
@@ -202,22 +203,26 @@ func (s *Service) HandleGreeting(ctx context.Context, convIDHint string) (Greeti
 		Type:           "assistant_started",
 		Role:           "assistant",
 		ConversationID: convID,
+		TurnID:         turnID,
 	})
 	s.broadcaster.Emit(convID, SSEEvent{
 		Type:           "assistant_delta",
 		Content:        content,
 		Role:           "assistant",
 		ConversationID: convID,
+		TurnID:         turnID,
 	})
 	s.broadcaster.Emit(convID, SSEEvent{
 		Type:           "assistant_done",
 		Role:           "assistant",
 		ConversationID: convID,
+		TurnID:         turnID,
 	})
 	s.broadcaster.Emit(convID, SSEEvent{
 		Type:           "done",
 		Status:         "completed",
 		ConversationID: convID,
+		TurnID:         turnID,
 	})
 
 	// Clear the queue now that the greeting is safely persisted.

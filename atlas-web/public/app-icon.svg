@@ -13,17 +13,26 @@
       <feGaussianBlur stdDeviation="1.8" result="blur"/>
       <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
+    <clipPath id="iconClip">
+      <rect width="32" height="32" rx="7"/>
+    </clipPath>
   </defs>
 
+  <g clip-path="url(#iconClip)">
   <rect width="32" height="32" rx="7" fill="#060612"/>
 
-  <rect x="3" y="3" width="26" height="26" rx="5.7" fill="#00D985" opacity="0.14" filter="url(#haloGlow)"/>
-  <rect x="5.35" y="5.35" width="21.3" height="21.3" rx="4.65" fill="#00D985" opacity="0.26" filter="url(#haloGlow)"/>
+  <!-- outer ring scaled to fill full icon (was x=3, 26×26 → x=0, 32×32) -->
+  <rect x="0" y="0" width="32" height="32" rx="7" fill="#00D985" opacity="0.14" filter="url(#haloGlow)"/>
+  <!-- middle ring: 21.3 × 32/26 = 26.22 -->
+  <rect x="2.89" y="2.89" width="26.22" height="26.22" rx="5.72" fill="#00D985" opacity="0.26" filter="url(#haloGlow)"/>
 
-  <rect x="7.75" y="7.75" width="16.5" height="16.5" rx="3.6" fill="url(#grad)" filter="url(#blockGlow)"/>
+  <!-- inner green block: 16.5 × 32/26 = 20.31 -->
+  <rect x="5.85" y="5.85" width="20.31" height="20.31" rx="4.43" fill="url(#grad)" filter="url(#blockGlow)"/>
 
-  <path d="M 10.5 10.75 L 13.6 12.3 L 10.5 13.85" fill="none" stroke="#060612" stroke-width="1.56"
+  <!-- chevrons: all coords scaled by 32/26 from center (16,16) -->
+  <path d="M 9.23 9.54 L 13.05 11.45 L 9.23 13.35" fill="none" stroke="#060612" stroke-width="1.92"
         stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M 21.4 14.2 L 14.4 18.0 L 21.4 21.8" fill="none" stroke="#060612" stroke-width="2.4"
+  <path d="M 22.65 13.78 L 14.03 18.46 L 22.65 23.14" fill="none" stroke="#060612" stroke-width="2.95"
         stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
 </svg>

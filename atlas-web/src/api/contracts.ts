@@ -155,6 +155,7 @@ export interface MessageResponse {
       role: "user" | "assistant";
       content: string;
       timestamp: string;
+      blocks?: Array<Record<string, unknown>>;
     }>;
   };
   response: {
@@ -182,6 +183,7 @@ export interface ChatStreamEvent {
   content?: string;
   role?: "assistant" | "user" | string;
   conversationID?: string;
+  turnID?: string;
   error?: string;
   message?: string;
   status?: string;
@@ -760,6 +762,7 @@ export interface ConversationMessage {
   role: "user" | "assistant" | "system" | "tool";
   content: string;
   timestamp: string;
+  blocks?: Array<Record<string, unknown>>;
 }
 
 export interface ConversationDetail extends ConversationSummary {

@@ -195,21 +195,37 @@ func validateLiveCompute(cfg map[string]any) error {
 
 func promptNeedsFreshInputs(prompt string) bool {
 	lower := strings.ToLower(prompt)
-	keywords := []string{
-		"latest",
-		"current",
-		"today",
-		"recent",
-		"news",
-		"breaking",
-		"now",
-		"this week",
-		"this month",
-	}
-	for _, kw := range keywords {
+	// Multi-word phrases: substring match is unambiguous.
+	for _, kw := range []string{"this week", "this month"} {
 		if strings.Contains(lower, kw) {
 			return true
 		}
+	}
+	// Single-word keywords: require word boundaries to avoid false positives
+	// ("now" ⊂ "know", "current" ⊂ "concurrent", etc.)
+	for _, kw := range []string{"latest", "current", "today", "recent", "news", "breaking", "now"} {
+		if containsWholeWord(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsWholeWord reports whether word appears as a whole word in s.
+// s must already be lowercased; word must be a lowercase ASCII string.
+func containsWholeWord(s, word string) bool {
+	wlen := len(word)
+	for i := 0; i <= len(s)-wlen; i++ {
+		if s[i:i+wlen] != word {
+			continue
+		}
+		if i > 0 && s[i-1] >= 'a' && s[i-1] <= 'z' {
+			continue
+		}
+		if end := i + wlen; end < len(s) && s[end] >= 'a' && s[end] <= 'z' {
+			continue
+		}
+		return true
 	}
 	return false
 }

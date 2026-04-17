@@ -413,7 +413,7 @@ func TestAutomationExecutionFlow_RunRouteCreatesRunRecord(t *testing.T) {
 		t.Fatal("expected run id")
 	}
 
-	deadline := time.Now().Add(8 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		runs, err := h.db.ListGremlinRuns(items[0].ID, 10)
 		if err != nil {

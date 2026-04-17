@@ -4,59 +4,71 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
-
-	"atlas-runtime-go/internal/creds"
 )
 
 func (r *Registry) registerWebSearch() {
 	r.register(SkillEntry{
 		Def: ToolDef{
 			Name:        "websearch.query",
-			Description: "Search the web using Brave Search and return the top results with titles, URLs, and descriptions.",
+			Description: "Search the web and return structured results with titles, URLs, snippets, provider, and source metadata.",
 			Properties: map[string]ToolParam{
-				"query": {Description: "The search query", Type: "string"},
-				"count": {Description: "Number of results to return (default 5, max 20)", Type: "integer"},
+				"query":     {Description: "The search query", Type: "string"},
+				"count":     {Description: "Number of results to return (default 5, max 10)", Type: "integer"},
+				"freshness": {Description: "Optional freshness window: day, week, month, year", Type: "string"},
+				"site":      {Description: "Optional site or hostname to focus on", Type: "string"},
+				"domains":   {Description: "Optional domains to prefer, comma-separated", Type: "string"},
+				"language":  {Description: "Optional language code for search localization", Type: "string"},
 			},
 			Required: []string{"query"},
 		},
 		PermLevel: "read",
-		Fn:        webSearchQuery,
+		FnResult:  webSearchQuery,
 	})
 }
 
-func webSearchQuery(ctx context.Context, args json.RawMessage) (string, error) {
+func webSearchQuery(ctx context.Context, args json.RawMessage) (ToolResult, error) {
 	var p struct {
-		Query string `json:"query"`
-		Count int    `json:"count"`
+		Query     string `json:"query"`
+		Count     int    `json:"count"`
+		Freshness string `json:"freshness"`
+		Site      string `json:"site"`
+		Domains   string `json:"domains"`
+		Language  string `json:"language"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil || p.Query == "" {
-		return "", fmt.Errorf("query is required")
-	}
-	if p.Count <= 0 {
-		p.Count = 5
-	}
-	if p.Count > 20 {
-		p.Count = 20
+		return ToolResult{}, fmt.Errorf("query is required")
 	}
 
-	bundle, _ := creds.Read()
-	if bundle.BraveSearchAPIKey == "" {
-		return "", fmt.Errorf("Brave Search API key not configured — add it in Settings → Credentials")
-	}
-
-	results, err := braveSearch(ctx, bundle.BraveSearchAPIKey, p.Query, p.Count, "")
+	resp, err := searchWebWithFallback(ctx, SearchOptions{
+		Query:      p.Query,
+		Count:      p.Count,
+		Freshness:  p.Freshness,
+		Site:       p.Site,
+		Domains:    splitQueryList(p.Domains),
+		Language:   p.Language,
+		SearchType: "web",
+	})
 	if err != nil {
-		return "", err
+		return ToolResult{}, err
 	}
-	if len(results) == 0 {
-		return "No results found for: " + p.Query, nil
+	if len(resp.Results) == 0 {
+		return OKResult("No results found for: "+p.Query, map[string]any{
+			"query":      p.Query,
+			"provider":   resp.Provider,
+			"filters":    resp.Filters,
+			"results":    []map[string]any{},
+			"fetched_at": resp.FetchedAt,
+		}), nil
 	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Search results for \"%s\":\n\n", p.Query))
-	for i, r := range results {
-		sb.WriteString(fmt.Sprintf("%d. %s\n   %s\n   %s\n\n", i+1, r.Title, r.URL, r.Description))
+	results := make([]map[string]any, 0, len(resp.Results))
+	for _, item := range resp.Results {
+		results = append(results, searchResultArtifact(item))
 	}
-	return strings.TrimRight(sb.String(), "\n"), nil
+	return OKResult(searchSummary("Web search", p.Query, len(resp.Results), resp.Provider, resp.Cached), map[string]any{
+		"query":      p.Query,
+		"provider":   resp.Provider,
+		"filters":    resp.Filters,
+		"results":    results,
+		"fetched_at": resp.FetchedAt,
+	}), nil
 }

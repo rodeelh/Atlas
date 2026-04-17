@@ -436,7 +436,9 @@ export function Theme({
                         </svg>
                       </span>
                       <span class="appearance-preview-avatar-initial">A</span>
-                      <span class="appearance-preview-avatar-minimal"><span /></span>
+                      <span class="appearance-preview-avatar-minimal">
+                        <span aria-hidden="true">&gt;</span>
+                      </span>
                     </div>
                     <div class="appearance-preview-bubble appearance-preview-bubble-ai">
                       Your workspace is ready. Want a clean summary or should I keep digging?
@@ -452,7 +454,9 @@ export function Theme({
                         </svg>
                       </span>
                       <span class="appearance-preview-avatar-initial">Y</span>
-                      <span class="appearance-preview-avatar-minimal"><span /></span>
+                      <span class="appearance-preview-avatar-minimal">
+                        <span aria-hidden="true">&lt;</span>
+                      </span>
                     </div>
                     <div class="appearance-preview-bubble appearance-preview-bubble-user">
                       Keep digging, but make it easy to scan.
@@ -468,7 +472,9 @@ export function Theme({
                         </svg>
                       </span>
                       <span class="appearance-preview-avatar-initial">A</span>
-                      <span class="appearance-preview-avatar-minimal"><span /></span>
+                      <span class="appearance-preview-avatar-minimal">
+                        <span aria-hidden="true">&gt;</span>
+                      </span>
                     </div>
                     <div class="appearance-preview-bubble appearance-preview-bubble-ai">
                       Clean, focused, and Atlas-native. Looking good already.

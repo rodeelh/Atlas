@@ -290,10 +290,15 @@ func (d *ChatDomain) getConversation(w http.ResponseWriter, r *http.Request) {
 		Role      string `json:"role"`
 		Content   string `json:"content"`
 		Timestamp string `json:"timestamp"`
+		Blocks    any    `json:"blocks,omitempty"`
 	}
 	items := make([]msgItem, len(msgs))
 	for i, m := range msgs {
-		items[i] = msgItem{ID: m.ID, Role: m.Role, Content: m.Content, Timestamp: m.Timestamp}
+		item := msgItem{ID: m.ID, Role: m.Role, Content: m.Content, Timestamp: m.Timestamp}
+		if m.BlocksJSON != nil {
+			item.Blocks = chat.HydrateStoredBlocks(*m.BlocksJSON)
+		}
+		items[i] = item
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

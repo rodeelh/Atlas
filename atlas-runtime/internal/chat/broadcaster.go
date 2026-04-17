@@ -16,6 +16,7 @@ type SSEEvent struct {
 	Content        string `json:"content,omitempty"`
 	Role           string `json:"role,omitempty"`
 	ConversationID string `json:"conversationID,omitempty"`
+	TurnID         string `json:"turnID,omitempty"`
 	Error          string `json:"error,omitempty"`
 	Status         string `json:"status,omitempty"`
 	ToolName       string `json:"toolName,omitempty"`

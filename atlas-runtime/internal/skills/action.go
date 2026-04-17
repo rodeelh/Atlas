@@ -219,17 +219,13 @@ func compactArtifactValue(value any) (any, bool) {
 		}
 		return items, true
 	case []any:
-		items := make([]string, 0, min(len(v), 3))
+		items := make([]any, 0, min(len(v), 3))
 		for _, item := range v {
-			text := strings.TrimSpace(fmt.Sprint(item))
-			if text == "" {
+			cv, ok := compactArtifactValue(item)
+			if !ok {
 				continue
 			}
-			runes := []rune(text)
-			if len(runes) > 80 {
-				text = string(runes[:80]) + "…"
-			}
-			items = append(items, text)
+			items = append(items, cv)
 			if len(items) >= 3 {
 				break
 			}
@@ -242,22 +238,7 @@ func compactArtifactValue(value any) (any, bool) {
 		if len(v) == 0 {
 			return nil, false
 		}
-		keys := make([]string, 0, len(v))
-		for key := range v {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		out := make(map[string]any)
-		for _, key := range keys {
-			cv, ok := compactArtifactValue(v[key])
-			if !ok {
-				continue
-			}
-			out[key] = cv
-			if len(out) >= 4 {
-				break
-			}
-		}
+		out := compactArtifactMap(v)
 		if len(out) == 0 {
 			return nil, false
 		}
@@ -294,6 +275,40 @@ func compactArtifactValue(value any) (any, bool) {
 		}
 		return text, true
 	}
+}
+
+func compactArtifactMap(v map[string]any) map[string]any {
+	priority := []string{"rank", "title", "url", "domain", "snippet", "provider", "confidence", "published_at", "source_type"}
+	out := make(map[string]any)
+	for _, key := range priority {
+		cv, ok := compactArtifactValue(v[key])
+		if !ok {
+			continue
+		}
+		out[key] = cv
+		if len(out) >= 5 {
+			return out
+		}
+	}
+	keys := make([]string, 0, len(v))
+	for key := range v {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, exists := out[key]; exists {
+			continue
+		}
+		cv, ok := compactArtifactValue(v[key])
+		if !ok {
+			continue
+		}
+		out[key] = cv
+		if len(out) >= 5 {
+			break
+		}
+	}
+	return out
 }
 
 // OKResult constructs a successful ToolResult. Pass nil for artifacts if none.

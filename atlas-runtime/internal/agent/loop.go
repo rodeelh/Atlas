@@ -27,12 +27,29 @@ type Emitter interface {
 	Finish(convID string)
 }
 
+type turnEmitter struct {
+	base   Emitter
+	turnID string
+}
+
+func (e *turnEmitter) Emit(convID string, event EmitEvent) {
+	if event.TurnID == "" {
+		event.TurnID = e.turnID
+	}
+	e.base.Emit(convID, event)
+}
+
+func (e *turnEmitter) Finish(convID string) {
+	e.base.Finish(convID)
+}
+
 // EmitEvent carries the fields needed to build an SSE event.
 type EmitEvent struct {
 	Type       string
 	Content    string
 	Role       string
 	ConvID     string
+	TurnID     string
 	ToolName   string
 	ToolCallID string
 	ApprovalID string
@@ -111,7 +128,8 @@ type RunResult struct {
 	ToolCallSummaries   []string // tool names called during this turn (all iterations)
 	ToolResultSummaries []string // short result summaries, one per tool call
 	GeneratedFiles      []string // absolute local file paths emitted as file_generated events
-	IterationsUsed      int      // number of real loop iterations consumed (excludes tool upgrades / compaction retries)
+	MessageBlocks       []map[string]any
+	IterationsUsed      int // number of real loop iterations consumed (excludes tool upgrades / compaction retries)
 }
 
 // requestToolsName is the internal action ID for the lazy-mode meta-tool.
@@ -167,6 +185,7 @@ type LoopConfig struct {
 	MaxIterations int
 	SupportDir    string
 	ConvID        string
+	TurnID        string
 	// AgentID identifies the delegated sub-agent for deferred approval records.
 	// Empty for normal Atlas chat turns.
 	AgentID string
@@ -277,6 +296,7 @@ func capToolsForProvider(tools []map[string]any, providerType ProviderType) []ma
 // and tool-call turns — no separate probe call is needed.
 // messages should include system + history + user message(s).
 func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, convID string) RunResult {
+	emitter := &turnEmitter{base: l.BC, turnID: cfg.TurnID}
 	tools := cfg.Tools
 	if tools == nil {
 		tools = l.Skills.ToolDefinitions()
@@ -307,6 +327,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		allToolSummaries   []string
 		allResultSummaries []string
 		allGeneratedFiles  []string
+		allMessageBlocks   []map[string]any
 		toolUpgradeStage   int  // lazy mode: 0 meta only, 1 short list, 2 broad/category list
 		compacted          bool // overflow recovery: compact at most once per turn
 		itersUsed          int  // real iterations consumed (excludes tool upgrades / compaction retries)
@@ -324,7 +345,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 	for i := 0; i < maxIter; i++ {
 		itersUsed++
 		// Single streaming call — detects tool calls and emits text in one pass.
-		sr, err := streamWithToolDetection(ctx, cfg.Provider, messages, tools, convID, l.BC)
+		sr, err := streamWithToolDetection(ctx, cfg.Provider, messages, tools, convID, emitter)
 		if err != nil {
 			// If the model's context window was exceeded and we haven't yet
 			// compacted this turn, trim old messages and retry immediately.
@@ -353,10 +374,11 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		streamChars += sr.StreamChars
 
 		// Mark the end of this assistant model turn before any tool execution starts.
-		l.BC.Emit(convID, EmitEvent{
+		emitter.Emit(convID, EmitEvent{
 			Type:   "assistant_done",
 			Role:   "assistant",
 			ConvID: convID,
+			TurnID: cfg.TurnID,
 		})
 
 		// Text response — streaming already delivered the tokens.
@@ -371,6 +393,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 				ToolCallSummaries:   allToolSummaries,
 				ToolResultSummaries: allResultSummaries,
 				GeneratedFiles:      allGeneratedFiles,
+				MessageBlocks:       allMessageBlocks,
 				IterationsUsed:      itersUsed,
 			}
 		}
@@ -438,11 +461,12 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 			messages = append(messages, assistantMsg)
 			for _, block := range blocked {
 				messages = append(messages, block.message())
-				l.BC.Emit(convID, EmitEvent{
+				emitter.Emit(convID, EmitEvent{
 					Type:       "tool_failed",
 					ToolName:   block.ActionID,
 					ToolCallID: block.ToolCallID,
 					ConvID:     convID,
+					TurnID:     cfg.TurnID,
 					Error:      block.Reason,
 				})
 			}
@@ -455,12 +479,13 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 					"conv":  shortConv,
 					"class": pa.ActionClass,
 				})
-				l.BC.Emit(convID, EmitEvent{
+				emitter.Emit(convID, EmitEvent{
 					Type:       "approval_required",
 					ConvID:     convID,
 					ApprovalID: pa.ApprovalID,
 					ToolCallID: pa.ToolCallID,
 					ToolName:   pa.ActionID,
+					TurnID:     cfg.TurnID,
 					Arguments:  pa.Arguments,
 				})
 			}
@@ -475,11 +500,12 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 				"reason": block.Reason,
 			})
 			messages = append(messages, block.message())
-			l.BC.Emit(convID, EmitEvent{
+			emitter.Emit(convID, EmitEvent{
 				Type:       "tool_failed",
 				ToolName:   block.ActionID,
 				ToolCallID: block.ToolCallID,
 				ConvID:     convID,
+				TurnID:     cfg.TurnID,
 				Error:      block.Reason,
 			})
 		}
@@ -492,11 +518,12 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		results := make([]*toolExecResult, len(canRun))
 
 		for _, tc := range canRun {
-			l.BC.Emit(convID, EmitEvent{
+			emitter.Emit(convID, EmitEvent{
 				Type:       "tool_started",
 				ToolName:   l.Skills.Normalise(tc.Function.Name),
 				ToolCallID: tc.ID,
 				ConvID:     convID,
+				TurnID:     cfg.TurnID,
 			})
 		}
 
@@ -557,11 +584,12 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 				entry.Errors = []string{r.execErr.Error()}
 				logstore.WriteAction(entry)
 
-				l.BC.Emit(convID, EmitEvent{
+				emitter.Emit(convID, EmitEvent{
 					Type:       "tool_failed",
 					ToolName:   l.Skills.Normalise(tc.Function.Name),
 					ToolCallID: tc.ID,
 					ConvID:     convID,
+					TurnID:     cfg.TurnID,
 					Error:      r.execErr.Error(),
 				})
 				messages = append(messages, OAIMessage{
@@ -578,13 +606,15 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 						artJSON = string(b)
 					}
 				}
-				l.BC.Emit(convID, EmitEvent{
+				emitter.Emit(convID, EmitEvent{
 					Type:       "tool_finished",
 					ToolName:   l.Skills.Normalise(tc.Function.Name),
 					ToolCallID: tc.ID,
 					ConvID:     convID,
+					TurnID:     cfg.TurnID,
 					Result:     artJSON,
 				})
+				allMessageBlocks = append(allMessageBlocks, BlocksFromToolArtifacts(l.Skills.Normalise(tc.Function.Name), r.result.Artifacts)...)
 				// Emit file_generated for each local file artifact produced by the tool.
 				// Scan both structured Artifacts map and the free-text Summary so that
 				// skills which only describe the output path in their summary are covered.
@@ -607,9 +637,10 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 					if err == nil {
 						size = info.Size()
 					}
-					l.BC.Emit(convID, EmitEvent{
+					emitter.Emit(convID, EmitEvent{
 						Type:      "file_generated",
 						ConvID:    convID,
+						TurnID:    cfg.TurnID,
 						ToolName:  l.Skills.Normalise(tc.Function.Name),
 						Filename:  filepath.Base(filePath),
 						MimeType:  MimeTypeForPath(filePath),
@@ -617,6 +648,9 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 						FileToken: token,
 					})
 					allGeneratedFiles = append(allGeneratedFiles, filePath)
+					if block := FileBlockForPath(filePath); block != nil {
+						allMessageBlocks = append(allMessageBlocks, block)
+					}
 				}
 				messages = append(messages, OAIMessage{
 					Role:       "tool",
@@ -639,6 +673,7 @@ func (l *Loop) Run(ctx context.Context, cfg LoopConfig, messages []OAIMessage, c
 		ToolCallSummaries:   allToolSummaries,
 		ToolResultSummaries: allResultSummaries,
 		GeneratedFiles:      allGeneratedFiles,
+		MessageBlocks:       allMessageBlocks,
 		IterationsUsed:      itersUsed,
 	}
 }

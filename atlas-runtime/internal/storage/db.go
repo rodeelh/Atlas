@@ -67,7 +67,8 @@ func (db *DB) migrate() error {
 			conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id),
 			role            TEXT NOT NULL,
 			content         TEXT NOT NULL,
-			timestamp       TEXT NOT NULL
+			timestamp       TEXT NOT NULL,
+			blocks_json     TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_conversation_id
 			ON messages(conversation_id)`,
@@ -462,6 +463,7 @@ func (db *DB) migrate() error {
 	// Idempotent migrations for messages columns added after initial creation.
 	alterMessages := []string{
 		`ALTER TABLE messages ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE messages ADD COLUMN blocks_json TEXT`,
 	}
 
 	// Idempotent migrations for browser_sessions columns added after initial creation.
@@ -912,10 +914,17 @@ type MessageRow struct {
 	Role           string
 	Content        string
 	Timestamp      string
+	BlocksJSON     *string
 }
 
 // SaveMessage inserts a message and updates the conversation's updated_at.
 func (db *DB) SaveMessage(id, convID, role, content, timestamp string) error {
+	return db.SaveMessageWithBlocks(id, convID, role, content, timestamp, nil)
+}
+
+// SaveMessageWithBlocks inserts a message with optional structured block JSON
+// and updates the conversation's updated_at.
+func (db *DB) SaveMessageWithBlocks(id, convID, role, content, timestamp string, blocksJSON *string) error {
 	tx, err := db.conn.Begin()
 	if err != nil {
 		return err
@@ -923,9 +932,9 @@ func (db *DB) SaveMessage(id, convID, role, content, timestamp string) error {
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(
-		`INSERT OR IGNORE INTO messages(message_id, conversation_id, role, content, timestamp)
-		 VALUES (?, ?, ?, ?, ?)`,
-		id, convID, role, content, timestamp,
+		`INSERT OR IGNORE INTO messages(message_id, conversation_id, role, content, timestamp, blocks_json)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		id, convID, role, content, timestamp, blocksJSON,
 	); err != nil {
 		return err
 	}
@@ -941,7 +950,7 @@ func (db *DB) SaveMessage(id, convID, role, content, timestamp string) error {
 // ListMessages returns all messages for a conversation ordered by timestamp ASC.
 func (db *DB) ListMessages(convID string) ([]MessageRow, error) {
 	rows, err := db.conn.Query(
-		`SELECT message_id, conversation_id, role, content, timestamp
+		`SELECT message_id, conversation_id, role, content, timestamp, blocks_json
 		 FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC`, convID)
 	if err != nil {
 		return nil, err
@@ -951,7 +960,7 @@ func (db *DB) ListMessages(convID string) ([]MessageRow, error) {
 	var out []MessageRow
 	for rows.Next() {
 		var r MessageRow
-		if err := rows.Scan(&r.ID, &r.ConversationID, &r.Role, &r.Content, &r.Timestamp); err != nil {
+		if err := rows.Scan(&r.ID, &r.ConversationID, &r.Role, &r.Content, &r.Timestamp, &r.BlocksJSON); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
