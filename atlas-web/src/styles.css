@@ -393,34 +393,36 @@ html, body {
   pointer-events: none;
 }
 
-.sidebar-control-glyph {
-  width: 34px;
-  height: 34px;
-  border-radius: var(--ui-radius);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: color-mix(in srgb, var(--theme-surface-card) 56%, transparent);
-  border: 1px solid color-mix(in srgb, var(--theme-border-subtle) 54%, transparent);
-  color: color-mix(in srgb, var(--theme-text-secondary) 70%, var(--theme-text-primary));
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 5%, transparent),
-    0 1px 0 color-mix(in srgb, black 6%, transparent);
-  flex-shrink: 0;
-  opacity: 1;
-}
-
 .sidebar-wordmark {
   flex: 1;
   min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar-wordmark-block {
+  display: inline-block;
+  width: 11px;
+  height: 20px;
+  background: var(--accent);
+  border-radius: 1px;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 35%, transparent);
+  flex-shrink: 0;
+}
+
+.sidebar-wordmark-block--collapsed {
+  width: 14px;
+  height: 24px;
 }
 
 .sidebar-wordmark-name {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 16px;
-  font-weight: 600;
-  letter-spacing: -0.28px;
+  font-weight: 500;
+  letter-spacing: -0.2px;
   color: var(--theme-text-primary);
-  line-height: 1.2;
+  line-height: 1;
 }
 
 .sidebar-nav {
@@ -2944,7 +2946,8 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 .chat-message-meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 5px;
   position: absolute;
   top: calc(100% + 5px);
   left: 0;
@@ -2964,9 +2967,9 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   transition-delay: 0s;
 }
 
-/* User messages: reverse so copy is on right, timestamp on left */
+/* User messages: align the pair to the right */
 .chat-message-group.user .chat-message-meta {
-  flex-direction: row-reverse;
+  justify-content: flex-end;
 }
 
 .chat-timestamp {
@@ -9903,6 +9906,46 @@ select.field-input {
   opacity: 0.7;
 }
 
+.dashboard-widget-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.dashboard-widget-health {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 58px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dashboard-widget-health.loading,
+.dashboard-widget-health.timeout {
+  background: color-mix(in srgb, var(--warning, #f59e0b) 12%, transparent);
+  border-color: color-mix(in srgb, var(--warning, #f59e0b) 28%, transparent);
+  color: var(--warning, #f59e0b);
+}
+
+.dashboard-widget-health.ok {
+  background: color-mix(in srgb, var(--green, #10b981) 12%, transparent);
+  border-color: color-mix(in srgb, var(--green, #10b981) 28%, transparent);
+  color: var(--green, #10b981);
+}
+
+.dashboard-widget-health.error {
+  background: color-mix(in srgb, var(--red, #f87171) 12%, transparent);
+  border-color: color-mix(in srgb, var(--red, #f87171) 28%, transparent);
+  color: var(--red, #f87171);
+}
+
 /* agent-authored code widgets — sandboxed iframe fills the card body */
 .dashboard-widget-code {
   padding: 0;
@@ -10369,6 +10412,10 @@ select.field-input {
   align-items: center;
   justify-content: center;
   height: 100%;
+}
+
+.dashboard-empty-warning {
+  color: var(--warning, #f59e0b);
 }
 
 /* ── Team HQ ─────────────────────────────────────────────── */

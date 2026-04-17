@@ -651,12 +651,13 @@ export function App() {
 
       <aside class={`sidebar${collapsed ? ' collapsed' : ''}${isMobile && mobileNavOpen ? ' mobile-open' : ''}`}>
         <div class="sidebar-header">
-          {!collapsed && <div class="sidebar-control-glyph">{Icon.controlCenter}</div>}
           {!collapsed && (
-            <div class="sidebar-wordmark">
-              <div class="sidebar-wordmark-name">Atlas</div>
+            <div class="sidebar-wordmark" aria-label="atlas">
+              <span class="sidebar-wordmark-block" aria-hidden="true"></span>
+              <span class="sidebar-wordmark-name">atlas</span>
             </div>
           )}
+          {collapsed && <div class="sidebar-wordmark-block sidebar-wordmark-block--collapsed" aria-label="atlas" />}
           <button
             class="sidebar-collapse-btn"
             onClick={isMobile && mobileNavOpen ? closeMobileNav : toggleCollapsed}
