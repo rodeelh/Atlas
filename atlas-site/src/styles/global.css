@@ -10,11 +10,24 @@
 
 :root { color-scheme: dark; }
 
+html { scroll-behavior: smooth; scroll-padding-top: 72px; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}
+
 html, body {
   background: #060612;
   color: #E0E0FF;
   font-family: 'Geist Sans', ui-sans-serif, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Visible focus ring — only on keyboard focus */
+.focus-ring:focus { outline: none; }
+.focus-ring:focus-visible {
+  outline: 1px solid rgba(0, 255, 153, 0.45);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 
 ::selection {

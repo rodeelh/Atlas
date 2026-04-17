@@ -21,14 +21,50 @@ const uid = 'wm-' + Math.random().toString(36).slice(2, 8);
 </span>
 
 <style>
-  .wm { gap: 0; }
+  .wm { gap: 0; position: relative; isolation: isolate; }
   .wm-cursor {
     display: inline-block;
+    position: relative;
     width: var(--wm-block-w);
     height: var(--wm-block-h);
-    background: #00FF99;
-    box-shadow: 0 0 14px rgba(0, 255, 153, 0.35);
+    background: linear-gradient(to bottom, #7CFFC4 0%, #00FF99 55%, #00C97A 100%);
+    border-radius: 2px;
+    box-shadow: 0 0 14px rgba(0, 255, 153, 0.45);
     transform: translateY(0.08em);
+    animation: wm-pulse 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+  .wm-cursor::before,
+  .wm-cursor::after {
+    content: "";
+    position: absolute;
+    background: #00FF99;
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: -1;
+  }
+  .wm-cursor::before {
+    inset: -12% -18%;
+    opacity: 0.22;
+    filter: blur(3px);
+    animation: wm-halo-inner 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+  .wm-cursor::after {
+    inset: -28% -38%;
+    opacity: 0.12;
+    filter: blur(6px);
+    animation: wm-halo-outer 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+  @keyframes wm-pulse {
+    0%, 100% { transform: translateY(0.08em) scale(1); }
+    50%      { transform: translateY(0.08em) scale(1.04); }
+  }
+  @keyframes wm-halo-inner {
+    0%, 100% { opacity: 0.12; }
+    50%      { opacity: 0.32; }
+  }
+  @keyframes wm-halo-outer {
+    0%, 100% { opacity: 0.06; }
+    50%      { opacity: 0.18; }
   }
   .wm-gap {
     display: inline-block;

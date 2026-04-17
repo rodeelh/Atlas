@@ -1,78 +1,237 @@
 ---
-const diagram = String.raw`
-            ┌─────────────────────────────────────────┐
-            │           atlas-web  (React UI)         │
-            │   chat · skills · approvals · forge     │
-            │       dashboards · teams · settings     │
-            └────────────────────┬────────────────────┘
-                                 │  http + sse
-                                 ▼
-   ┌───────────────────────────────────────────────────────────┐
-   │           atlas-runtime  (Go daemon · port 1984)          │
-   │                                                           │
-   │   chat svc ── agent loop ── provider dispatch             │
-   │       │           │              │                        │
-   │       │           │              ├── openai               │
-   │       │           │              ├── anthropic            │
-   │       │           │              ├── gemini               │
-   │       │           │              └── lm studio            │
-   │       │           ▼                                       │
-   │       │      skills registry  (read · write · execute)    │
-   │       │           │                                       │
-   │       ▼           ▼                                       │
-   │   sqlite     keychain      mind.md / diary.md             │
-   └───────────────────────────────────────────────────────────┘
-                                 │
-                                 ▼
-                ┌──────────────────────────────┐
-                │  telegram   discord   ...    │
-                └──────────────────────────────┘
-`;
+const steps = [
+  {
+    key: "listen",
+    label: "you talk",
+    caption: "in your own words. no commands, no syntax.",
+    sample: "remind me to call sarah tomorrow at 2",
+  },
+  {
+    key: "think",
+    label: "it thinks",
+    caption: "with what it knows about you, your day, your past.",
+    chips: ["sarah → friend", "tomorrow → apr 17", "2 → 2:00 pm"],
+  },
+  {
+    key: "act",
+    label: "it acts",
+    caption: "and tells you, plainly, what it did.",
+    result: "ok. i'll nudge you at 1:55 pm tomorrow.",
+  },
+];
 ---
-<section id="architecture" class="border-b border-border">
+<section id="how">
   <div class="mx-auto max-w-6xl px-6 py-24 md:py-32">
     <div class="mb-16 flex items-baseline gap-4" data-reveal>
       <span class="font-mono text-sm text-accent">// 02</span>
-      <h2 class="font-mono text-2xl text-text md:text-3xl"><span data-typed-heading>how it works</span></h2>
+      <h2 class="font-mono text-2xl text-text md:text-3xl"><span data-typed-heading>architecture</span></h2>
     </div>
 
-    <div class="grid gap-12 lg:grid-cols-[1fr_auto] lg:items-center">
-      <div class="arch-frame relative overflow-x-auto rounded border border-border bg-surface p-6 shadow-glow-soft" data-reveal>
-        <span class="pointer-events-none absolute -inset-px rounded border border-accent/0 transition-[border-color] duration-700"></span>
-        <span class="arch-scan pointer-events-none absolute inset-x-0 top-0 h-12 opacity-30" aria-hidden="true"></span>
-        <pre class="font-mono text-[11px] leading-snug text-text-2 md:text-xs"><code>{diagram}</code></pre>
-      </div>
+    <div class="how-flow grid gap-6 md:grid-cols-3" data-reveal>
+      {steps.map((s, i) => (
+        <article
+          class="how-step relative rounded border border-border bg-surface p-6 transition-colors"
+          data-step={s.key}
+          data-index={i}
+        >
+          <header class="mb-5 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <span class="how-dot" aria-hidden="true"></span>
+              <span class="font-mono text-xs uppercase tracking-wider text-text-2">step 0{i + 1}</span>
+            </div>
+            <span class="font-mono text-xs text-accent opacity-0 transition-opacity duration-300" data-active-tag>active</span>
+          </header>
+          <h3 class="font-mono text-lg text-text">{s.label}</h3>
+          <p class="mt-2 text-sm leading-relaxed text-text-2">{s.caption}</p>
 
-      <div class="max-w-md space-y-5 text-sm leading-relaxed text-text-2" data-reveal style="--reveal-delay: 180ms;">
-        <p>
-          The runtime is a single Go binary installed as a launchd LaunchAgent. It serves the
-          web UI, brokers AI provider calls, and dispatches skills.
-        </p>
-        <p>
-          Everything that matters — conversations, memories, agent definitions, skill state — lives
-          in <span class="text-text font-mono">~/Library/Application Support/ProjectAtlas/</span>.
-        </p>
-        <p>
-          Secrets sit in the macOS Keychain. No <code class="font-mono text-text">.env</code> files.
-          No telemetry. The daemon stops when you tell it to.
-        </p>
-      </div>
+          <div class="mt-6 min-h-[112px]">
+            {s.sample && (
+              <div class="how-bubble font-mono text-[13px] text-text">
+                <span class="text-text-2">›</span>
+                <span class="how-typed" data-typed-text={s.sample}></span><span class="how-caret" aria-hidden="true">▍</span>
+              </div>
+            )}
+
+            {s.chips && (
+              <div class="flex flex-wrap gap-2">
+                {s.chips.map((chip, ci) => (
+                  <span
+                    class="how-chip rounded border border-border/80 bg-bg px-2 py-1 font-mono text-[11px] text-text-2"
+                    style={`--chip-delay: ${ci * 180}ms;`}
+                  >{chip}</span>
+                ))}
+              </div>
+            )}
+
+            {s.result && (
+              <div class="how-result font-mono text-[13px] text-text">
+                <span class="text-accent">✓</span>
+                <span class="how-result-text">{s.result}</span>
+              </div>
+            )}
+          </div>
+        </article>
+      ))}
     </div>
+
+    <p class="mt-10 max-w-2xl font-mono text-xs leading-relaxed text-text-2" data-reveal style="--reveal-delay: 180ms;">
+      everything happens on your machine. your words, your memories, your keys —
+      none of it leaves unless you ask it to.
+    </p>
   </div>
 </section>
 
 <style>
-  .arch-scan {
-    background: linear-gradient(180deg, rgba(0,255,153,0.18), transparent);
-    animation: arch-scan 4.5s ease-in-out infinite;
+  .how-step {
+    overflow: hidden;
   }
-  @keyframes arch-scan {
-    0%   { transform: translateY(0);  opacity: 0; }
-    20%  { opacity: 0.6; }
-    100% { transform: translateY(360px); opacity: 0; }
+  .how-step::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    border: 1px solid transparent;
+    pointer-events: none;
+    transition: border-color 400ms ease;
   }
-  .arch-frame:hover > span:first-of-type { border-color: rgba(0,255,153,0.35); }
+  .how-step.is-active::before {
+    border-color: color-mix(in srgb, var(--tw-color-accent, #00FF99) 55%, transparent);
+    box-shadow: 0 0 24px color-mix(in srgb, #00FF99 22%, transparent);
+  }
+  .how-step.is-active [data-active-tag] { opacity: 1; }
+
+  .how-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: #2a2a3a;
+    transition: background 300ms ease, box-shadow 300ms ease;
+  }
+  .how-step.is-active .how-dot {
+    background: #00FF99;
+    box-shadow: 0 0 12px rgba(0,255,153,0.65);
+  }
+
+  .how-bubble, .how-result {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+
+  .how-typed {
+    display: inline-block;
+    white-space: nowrap;
+    overflow: hidden;
+    vertical-align: bottom;
+  }
+  .how-caret {
+    color: #00FF99;
+    margin-left: 2px;
+    opacity: 0;
+  }
+  .how-step.is-active .how-caret {
+    animation: how-blink 1s steps(2, start) infinite;
+  }
+
+  .how-chip {
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 320ms ease, transform 320ms ease, border-color 320ms ease, color 320ms ease;
+  }
+  .how-step.is-active .how-chip {
+    opacity: 1;
+    transform: none;
+    transition-delay: var(--chip-delay, 0ms);
+    border-color: color-mix(in srgb, #00FF99 35%, transparent);
+    color: #E0E0FF;
+  }
+
+  .how-result-text {
+    opacity: 0;
+    transform: translateY(2px);
+    transition: opacity 400ms ease 120ms, transform 400ms ease 120ms;
+  }
+  .how-step.is-active .how-result-text {
+    opacity: 1;
+    transform: none;
+  }
+
+  @keyframes how-blink {
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
-    .arch-scan { display: none; }
+    .how-step.is-active .how-caret { animation: none; opacity: 1; }
+    .how-typed { white-space: normal; }
   }
 </style>
+
+<script>
+  const flow = document.querySelector<HTMLElement>(".how-flow");
+  if (flow) {
+    const steps = Array.from(flow.querySelectorAll<HTMLElement>(".how-step"));
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const stepDur = reduced ? 1800 : 2600;
+    let idx = 0;
+    let timer: number | null = null;
+
+    const typeInto = (el: HTMLElement, text: string, dur: number) => {
+      if (reduced) { el.textContent = text; return; }
+      el.textContent = "";
+      const total = Math.min(text.length, 60);
+      const interval = Math.max(20, dur / total);
+      let i = 0;
+      const tick = () => {
+        if (i > text.length) return;
+        el.textContent = text.slice(0, i);
+        i += 1;
+        if (i <= text.length) window.setTimeout(tick, interval);
+      };
+      tick();
+    };
+
+    const activate = (n: number) => {
+      steps.forEach((step, i) => step.classList.toggle("is-active", i === n));
+      const active = steps[n];
+      const typed = active.querySelector<HTMLElement>(".how-typed");
+      if (typed) {
+        const text = typed.dataset.typedText ?? "";
+        typeInto(typed, text, stepDur * 0.55);
+      }
+    };
+
+    const advance = () => {
+      idx = (idx + 1) % steps.length;
+      activate(idx);
+    };
+
+    const start = () => {
+      activate(0);
+      if (timer) window.clearInterval(timer);
+      timer = window.setInterval(advance, stepDur);
+    };
+
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) {
+          start();
+        } else if (timer) {
+          window.clearInterval(timer);
+          timer = null;
+        }
+      }
+    }, { threshold: 0.35 });
+    io.observe(flow);
+
+    flow.addEventListener("mouseleave", () => { if (!timer) start(); });
+    steps.forEach((step, i) => {
+      step.addEventListener("mouseenter", () => {
+        if (timer) { window.clearInterval(timer); timer = null; }
+        idx = i;
+        activate(i);
+      });
+    });
+  }
+</script>

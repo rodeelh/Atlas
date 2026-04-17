@@ -28,9 +28,43 @@ export function Settings() {
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
   const [storageCleaning, setStorageCleaning] = useState(false)
   const [locking, setLocking] = useState(false)
+  const [updateChecking, setUpdateChecking] = useState(false)
+  const [updateResult, setUpdateResult] = useState<
+    | { kind: 'idle' }
+    | { kind: 'current'; latest: string }
+    | { kind: 'available'; latest: string; url: string }
+    | { kind: 'error'; message: string }
+  >({ kind: 'idle' })
 
   const canRestartLocally = typeof window !== 'undefined' &&
     (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+
+  const checkForUpdate = async () => {
+    setUpdateChecking(true)
+    setUpdateResult({ kind: 'idle' })
+    try {
+      const res = await fetch('https://api.github.com/repos/rodeelh/Atlas/releases/latest', {
+        headers: { Accept: 'application/vnd.github+json' },
+      })
+      if (!res.ok) throw new Error(`GitHub returned ${res.status}`)
+      const data = await res.json() as { tag_name?: string; html_url?: string }
+      const latest = (data.tag_name || '').replace(/^v/i, '').trim()
+      if (!latest) throw new Error('No release tag found')
+      if (compareVersions(latest, __APP_VERSION__) > 0) {
+        setUpdateResult({
+          kind: 'available',
+          latest,
+          url: data.html_url || 'https://github.com/rodeelh/Atlas/releases/latest',
+        })
+      } else {
+        setUpdateResult({ kind: 'current', latest })
+      }
+    } catch (e) {
+      setUpdateResult({ kind: 'error', message: e instanceof Error ? e.message : 'Check failed' })
+    } finally {
+      setUpdateChecking(false)
+    }
+  }
 
   const lockAtlas = async () => {
     setLocking(true)
@@ -432,8 +466,150 @@ export function Settings() {
           </button>
         </SettingsRow>
       </SettingsGroup>
+
+      <SettingsGroup title="About">
+        <div class="settings-about-hero">
+          <AtlasIcon />
+          <div class="settings-about-meta">
+            <div class="settings-about-name">Atlas</div>
+            <div class="settings-about-version">v{__APP_VERSION__}</div>
+          </div>
+        </div>
+        <SettingsRow
+          label="Check for updates"
+          sublabel={
+            updateResult.kind === 'available'
+              ? `Update available: v${updateResult.latest}`
+              : updateResult.kind === 'current'
+              ? `You're on the latest version (v${updateResult.latest}).`
+              : updateResult.kind === 'error'
+              ? `Check failed: ${updateResult.message}`
+              : 'Compare your version with the latest release on GitHub.'
+          }
+          mobileSplit
+        >
+          {updateResult.kind === 'available' ? (
+            <a
+              class="btn btn-sm"
+              style={{ width: '96px', textAlign: 'center' }}
+              href={updateResult.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Update
+            </a>
+          ) : (
+            <button
+              class="btn btn-sm"
+              style={{ width: '96px' }}
+              onClick={checkForUpdate}
+              disabled={updateChecking || updateResult.kind === 'current'}
+            >
+              {updateChecking ? 'Checking…' : updateResult.kind === 'current' ? 'Up to date' : 'Check'}
+            </button>
+          )}
+        </SettingsRow>
+      </SettingsGroup>
     </div>
   )
+}
+
+function AtlasIcon() {
+  return (
+    <svg class="settings-about-icon" viewBox="0 0 32 32" aria-hidden="true">
+      <defs>
+        <linearGradient id="atlas-icon-grad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#7CFFC4" />
+          <stop offset="55%" stop-color="#00FF99" />
+          <stop offset="100%" stop-color="#00C97A" />
+        </linearGradient>
+        <linearGradient id="atlas-icon-flash" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#D6FFEC" stop-opacity="1" />
+          <stop offset="60%" stop-color="#7CFFC4" stop-opacity="0.6" />
+          <stop offset="100%" stop-color="#7CFFC4" stop-opacity="0" />
+        </linearGradient>
+        <filter id="atlas-icon-block-glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="1.1" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <filter id="atlas-icon-halo-glow" x="-75%" y="-75%" width="250%" height="250%">
+          <feGaussianBlur stdDeviation="1.8" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+
+      <rect width="32" height="32" rx="7" fill="#000000" />
+
+      <g transform-origin="16 16">
+        <rect x="3" y="3" width="26" height="26" rx="5.7" fill="#00D985" opacity="0.14" filter="url(#atlas-icon-halo-glow)">
+          <animate attributeName="opacity" values="0.08;0.20;0.08" dur="2.6s" begin="0.4s" repeatCount="indefinite"
+                   calcMode="spline" keySplines="0.4 0 0.2 1; 0.4 0 0.2 1" keyTimes="0;0.5;1" />
+        </rect>
+        <animateTransform attributeName="transform" type="scale" values="1;1.03;1" dur="2.6s" begin="0.4s"
+                          repeatCount="indefinite" calcMode="spline"
+                          keySplines="0.4 0 0.2 1; 0.4 0 0.2 1" keyTimes="0;0.5;1" additive="sum" />
+      </g>
+
+      <g transform-origin="16 16">
+        <rect x="5.35" y="5.35" width="21.3" height="21.3" rx="4.65" fill="#00D985" opacity="0.26" filter="url(#atlas-icon-halo-glow)">
+          <animate attributeName="opacity" values="0.16;0.36;0.16" dur="2.6s" begin="0.2s" repeatCount="indefinite"
+                   calcMode="spline" keySplines="0.4 0 0.2 1; 0.4 0 0.2 1" keyTimes="0;0.5;1" />
+        </rect>
+        <animateTransform attributeName="transform" type="scale" values="1;1.03;1" dur="2.6s" begin="0.2s"
+                          repeatCount="indefinite" calcMode="spline"
+                          keySplines="0.4 0 0.2 1; 0.4 0 0.2 1" keyTimes="0;0.5;1" additive="sum" />
+      </g>
+
+      <g transform-origin="16 16">
+        <rect x="7.75" y="7.75" width="16.5" height="16.5" rx="3.6" fill="url(#atlas-icon-grad)" filter="url(#atlas-icon-block-glow)" />
+        <rect x="7.75" y="7.75" width="16.5" height="16.5" rx="3.6" fill="#FFFFFF" opacity="0">
+          <animate attributeName="opacity" values="0;0.18;0" dur="2.6s" repeatCount="indefinite"
+                   calcMode="spline" keySplines="0.4 0 0.2 1; 0.4 0 0.2 1" keyTimes="0;0.5;1" />
+        </rect>
+        <animateTransform attributeName="transform" type="scale" values="1;1.03;1" dur="2.6s"
+                          repeatCount="indefinite" calcMode="spline"
+                          keySplines="0.4 0 0.2 1; 0.4 0 0.2 1" keyTimes="0;0.5;1" additive="sum" />
+      </g>
+
+      <path d="M 10.5 10.5 L 14.75 13 L 10.5 15.5" fill="none" stroke="#000000" stroke-width="2.1"
+            stroke-linecap="round" stroke-linejoin="round" opacity="0.9">
+        <animate attributeName="opacity" values="0.9;0.9;0.3;0.6;0.9" keyTimes="0;0.55;0.75;0.95;1"
+                 dur="2.6s" repeatCount="indefinite"
+                 calcMode="spline" keySplines="0.4 0 0.6 1; 0.4 0 0.6 1; 0.4 0 0.6 1; 0.4 0 0.6 1" />
+      </path>
+      <path d="M 21.5 16.5 L 17.25 19 L 21.5 21.5" fill="none" stroke="#000000" stroke-width="2.3"
+            stroke-linecap="round" stroke-linejoin="round" opacity="0.9">
+        <animate attributeName="opacity" values="0.9;0.3;0.6;0.9;0.9" keyTimes="0;0.25;0.45;0.55;1"
+                 dur="2.6s" repeatCount="indefinite"
+                 calcMode="spline" keySplines="0.4 0 0.6 1; 0.4 0 0.6 1; 0.4 0 0.6 1; 0.4 0 0.6 1" />
+      </path>
+
+      <rect x="7.75" y="7.75" width="16.5" height="16.5" rx="3.6" fill="url(#atlas-icon-flash)" opacity="0">
+        <animate attributeName="opacity" values="0;0;0.55;0;0" keyTimes="0;0.45;0.60;0.85;1"
+                 dur="3.8s" repeatCount="indefinite"
+                 calcMode="spline"
+                 keySplines="0.4 0 0.6 1; 0.25 0.8 0.3 1; 0.4 0 0.6 1; 0.4 0 0.6 1" />
+      </rect>
+    </svg>
+  )
+}
+
+function compareVersions(a: string, b: string): number {
+  const pa = a.split(/[.-]/).map((p) => parseInt(p, 10) || 0)
+  const pb = b.split(/[.-]/).map((p) => parseInt(p, 10) || 0)
+  const len = Math.max(pa.length, pb.length)
+  for (let i = 0; i < len; i++) {
+    const x = pa[i] ?? 0
+    const y = pb[i] ?? 0
+    if (x !== y) return x - y
+  }
+  return 0
 }
 
 function formatBytes(bytes: number): string {

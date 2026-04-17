@@ -1,10 +1,10 @@
 ---
 ---
-<section id="download" class="border-b border-border">
+<section id="download">
   <div class="mx-auto max-w-6xl px-6 py-24 md:py-32">
     <div class="mb-16 flex items-baseline gap-4" data-reveal>
-      <span class="font-mono text-sm text-accent">// 05</span>
-      <h2 class="font-mono text-2xl text-text md:text-3xl"><span data-typed-heading>install</span></h2>
+      <span class="font-mono text-sm text-accent">// 04</span>
+      <h2 class="font-mono text-2xl text-text md:text-3xl"><span data-typed-heading>download</span></h2>
     </div>
 
     <div class="grid gap-8 lg:grid-cols-[1fr_1fr] lg:gap-12">
@@ -23,25 +23,33 @@
       </div>
 
       <div class="rounded border border-border bg-surface p-8 transition hover:border-accent/30" data-reveal style="--reveal-delay: 120ms;">
-        <div class="mb-4 font-mono text-xs text-text-2">// from source</div>
-        <h3 class="mb-2 font-mono text-xl text-text">One-line install</h3>
+        <div class="mb-4 font-mono text-xs text-text-2">// one-liner</div>
+        <h3 class="mb-2 font-mono text-xl text-text">Install with curl</h3>
         <p class="mb-6 text-sm leading-relaxed text-text-2">
-          Clone, build, and install the launchd daemon in one shot. Requires Go 1.22+ and Node 20+.
+          Pulls the v0.9.6 release tarball, unpacks it, and runs the installer. No toolchain required.
         </p>
         <button
           type="button"
-          class="group relative block w-full cursor-copy rounded border border-border bg-bg p-4 pr-14 text-left font-mono text-xs leading-relaxed hover:border-accent/40 transition"
-          data-copy="git clone https://github.com/rodeelh/Atlas.git && cd Atlas && make install"
-          aria-label="Copy one-line install command"
+          class="term group relative block w-full cursor-copy overflow-hidden rounded border border-border bg-bg text-left font-mono text-xs leading-relaxed hover:border-accent/40 transition"
+          data-copy="curl -L https://github.com/rodeelh/Atlas/releases/download/v0.9.6/atlas-v0.9.6-darwin-arm64.tar.gz | tar -xz && cd atlas-v0.9.6 && ./install.sh"
+          aria-label="Copy curl install command"
         >
-          <span class="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-[10px] text-text-3 transition group-hover:text-accent" data-copy-label>copy ⎘</span>
-          <div class="overflow-x-auto whitespace-nowrap">
-            <span class="text-accent">$</span>
-            <span class="text-text">git clone https://github.com/rodeelh/Atlas.git</span>
-            <span class="text-text-3"> &amp;&amp; </span>
-            <span class="text-text">cd Atlas</span>
-            <span class="text-text-3"> &amp;&amp; </span>
-            <span class="text-accent">make install</span>
+          <div class="flex items-center justify-between border-b border-border bg-surface px-3 py-2">
+            <div class="flex items-center gap-1.5">
+              <span class="block h-2.5 w-2.5 rounded-full bg-[#ff5f56]/80"></span>
+              <span class="block h-2.5 w-2.5 rounded-full bg-[#ffbd2e]/80"></span>
+              <span class="block h-2.5 w-2.5 rounded-full bg-[#27c93f]/80"></span>
+              <span class="ml-3 text-[10px] text-text-3">~ install atlas</span>
+            </div>
+            <span class="text-[10px] text-text-3 transition group-hover:text-accent" data-copy-label>copy ⎘</span>
+          </div>
+
+          <div class="px-4 py-4 text-[12px]">
+            <div class="flex items-start gap-2">
+              <span class="text-accent">$</span>
+              <span class="term-typed text-text break-all">curl -L https://github.com/rodeelh/Atlas/releases/download/v0.9.6/atlas-v0.9.6-darwin-arm64.tar.gz | tar -xz &amp;&amp; cd atlas-v0.9.6 &amp;&amp; ./install.sh</span>
+              <span class="term-caret text-accent" aria-hidden="true">▍</span>
+            </div>
           </div>
         </button>
       </div>
@@ -49,11 +57,58 @@
   </div>
 </section>
 
+<style>
+  .term-caret { animation: term-blink 1s steps(2, start) infinite; }
+  @keyframes term-blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
+  .term.is-done .term-output { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) {
+    .term-caret { animation: none; opacity: 1; }
+  }
+</style>
+
 <script>
-  document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((btn) => {
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const term = document.querySelector('.term');
+  if (term) {
+    const typed = term.querySelector('.term-typed');
+    const cmd = term.getAttribute('data-copy') || '';
+
+    const runOnce = () => new Promise((resolve) => {
+      if (!typed) { resolve(); return; }
+      typed.textContent = '';
+      if (reduced) {
+        typed.textContent = cmd;
+        resolve();
+        return;
+      }
+      let i = 0;
+      const tick = () => {
+        if (i > cmd.length) {
+          resolve();
+          return;
+        }
+        typed.textContent = cmd.slice(0, i);
+        i += 1;
+        const ch = cmd[i - 1];
+        const delay = ch === ' ' ? 30 : 18 + Math.random() * 38;
+        window.setTimeout(tick, delay);
+      };
+      tick();
+    });
+
+    const loop = async () => {
+      while (true) {
+        await runOnce();
+        await new Promise((r) => window.setTimeout(r, 4200));
+      }
+    };
+    loop();
+  }
+
+  document.querySelectorAll('[data-copy]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      const text = btn.getAttribute('data-copy') ?? '';
-      const label = btn.querySelector('[data-copy-label]') as HTMLElement | null;
+      const text = btn.getAttribute('data-copy') || '';
+      const label = btn.querySelector('[data-copy-label]');
       try {
         await navigator.clipboard.writeText(text);
         if (label) {

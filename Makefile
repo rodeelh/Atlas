@@ -211,9 +211,33 @@ engine-update:
 	@$(MAKE) download-engine LLAMA_VERSION=$(LLAMA_VERSION)
 
 install: build build-tui build-web download-engine download-voice
-	@echo "→ Installing runtime binary and web assets..."
-	@mkdir -p "$$HOME/Library/Application Support/Atlas"
-	cp $(RUNTIME_DIR)/$(BINARY) "$$HOME/Library/Application Support/Atlas/$(BINARY)"
+	@echo "→ Building Atlas.app bundle..."
+	@APP_DIR="$$HOME/Library/Application Support/Atlas/Atlas.app"; \
+	rm -rf "$$APP_DIR"; \
+	mkdir -p "$$APP_DIR/Contents/MacOS" "$$APP_DIR/Contents/Resources"; \
+	cp $(RUNTIME_DIR)/$(BINARY) "$$APP_DIR/Contents/MacOS/$(BINARY)"; \
+	chmod +x "$$APP_DIR/Contents/MacOS/$(BINARY)"; \
+	sed "s|__HOME__|$$HOME|g" $(RUNTIME_DIR)/Info.plist.tmpl > "$$APP_DIR/Contents/Info.plist"; \
+	echo "→ Generating AppIcon.icns from app-icon.svg..."; \
+	TMPDIR_ICON=$$(mktemp -d); \
+	ICONSET="$$TMPDIR_ICON/AppIcon.iconset"; \
+	mkdir -p "$$ICONSET"; \
+	qlmanage -t -s 1024 -o "$$TMPDIR_ICON" "$(WEB_DIR)/public/app-icon.svg" >/dev/null 2>&1; \
+	SRC_PNG="$$TMPDIR_ICON/app-icon.svg.png"; \
+	for SIZE in 16 32 64 128 256 512 1024; do \
+		sips -z $$SIZE $$SIZE "$$SRC_PNG" --out "$$ICONSET/icon_$${SIZE}x$${SIZE}.png" >/dev/null 2>&1; \
+	done; \
+	cp "$$ICONSET/icon_32x32.png"   "$$ICONSET/icon_16x16@2x.png"; \
+	cp "$$ICONSET/icon_64x64.png"   "$$ICONSET/icon_32x32@2x.png"; \
+	cp "$$ICONSET/icon_256x256.png" "$$ICONSET/icon_128x128@2x.png"; \
+	cp "$$ICONSET/icon_512x512.png" "$$ICONSET/icon_256x256@2x.png"; \
+	cp "$$ICONSET/icon_1024x1024.png" "$$ICONSET/icon_512x512@2x.png"; \
+	rm -f "$$ICONSET/icon_64x64.png" "$$ICONSET/icon_1024x1024.png"; \
+	iconutil -c icns "$$ICONSET" -o "$$APP_DIR/Contents/Resources/AppIcon.icns"; \
+	rm -rf "$$TMPDIR_ICON"; \
+	touch "$$APP_DIR"; \
+	echo "✓ Atlas.app bundle ready"
+	@echo "→ Installing web assets..."
 	rsync -a --delete $(WEB_DIR)/dist/ "$$HOME/Library/Application Support/Atlas/web/"
 	@echo "→ Installing TUI binary to ~/.local/bin..."
 	@mkdir -p "$$HOME/.local/bin"
@@ -238,7 +262,8 @@ uninstall:
 	@-launchctl unload -w "$$HOME/Library/LaunchAgents/$(DAEMON_LABEL).plist" 2>/dev/null; true
 	@-rm -f "$$HOME/Library/LaunchAgents/$(DAEMON_LABEL).plist"
 	@echo "→ Removing installed files..."
-	@-rm -f "$$HOME/Library/Application Support/Atlas/$(BINARY)"
+	@-rm -rf "$$HOME/Library/Application Support/Atlas/Atlas.app"
+	@-rm -f  "$$HOME/Library/Application Support/Atlas/$(BINARY)"
 	@-rm -rf "$$HOME/Library/Application Support/Atlas/web"
 	@-rm -f "$$HOME/.local/bin/atlas"
 	@echo "✓ Uninstalled (data in ~/Library/Application Support/ProjectAtlas preserved)"

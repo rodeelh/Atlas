@@ -1,4 +1,29 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="6" fill="#060612"/>
-  <rect x="11" y="7" width="10" height="18" fill="#00FF99"/>
+  <defs>
+    <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7CFFC4"/>
+      <stop offset="55%" stop-color="#00FF99"/>
+      <stop offset="100%" stop-color="#00C97A"/>
+    </linearGradient>
+    <filter id="blockGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="1.1" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="haloGlow" x="-75%" y="-75%" width="250%" height="250%">
+      <feGaussianBlur stdDeviation="1.8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="32" height="32" rx="7" fill="#000000"/>
+
+  <rect x="3" y="3" width="26" height="26" rx="5.7" fill="#00D985" opacity="0.14" filter="url(#haloGlow)"/>
+  <rect x="5.35" y="5.35" width="21.3" height="21.3" rx="4.65" fill="#00D985" opacity="0.26" filter="url(#haloGlow)"/>
+
+  <rect x="7.75" y="7.75" width="16.5" height="16.5" rx="3.6" fill="url(#grad)" filter="url(#blockGlow)"/>
+
+  <path d="M 10.5 10.5 L 14.75 13 L 10.5 15.5" fill="none" stroke="#000000" stroke-width="2.1"
+        stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+  <path d="M 21.5 16.5 L 17.25 19 L 21.5 21.5" fill="none" stroke="#000000" stroke-width="2.3"
+        stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
 </svg>

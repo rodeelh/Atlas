@@ -2,11 +2,10 @@
 import Wordmark from './Wordmark.astro';
 import Terminal from './Terminal.astro';
 ---
-<section class="relative overflow-hidden border-b border-border">
-  <div class="pointer-events-none absolute inset-0 opacity-[0.04]" aria-hidden="true"
-       style="background-image: linear-gradient(rgba(0,255,153,1) 1px, transparent 1px), linear-gradient(90deg, rgba(0,255,153,1) 1px, transparent 1px); background-size: 40px 40px;"></div>
-  <div class="pointer-events-none absolute -left-40 -top-40 h-[480px] w-[480px] rounded-full opacity-30 blur-[120px]" aria-hidden="true"
-       style="background: radial-gradient(closest-side, rgba(0,255,153,0.45), transparent);"></div>
+<section class="hero-station relative overflow-hidden">
+  <div class="hero-station-base pointer-events-none absolute inset-0" aria-hidden="true"></div>
+  <div class="hero-station-dots pointer-events-none absolute inset-0" aria-hidden="true"></div>
+  <div class="hero-station-vignette pointer-events-none absolute inset-0" aria-hidden="true"></div>
 
   <div class="relative mx-auto grid max-w-6xl gap-16 px-6 pb-28 pt-24 md:pb-40 md:pt-32 lg:grid-cols-[1.1fr_1fr] lg:items-center lg:gap-12">
     <div>
@@ -49,6 +48,52 @@ import Terminal from './Terminal.astro';
     </div>
   </div>
 </section>
+
+<style>
+  /* Hero background — adapted from Team HQ Atlas Station card */
+  .hero-station-base {
+    background:
+      radial-gradient(ellipse at 92% 8%,  rgba(0, 255, 153, 0.22) 0%, transparent 52%),
+      radial-gradient(ellipse at 8%  92%, rgba(0, 255, 153, 0.10) 0%, transparent 46%),
+      linear-gradient(160deg, rgba(10, 10, 26, 0.85), #060612 70%);
+    -webkit-mask-image: radial-gradient(ellipse 70% 75% at 50% 50%, black 0%, rgba(0,0,0,0.7) 55%, transparent 100%);
+            mask-image: radial-gradient(ellipse 70% 75% at 50% 50%, black 0%, rgba(0,0,0,0.7) 55%, transparent 100%);
+  }
+  .hero-station-dots {
+    background-image: radial-gradient(circle, rgba(0, 255, 153, 0.45) 1px, transparent 1px);
+    background-size: 26px 26px;
+    -webkit-mask-image: radial-gradient(ellipse 48% 55% at 50% 50%, black 0%, transparent 100%);
+            mask-image: radial-gradient(ellipse 48% 55% at 50% 50%, black 0%, transparent 100%);
+    -webkit-mask-size: 200% 200%;
+            mask-size: 200% 200%;
+    animation: hero-dot-drift 10s ease-in-out infinite;
+    opacity: 0.9;
+  }
+  @keyframes hero-dot-drift {
+    0%   { -webkit-mask-position: 20% 20%; mask-position: 20% 20%; }
+    25%  { -webkit-mask-position: 75% 10%; mask-position: 75% 10%; }
+    50%  { -webkit-mask-position: 80% 75%; mask-position: 80% 75%; }
+    75%  { -webkit-mask-position: 20% 80%; mask-position: 20% 80%; }
+    100% { -webkit-mask-position: 20% 20%; mask-position: 20% 20%; }
+  }
+  /* Static vignette — fades the dot grid + base into the page bg at the edges.
+     Stacked so the bottom edge fully resolves to page bg before the next section. */
+  .hero-station-vignette {
+    background:
+      linear-gradient(to bottom, transparent 0%, transparent 55%, rgba(6,6,18,0.85) 88%, #060612 100%),
+      linear-gradient(to top,    transparent 0%, transparent 70%, rgba(6,6,18,0.55) 92%, #060612 100%),
+      radial-gradient(
+        ellipse 70% 75% at 50% 45%,
+        transparent 0%,
+        transparent 35%,
+        rgba(6,6,18,0.55) 75%,
+        #060612 100%
+      );
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hero-station-dots { animation: none; }
+  }
+</style>
 
 <script>
   const statusEl = document.querySelector('[data-status-text]') as HTMLElement | null;

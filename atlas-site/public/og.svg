@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#060612"/>
+  <g transform="translate(80,260)">
+    <rect x="0" y="0" width="64" height="120" fill="#00FF99" rx="3"/>
+    <text x="92" y="98" font-family="Geist Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="120" font-weight="500" fill="#E0E0FF">atlas</text>
+  </g>
+  <text x="80" y="460" font-family="Geist Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="36" fill="#E0E0FF" opacity="0.85">a companion that lives on your machine.</text>
+  <text x="80" y="560" font-family="Geist Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="22" fill="#00FF99" opacity="0.9">› get atlas — github.com/rodeelh/Atlas</text>
+</svg>

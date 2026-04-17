@@ -1,29 +1,131 @@
 ---
 const points = [
-  { title: 'Local-first', body: 'Conversations, memories, and logs live in SQLite on your machine. Nothing is synced by default.' },
-  { title: 'Keychain-only secrets', body: 'API keys sit in the macOS Keychain. Atlas reads them on demand; they never touch disk in plaintext.' },
-  { title: 'No telemetry', body: 'Zero analytics, zero phone-home. The only network calls are the AI provider and skills you explicitly invoke.' },
+  { tag: 'on your machine',     title: 'stays local',     body: 'your words, your memory, your day — all of it lives on your laptop. nothing syncs unless you ask it to.' },
+  { tag: 'kept in the keychain', title: 'keys stay safe', body: 'api keys live in the macos keychain. atlas reads them when it needs to. they never touch disk in the clear.' },
+  { tag: 'no phone-home',        title: 'nothing watched', body: 'no analytics, no tracking. the only calls out are the ai provider you chose and the things you tell it to do.' },
 ];
 ---
-<section id="privacy" class="border-b border-border">
-  <div class="mx-auto max-w-6xl px-6 py-24 md:py-32">
+<section id="privacy" class="relative overflow-hidden">
+  <div aria-hidden="true" class="priv-grid pointer-events-none absolute inset-0 opacity-[0.07]"></div>
+
+  <div class="relative mx-auto max-w-6xl px-6 py-24 md:py-32">
     <div class="mb-16 flex items-baseline gap-4" data-reveal>
-      <span class="font-mono text-sm text-accent">// 04</span>
-      <h2 class="font-mono text-2xl text-text md:text-3xl"><span data-typed-heading>privacy &amp; control</span></h2>
+      <span class="font-mono text-sm text-accent">// 03</span>
+      <h2 class="font-mono text-2xl text-text md:text-3xl"><span data-typed-heading>privacy</span></h2>
+      <span class="priv-lock ml-1 inline-flex items-center" aria-hidden="true">
+        <svg width="14" height="16" viewBox="0 0 14 16" fill="none" stroke="currentColor" stroke-width="1.4" class="text-accent">
+          <rect x="2" y="7" width="10" height="7" rx="1.2" />
+          <path d="M4 7 V5 a3 3 0 0 1 6 0 V7" />
+        </svg>
+      </span>
     </div>
 
     <div class="grid gap-6 md:grid-cols-3">
       {points.map((p, i) => (
-        <div
-          class="rounded border border-border bg-surface p-6 transition hover:border-accent/30 hover:shadow-glow-soft"
+        <article
+          class="priv-card group relative overflow-hidden rounded border border-border bg-surface p-6 transition hover:border-accent/40 hover:shadow-glow-soft"
           data-reveal
           style={`--reveal-delay: ${i * 90}ms;`}
         >
-          <div class="mb-3 font-mono text-xs text-accent">$ {p.title.toLowerCase().replace(/ /g, '-')}</div>
+          <div class="mb-3 flex items-center justify-between">
+            <span class="priv-cipher font-mono text-xs text-accent" data-cipher={p.tag}>{p.tag}</span>
+            <span class="priv-dot" aria-hidden="true"></span>
+          </div>
           <h3 class="mb-2 font-mono text-base text-text">{p.title}</h3>
           <p class="text-sm leading-relaxed text-text-2">{p.body}</p>
-        </div>
+        </article>
       ))}
     </div>
   </div>
 </section>
+
+<style>
+  /* Faint encryption-grid backdrop */
+  .priv-grid {
+    background-image:
+      linear-gradient(to right, rgba(0,255,153,0.18) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(0,255,153,0.10) 1px, transparent 1px);
+    background-size: 32px 32px, 32px 32px;
+    mask-image: radial-gradient(ellipse at center, rgba(0,0,0,0.9), transparent 70%);
+    -webkit-mask-image: radial-gradient(ellipse at center, rgba(0,0,0,0.9), transparent 70%);
+  }
+
+  .priv-lock {
+    transform: translateY(2px);
+    animation: priv-lock-pulse 4.5s ease-in-out infinite;
+  }
+  @keyframes priv-lock-pulse {
+    0%, 100% { filter: drop-shadow(0 0 0 rgba(0,255,153,0)); }
+    50%      { filter: drop-shadow(0 0 6px rgba(0,255,153,0.55)); }
+  }
+
+  .priv-dot {
+    width: 6px; height: 6px; border-radius: 999px;
+    background: rgba(0,255,153,0.55);
+    box-shadow: 0 0 8px rgba(0,255,153,0.45);
+    animation: priv-dot 2.4s ease-in-out infinite;
+  }
+  @keyframes priv-dot {
+    0%, 100% { opacity: 0.35; transform: scale(0.9); }
+    50%      { opacity: 1;    transform: scale(1.1); }
+  }
+
+  .priv-cipher {
+    display: inline-block;
+    min-width: 11ch;
+    letter-spacing: 0.02em;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .priv-lock, .priv-dot { animation: none; }
+  }
+</style>
+
+<script>
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const cards = Array.from(document.querySelectorAll<HTMLElement>('.priv-card'));
+  if (cards.length && !reduced) {
+    const charset = 'abcdef0123456789!@#$%&*<>/\\|=+';
+    const rand = () => charset[Math.floor(Math.random() * charset.length)];
+
+    const scrambleTo = (el: HTMLElement, target: string, dur = 900) => {
+      const start = performance.now();
+      const len = target.length;
+      const step = (now: number) => {
+        const t = Math.min(1, (now - start) / dur);
+        const settled = Math.floor(t * len);
+        let out = '';
+        for (let i = 0; i < len; i++) {
+          out += i < settled ? target[i] : (target[i] === ' ' ? ' ' : rand());
+        }
+        el.textContent = out;
+        if (t < 1) requestAnimationFrame(step);
+        else el.textContent = target;
+      };
+      requestAnimationFrame(step);
+    };
+
+    const cycleCard = (card: HTMLElement, delay: number) => {
+      const cipher = card.querySelector<HTMLElement>('.priv-cipher');
+      if (!cipher) return;
+      const target = cipher.dataset.cipher ?? cipher.textContent ?? '';
+      const tick = () => {
+        scrambleTo(cipher, target, 950);
+      };
+      window.setTimeout(() => {
+        tick();
+        window.setInterval(tick, 5200);
+      }, delay);
+    };
+
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) {
+          cards.forEach((c, i) => cycleCard(c, i * 350));
+          io.disconnect();
+        }
+      }
+    }, { threshold: 0.3 });
+    io.observe(cards[0]);
+  }
+</script>

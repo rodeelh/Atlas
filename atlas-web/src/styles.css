@@ -399,21 +399,106 @@ html, body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  position: relative;
+  isolation: isolate;
 }
 
 .sidebar-wordmark-block {
   display: inline-block;
+  position: relative;
   width: 11px;
   height: 20px;
-  background: var(--accent);
-  border-radius: 1px;
-  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 35%, transparent);
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--accent) 55%, white) 0%,
+    var(--accent) 55%,
+    color-mix(in srgb, var(--accent) 80%, black) 100%
+  );
+  border-radius: 2px;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 45%, transparent);
   flex-shrink: 0;
+  animation: sbwm-pulse 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.sidebar-wordmark-block::before,
+.sidebar-wordmark-block::after {
+  content: "";
+  position: absolute;
+  background: var(--accent);
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: -1;
+}
+.sidebar-wordmark-block::before {
+  inset: -12% -18%;
+  opacity: 0.22;
+  filter: blur(3px);
+  animation: sbwm-halo-inner 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+.sidebar-wordmark-block::after {
+  inset: -28% -38%;
+  opacity: 0.12;
+  filter: blur(6px);
+  animation: sbwm-halo-outer 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes sbwm-pulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.04); }
+}
+@keyframes sbwm-halo-inner {
+  0%, 100% { opacity: 0.12; }
+  50%      { opacity: 0.32; }
+}
+@keyframes sbwm-halo-outer {
+  0%, 100% { opacity: 0.06; }
+  50%      { opacity: 0.18; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-wordmark-block,
+  .sidebar-wordmark-block::before,
+  .sidebar-wordmark-block::after { animation: none; }
 }
 
 .sidebar-wordmark-block--collapsed {
   width: 14px;
   height: 24px;
+}
+
+.settings-about-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+}
+.settings-about-icon {
+  width: 44px;
+  height: 44px;
+  display: block;
+  border-radius: 10px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.settings-about-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.settings-about-name {
+  font-family: var(--font, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--theme-text-primary);
+  line-height: 1.2;
+}
+.settings-about-version {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  color: var(--theme-text-secondary);
+  letter-spacing: 0.01em;
+  line-height: 1.2;
 }
 
 .sidebar-wordmark-name {

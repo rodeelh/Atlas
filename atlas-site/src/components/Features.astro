@@ -1,42 +1,42 @@
 ---
 const features = [
   {
-    cmd: 'atlas.providers',
-    title: 'Multi-provider AI',
-    body: 'OpenAI, Anthropic, Gemini, and LM Studio out of the box. Per-task primary/fast model selection. Switch providers without losing your conversation.',
+    cmd: 'providers',
+    title: 'pick your brain',
+    body: 'openai, anthropic, gemini, or a local model through lm studio. switch any time without losing the thread.',
   },
   {
-    cmd: 'atlas.skills',
-    title: 'Skills & Forge',
-    body: 'A registry of capabilities — filesystem, browser, terminal, web search, finance, image, system. Forge lets the agent research and install new skills on its own.',
+    cmd: 'skills',
+    title: 'give it hands',
+    body: 'browse the web, read files, run a command, send a message, check the weather. you decide what it can touch.',
   },
   {
-    cmd: 'atlas.memory',
-    title: 'Memory & MIND',
-    body: 'Per-turn memory extraction into SQLite. A self-updating MIND.md system prompt. Nightly dream cycles consolidate what mattered.',
+    cmd: 'memory',
+    title: 'it remembers',
+    body: 'names, places, what mattered last week. it tells you what it kept, and forgets when you ask.',
   },
   {
-    cmd: 'atlas.dashboards',
-    title: 'Dashboards',
-    body: 'Schema-driven widget grid backed by skills, SQL, runtime endpoints, or live AI compute. Authored by the agent on request.',
+    cmd: 'dashboards',
+    title: 'show it back',
+    body: 'ask for a view of your day, your inbox, your spending — and it builds a small dashboard you can keep.',
   },
   {
-    cmd: 'atlas.teams',
-    title: 'Teams',
-    body: 'Spawn worker agents with scoped skill allowlists. Sequence or single delegation, sync or async. Approvals route back to chat.',
+    cmd: 'teams',
+    title: 'split the work',
+    body: 'give it a small crew of focused helpers. one researches, one writes, one keeps notes. you stay in the chair.',
   },
   {
-    cmd: 'atlas.comms',
-    title: 'Comms bridges',
-    body: 'Telegram and Discord bridges run inside the daemon. Talk to Atlas from anywhere; it talks back through the same chat surface.',
+    cmd: 'comms',
+    title: 'meet you where you are',
+    body: 'talk to it from telegram or discord. same companion, same memory, same conversation.',
   },
 ];
 ---
-<section id="features" class="border-b border-border">
+<section id="features">
   <div class="mx-auto max-w-6xl px-6 py-24 md:py-32">
     <div class="mb-16 flex items-baseline gap-4" data-reveal>
       <span class="font-mono text-sm text-accent">// 01</span>
-      <h2 class="font-mono text-2xl text-text md:text-3xl"><span data-typed-heading>what it does</span></h2>
+      <h2 class="font-mono text-2xl text-text md:text-3xl"><span data-typed-heading>features</span></h2>
     </div>
 
     <div class="grid gap-px overflow-hidden rounded border border-border bg-border md:grid-cols-2 lg:grid-cols-3">
@@ -51,7 +51,7 @@ const features = [
           <p class="text-sm leading-relaxed text-text-2">{f.body}</p>
           <div class="mt-5 h-5 overflow-hidden font-mono text-[11px] text-text-3">
             <span class="block translate-y-5 opacity-0 transition duration-300 group-hover:translate-y-0 group-hover:opacity-100 group-hover:text-accent">
-              ▸ {f.cmd}.invoke()
+              → ready when you are
             </span>
           </div>
           <span class="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-accent/40 to-transparent opacity-0 transition group-hover:opacity-100"></span>
