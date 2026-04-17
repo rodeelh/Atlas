@@ -468,55 +468,59 @@ export function Settings() {
       </SettingsGroup>
 
       <SettingsGroup title="About">
-        <div class="settings-about-hero">
-          <AtlasIcon />
-          <div class="settings-about-meta">
-            <div class="settings-about-name">Atlas</div>
-            <div class="settings-about-version">v{__APP_VERSION__}</div>
+        <div class="settings-row" style={{ borderBottom: 'none' }}>
+          <div class="settings-label-col" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <AtlasIcon size={36} />
+            <div>
+              <div class="settings-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: "'Geist Mono', ui-monospace, monospace", fontWeight: 500 }}>
+                atlas
+                {updateResult.kind === 'available' && (
+                  <span class="badge badge-yellow" style={{ fontSize: 11, padding: '1px 6px' }}>Update</span>
+                )}
+              </div>
+              <div class="settings-sublabel">
+                {updateResult.kind === 'available'
+                  ? `v${__APP_VERSION__} — Update available: v${updateResult.latest}`
+                  : updateResult.kind === 'current'
+                  ? `v${__APP_VERSION__} — Up to date.`
+                  : updateResult.kind === 'error'
+                  ? `v${__APP_VERSION__} — Check failed: ${updateResult.message}`
+                  : `v${__APP_VERSION__} — Check for the latest release on GitHub.`}
+              </div>
+            </div>
+          </div>
+          <div class="settings-field">
+            {updateResult.kind === 'available' ? (
+              <a
+                class="btn btn-sm btn-primary"
+                style={{ width: '80px', textAlign: 'center' }}
+                href={updateResult.url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Update
+              </a>
+            ) : (
+              <button
+                class="btn btn-sm"
+                style={{ width: '80px' }}
+                onClick={checkForUpdate}
+                disabled={updateChecking || updateResult.kind === 'current'}
+              >
+                {updateChecking ? 'Checking…' : updateResult.kind === 'current' ? 'Up to date' : 'Check'}
+              </button>
+            )}
           </div>
         </div>
-        <SettingsRow
-          label="Check for updates"
-          sublabel={
-            updateResult.kind === 'available'
-              ? `Update available: v${updateResult.latest}`
-              : updateResult.kind === 'current'
-              ? `You're on the latest version (v${updateResult.latest}).`
-              : updateResult.kind === 'error'
-              ? `Check failed: ${updateResult.message}`
-              : 'Compare your version with the latest release on GitHub.'
-          }
-          mobileSplit
-        >
-          {updateResult.kind === 'available' ? (
-            <a
-              class="btn btn-sm"
-              style={{ width: '96px', textAlign: 'center' }}
-              href={updateResult.url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Update
-            </a>
-          ) : (
-            <button
-              class="btn btn-sm"
-              style={{ width: '96px' }}
-              onClick={checkForUpdate}
-              disabled={updateChecking || updateResult.kind === 'current'}
-            >
-              {updateChecking ? 'Checking…' : updateResult.kind === 'current' ? 'Up to date' : 'Check'}
-            </button>
-          )}
-        </SettingsRow>
       </SettingsGroup>
     </div>
   )
 }
 
-function AtlasIcon() {
+function AtlasIcon({ size = 22 }: { size?: number }) {
+  const r = Math.round(size * (7 / 32))
   return (
-    <svg class="settings-about-icon" viewBox="0 0 32 32" aria-hidden="true">
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" style={{ display: 'block', borderRadius: `${r}px`, flexShrink: 0 }}>
       <defs>
         <linearGradient id="atlas-icon-grad" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stop-color="#7CFFC4" />
@@ -525,31 +529,22 @@ function AtlasIcon() {
         </linearGradient>
         <filter id="atlas-icon-block-glow" x="-50%" y="-50%" width="200%" height="200%">
           <feGaussianBlur stdDeviation="1.1" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
         </filter>
         <filter id="atlas-icon-halo-glow" x="-75%" y="-75%" width="250%" height="250%">
           <feGaussianBlur stdDeviation="1.8" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
         </filter>
+        <clipPath id="atlas-icon-clip"><rect width="32" height="32" rx="7" /></clipPath>
       </defs>
-
-      <rect width="32" height="32" rx="7" fill="#060612" />
-
-      <rect x="3" y="3" width="26" height="26" rx="5.7" fill="#00D985" opacity="0.14" filter="url(#atlas-icon-halo-glow)" />
-      <rect x="5.35" y="5.35" width="21.3" height="21.3" rx="4.65" fill="#00D985" opacity="0.26" filter="url(#atlas-icon-halo-glow)" />
-
-      <rect x="7.75" y="7.75" width="16.5" height="16.5" rx="3.6" fill="url(#atlas-icon-grad)" filter="url(#atlas-icon-block-glow)" />
-
-      <path d="M 10.5 10.75 L 13.6 12.3 L 10.5 13.85" fill="none" stroke="#060612" stroke-width="1.56"
-            stroke-linecap="round" stroke-linejoin="round" />
-      <path d="M 21.4 14.2 L 14.4 18.0 L 21.4 21.8" fill="none" stroke="#060612" stroke-width="2.4"
-            stroke-linecap="round" stroke-linejoin="round" />
+      <g clip-path="url(#atlas-icon-clip)">
+        <rect width="32" height="32" rx="7" fill="#060612" />
+        <rect x="0" y="0" width="32" height="32" rx="7" fill="#00D985" opacity="0.14" filter="url(#atlas-icon-halo-glow)" />
+        <rect x="2.89" y="2.89" width="26.22" height="26.22" rx="5.72" fill="#00D985" opacity="0.26" filter="url(#atlas-icon-halo-glow)" />
+        <rect x="5.85" y="5.85" width="20.31" height="20.31" rx="4.43" fill="url(#atlas-icon-grad)" filter="url(#atlas-icon-block-glow)" />
+        <path d="M 9.23 9.54 L 13.05 11.45 L 9.23 13.35" fill="none" stroke="#060612" stroke-width="1.92" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="M 22.65 13.78 L 14.03 18.46 L 22.65 23.14" fill="none" stroke="#060612" stroke-width="2.95" stroke-linecap="round" stroke-linejoin="round" />
+      </g>
     </svg>
   )
 }
