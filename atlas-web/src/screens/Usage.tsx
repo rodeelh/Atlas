@@ -347,7 +347,11 @@ export function Usage() {
       const before = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
       const res = await api.deleteUsage(before)
       setClearMsg(`Deleted ${res.deleted} record${res.deleted !== 1 ? 's' : ''}.`)
-      load()
+      try {
+        await load()
+      } catch {
+        setClearMsg('Data cleared, but failed to reload — please refresh.')
+      }
     } catch {
       setClearMsg('Failed to clear data.')
     } finally {

@@ -383,7 +383,7 @@ export function Communications() {
                 <button
                   key={platform.id}
                   class="communication-picker-row communication-platform-row"
-                  onClick={() => { void choosePlatform(platform.platform) }}
+                  onClick={() => { choosePlatform(platform.platform).catch(e => setError(e instanceof Error ? e.message : 'Action failed.')) }}
                 >
                   <div class="communication-platform-summary">
                     <PlatformLogo platform={platform.platform} />
@@ -413,7 +413,7 @@ export function Communications() {
                     <button
                       key={platform.id}
                       class="communication-picker-row communication-platform-row"
-                      onClick={() => { void choosePlatform(platform.platform) }}
+                      onClick={() => { choosePlatform(platform.platform).catch(e => setError(e instanceof Error ? e.message : 'Action failed.')) }}
                     >
                       <div class="communication-platform-summary">
                         <PlatformLogo platform={platform.platform} />
@@ -533,6 +533,7 @@ function QuickSetupModal({
   const [errorMsg, setErrorMsg] = useState('')
   const [qrDataURL, setQrDataURL] = useState('')
   const [accountName, setAccountName] = useState('')
+  const [qrSecondsLeft, setQrSecondsLeft] = useState(60)
 
   const hasPendingInput = fields.some(f => values[f.id]?.trim())
   const connectDisabled = fields.length > 0 && !platform.credentialConfigured && !hasPendingInput
@@ -567,6 +568,24 @@ function QuickSetupModal({
   useEffect(() => {
     if (isWhatsApp) connect()
   }, [])
+
+  // WhatsApp: 60-second QR expiry countdown
+  useEffect(() => {
+    if (phase !== 'qr') return
+    setQrSecondsLeft(60)
+    const tick = window.setInterval(() => {
+      setQrSecondsLeft(prev => {
+        if (prev <= 1) {
+          window.clearInterval(tick)
+          setErrorMsg('QR code expired. Please try again.')
+          setPhase('error')
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+    return () => window.clearInterval(tick)
+  }, [phase])
 
   // WhatsApp: poll for connection after QR is shown; also detect QR expiry
   useEffect(() => {
@@ -678,6 +697,9 @@ function QuickSetupModal({
               <img src={qrDataURL} alt="WhatsApp QR code" class="communication-whatsapp-qr-image" />
               <div class="communication-setup-status-title">Scan with your phone</div>
               <div class="communication-setup-status-body">WhatsApp → Linked Devices → Link a Device</div>
+              <div class="communication-setup-status-body" style={{ fontSize: '12px', color: qrSecondsLeft <= 10 ? 'var(--theme-text-danger, #e05252)' : 'var(--text-3)' }}>
+                QR expires in {qrSecondsLeft}s
+              </div>
               <button class="btn btn-sm btn-ghost" onClick={onCancel}>Cancel</button>
             </div>
           )}

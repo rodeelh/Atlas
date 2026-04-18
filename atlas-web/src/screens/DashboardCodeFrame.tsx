@@ -18,7 +18,7 @@
 // connect-src 'none' in CSP blocks fetch/XHR/WebSocket even if a widget
 // somehow bypassed the lexical forbidden-token check in the backend.
 
-import { useEffect, useMemo, useRef } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 
 // ── @atlas/ui stdlib ──────────────────────────────────────────────────────────
@@ -215,12 +215,15 @@ function errorDisplay(err) {
   pre.className = 'au-error'
   pre.textContent = String((err && err.message) || err)
   root.appendChild(pre)
+  try { window.parent.postMessage({ type: 'atlas:error', message: String((err && err.message) || err) }, '*') } catch (_) {}
 }
 
+let painted = false
 function paint() {
   if (!WidgetComponent) return
   try {
     render(h(WidgetComponent, { data: currentData }), document.getElementById('root'))
+    if (!painted) { painted = true; try { window.parent.postMessage({ type: 'atlas:paint' }, '*') } catch (_) {} }
   } catch (err) { errorDisplay(err) }
 }
 
@@ -275,14 +278,23 @@ export interface DashboardCodeFrameProps {
 }
 
 export function DashboardCodeFrame({ hash, compiled, data }: DashboardCodeFrameProps): JSX.Element {
-  const iframeRef = useRef<HTMLIFrameElement>(null)
-  const dataRef   = useRef<unknown>(data)
-  dataRef.current = data
+  const iframeRef    = useRef<HTMLIFrameElement>(null)
+  const dataRef      = useRef<unknown>(data)
+  dataRef.current    = data
+  const [widgetReady, setWidgetReady] = useState(false)
+  const [widgetError, setWidgetError] = useState<string | null>(null)
+  const [reloadKey,   setReloadKey]   = useState(0)
 
   // The srcdoc only depends on the compiled module — when TSX changes, the
   // parent will pass a new hash + compiled; useMemo keyed on hash keeps this
   // stable across data-only updates.
-  const srcdoc = useMemo(() => buildSrcdoc(compiled), [hash, compiled])
+  const srcdoc = useMemo(() => buildSrcdoc(compiled), [hash, compiled, reloadKey])
+
+  // Reset ready/error state whenever srcdoc changes.
+  useEffect(() => {
+    setWidgetReady(false)
+    setWidgetError(null)
+  }, [srcdoc])
 
   useEffect(() => {
     const iframe = iframeRef.current
@@ -293,8 +305,10 @@ export function DashboardCodeFrame({ hash, compiled, data }: DashboardCodeFrameP
     }
     function onMessage(e: MessageEvent) {
       if (e.source !== iframe!.contentWindow) return
-      const payload = e.data as { type?: string } | undefined
+      const payload = e.data as { type?: string; message?: string } | undefined
       if (payload?.type === 'atlas:ready') send()
+      if (payload?.type === 'atlas:paint') setWidgetReady(true)
+      if (payload?.type === 'atlas:error') setWidgetError(payload.message ?? 'Widget error')
     }
     window.addEventListener('message', onMessage)
     iframe.addEventListener('load', send)
@@ -310,13 +324,34 @@ export function DashboardCodeFrame({ hash, compiled, data }: DashboardCodeFrameP
     catch { /* noop */ }
   }, [data])
 
+  function handleRetry() {
+    setWidgetError(null)
+    setWidgetReady(false)
+    setReloadKey(k => k + 1)
+  }
+
   return (
-    <iframe
-      ref={iframeRef}
-      class="dashboard-widget-code-frame"
-      sandbox="allow-scripts"
-      srcDoc={srcdoc}
-      title="widget"
-    />
+    <div class="dashboard-widget-code-frame-wrap" style="position:relative;width:100%;height:100%;">
+      {!widgetReady && !widgetError && (
+        <div class="empty-state" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;">
+          Loading widget…
+        </div>
+      )}
+      {widgetError && (
+        <div class="dashboard-widget-code-error" style="padding:8px;">
+          <pre class="dashboard-widget-error" style="margin:0 0 8px 0;">{widgetError}</pre>
+          <button class="btn btn-sm" onClick={handleRetry}>Retry</button>
+        </div>
+      )}
+      <iframe
+        key={reloadKey}
+        ref={iframeRef}
+        class="dashboard-widget-code-frame"
+        style={widgetError ? 'display:none' : undefined}
+        sandbox="allow-scripts"
+        srcDoc={srcdoc}
+        title="widget"
+      />
+    </div>
   )
 }

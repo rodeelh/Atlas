@@ -98,6 +98,8 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
   const [mlxRequestSaving, setMlxRequestSaving] = useState(false)
   const [temperature, setTemperature] = useState(0)
   const [repetitionPenalty, setRepetitionPenalty] = useState(0)
+  // Finding 45: debounce ref for config slider saves
+  const mlxRequestDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Download state
   const [dlRepo, setDlRepo]         = useState('')
@@ -147,7 +149,8 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
     api.config().then(cfg => {
       if (cfg.atlasMLXPort && cfg.atlasMLXPort > 0) setServerPort(cfg.atlasMLXPort)
       if (cfg.atlasMLXCtxSize && cfg.atlasMLXCtxSize > 0) setCtxSize(cfg.atlasMLXCtxSize)
-      if (cfg.atlasMLXRouterModel) setRouterModel(cfg.atlasMLXRouterModel)
+      // Finding 43: sync atlasMLXRouterModel from config into routerModel state on mount
+      setRouterModel(cfg.atlasMLXRouterModel ?? '')
       setTemperature(cfg.atlasMLXTemperature ?? 0)
       setRepetitionPenalty(cfg.atlasMLXRepetitionPenalty ?? 0)
       // Reset removed settings to defaults so stale user values don't persist.
@@ -155,11 +158,14 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
     }).catch(() => {})
 
     // Restore any in-progress download that survived a page refresh.
+    // Finding 44: show an error note if the download status check fails on mount
     api.mlxDownloadStatus().then(s => {
       if (!s.repo || !s.active) return
       setDownload({ repo: s.repo, done: false, error: null, line: 'Resuming…' })
       setDlRepo(s.repo)
-    }).catch(() => {})
+    }).catch(() => {
+      setError('Could not resume download status.')
+    })
   }, [])
 
   // Append to TPS history when a new inference result arrives from the status poll.
@@ -219,6 +225,15 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
     } finally {
       setMlxRequestSaving(false)
     }
+  }
+
+  // Finding 45: debounced wrapper — only fires the save 400ms after the last slider event
+  const updateMLXRequestConfigDebounced = (patch: Partial<RuntimeConfig>) => {
+    if (mlxRequestDebounceRef.current) clearTimeout(mlxRequestDebounceRef.current)
+    mlxRequestDebounceRef.current = setTimeout(() => {
+      mlxRequestDebounceRef.current = null
+      void updateMLXRequestConfig(patch)
+    }, 400)
   }
 
   const handleStart = async (modelName: string) => {
@@ -809,7 +824,7 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
                 onChange={(e) => {
                   const v = Number((e.target as HTMLInputElement).value)
                   setTemperature(v)
-                  void updateMLXRequestConfig({ atlasMLXTemperature: v } as Partial<RuntimeConfig>)
+                  updateMLXRequestConfigDebounced({ atlasMLXTemperature: v } as Partial<RuntimeConfig>)
                 }}
                 disabled={mlxRequestSaving}
               />
@@ -836,7 +851,7 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
                   // Clamp: 0 = disabled, otherwise must be > 1.0 to be meaningful.
                   const clamped = v > 0 && v < 1 ? 1 : v
                   setRepetitionPenalty(clamped)
-                  void updateMLXRequestConfig({ atlasMLXRepetitionPenalty: clamped } as Partial<RuntimeConfig>)
+                  updateMLXRequestConfigDebounced({ atlasMLXRepetitionPenalty: clamped } as Partial<RuntimeConfig>)
                 }}
                 disabled={mlxRequestSaving}
               />

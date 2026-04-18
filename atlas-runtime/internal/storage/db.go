@@ -2306,6 +2306,24 @@ func (db *DB) ListAgentEvents(limit int) ([]AgentEventRow, error) {
 	return out, rows.Err()
 }
 
+// ClearAgentTasks deletes all rows from agent_tasks and their steps.
+func (db *DB) ClearAgentTasks() error {
+	if _, err := db.conn.Exec(`DELETE FROM agent_task_steps`); err != nil {
+		return err
+	}
+	_, err := db.conn.Exec(`DELETE FROM agent_tasks`)
+	return err
+}
+
+// ClearBlockedAgentTasks deletes agent_tasks rows with failed or needs_review status.
+func (db *DB) ClearBlockedAgentTasks() error {
+	if _, err := db.conn.Exec(`DELETE FROM agent_task_steps WHERE task_id IN (SELECT task_id FROM agent_tasks WHERE status IN ('failed','error','needs_review','pending_approval'))`); err != nil {
+		return err
+	}
+	_, err := db.conn.Exec(`DELETE FROM agent_tasks WHERE status IN ('failed','error','needs_review','pending_approval')`)
+	return err
+}
+
 // ClearAgentEvents deletes all rows from agent_events.
 func (db *DB) ClearAgentEvents() error {
 	_, err := db.conn.Exec(`DELETE FROM agent_events`)

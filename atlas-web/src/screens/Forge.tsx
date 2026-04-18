@@ -422,6 +422,8 @@ export function Forge() {
   const [installed,   setInstalled]   = useState<SkillRecord[]>([])
   const [loading,     setLoading]     = useState(true)
   const [error,       setError]       = useState<string | null>(null)
+  const [proposalsError, setProposalsError] = useState<string | null>(null)
+  const [installedError, setInstalledError] = useState<string | null>(null)
   const [acting,      setActing]      = useState<Set<string>>(new Set())
 
   const load = useCallback(async () => {
@@ -432,8 +434,10 @@ export function Forge() {
         api.forgeInstalled(),
       ])
       if (r.status === 'fulfilled') setResearching(r.value)
-      if (p.status === 'fulfilled') setProposals(p.value)
-      if (i.status === 'fulfilled') setInstalled(i.value)
+      if (p.status === 'fulfilled') { setProposals(p.value); setProposalsError(null) }
+      else setProposalsError(p.reason instanceof Error ? p.reason.message : 'Failed to load proposals.')
+      if (i.status === 'fulfilled') { setInstalled(i.value); setInstalledError(null) }
+      else setInstalledError(i.reason instanceof Error ? i.reason.message : 'Failed to load installed skills.')
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load Forge data.')
@@ -560,7 +564,8 @@ export function Forge() {
           sub="Skills awaiting your decision"
           count={pendingProposals.length}
         />
-        {pendingProposals.length === 0 ? (
+        {proposalsError && <p class="error-banner">{proposalsError}</p>}
+        {!proposalsError && pendingProposals.length === 0 ? (
           <div class="card forge-empty-card">
             <EmptyState message="No pending proposals. Atlas will surface new skills here when it identifies useful capabilities." />
           </div>
@@ -584,7 +589,8 @@ export function Forge() {
           sub="Forge skills in your skill registry"
           count={installed.length}
         />
-        {installed.length === 0 ? (
+        {installedError && <p class="error-banner">{installedError}</p>}
+        {!installedError && installed.length === 0 ? (
           <div class="card forge-empty-card">
             <EmptyState message="No Forge skills installed yet. Approve a proposal above to install one." />
           </div>

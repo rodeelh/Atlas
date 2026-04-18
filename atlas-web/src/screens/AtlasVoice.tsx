@@ -38,6 +38,8 @@ export function AtlasVoice() {
   const [dlPreset, setDlPreset]   = useState('')
   const [download, setDownload]   = useState<DownloadState | null>(null)
   const dlAbortRef = useRef<(() => void) | null>(null)
+  // Finding 47: unmounted guard to prevent state updates after component cleanup
+  const unmounted = useRef(false)
 
   const [whisperUpdate, setWhisperUpdate]         = useState<UpdateState | null>(null)
   const whisperUpdateAbortRef = useRef<(() => void) | null>(null)
@@ -63,6 +65,7 @@ export function AtlasVoice() {
   }
 
   useEffect(() => {
+    unmounted.current = false
     void load()
     fetch('https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest')
       .then(r => r.json())
@@ -72,6 +75,7 @@ export function AtlasVoice() {
       .then(r => r.json())
       .then((d: { info?: { version?: string } }) => { if (d.info?.version) setLatestKokoroVersion(d.info.version) })
       .catch(() => {})
+    return () => { unmounted.current = true }
   }, [])
 
   const handleDownload = async (filenameArg?: string) => {
@@ -121,28 +125,43 @@ export function AtlasVoice() {
           if (!event || !data) continue
           const parsed = JSON.parse(data)
           if (event === 'progress') {
+            if (unmounted.current) return
             setDownload(prev => prev ? { ...prev, ...parsed } : null)
           } else if (event === 'done') {
+            if (unmounted.current) return
             setDownload(prev => prev ? { ...prev, done: true, percent: 100 } : null)
             if (parsed.models) setModels(parsed.models)
-            // Auto-activate the new model
-            try { await api.updateConfig({ voiceWhisperModel: filename }) } catch { /* non-fatal */ }
-            setActiveModel(filename)
+            // Auto-activate the new model — Finding 46: surface activation failures
+            try {
+              await api.updateConfig({ voiceWhisperModel: filename })
+              if (unmounted.current) return
+              setActiveModel(filename)
+            } catch {
+              if (!unmounted.current) {
+                setDownload(prev => prev
+                  ? { ...prev, error: 'Download complete but activation failed. Please select the model manually.' }
+                  : null)
+              }
+            }
             // Delete the previous model if it's different
             if (prevModel && prevModel !== filename) {
               try {
                 const updated = await api.voiceDeleteModel('whisper', prevModel)
-                setModels(updated)
+                if (!unmounted.current) setModels(updated)
               } catch { /* non-fatal */ }
             }
-            setDlPreset('')
-            toast.success(`${filename} downloaded and activated`)
+            if (!unmounted.current) {
+              setDlPreset('')
+              toast.success(`${filename} downloaded and activated`)
+            }
           } else if (event === 'error') {
+            if (unmounted.current) return
             setDownload(prev => prev ? { ...prev, error: parsed.message } : null)
           }
         }
       }
     } catch (e) {
+      if (unmounted.current) return
       if ((e as Error).name !== 'AbortError') {
         setDownload(prev => prev ? { ...prev, error: (e as Error).message || 'Download failed' } : null)
       } else {

@@ -376,7 +376,7 @@ Some skills expose the same action under two names. Aliases are transparent to c
 - Mutating routes (POST create/install/reject/pin/access/widgets/execute) return 501 — **deferred to V1.0 rewrite**.
 
 **Agents (Teams V1 — DB-first)**
-- SQLite is the authoritative source for agent definitions. AGENTS.md is export-only (`GET /agents/export`). One-time import from AGENTS.md on first startup if DB is empty (`Start()` guard). `syncFromFile` is NOT called during delegation — DB is the sole authority at task execution time.
+- SQLite is the authoritative source for agent definitions. AGENTS.md is export-only (`GET /agents/export`). There is no startup import from AGENTS.md — the file is never read automatically. `POST /agents/sync` exists for manual one-off imports only. DB is the sole authority at all times.
 - `allowedSkills` entries must be bare-prefix canonical form: `["fs", "terminal", "websearch"]`. See the Skill Naming conventions above.
 - Canonical skill names: `team.list`, `team.get`, `team.delegate` for read/delegation; `agent.create`, `agent.update`, `agent.delete`, `agent.enable`, `agent.disable`, `agent.pause`, `agent.resume`, `agent.sequence`, `agent.assign` for management. `agent.list` and `agent.get` were removed in Teams V1.
 - HTTP routes are under `/agents`: `/agents`, `/agents/{id}`, `/agents/hq`, `/agents/tasks`, `/agents/tasks/{id}`, `/agents/events`, `/agents/sync`, `/agents/export`, `/agents/triggers`.

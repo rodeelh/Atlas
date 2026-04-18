@@ -121,17 +121,6 @@ func (m *Module) rosterContextFromDB() string {
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	// One-time import guard: if the DB has no agent definitions and AGENTS.md
-	// exists, import it once so existing deployments migrate automatically.
-	// After the first successful import the file is no longer read on startup —
-	// the DB is the authoritative source.
-	existing, _ := m.store.ListAgentDefinitions()
-	if len(existing) == 0 {
-		if _, err := m.syncFromFile(context.Background()); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-	}
-
 	m.resetStaleRuntimeStates()
 
 	// M6: start bounded-autonomy trigger coordinator.
@@ -198,6 +187,8 @@ func (m *Module) registerRoutes(r chi.Router) {
 	r.Get("/agents/events", m.listEvents)
 	r.Delete("/agents/events", m.clearEvents)
 	r.Get("/agents/tasks", m.listTasks)
+	r.Delete("/agents/tasks", m.clearTasks)
+	r.Delete("/agents/blocked", m.clearBlocked)
 	r.Get("/agents/tasks/{id}", m.getTask)
 	r.Post("/agents/tasks", m.assignTask)
 	r.Post("/agents/tasks/{id}/cancel", m.cancelTask)
@@ -438,6 +429,22 @@ func (m *Module) listEvents(w http.ResponseWriter, _ *http.Request) {
 func (m *Module) clearEvents(w http.ResponseWriter, _ *http.Request) {
 	if err := m.store.ClearAgentEvents(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to clear events: "+err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *Module) clearTasks(w http.ResponseWriter, _ *http.Request) {
+	if err := m.store.ClearAgentTasks(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clear tasks: "+err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *Module) clearBlocked(w http.ResponseWriter, _ *http.Request) {
+	if err := m.store.ClearBlockedAgentTasks(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clear blocked items: "+err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -225,7 +225,8 @@ export function Activity() {
       await navigator.clipboard.writeText(text)
       setCopiedLogId(entry.id)
       toast.success('Copied')
-      setTimeout(() => setCopiedLogId(prev => prev === entry.id ? null : prev), 1800)
+      const copiedId = entry.id
+      setTimeout(() => setCopiedLogId(curr => curr === copiedId ? null : curr), 1800)
     } catch {
       toast.error('Could not copy')
     }
@@ -241,7 +242,8 @@ export function Activity() {
       if (configData.status === 'fulfilled')  setConfig(configData.value)
       if (engineData.status === 'fulfilled')  setEngineStatus(engineData.value)
       setLastUpdated(new Date())
-      setError(null)
+      const anyRejected = [logData, statusData, configData, engineData].some(r => r.status === 'rejected')
+      setError(anyRejected ? 'Some data failed to load.' : null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load activity.')
     } finally {

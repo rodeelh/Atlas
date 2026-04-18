@@ -64,11 +64,16 @@ export function Memory() {
     if (searchTimeout.current) clearTimeout(searchTimeout.current)
     searchTimeout.current = setTimeout(async () => {
       setSearching(true)
+      setError(null)
       try {
+        // api.searchMemories does not accept a category parameter — category
+        // filtering is applied client-side below as a safety net.
         const results = await api.searchMemories(query.trim())
         const cat = category === 'all' ? null : category
         setFiltered(cat ? results.filter(m => m.category.toLowerCase() === cat) : results)
-      } catch { /* silent */ } finally {
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Search failed.')
+      } finally {
         setSearching(false)
       }
     }, 350)

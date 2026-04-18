@@ -66,6 +66,8 @@ type AgentStore interface {
 	ListAgentEvents(limit int) ([]storage.AgentEventRow, error)
 	SaveAgentEvent(row storage.AgentEventRow) error
 	ClearAgentEvents() error
+	ClearAgentTasks() error
+	ClearBlockedAgentTasks() error
 	GetAgentMetrics(agentID string) (*storage.AgentMetricsRow, error)
 	UpsertAgentMetrics(row storage.AgentMetricsRow) error
 	ListAgentMetrics() ([]storage.AgentMetricsRow, error)
@@ -272,6 +274,14 @@ func (s agentStore) SaveAgentEvent(row storage.AgentEventRow) error {
 
 func (s agentStore) ClearAgentEvents() error {
 	return s.db.ClearAgentEvents()
+}
+
+func (s agentStore) ClearAgentTasks() error {
+	return s.db.ClearAgentTasks()
+}
+
+func (s agentStore) ClearBlockedAgentTasks() error {
+	return s.db.ClearBlockedAgentTasks()
 }
 
 func (s agentStore) GetAgentMetrics(agentID string) (*storage.AgentMetricsRow, error) {

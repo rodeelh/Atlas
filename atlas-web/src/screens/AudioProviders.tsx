@@ -202,12 +202,16 @@ export function AudioProviders() {
         <div class="section-label">Voice</div>
         <div class="card ai-provider-setup-card ai-provider-setup-card--no-anim">
           {voicesLoading ? (
-            <div style={{ padding: '16px 20px' }}><span class="spinner spinner-sm" /></div>
+            <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span class="spinner spinner-sm" />
+              <span style={{ fontSize: '13px', color: 'var(--theme-text-secondary)' }}>Loading voices…</span>
+            </div>
           ) : voices.length === 0 ? (
             <div style={{ padding: '16px 20px', fontSize: '13px', color: 'var(--theme-text-secondary)' }}>No voices available</div>
           ) : (
             <div class="ai-mode-grid" style={{ gridTemplateColumns: showAllVoices ? 'repeat(auto-fill, minmax(min(130px, 100%), 1fr))' : `repeat(${displayedVoices.length + (hasMore ? 1 : 0)}, 1fr)` }}>
               {displayedVoices.map((v) => {
+                // Finding 49: treat undefined/'' modelGate as "no gate" — only gate when modelGate is a non-empty string
                 const gated = !!v.modelGate && ttsModelValue !== v.modelGate
                 return (
                   <button
@@ -215,6 +219,7 @@ export function AudioProviders() {
                     type="button"
                     class={`card ai-mode-card${selectedVoice === v.id ? ' ai-mode-card-selected' : ''}`}
                     style={{ padding: '8px 10px', minHeight: 'unset', opacity: gated ? 0.45 : 1, cursor: gated ? 'not-allowed' : 'pointer' }}
+                    disabled={voicesLoading}
                     onClick={() => { if (!gated) selectVoice(v.id) }}
                     title={gated && v.modelGate ? `Requires model: ${v.modelGate}` : v.description}
                   >

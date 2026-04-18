@@ -223,9 +223,15 @@ function WorkflowModal({ workflow, onSave, onClose }: WorkflowModalProps) {
 
 function WorkflowRunsPanel({ workflow, onClose }: { workflow: WorkflowDefinition, onClose: () => void }) {
   const [runs, setRuns] = useState<WorkflowRun[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    api.workflowRuns(workflow.id).then(setRuns).catch(() => setRuns([]))
+    setLoading(true)
+    setError(null)
+    api.workflowRuns(workflow.id)
+      .then(data => { setRuns(data); setLoading(false) })
+      .catch(e => { setError(e instanceof Error ? e.message : 'Failed to load runs.'); setLoading(false) })
   }, [workflow.id])
 
   async function handleApprove(runID: string) {
@@ -251,7 +257,9 @@ function WorkflowRunsPanel({ workflow, onClose }: { workflow: WorkflowDefinition
           <button class="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
         <div class="modal-body" style={{ maxHeight: 500, overflowY: 'auto' }}>
-          {runs.length === 0 && <p class="empty-state">No workflow runs yet.</p>}
+          {loading && <PageSpinner />}
+          {!loading && error && <p class="error-banner">{error}</p>}
+          {!loading && !error && runs.length === 0 && <p class="empty-state">No workflow runs yet.</p>}
           {runs.map(run => (
             <div key={run.id} class="surface-card-soft" style={{ padding: '14px', marginBottom: '12px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center' }}>
@@ -349,8 +357,8 @@ export function Workflows() {
   async function handleToggle(workflow: WorkflowDefinition) {
     setTogglingID(workflow.id)
     try {
-      const updated = await api.updateWorkflow({ ...workflow, isEnabled: !workflow.isEnabled, updatedAt: new Date().toISOString() })
-      setWorkflows(current => current.map(item => item.id === updated.id ? updated : item))
+      await api.updateWorkflow({ ...workflow, isEnabled: !workflow.isEnabled })
+      await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to toggle workflow.')
     } finally {

@@ -62,7 +62,7 @@ export function APIKeys() {
     if (loadingRef.current) return
     loadingRef.current = true
     api.apiKeys()
-      .then(s => setKeyStatus({ ...s, customKeys: s.customKeys ?? [] }))
+      .then(s => { setError(null); setKeyStatus({ ...s, customKeys: s.customKeys ?? [] }) })
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load API key status.'))
       .finally(() => { setLoading(false); loadingRef.current = false })
   }
@@ -91,8 +91,10 @@ export function APIKeys() {
     return () => document.removeEventListener('mousedown', handler)
   }, [searchOpen])
 
-  const handleSaved = (updated: APIKeyStatus) =>
+  const handleSaved = (updated: APIKeyStatus) => {
+    setError(null)
     setKeyStatus({ ...updated, customKeys: updated.customKeys ?? [] })
+  }
 
   if (loading) {
     return (
@@ -264,6 +266,7 @@ export function APIKeys() {
               label={keyStatus?.customKeyLabels?.[name]}
               last={i === customKeys.length - 1 && !addingNew}
               onSaved={handleSaved}
+              onDeleted={(updated) => { handleSaved(updated); setSearch(''); setSearchOpen(false) }}
             />
           ))}
 
@@ -339,7 +342,7 @@ function KeyRow({ providerID, label, sublabel, configured, last, onSaved }: KeyR
 
 // ── Custom key row ────────────────────────────────────────────────────────────
 
-function CustomKeyRow({ name, label, last, onSaved }: { name: string; label?: string; last: boolean; onSaved: (u: APIKeyStatus) => void }) {
+function CustomKeyRow({ name, label, last, onSaved, onDeleted }: { name: string; label?: string; last: boolean; onSaved: (u: APIKeyStatus) => void; onDeleted?: (u: APIKeyStatus) => void }) {
   const [editing, setEditing]   = useState(false)
   const [value, setValue]       = useState('')
   const [saving, setSaving]     = useState(false)
@@ -362,7 +365,11 @@ function CustomKeyRow({ name, label, last, onSaved }: { name: string; label?: st
     setDeleting(true)
     try {
       const updated = await api.deleteAPIKey(name)
-      onSaved(updated)
+      if (onDeleted) {
+        onDeleted(updated)
+      } else {
+        onSaved(updated)
+      }
     } catch { /* best-effort */ } finally { setDeleting(false) }
   }
 

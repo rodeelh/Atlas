@@ -265,6 +265,7 @@ export function Approvals({ onBadgeChange, onApproved }: Props) {
   const [resolvedExpanded, setResolvedExpanded] = useState(false)
   const [confirmBulkApprove, setConfirmBulkApprove] = useState(false)
   const [confirmBulkDeny, setConfirmBulkDeny]       = useState(false)
+  const [bulkActing, setBulkActing]                 = useState(false)
 
   const load = async () => {
     try {
@@ -300,10 +301,20 @@ export function Approvals({ onBadgeChange, onApproved }: Props) {
 
   const bulkAct = async (action: 'approve' | 'deny') => {
     const targets = pendingItems.filter(a => selected.has(a.id))
-    for (const a of targets) {
-      try {
-        action === 'approve' ? await api.approve(a.toolCall.id) : await api.deny(a.toolCall.id)
-      } catch { /* continue */ }
+    setBulkActing(true)
+    let failCount = 0
+    try {
+      for (const a of targets) {
+        try {
+          // selected stores approval .id values; API expects the toolCall.id
+          action === 'approve' ? await api.approve(a.toolCall.id) : await api.deny(a.toolCall.id)
+        } catch { failCount++ }
+      }
+      if (failCount > 0) {
+        setError('Some actions failed. Please try again.')
+      }
+    } finally {
+      setBulkActing(false)
     }
     setSelected(new Set())
     await load()
@@ -407,14 +418,14 @@ export function Approvals({ onBadgeChange, onApproved }: Props) {
               {confirmBulkApprove ? (
                 <div class="approvals-confirm-strip">
                   <span class="approvals-confirm-label">Approve {selectedPending.length} item{selectedPending.length !== 1 ? 's' : ''}?</span>
-                  <button class="btn btn-sm btn-primary" onClick={() => { setConfirmBulkApprove(false); bulkAct('approve') }}>Confirm</button>
-                  <button class="btn btn-sm btn-ghost" onClick={() => setConfirmBulkApprove(false)}>Cancel</button>
+                  <button class="btn btn-sm btn-primary" disabled={bulkActing} onClick={() => { setConfirmBulkApprove(false); bulkAct('approve') }}>Confirm</button>
+                  <button class="btn btn-sm btn-ghost" disabled={bulkActing} onClick={() => setConfirmBulkApprove(false)}>Cancel</button>
                 </div>
               ) : confirmBulkDeny ? (
                 <div class="approvals-confirm-strip">
                   <span class="approvals-confirm-label">Deny {selectedPending.length} item{selectedPending.length !== 1 ? 's' : ''}?</span>
-                  <button class="btn btn-sm btn-danger" onClick={() => { setConfirmBulkDeny(false); bulkAct('deny') }}>Confirm</button>
-                  <button class="btn btn-sm btn-ghost" onClick={() => setConfirmBulkDeny(false)}>Cancel</button>
+                  <button class="btn btn-sm btn-danger" disabled={bulkActing} onClick={() => { setConfirmBulkDeny(false); bulkAct('deny') }}>Confirm</button>
+                  <button class="btn btn-sm btn-ghost" disabled={bulkActing} onClick={() => setConfirmBulkDeny(false)}>Cancel</button>
                 </div>
               ) : (
                 <>

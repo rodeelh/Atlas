@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useEffect, useMemo, useState } from 'preact/hooks'
 import { api, TeamAgent, TeamAssignPayload, TeamEvent, TeamSnapshot, TeamTask, TriggerEvent } from '../api/client'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { ErrorBanner } from '../components/ErrorBanner'
@@ -177,12 +177,6 @@ const ChevronIcon = ({ open }: { open: boolean }) => (
   </svg>
 )
 
-const BlockedIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-    <circle cx="6.5" cy="6.5" r="5" />
-    <path d="M6.5 3.5v3M6.5 9v.5" />
-  </svg>
-)
 
 export function Team() {
   const [snapshot, setSnapshot] = useState<TeamSnapshot | null>(null)
@@ -198,7 +192,6 @@ export function Team() {
   const [visibleBlockedCount, setVisibleBlockedCount] = useState(3)
   const [expandedEventDetails, setExpandedEventDetails] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [acting, setActing] = useState<Record<string, boolean>>({})
   const [showTemplateModal, setShowTemplateModal] = useState(false)
@@ -216,7 +209,6 @@ export function Team() {
   const selectedTemplate = AGENT_TEMPLATES.find((tpl) => tpl.name === selectedTemplateName) ?? AGENT_TEMPLATES[0]
 
   const load = async ({ silent = false }: { silent?: boolean } = {}) => {
-    if (!silent) setRefreshing(true)
     try {
       const [snapshotData, tasksData, eventsData, triggersData] = await Promise.all([
         api.teamSnapshot(),
@@ -230,10 +222,9 @@ export function Team() {
       setTriggers(triggersData)
       setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load team workspace.')
+      if (!silent) setError(err instanceof Error ? err.message : 'Failed to load team workspace.')
     } finally {
       setLoading(false)
-      setRefreshing(false)
     }
   }
 
@@ -522,10 +513,7 @@ export function Team() {
                         aria-label={`Delete ${agent.name}`}
                       >✕</button>
                       <div class="team-agent-card-top">
-                        <div>
-                          <div class="team-agent-name">{agent.name}</div>
-                          <div class="team-agent-role">{formatLabel(agent.role)}</div>
-                        </div>
+                        <div class="team-agent-name">{agent.name}</div>
                         <span class={statusBadgeClass(agent.runtime.status)}>{formatLabel(agent.runtime.status)}</span>
                       </div>
                       <p class="team-agent-mission">{agent.mission}</p>
@@ -547,17 +535,19 @@ export function Team() {
                           >
                             Assign
                           </button>
-                          <button
-                            class="btn btn-sm"
-                            disabled={!!acting[busyKey] || !agent.enabled}
-                            onClick={() => void runAction(
-                              busyKey,
-                              () => agent.runtime.status === 'paused' ? api.resumeTeamAgent(agent.id) : api.pauseTeamAgent(agent.id),
-                              agent.runtime.status === 'paused' ? `${agent.name} resumed` : `${agent.name} paused`,
-                            )}
-                          >
-                            {agent.runtime.status === 'paused' ? 'Resume' : 'Pause'}
-                          </button>
+                          {agent.enabled && (
+                            <button
+                              class="btn btn-sm"
+                              disabled={!!acting[busyKey]}
+                              onClick={() => void runAction(
+                                busyKey,
+                                () => agent.runtime.status === 'paused' ? api.resumeTeamAgent(agent.id) : api.pauseTeamAgent(agent.id),
+                                agent.runtime.status === 'paused' ? `${agent.name} resumed` : `${agent.name} paused`,
+                              )}
+                            >
+                              {agent.runtime.status === 'paused' ? 'Resume' : 'Pause'}
+                            </button>
+                          )}
                           <button
                             class="btn btn-sm"
                             disabled={!!acting[busyKey]}
@@ -716,7 +706,7 @@ export function Team() {
               })}
             </div>
           ) : (
-            <TeamEmptyState
+            <TeamEmptyInline
               title="No agents configured"
               body="Click Add Agent above to create your first teammate from a template."
             />
@@ -729,7 +719,10 @@ export function Team() {
         <div class="card">
           <div class="card-header">
             <span class="card-title">Blocked Items</span>
-            <span class="team-event-count-badge">{blockedItems.length} item{blockedItems.length !== 1 ? 's' : ''}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span class="team-event-count-badge">{blockedItems.length} item{blockedItems.length !== 1 ? 's' : ''}</span>
+              <button class="btn btn-sm" disabled={!!acting['clear-blocked']} onClick={() => void runAction('clear-blocked', () => api.clearBlockedItems(), 'Blocked items cleared')}>Clear</button>
+            </div>
           </div>
           <div class="team-panel-body">
             <div class="team-task-list">
@@ -772,7 +765,10 @@ export function Team() {
         <div class="card-header">
           <span class="card-title">Delegated Tasks</span>
           {tasks.length > 0 && (
-            <span class="team-event-count-badge">{tasks.length} task{tasks.length !== 1 ? 's' : ''}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span class="team-event-count-badge">{tasks.length} task{tasks.length !== 1 ? 's' : ''}</span>
+              <button class="btn btn-sm" disabled={!!acting['clear-tasks']} onClick={() => void runAction('clear-tasks', () => api.clearTeamTasks(), 'Tasks cleared')}>Clear</button>
+            </div>
           )}
         </div>
         <div class="team-panel-body">
@@ -925,12 +921,10 @@ export function Team() {
         <div class="card-header">
           <span class="card-title">Recent Activity</span>
           {events.length > 0 && (
-            <button
-              class="btn btn-sm"
-              onClick={() => void runAction('clear-events', () => api.clearTeamEvents(), 'Activity cleared')}
-            >
-              Clear
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span class="team-event-count-badge">{events.length} event{events.length !== 1 ? 's' : ''}</span>
+              <button class="btn btn-sm" disabled={!!acting['clear-events']} onClick={() => void runAction('clear-events', () => api.clearTeamEvents(), 'Activity cleared')}>Clear</button>
+            </div>
           )}
         </div>
         <div class="team-panel-body">
@@ -1051,37 +1045,6 @@ function TeamKPI({ label, value, tone }: { label: string; value: string; tone?: 
   )
 }
 
-function TeamEmptyState({ title, body }: { title: string; body: string }) {
-  return (
-    <div class="team-empty-state">
-      {/*
-        Circle ring — faint orbit track + 5 explicit arc paths, one per adjacent edge.
-        Each path is a CW arc (sweep-flag=1) from one node to the next.
-        Nodes drawn last so they sit on top of the arc endpoints.
-      */}
-      <svg class="team-empty-icon" width="64" height="64" viewBox="0 0 64 64" fill="none" aria-hidden="true">
-        <circle class="team-orbit-track" cx="32" cy="32" r="22" />
-        {/* Arc N1→N2 */}
-        <path class="team-edge-spark team-spark-1" d="M 32 10 A 22 22 0 0 1 53 25" />
-        {/* Arc N2→N3 */}
-        <path class="team-edge-spark team-spark-2" d="M 53 25 A 22 22 0 0 1 45 50" />
-        {/* Arc N3→N4 */}
-        <path class="team-edge-spark team-spark-3" d="M 45 50 A 22 22 0 0 1 19 50" />
-        {/* Arc N4→N5 */}
-        <path class="team-edge-spark team-spark-4" d="M 19 50 A 22 22 0 0 1 11 25" />
-        {/* Arc N5→N1 */}
-        <path class="team-edge-spark team-spark-5" d="M 11 25 A 22 22 0 0 1 32 10" />
-        <circle class="team-node-dot team-node-1" cx="32" cy="10" r="3.5" fill="currentColor" />
-        <circle class="team-node-dot team-node-2" cx="53" cy="25" r="3.5" fill="currentColor" />
-        <circle class="team-node-dot team-node-3" cx="45" cy="50" r="3.5" fill="currentColor" />
-        <circle class="team-node-dot team-node-4" cx="19" cy="50" r="3.5" fill="currentColor" />
-        <circle class="team-node-dot team-node-5" cx="11" cy="25" r="3.5" fill="currentColor" />
-      </svg>
-      <h3>{title}</h3>
-      <p>{body}</p>
-    </div>
-  )
-}
 
 function TeamEmptyInline({ title, body }: { title: string; body: string }) {
   return (

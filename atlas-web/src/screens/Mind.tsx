@@ -304,7 +304,6 @@ export function Mind() {
   const [editText, setEditText] = useState('')
   const [saving, setSaving]     = useState(false)
   const [dreaming, setDreaming] = useState(false)
-  const [dreamMsg, setDreamMsg] = useState<string | null>(null)
   const [diary, setDiary]       = useState<DiaryDay[]>([])
   const [cfg, setCfg]           = useState<RuntimeConfig | null>(null)
   const dreamStopRef            = useRef<(() => void) | null>(null)
@@ -389,8 +388,7 @@ export function Mind() {
 
     } catch (e: unknown) {
       stop()
-      setDreamMsg(e instanceof Error ? e.message : 'Failed to start dream cycle.')
-      setTimeout(() => setDreamMsg(null), 4000)
+      setError(e instanceof Error ? e.message : 'Failed to start dream cycle.')
     }
   }
 
@@ -406,7 +404,6 @@ export function Mind() {
         subtitle="Atlas's living inner world — updated after every conversation"
         actions={!editing && (
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            {dreamMsg && <span style={{ fontSize: '12px', color: 'var(--text-2)' }}>{dreamMsg}</span>}
             <button class="btn btn-ghost btn-sm" onClick={triggerDream} disabled={dreaming} title="Run dream consolidation cycle now">
               <DreamIcon /> Dream
             </button>

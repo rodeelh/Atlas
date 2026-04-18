@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks'
-import { JSX } from 'preact'
+import { ComponentChildren } from 'preact'
 import { api, AutomationSummary, CapabilityRecord, CommunicationChannel, ExecutableTarget, GremlinItem, GremlinRun, WorkflowDefinition } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { Portal } from '../components/Portal'
@@ -29,16 +29,42 @@ const MoreIcon = () => (
   </svg>
 )
 
-function CompactActionMenu({ children }: { children: JSX.Element | JSX.Element[] }) {
+function CompactActionMenu({ children }: { children: ComponentChildren }) {
+  const [open, setOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onDown(e: MouseEvent) {
+      if (!menuRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
   return (
-    <details class="automation-more-actions">
-      <summary class="btn btn-sm btn-icon automation-action-btn automation-action-icon" title="More actions">
+    <div ref={menuRef} class="automation-more-actions">
+      <button
+        type="button"
+        class="btn btn-sm btn-icon automation-action-btn automation-action-icon"
+        title="More actions"
+        onClick={() => setOpen(o => !o)}
+      >
         <MoreIcon />
-      </summary>
-      <div class="automation-more-actions-panel">
-        {children}
-      </div>
-    </details>
+      </button>
+      {open && (
+        <div class="automation-more-actions-panel" onClick={() => setOpen(false)}>
+          {children}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -149,11 +175,6 @@ function destinationLabel(item: GremlinItem, summary?: AutomationSummary) {
   return 'Not configured'
 }
 
-function workflowLabel(item: GremlinItem, workflows: WorkflowDefinition[]) {
-  if (!item.workflowID) return 'Prompt only'
-  return workflows.find(workflow => workflow.id === item.workflowID)?.name ?? item.workflowID
-}
-
 function automationTarget(item: GremlinItem): ExecutableTarget | undefined {
   if (item.target) return item.target
   if (item.workflowID) return { type: 'workflow', ref: item.workflowID }
@@ -177,11 +198,12 @@ function targetLabel(item: GremlinItem, workflows: WorkflowDefinition[], capabil
 function RunsPanel({ gremlin, onClose }: { gremlin: GremlinItem; onClose: () => void }) {
   const [runs, setRuns] = useState<GremlinRun[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     api.automationRuns(gremlin.id)
       .then(setRuns)
-      .catch(() => setRuns([]))
+      .catch(() => setError('Failed to load run history.'))
       .finally(() => setLoading(false))
   }, [gremlin.id])
 
@@ -199,7 +221,8 @@ function RunsPanel({ gremlin, onClose }: { gremlin: GremlinItem; onClose: () => 
         </div>
         <div class="modal-body" style={{ maxHeight: 400, overflowY: 'auto' }}>
           {loading && <p class="empty-state">Loading…</p>}
-          {!loading && runs.length === 0 && <p class="empty-state">No runs yet.</p>}
+          {!loading && error && <p class="error-banner">{error}</p>}
+          {!loading && !error && runs.length === 0 && <p class="empty-state">No runs yet.</p>}
           {!loading && runs.map(run => (
             <div key={run.id} class="run-row automation-run-card">
               <div class="run-row-header">
@@ -288,7 +311,7 @@ function EditModal({ gremlin, capabilities, onSave, onClose }: EditModalProps) {
       setError('Choose a workflow target or switch to another execution mode.')
       return
     }
-    if ((targetType === 'skill' || targetType === 'command') && !targetRef.trim()) {
+    if (targetType === 'skill' && !targetRef.trim()) {
       setError('Add a target reference for this automation.')
       return
     }
@@ -461,25 +484,33 @@ export function Automations() {
   const [togglingID, setTogglingID]   = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<GremlinItem | null>(null)
 
+  async function fetchAll() {
+    const [data, summaryData, workflowData, capabilityData] = await Promise.all([
+      api.automations(),
+      api.automationSummaries().catch(() => [] as AutomationSummary[]),
+      api.workflows().catch(() => [] as WorkflowDefinition[]),
+      api.capabilities().catch(() => [] as CapabilityRecord[]),
+    ])
+    setItems(data)
+    setSummaries(Object.fromEntries(summaryData.map(summary => [summary.id, summary])))
+    setWorkflows(workflowData)
+    setCapabilities(capabilityData)
+  }
+
   async function load() {
     setLoading(true)
     setError(null)
     try {
-      const [data, summaryData, workflowData, capabilityData] = await Promise.all([
-        api.automations(),
-        api.automationSummaries().catch(() => [] as AutomationSummary[]),
-        api.workflows().catch(() => [] as WorkflowDefinition[]),
-        api.capabilities().catch(() => [] as CapabilityRecord[]),
-      ])
-      setItems(data)
-      setSummaries(Object.fromEntries(summaryData.map(summary => [summary.id, summary])))
-      setWorkflows(workflowData)
-      setCapabilities(capabilityData)
+      await fetchAll()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load automations.')
     } finally {
       setLoading(false)
     }
+  }
+
+  async function silentLoad() {
+    try { await fetchAll() } catch { /* ignore — visible error state remains */ }
   }
 
   useEffect(() => { load() }, [])
@@ -489,7 +520,7 @@ export function Automations() {
     try {
       if (item.isEnabled) await api.disableAutomation(item.id)
       else await api.enableAutomation(item.id)
-      await load()
+      await silentLoad()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Toggle failed.')
     } finally {
@@ -502,7 +533,7 @@ export function Automations() {
     setError(null)
     try {
       await api.runAutomationNow(item.id)
-      await load()
+      await silentLoad()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Run failed.')
     } finally {
@@ -520,7 +551,7 @@ export function Automations() {
     setPendingDelete(null)
     try {
       await api.deleteAutomation(item.id)
-      setItems(prev => prev.filter(i => i.id !== item.id))
+      await silentLoad()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Delete failed.')
     }
@@ -532,7 +563,7 @@ export function Automations() {
     } else {
       await api.updateAutomation(item)
     }
-    await load()
+    await silentLoad()
   }
 
   return (
@@ -561,6 +592,7 @@ export function Automations() {
         <div class="automation-list">
           {items.map(item => {
             const summary = summaries[item.id]
+            const target = automationTarget(item)
             return (
             <div key={item.id} class={`card automation-card automation-console-card${item.isEnabled ? '' : ' disabled'}`}>
               <div class="automation-card-header">
@@ -598,7 +630,7 @@ export function Automations() {
                   </CompactActionMenu>
                 </div>
               </div>
-              {(!automationTarget(item) && item.prompt) && (
+              {(!target && item.prompt) && (
                 <div class="automation-prompt-section">
                   <span class="automation-console-label">Prompt</span>
                   <p class="automation-prompt">{item.prompt}</p>
@@ -608,7 +640,7 @@ export function Automations() {
                 <div class="automation-console-cell">
                   <span class="automation-console-label">Task</span>
                   <strong>{targetLabel(item, workflows, capabilities)}</strong>
-                  <span>{automationTarget(item)?.type ? `${automationTarget(item)?.type} target` : 'Prompt-driven run'}</span>
+                  <span>{target?.type ? `${target.type} target` : 'Prompt-driven run'}</span>
                 </div>
                 <div class="automation-console-cell">
                   <span class="automation-console-label">Delivery</span>

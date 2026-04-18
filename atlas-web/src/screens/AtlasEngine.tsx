@@ -155,6 +155,7 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
   const [update, setUpdate]         = useState<UpdateState | null>(null)
   const updateAbortRef = useRef<(() => void) | null>(null)
   const [latestVersion, setLatestVersion] = useState<string | null>(null)
+  const [versionCheckFailed, setVersionCheckFailed] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
   const load = async () => {
@@ -183,6 +184,15 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
   }
 
   useEffect(() => {
+    // Reset module-level TPS history on every mount so stale data from a
+    // previous render cycle doesn't bleed through after SPA navigation.
+    _tpsHistory.splice(0)
+    _promptTpsHistory.splice(0)
+    _wasRunning = false
+    wasRunningRef.current = false
+    setTpsHistory([])
+    setPromptTpsHistory([])
+
     void load()
     const interval = setInterval(load, 4000)
     return () => clearInterval(interval)
@@ -196,10 +206,13 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
 
   // Fast 1s TPS poll — separate from the 4s status poll to keep the graph smooth.
   useEffect(() => {
+    let consecutiveFailures = 0
+    const MAX_POLL_FAILURES = 3
     const tpsPoll = setInterval(async () => {
       if (!wasRunningRef.current) return
       try {
         const s = await api.engineStatus()
+        consecutiveFailures = 0
         if (!s.running || (s.activeRequests ?? 0) === 0) return
         if ((s.lastTPS ?? 0) > 0) {
           setTpsHistory(h => { const n = [...h.slice(-(MAX_TPS_SLOTS - 1)), s.lastTPS!]; _tpsHistory = n; return n })
@@ -207,7 +220,12 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
         if ((s.promptTPS ?? 0) > 0) {
           setPromptTpsHistory(h => { const n = [...h.slice(-(MAX_TPS_SLOTS - 1)), s.promptTPS!]; _promptTpsHistory = n; return n })
         }
-      } catch { /* ignore — main poll handles errors */ }
+      } catch {
+        consecutiveFailures++
+        if (consecutiveFailures >= MAX_POLL_FAILURES) {
+          setError('Lost connection to engine.')
+        }
+      }
     }, 1000)
     return () => clearInterval(tpsPoll)
   }, [])
@@ -226,8 +244,8 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
     // Fetch latest llama.cpp release tag from GitHub.
     fetch('https://api.github.com/repos/ggml-org/llama.cpp/releases/latest')
       .then(r => r.json())
-      .then(d => { if (d.tag_name) setLatestVersion(d.tag_name) })
-      .catch(() => {})
+      .then(d => { if (d.tag_name) { setLatestVersion(d.tag_name); setVersionCheckFailed(false) } })
+      .catch(() => { setVersionCheckFailed(true) })
 
     // Restore download state after page refresh or SPA navigation.
     // The server tracks the last known download progress even after interruption.
@@ -250,6 +268,10 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
   }, [])
 
   const handleCtxSizeChange = async (newSize: number) => {
+    if (!Number.isFinite(newSize) || newSize < 512) {
+      setError('Context size must be at least 512 tokens.')
+      return
+    }
     setCtxSize(newSize)
     setCtxSizeSaving(true)
     try {
@@ -983,6 +1005,11 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
                     ? `Up to date — latest release ${targetVersion}.`
                     : `Update available — latest: ${targetVersion}`
                   : 'Not installed — run make install or make download-engine'}
+                {versionCheckFailed && (
+                  <span style={{ marginLeft: 6, color: 'var(--theme-text-muted)' }}>
+                    (Version check unavailable)
+                  </span>
+                )}
               </div>
             </div>
             <div class={`settings-field engine-inline-control-field${isMobile ? ' settings-field-mobile' : ''}`} style={isMobile ? undefined : { flexShrink: 0 }}>
@@ -1083,7 +1110,11 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
                   const url = (e.target as HTMLInputElement).value
                   setDlURL(url)
                   const name = url.split('/').pop()?.split('?')[0] ?? ''
-                  if (name) setDlFilename(name)
+                  if (name) {
+                    setDlFilename(name)
+                  } else if (url) {
+                    setError('Could not determine filename from URL.')
+                  }
                 }}
                 disabled={isDownloading}
               />

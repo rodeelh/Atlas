@@ -1770,6 +1770,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       setMessages(loaded)
     } catch (err) {
       setMessages([])
+      setPendingApproval(null)
       setError(err instanceof Error ? err.message : 'Failed to load conversation.')
     }
   }
@@ -2886,7 +2887,9 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                 setApprovingAction(true)
                 try {
                   await api.approve(pendingApproval.toolCallID)
+                  setApprovingAction(false)
                 } catch {
+                  setPendingApproval(null)
                   setApprovingAction(false)
                 }
               }}

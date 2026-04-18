@@ -125,25 +125,48 @@ export function AIProviders() {
   const [cloudProvider, setCloudProvider] = useState<CloudProviderID>('openai')
   const [localBackend, setLocalBackend] = useState<LocalBackendID>('atlas_engine')
 
+  // Finding 40: request sequence counter to discard stale out-of-order fetch results
+  const cloudFetchSeq = useRef(0)
+  const localFetchSeq = useRef(0)
+
   const fetchCloudModels = async (provider: CloudProviderID, refresh: boolean) => {
+    const seq = ++cloudFetchSeq.current
     setCloudModels(null)
     try {
       const next = provider === 'openrouter'
         ? await api.openRouterModels(refresh, openRouterLimit)
         : await api.modelsForProvider(provider, refresh)
+      if (seq !== cloudFetchSeq.current) return
       setCloudModels(next)
     } catch (err) {
-      setCloudModels(emptyModelSelector(err instanceof Error ? err.message : 'Could not load cloud models.'))
+      if (seq !== cloudFetchSeq.current) return
+      // Finding 41: distinguish connection errors from empty model lists
+      const msg = err instanceof Error ? err.message : ''
+      const isNetworkError = msg.includes('fetch') || msg.includes('network') ||
+        msg.includes('ECONNREFUSED') || msg.includes('Failed to fetch') || msg.includes('NetworkError')
+      setCloudModels(emptyModelSelector(isNetworkError ? 'Local backend unreachable.' : (msg || 'Could not load cloud models.')))
     }
   }
 
   const fetchLocalModels = async (backend: LocalBackendID, refresh: boolean) => {
+    const seq = ++localFetchSeq.current
     setLocalModels(null)
     try {
       const next = await api.modelsForProvider(backend, refresh)
+      if (seq !== localFetchSeq.current) return
+      // Finding 41: distinguish empty list from connection error
+      if (next.availableModels.length === 0) {
+        setLocalModels(emptyModelSelector('No models found.'))
+        return
+      }
       setLocalModels(next)
     } catch (err) {
-      setLocalModels(emptyModelSelector(err instanceof Error ? err.message : 'Could not reach the local backend.'))
+      if (seq !== localFetchSeq.current) return
+      // Finding 41: distinguish connection errors from empty model lists
+      const msg = err instanceof Error ? err.message : ''
+      const isNetworkError = msg.includes('fetch') || msg.includes('network') ||
+        msg.includes('ECONNREFUSED') || msg.includes('Failed to fetch') || msg.includes('NetworkError')
+      setLocalModels(emptyModelSelector(isNetworkError ? 'Local backend unreachable.' : (msg || 'Could not reach the local backend.')))
     }
   }
 

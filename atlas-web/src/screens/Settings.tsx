@@ -160,7 +160,7 @@ export function Settings() {
     return (
       <div class="screen general-settings-screen">
         <PageHeader title="General" subtitle="Profile and access preferences" />
-        <ErrorBanner error={error} />
+        <ErrorBanner error={error} onDismiss={() => setError(null)} />
       </div>
     )
   }
@@ -274,6 +274,7 @@ export function Settings() {
                         // Permission denied or unavailable — fall back to IP detection
                         try {
                           const loc = await api.detectLocation()
+                          setLocationError(null)
                           await finish(loc)
                         } catch (err) {
                           setLocationError(geoErr.message || (err instanceof Error ? err.message : 'Failed'))

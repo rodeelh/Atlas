@@ -15,6 +15,7 @@ const PANELS: { id: LocalPanel; label: string; sublabel: string }[] = [
 
 export function LocalLM() {
   const [panel, setPanel] = useState<LocalPanel>('atlas_engine')
+  const [switchError, setSwitchError] = useState<string | null>(null)
 
   useEffect(() => {
     api.config().then(cfg => {
@@ -23,9 +24,18 @@ export function LocalLM() {
     }).catch(() => {})
   }, [])
 
+  // Finding 42: await updateConfig and surface errors rather than discarding the result
   const switchPanel = async (next: LocalPanel) => {
+    const prev = panel
     setPanel(next)
-    try { await api.updateConfig({ selectedLocalEngine: next }) } catch { /* non-fatal */ }
+    setSwitchError(null)
+    try {
+      await api.updateConfig({ selectedLocalEngine: next })
+    } catch (err) {
+      // Revert UI selection so it matches server state
+      setPanel(prev)
+      setSwitchError(err instanceof Error ? err.message : 'Failed to switch panel.')
+    }
   }
 
   return (
@@ -34,6 +44,13 @@ export function LocalLM() {
         title="Local LM"
         subtitle="On-device inference — no cloud, no cost."
       />
+
+      {switchError && (
+        <div class="banner banner-error" style={{ marginBottom: '12px' }}>
+          <span class="banner-message">{switchError}</span>
+          <button class="banner-dismiss" onClick={() => setSwitchError(null)} title="Dismiss">✕</button>
+        </div>
+      )}
 
       {/* Hero card picker */}
       <div style={{ marginBottom: '4px' }}>

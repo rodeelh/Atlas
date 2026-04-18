@@ -149,7 +149,8 @@ export function Skills() {
   const [fsRootError, setFsRootError] = useState<string | null>(null)
 
   const loadFsRoots = async () => {
-    try { setFsRoots(await api.fsRoots()) } catch { /* non-fatal */ }
+    try { setFsRoots(await api.fsRoots()) }
+    catch (e: unknown) { setFsRootError(e instanceof Error ? e.message : 'Failed to load approved folders.') }
   }
 
   const browseFsFolder = async () => {
@@ -218,12 +219,6 @@ export function Skills() {
   const bulkChangePolicy = async (scopeKey: string, actionIDs: string[], policy: string) => {
     if (!actionIDs.length) return
     setBulkActing(prev => new Set(prev).add(scopeKey))
-    // Optimistic update
-    setPolicies(prev => {
-      const next = { ...prev }
-      actionIDs.forEach(id => { next[id] = policy })
-      return next
-    })
     try {
       await Promise.all(actionIDs.map(id => api.setActionPolicy(id, policy)))
       const updated = await api.actionPolicies()
@@ -432,8 +427,6 @@ export function Skills() {
                     {group.sub && <p class="skill-group-sub">{group.sub}</p>}
                   </div>
 
-
-
                   {isCustomGroup && groupSkills.length === 0 ? (
                     <div class="card skill-empty-card">
                       <div class="skill-empty-title">No custom extensions installed</div>
@@ -446,9 +439,18 @@ export function Skills() {
                       </button>
                     </div>
                   ) : (
-                    <div class="card skill-card">
-                      {groupSkills.map((skill, i) => renderSkillRow(skill, i, groupSkills.length))}
-                    </div>
+                    <>
+                      {isCustomGroup && (
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
+                          <button class="btn btn-primary btn-sm" disabled={customInstalling} onClick={installCustomSkill}>
+                            {customInstalling ? <span class="spinner" style={{ width: '11px', height: '11px' }} /> : 'Install from Folder'}
+                          </button>
+                        </div>
+                      )}
+                      <div class="card skill-card">
+                        {groupSkills.map((skill, i) => renderSkillRow(skill, i, groupSkills.length))}
+                      </div>
+                    </>
                   )}
                 </div>
               )

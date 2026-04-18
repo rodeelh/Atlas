@@ -6997,13 +6997,6 @@ input[type=number] { -moz-appearance: textfield; }
   position: relative;
 }
 
-.automation-more-actions summary {
-  list-style: none;
-}
-
-.automation-more-actions summary::-webkit-details-marker {
-  display: none;
-}
 
 .automation-more-actions-panel {
   position: absolute;
@@ -11052,9 +11045,8 @@ select.field-input {
 
 .team-agent-card-top {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  align-items: center;
+  gap: 8px;
   padding-right: 28px;
 }
 
@@ -11230,7 +11222,8 @@ select.field-input {
 }
 
 .team-task-title {
-  font-weight: 600;
+  font-size: 14px;
+  color: var(--theme-text-secondary);
   white-space: pre-wrap;
 }
 

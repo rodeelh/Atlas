@@ -8,7 +8,7 @@
 // by name via `widget.bindings[0].source`.
 
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { JSX } from 'preact'
+import type { JSX } from 'preact'
 import {
   api,
   type DashboardDefinition,
@@ -215,8 +215,10 @@ export function DashboardDetail(
   const [def, setDef]           = useState<DashboardDefinition | null>(null)
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState<string | null>(null)
+  const [loadError, setLoadError] = useState(false)
   const [sources, setSources]   = useState<Record<string, SourceEntry>>({})
   const [refreshing, setRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState(false)
   const [pendingDelete, setPendingDelete] = useState(false)
   const esRef = useRef<EventSource | null>(null)
 
@@ -224,10 +226,10 @@ export function DashboardDetail(
   // events on subscribe, so we don't need a separate initial data fetch.
   useEffect(() => {
     let cancelled = false
-    setLoading(true); setError(null)
+    setLoading(true); setError(null); setLoadError(false)
     client.dashboard(id)
-      .then(d => { if (!cancelled) setDef(d) })
-      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load dashboard.') })
+      .then(d => { if (!cancelled) { setDef(d); setLoadError(false) } })
+      .catch(e => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load dashboard.'); setLoadError(true) } })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [client, id])
@@ -242,28 +244,47 @@ export function DashboardDetail(
   // Subscribe to the per-dashboard event stream. The coordinator synchronously
   // replays the latest cached event for every source when we subscribe, so the
   // grid paints on the first tick without a round-trip.
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    const es = client.streamDashboardEvents(id)
-    esRef.current = es
-    es.onmessage = (ev: MessageEvent<string>) => {
-      try {
-        const payload = JSON.parse(ev.data) as DashboardRefreshEvent
-        setSources(prev => ({
-          ...prev,
-          [payload.source]: {
-            ...(prev[payload.source] ?? { requestedAt: Date.now() }),
-            data: payload.data,
-            error: payload.error || undefined,
-            at: payload.at,
-            health: payload.error ? 'error' : 'ok',
-            requestedAt: undefined,
-          },
-        }))
-      } catch { /* ignore malformed frames */ }
+    let cancelled = false
+
+    function connect() {
+      if (cancelled) return
+      const es = client.streamDashboardEvents(id)
+      esRef.current = es
+      es.onmessage = (ev: MessageEvent<string>) => {
+        try {
+          const payload = JSON.parse(ev.data) as DashboardRefreshEvent
+          setSources(prev => ({
+            ...prev,
+            [payload.source]: {
+              ...(prev[payload.source] ?? { requestedAt: Date.now() }),
+              data: payload.data,
+              error: payload.error || undefined,
+              at: payload.at,
+              health: payload.error ? 'error' : 'ok',
+              requestedAt: undefined,
+            },
+          }))
+        } catch { /* ignore malformed frames */ }
+      }
+      es.onerror = () => {
+        es.close()
+        esRef.current = null
+        if (!cancelled) {
+          reconnectTimerRef.current = setTimeout(connect, 5000)
+        }
+      }
     }
-    es.onerror = () => { /* browser auto-reconnects; nothing to do */ }
+
+    connect()
     return () => {
-      es.close()
+      cancelled = true
+      if (reconnectTimerRef.current !== null) {
+        clearTimeout(reconnectTimerRef.current)
+        reconnectTimerRef.current = null
+      }
+      esRef.current?.close()
       esRef.current = null
     }
   }, [client, id])
@@ -277,9 +298,10 @@ export function DashboardDetail(
 
   async function handleRefresh() {
     setRefreshing(true)
+    setRefreshError(false)
     setSources(prev => markSourcesLoading(prev, boundSourceNames))
-    try { await client.refreshDashboard(id) }
-    catch (e) { setError(e instanceof Error ? e.message : 'Refresh failed.') }
+    try { await client.refreshDashboard(id); setRefreshError(false) }
+    catch (e) { setError(e instanceof Error ? e.message : 'Refresh failed.'); setRefreshError(true) }
     finally { setRefreshing(false) }
   }
 
@@ -311,7 +333,7 @@ export function DashboardDetail(
                 Draft
               </span>
             )}
-            {def && <button class="btn btn-sm" onClick={handleRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh'}</button>}
+            {def && <button class={`btn btn-sm${refreshError ? ' btn-danger' : ''}`} onClick={handleRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : refreshError ? 'Retry' : 'Refresh'}</button>}
             {def && <button class="btn btn-sm" onClick={() => setPendingDelete(true)}>Delete</button>}
           </>
         }
@@ -319,7 +341,7 @@ export function DashboardDetail(
       {error && <p class="error-banner">{error}</p>}
       {loading && <p class="empty-state">Loading dashboard…</p>}
       {!loading && widgets.length === 0 && (
-        <p class="empty-state">This dashboard has no widgets yet. Ask Atlas in chat to add some.</p>
+        <p class="empty-state">{loadError ? 'Failed to load widgets.' : 'This dashboard has no widgets yet. Ask Atlas in chat to add some.'}</p>
       )}
       {!loading && widgets.length > 0 && (
         <div class="dashboard-grid">

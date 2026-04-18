@@ -121,11 +121,12 @@ export function MetricWidget({ widget, data }: { widget: DashboardWidget; data: 
   // the first numeric or {text} field so the metric doesn't render "[object
   // Object]" for skill outputs the agent hasn't bound precisely.
   let raw: unknown = path ? valueAtPath(data, path) : data
+  let inferredField = false
   if (!path && raw && typeof raw === 'object' && !Array.isArray(raw)) {
     const obj = raw as Record<string, unknown>
     const numericKey = Object.keys(obj).find(k => typeof obj[k] === 'number')
-    if (numericKey) raw = obj[numericKey]
-    else if (typeof obj.text === 'string') raw = obj.text
+    if (numericKey) { raw = obj[numericKey]; inferredField = true }
+    else if (typeof obj.text === 'string') { raw = obj.text; inferredField = true }
   }
   const display = formatValue(raw, format)
   const change  = changePath ? valueAtPath(data, changePath) : undefined
@@ -135,7 +136,12 @@ export function MetricWidget({ widget, data }: { widget: DashboardWidget; data: 
 
   return (
     <div class="dashboard-widget-body dw-metric">
-      <div class="dw-metric-value">{prefix}{display}{suffix}</div>
+      <div
+        class="dw-metric-value"
+        title={inferredField ? 'Field was inferred automatically — configure a path in the widget options for precision.' : undefined}
+      >
+        {prefix}{display}{suffix}{inferredField && <span class="dw-metric-inferred" aria-label="inferred field"> ⚠</span>}
+      </div>
       {Number.isFinite(changeN) && (
         <div class={`dw-metric-change ${trendUp ? 'up' : trendDn ? 'down' : ''}`}>
           {trendUp ? '▲' : trendDn ? '▼' : '●'} {Math.abs(changeN).toFixed(2)}
@@ -152,7 +158,7 @@ export function LineChartWidget({ widget, data }: { widget: DashboardWidget; dat
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const chartRef  = useRef<Chart | null>(null)
   const opts      = widgetOptions(widget)
-  const points    = useMemo(() => extractSeries(opts, data), [data, opts])
+  const points    = useMemo(() => extractSeries(opts, data ?? null), [data, opts])
   const color     = (opts.color as string) || '#3b82f6'
   const filled    = (opts.filled as boolean) ?? true
 
@@ -210,7 +216,7 @@ export function LineChartWidget({ widget, data }: { widget: DashboardWidget; dat
   }, [points, color, filled])
 
   if (points.length === 0) {
-    return <div class="dashboard-widget-body dashboard-empty">No series data</div>
+    return <div class="dashboard-widget-body dashboard-empty">{data == null ? 'No data available.' : 'No series data.'}</div>
   }
   return (
     <div class="dashboard-widget-body dw-chart-wrap">
@@ -225,7 +231,7 @@ export function BarChartWidget({ widget, data }: { widget: DashboardWidget; data
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const chartRef  = useRef<Chart | null>(null)
   const opts      = widgetOptions(widget)
-  const points    = useMemo(() => extractSeries(opts, data), [data, opts])
+  const points    = useMemo(() => extractSeries(opts, data ?? null), [data, opts])
   const color     = (opts.color as string) || '#6366f1'
 
   useEffect(() => {
@@ -275,7 +281,7 @@ export function BarChartWidget({ widget, data }: { widget: DashboardWidget; data
   }, [points, color])
 
   if (points.length === 0) {
-    return <div class="dashboard-widget-body dashboard-empty">No series data</div>
+    return <div class="dashboard-widget-body dashboard-empty">{data == null ? 'No data available.' : 'No series data.'}</div>
   }
   return (
     <div class="dashboard-widget-body dw-chart-wrap">
