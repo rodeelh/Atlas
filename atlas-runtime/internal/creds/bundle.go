@@ -20,6 +20,7 @@ type Bundle struct {
 	LMStudioAPIKey     string            `json:"lmStudioAPIKey"`
 	OllamaAPIKey       string            `json:"ollamaAPIKey"`
 	BraveSearchAPIKey  string            `json:"braveSearchAPIKey"`
+	TwitterBearerToken string            `json:"twitterBearerToken"`
 	FinnhubAPIKey      string            `json:"finnhubAPIKey"`
 	GoogleMapsAPIKey   string            `json:"googleMapsAPIKey"`
 	ElevenLabsAPIKey   string            `json:"elevenLabsAPIKey"`
@@ -105,6 +106,8 @@ func Store(provider, key, name string) error {
 		m["slackBotToken"] = key
 	case "slackApp":
 		m["slackAppToken"] = key
+	case "twitter", "x":
+		m["twitterBearerToken"] = key
 	case "brave", "braveSearch":
 		m["braveSearchAPIKey"] = key
 	case "finnhub":

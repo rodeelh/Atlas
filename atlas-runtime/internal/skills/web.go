@@ -145,6 +145,37 @@ func (r *Registry) registerWeb() {
 
 	r.register(SkillEntry{
 		Def: ToolDef{
+			Name:        "web.search_x",
+			Description: "Search X (Twitter) posts and return recent tweets matching a query.",
+			Properties: map[string]ToolParam{
+				"query":            {Description: "Search query", Type: "string"},
+				"count":            {Description: "Number of results to return (default 10, max 100)", Type: "integer"},
+				"allowed_handles":  {Description: "Only include posts from these X handles, comma-separated (e.g. 'elonmusk,sama')", Type: "string"},
+				"excluded_handles": {Description: "Exclude posts from these X handles, comma-separated", Type: "string"},
+				"freshness":        {Description: "Filter by recency: hour, day, week", Type: "string"},
+			},
+			Required: []string{"query"},
+		},
+		PermLevel: "read",
+		FnResult:  webSearchX,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "web.ask",
+			Description: "Ask a question and get an AI-synthesized answer with citations from the web. Uses Perplexity if configured, otherwise OpenAI.",
+			Properties: map[string]ToolParam{
+				"query": {Description: "Question or topic to research", Type: "string"},
+				"focus": {Description: "Search focus: web (default) or news", Type: "string"},
+			},
+			Required: []string{"query"},
+		},
+		PermLevel: "read",
+		FnResult:  webAsk,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
 			Name:        "web.search_entities",
 			Description: "Search for entities such as companies, people, products, or places and return structured sources.",
 			Properties: map[string]ToolParam{
@@ -168,9 +199,11 @@ var (
 	metaTagReAlt = regexp.MustCompile(`(?is)<meta\s+[^>]*content\s*=\s*["']([^"']*)["'][^>]*(?:name|property)\s*=\s*["']([^"']+)["'][^>]*>`)
 	linkCanonicalRe = regexp.MustCompile(`(?is)<link\s+[^>]*rel\s*=\s*["'][^"']*canonical[^"']*["'][^>]*href\s*=\s*["']([^"']+)["'][^>]*>`)
 	headingRe = regexp.MustCompile(`(?is)<h([12])[^>]*>(.*?)</h[12]>`)
-	braveSearchURL     = "https://api.search.brave.com/res/v1/web/search"
-	openAIWebSearchURL = "https://api.openai.com/v1/responses"
-	ddgSearchURL       = "https://html.duckduckgo.com/html/"
+	braveSearchURL        = "https://api.search.brave.com/res/v1/web/search"
+	openAIWebSearchURL    = "https://api.openai.com/v1/responses"
+	ddgSearchURL          = "https://html.duckduckgo.com/html/"
+	twitterRecentSearchURL = "https://api.twitter.com/2/tweets/search/recent"
+	perplexityAPIURL       = "https://api.perplexity.ai/chat/completions"
 	ddgAnchorRe        = regexp.MustCompile(`(?is)<a\b[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
 	ddgSnippetRe       = regexp.MustCompile(`(?is)<a\b[^>]+class="result__snippet"[^>]*>(.*?)</a>`)
 	readCredsBundle = creds.Read
@@ -1436,6 +1469,334 @@ func webSearchEntities(ctx context.Context, args json.RawMessage) (ToolResult, e
 		"query": p.Query, "provider": resp.Provider, "filters": resp.Filters, "results": results, "fetched_at": resp.FetchedAt,
 	}), nil
 }
+
+// ── web.search_x ─────────────────────────────────────────────────────────────
+
+func webSearchX(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+	var p struct {
+		Query           string `json:"query"`
+		Count           int    `json:"count"`
+		AllowedHandles  string `json:"allowed_handles"`
+		ExcludedHandles string `json:"excluded_handles"`
+		Freshness       string `json:"freshness"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || strings.TrimSpace(p.Query) == "" {
+		return ToolResult{}, fmt.Errorf("query is required")
+	}
+
+	bundle, _ := readCredsBundle()
+	token := strings.TrimSpace(bundle.TwitterBearerToken)
+	if token == "" {
+		return ToolResult{}, fmt.Errorf("X (Twitter) bearer token not configured — add it in Settings under credential type 'x'")
+	}
+
+	if p.Count < 10 {
+		p.Count = 10
+	}
+	if p.Count > 100 {
+		p.Count = 100
+	}
+
+	query := strings.TrimSpace(p.Query)
+	for _, handle := range splitQueryList(p.AllowedHandles) {
+		handle = strings.TrimPrefix(strings.TrimSpace(handle), "@")
+		if handle != "" {
+			query += " from:" + handle
+		}
+	}
+	for _, handle := range splitQueryList(p.ExcludedHandles) {
+		handle = strings.TrimPrefix(strings.TrimSpace(handle), "@")
+		if handle != "" {
+			query += " -from:" + handle
+		}
+	}
+	if !strings.Contains(query, "is:retweet") {
+		query += " -is:retweet"
+	}
+
+	u := fmt.Sprintf("%s?query=%s&max_results=%d&tweet.fields=created_at,public_metrics,author_id&expansions=author_id&user.fields=username,name",
+		twitterRecentSearchURL, url.QueryEscape(query), p.Count)
+
+	switch strings.ToLower(strings.TrimSpace(p.Freshness)) {
+	case "hour":
+		u += "&start_time=" + url.QueryEscape(time.Now().UTC().Add(-1*time.Hour).Format(time.RFC3339))
+	case "day":
+		u += "&start_time=" + url.QueryEscape(time.Now().UTC().Add(-24*time.Hour).Format(time.RFC3339))
+	case "week":
+		u += "&start_time=" + url.QueryEscape(time.Now().UTC().Add(-7*24*time.Hour).Format(time.RFC3339))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return ToolResult{}, fmt.Errorf("x search request failed: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := newWebClient(15 * time.Second).Do(req)
+	if err != nil {
+		return ToolResult{}, fmt.Errorf("x search request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 500*1024))
+	if resp.StatusCode != http.StatusOK {
+		return ToolResult{}, fmt.Errorf("x search error %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+
+	var data struct {
+		Data []struct {
+			ID        string `json:"id"`
+			Text      string `json:"text"`
+			AuthorID  string `json:"author_id"`
+			CreatedAt string `json:"created_at"`
+			PublicMetrics struct {
+				RetweetCount int `json:"retweet_count"`
+				LikeCount    int `json:"like_count"`
+				ReplyCount   int `json:"reply_count"`
+			} `json:"public_metrics"`
+		} `json:"data"`
+		Includes struct {
+			Users []struct {
+				ID       string `json:"id"`
+				Name     string `json:"name"`
+				Username string `json:"username"`
+			} `json:"users"`
+		} `json:"includes"`
+		Meta struct {
+			ResultCount int    `json:"result_count"`
+			NewestID    string `json:"newest_id"`
+			OldestID    string `json:"oldest_id"`
+		} `json:"meta"`
+	}
+	if err := json.Unmarshal(bodyBytes, &data); err != nil {
+		return ToolResult{}, fmt.Errorf("x search parse failed: %w", err)
+	}
+
+	users := map[string]struct{ Name, Username string }{}
+	for _, u := range data.Includes.Users {
+		users[u.ID] = struct{ Name, Username string }{u.Name, u.Username}
+	}
+
+	results := make([]map[string]any, 0, len(data.Data))
+	for i, tweet := range data.Data {
+		user := users[tweet.AuthorID]
+		results = append(results, map[string]any{
+			"rank":       i + 1,
+			"id":         tweet.ID,
+			"text":       tweet.Text,
+			"author":     user.Name,
+			"handle":     "@" + user.Username,
+			"url":        fmt.Sprintf("https://x.com/%s/status/%s", user.Username, tweet.ID),
+			"created_at": tweet.CreatedAt,
+			"metrics": map[string]any{
+				"likes":    tweet.PublicMetrics.LikeCount,
+				"retweets": tweet.PublicMetrics.RetweetCount,
+				"replies":  tweet.PublicMetrics.ReplyCount,
+			},
+		})
+	}
+
+	if len(results) == 0 {
+		return OKResult("No X posts found for: "+p.Query, map[string]any{
+			"query": p.Query, "provider": "x", "results": []map[string]any{},
+			"result_count": 0, "fetched_at": time.Now().UTC().Format(time.RFC3339),
+		}), nil
+	}
+	return OKResult(
+		fmt.Sprintf("X search for %q returned %d post(s).", p.Query, len(results)),
+		map[string]any{
+			"query": p.Query, "provider": "x", "results": results,
+			"result_count": data.Meta.ResultCount, "fetched_at": time.Now().UTC().Format(time.RFC3339),
+		},
+	), nil
+}
+
+// ── web.ask ───────────────────────────────────────────────────────────────────
+
+func webAsk(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+	var p struct {
+		Query string `json:"query"`
+		Focus string `json:"focus"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || strings.TrimSpace(p.Query) == "" {
+		return ToolResult{}, fmt.Errorf("query is required")
+	}
+
+	bundle, _ := readCredsBundle()
+
+	if key := strings.TrimSpace(bundle.CustomSecret("perplexity")); key != "" {
+		result, err := perplexityAsk(ctx, key, p.Query, p.Focus)
+		if err == nil {
+			return result, nil
+		}
+	}
+
+	if strings.TrimSpace(bundle.OpenAIAPIKey) != "" {
+		return openAIAsk(ctx, bundle.OpenAIAPIKey, p.Query, p.Focus)
+	}
+
+	return ToolResult{}, fmt.Errorf("web.ask requires a Perplexity API key (add via Settings > custom credential 'perplexity') or an OpenAI API key")
+}
+
+func perplexityAsk(ctx context.Context, apiKey, query, focus string) (ToolResult, error) {
+	body := map[string]any{
+		"model": "sonar",
+		"messages": []map[string]any{
+			{"role": "system", "content": "Be precise and concise. Always cite your sources."},
+			{"role": "user", "content": query},
+		},
+		"max_tokens":               1024,
+		"return_citations":         true,
+		"return_related_questions": false,
+	}
+	if strings.ToLower(strings.TrimSpace(focus)) == "news" {
+		body["search_recency_filter"] = "week"
+	}
+
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return ToolResult{}, fmt.Errorf("perplexity marshal failed: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", perplexityAPIURL, strings.NewReader(string(payload)))
+	if err != nil {
+		return ToolResult{}, fmt.Errorf("perplexity request failed: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := newWebClient(30 * time.Second).Do(req)
+	if err != nil {
+		return ToolResult{}, fmt.Errorf("perplexity request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Citations []string `json:"citations"`
+		Error     *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return ToolResult{}, fmt.Errorf("perplexity parse failed: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		msg := http.StatusText(resp.StatusCode)
+		if data.Error != nil && data.Error.Message != "" {
+			msg = data.Error.Message
+		}
+		return ToolResult{}, fmt.Errorf("perplexity error %d: %s", resp.StatusCode, msg)
+	}
+	if len(data.Choices) == 0 {
+		return ToolResult{}, fmt.Errorf("perplexity returned no answer")
+	}
+
+	answer := strings.TrimSpace(data.Choices[0].Message.Content)
+	citations := make([]map[string]any, 0, len(data.Citations))
+	for i, cite := range data.Citations {
+		citations = append(citations, map[string]any{
+			"rank": i + 1, "url": cite, "domain": webDomain(cite),
+		})
+	}
+	return OKResult(
+		fmt.Sprintf("AI answer for %q (Perplexity, %d citation(s)).", query, len(citations)),
+		map[string]any{
+			"query": query, "answer": answer, "citations": citations,
+			"provider": "perplexity", "fetched_at": time.Now().UTC().Format(time.RFC3339),
+		},
+	), nil
+}
+
+func openAIAsk(ctx context.Context, apiKey, query, focus string) (ToolResult, error) {
+	prompt := query
+	if strings.ToLower(strings.TrimSpace(focus)) == "news" {
+		prompt = "Latest news: " + query
+	}
+	body := map[string]any{
+		"model":             "gpt-5-mini",
+		"reasoning":        map[string]any{"effort": "low"},
+		"tools":            []map[string]any{{"type": "web_search"}},
+		"include":          []string{"web_search_call.action.sources"},
+		"input":            prompt,
+		"max_output_tokens": 1200,
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return ToolResult{}, fmt.Errorf("openai ask marshal failed: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", openAIWebSearchURL, strings.NewReader(string(payload)))
+	if err != nil {
+		return ToolResult{}, fmt.Errorf("openai ask request failed: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := newWebClient(30 * time.Second).Do(req)
+	if err != nil {
+		return ToolResult{}, fmt.Errorf("openai ask request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		OutputText string `json:"output_text"`
+		Output     []struct {
+			Action struct {
+				Sources []struct {
+					Title string `json:"title"`
+					URL   string `json:"url"`
+				} `json:"sources"`
+			} `json:"action"`
+		} `json:"output"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return ToolResult{}, fmt.Errorf("openai ask parse failed: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		msg := http.StatusText(resp.StatusCode)
+		if data.Error != nil && strings.TrimSpace(data.Error.Message) != "" {
+			msg = strings.TrimSpace(data.Error.Message)
+		}
+		return ToolResult{}, fmt.Errorf("openai ask error %d: %s", resp.StatusCode, msg)
+	}
+	answer := strings.TrimSpace(data.OutputText)
+	if answer == "" {
+		return ToolResult{}, fmt.Errorf("openai ask returned no answer")
+	}
+
+	seen := map[string]bool{}
+	citations := make([]map[string]any, 0)
+	for _, item := range data.Output {
+		for _, src := range item.Action.Sources {
+			rawURL := strings.TrimSpace(src.URL)
+			if rawURL == "" || seen[rawURL] {
+				continue
+			}
+			seen[rawURL] = true
+			citations = append(citations, map[string]any{
+				"rank":   len(citations) + 1,
+				"url":    rawURL,
+				"title":  compactPreview(strings.TrimSpace(src.Title), 120),
+				"domain": webDomain(rawURL),
+			})
+		}
+	}
+	return OKResult(
+		fmt.Sprintf("AI answer for %q (OpenAI, %d citation(s)).", query, len(citations)),
+		map[string]any{
+			"query": query, "answer": answer, "citations": citations,
+			"provider": "openai", "fetched_at": time.Now().UTC().Format(time.RFC3339),
+		},
+	), nil
+}
+
+// ── splitQueryList / helpers ──────────────────────────────────────────────────
 
 func splitQueryList(raw string) []string {
 	parts := strings.Split(raw, ",")
