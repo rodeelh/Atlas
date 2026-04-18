@@ -668,6 +668,157 @@ func (m *Manager) ExtractTable(ctx context.Context, selector string) ([][]string
 
 // ── PDF save helper (used by skill layer) ─────────────────────────────────────
 
+// ── Browser emulation ────────────────────────────────────────────────────────
+
+// devicePreset holds the emulation parameters for a named device.
+type devicePreset struct {
+	Width       int
+	Height      int
+	DPR         float64
+	Mobile      bool
+	UserAgent   string
+	Touch       bool
+}
+
+var devicePresets = map[string]devicePreset{
+	"iphone-se": {375, 667, 2, true, "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1", true},
+	"iphone-14": {390, 844, 3, true, "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1", true},
+	"iphone-14-pro-max": {430, 932, 3, true, "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1", true},
+	"pixel-7": {412, 915, 2.625, true, "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36", true},
+	"galaxy-s23": {360, 780, 3, true, "Mozilla/5.0 (Linux; Android 13; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36", true},
+	"ipad-air": {820, 1180, 2, false, "Mozilla/5.0 (iPad; CPU OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1", true},
+	"ipad-pro": {1024, 1366, 2, false, "Mozilla/5.0 (iPad; CPU OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1", true},
+	"desktop-1080p": {1920, 1080, 1, false, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36", false},
+	"desktop-1440p": {2560, 1440, 2, false, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36", false},
+}
+
+// EmulateDevice applies a named device preset: viewport, DPR, mobile flag, UA, touch.
+func (m *Manager) EmulateDevice(ctx context.Context, device string) error {
+	preset, ok := devicePresets[device]
+	if !ok {
+		return fmt.Errorf("unknown device preset %q; known: iphone-se, iphone-14, iphone-14-pro-max, pixel-7, galaxy-s23, ipad-air, ipad-pro, desktop-1080p, desktop-1440p", device)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	page, err := m.activePage()
+	if err != nil {
+		return err
+	}
+	metrics := proto.EmulationSetDeviceMetricsOverride{Width: preset.Width, Height: preset.Height, DeviceScaleFactor: preset.DPR, Mobile: preset.Mobile}
+	if err := metrics.Call(page); err != nil {
+		return fmt.Errorf("set device metrics: %w", err)
+	}
+	ua := proto.EmulationSetUserAgentOverride{UserAgent: preset.UserAgent}
+	if err := ua.Call(page); err != nil {
+		return fmt.Errorf("set user agent: %w", err)
+	}
+	touch := proto.EmulationSetTouchEmulationEnabled{Enabled: preset.Touch}
+	if err := touch.Call(page); err != nil {
+		return fmt.Errorf("set touch emulation: %w", err)
+	}
+	return nil
+}
+
+// SetUserAgent overrides the User-Agent header sent by the browser.
+func (m *Manager) SetUserAgent(ctx context.Context, ua, acceptLanguage string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	page, err := m.activePage()
+	if err != nil {
+		return err
+	}
+	return proto.EmulationSetUserAgentOverride{UserAgent: ua, AcceptLanguage: acceptLanguage}.Call(page)
+}
+
+// SetGeolocation fakes the browser's GPS position.
+func (m *Manager) SetGeolocation(ctx context.Context, lat, lng, accuracy float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	page, err := m.activePage()
+	if err != nil {
+		return err
+	}
+	return proto.EmulationSetGeolocationOverride{
+		Latitude: &lat, Longitude: &lng, Accuracy: &accuracy,
+	}.Call(page)
+}
+
+// SetColorScheme emulates prefers-color-scheme (dark/light/no-preference).
+func (m *Manager) SetColorScheme(ctx context.Context, scheme string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	page, err := m.activePage()
+	if err != nil {
+		return err
+	}
+	return proto.EmulationSetEmulatedMedia{
+		Features: []*proto.EmulationMediaFeature{
+			{Name: "prefers-color-scheme", Value: scheme},
+		},
+	}.Call(page)
+}
+
+// SetNetworkThrottle applies a named network throttle profile.
+// profile: "offline" | "slow-3g" | "fast-3g" | "4g" | "none"
+func (m *Manager) SetNetworkThrottle(ctx context.Context, profile string) error {
+	type throttleSpec struct {
+		offline  bool
+		latency  float64
+		download float64
+		upload   float64
+	}
+	profiles := map[string]throttleSpec{
+		"offline": {offline: true},
+		"slow-3g": {latency: 2000, download: 50 * 1024 / 8, upload: 50 * 1024 / 8},
+		"fast-3g": {latency: 562.5, download: 1.6 * 1024 * 1024 / 8, upload: 750 * 1024 / 8},
+		"4g":      {latency: 20, download: 4 * 1024 * 1024, upload: 3 * 1024 * 1024},
+		"none":    {download: -1, upload: -1},
+	}
+	spec, ok := profiles[profile]
+	if !ok {
+		return fmt.Errorf("unknown throttle profile %q; use: offline, slow-3g, fast-3g, 4g, none", profile)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	page, err := m.activePage()
+	if err != nil {
+		return err
+	}
+	return proto.NetworkEmulateNetworkConditions{
+		Offline:           spec.offline,
+		Latency:           spec.latency,
+		DownloadThroughput: spec.download,
+		UploadThroughput:  spec.upload,
+	}.Call(page)
+}
+
+// ClearEmulation resets all emulation overrides (device, UA, geolocation, throttle).
+func (m *Manager) ClearEmulation(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	page, err := m.activePage()
+	if err != nil {
+		return err
+	}
+	clearMetrics := proto.EmulationClearDeviceMetricsOverride{}
+	if err := clearMetrics.Call(page); err != nil {
+		return fmt.Errorf("clear device metrics: %w", err)
+	}
+	clearGeo := proto.EmulationClearGeolocationOverride{}
+	if err := clearGeo.Call(page); err != nil {
+		return fmt.Errorf("clear geolocation: %w", err)
+	}
+	clearTouch := proto.EmulationSetTouchEmulationEnabled{Enabled: false}
+	if err := clearTouch.Call(page); err != nil {
+		return fmt.Errorf("clear touch: %w", err)
+	}
+	clearNet := proto.NetworkEmulateNetworkConditions{DownloadThroughput: -1, UploadThroughput: -1}
+	if err := clearNet.Call(page); err != nil {
+		return fmt.Errorf("clear network throttle: %w", err)
+	}
+	return nil
+}
+
 // SavePDFToFile renders the page as PDF and writes it to path.
 // If path is empty it defaults to ~/Downloads/atlas-page-<unix>.pdf.
 func SavePDFToFile(ctx context.Context, m *Manager, path string) (string, error) {

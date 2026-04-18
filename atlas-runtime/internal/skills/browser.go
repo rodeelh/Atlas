@@ -70,6 +70,13 @@ type BrowserManager interface {
 	DragDrop(ctx context.Context, fromSel, toSel string) error
 	Focus(ctx context.Context, selector string) error
 	ExtractTable(ctx context.Context, selector string) ([][]string, error)
+	// Emulation
+	EmulateDevice(ctx context.Context, device string) error
+	SetUserAgent(ctx context.Context, ua, acceptLanguage string) error
+	SetGeolocation(ctx context.Context, lat, lng, accuracy float64) error
+	SetColorScheme(ctx context.Context, scheme string) error
+	SetNetworkThrottle(ctx context.Context, profile string) error
+	ClearEmulation(ctx context.Context) error
 }
 
 func (r *Registry) registerBrowser() {
@@ -787,6 +794,93 @@ func (r *Registry) registerBrowser() {
 		PermLevel:   "read",
 		ActionClass: ActionClassRead,
 		Fn:          r.browserExtractTable,
+	})
+
+	// ── Emulation ────────────────────────────────────────────────────────────
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "browser.emulate_device",
+			Description: "Emulate a named device: sets viewport, device pixel ratio, mobile mode, user-agent, and touch emulation. Reload the page after calling this to apply the changes. Available presets: iphone-se, iphone-14, iphone-14-pro-max, pixel-7, galaxy-s23, ipad-air, ipad-pro, desktop-1080p, desktop-1440p.",
+			Properties: map[string]ToolParam{
+				"device": {Description: "Device preset name (e.g. iphone-14, pixel-7, ipad-air)", Type: "string"},
+			},
+			Required: []string{"device"},
+		},
+		PermLevel:   "execute",
+		ActionClass: ActionClassLocalWrite,
+		Fn:          r.browserEmulateDevice,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "browser.set_user_agent",
+			Description: "Override the browser User-Agent string. Useful to test how a site behaves for specific clients without full device emulation.",
+			Properties: map[string]ToolParam{
+				"user_agent":      {Description: "User-Agent string to send", Type: "string"},
+				"accept_language": {Description: "Accept-Language header value (optional, e.g. en-US,en;q=0.9)", Type: "string"},
+			},
+			Required: []string{"user_agent"},
+		},
+		PermLevel:   "execute",
+		ActionClass: ActionClassLocalWrite,
+		Fn:          r.browserSetUserAgent,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "browser.set_geolocation",
+			Description: "Fake the browser's GPS location. The page will see these coordinates when it calls navigator.geolocation. Accuracy defaults to 10 metres if omitted.",
+			Properties: map[string]ToolParam{
+				"latitude":  {Description: "Decimal latitude (e.g. 37.7749)", Type: "number"},
+				"longitude": {Description: "Decimal longitude (e.g. -122.4194)", Type: "number"},
+				"accuracy":  {Description: "Position accuracy in metres (default 10)", Type: "number"},
+			},
+			Required: []string{"latitude", "longitude"},
+		},
+		PermLevel:   "execute",
+		ActionClass: ActionClassLocalWrite,
+		Fn:          r.browserSetGeolocation,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "browser.set_color_scheme",
+			Description: "Emulate the prefers-color-scheme CSS media feature. Use this to test a page in dark mode or light mode without changing system settings.",
+			Properties: map[string]ToolParam{
+				"scheme": {Description: "Color scheme to emulate: dark, light, or no-preference", Type: "string"},
+			},
+			Required: []string{"scheme"},
+		},
+		PermLevel:   "execute",
+		ActionClass: ActionClassLocalWrite,
+		Fn:          r.browserSetColorScheme,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "browser.set_network_throttle",
+			Description: "Throttle the browser's network to simulate different connection speeds. Profile none removes all throttling.",
+			Properties: map[string]ToolParam{
+				"profile": {Description: "Throttle profile: offline, slow-3g, fast-3g, 4g, none", Type: "string"},
+			},
+			Required: []string{"profile"},
+		},
+		PermLevel:   "execute",
+		ActionClass: ActionClassLocalWrite,
+		Fn:          r.browserSetNetworkThrottle,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "browser.clear_emulation",
+			Description: "Reset all active browser emulation: clears device metrics, geolocation override, touch emulation, and network throttle. Restores the browser to its natural state.",
+			Properties:  map[string]ToolParam{},
+			Required:    []string{},
+		},
+		PermLevel:   "execute",
+		ActionClass: ActionClassLocalWrite,
+		Fn:          r.browserClearEmulation,
 	})
 
 	// ── CAPTCHA solver ────────────────────────────────────────────────────────
@@ -1718,6 +1812,91 @@ func (r *Registry) browserExtractTable(ctx context.Context, args json.RawMessage
 		fmt.Fprintf(&sb, "  [%d] %s\n", i, strings.Join(row, " | "))
 	}
 	return strings.TrimSpace(sb.String()), nil
+}
+
+// ── Emulation handlers ───────────────────────────────────────────────────────
+
+func (r *Registry) browserEmulateDevice(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		Device string `json:"device"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || p.Device == "" {
+		return "", fmt.Errorf("browser.emulate_device: device is required")
+	}
+	if err := r.browserMgr.EmulateDevice(ctx, p.Device); err != nil {
+		return "", fmt.Errorf("browser.emulate_device: %w", err)
+	}
+	return fmt.Sprintf("Emulating device %q. Reload the page to apply changes.", p.Device), nil
+}
+
+func (r *Registry) browserSetUserAgent(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		UserAgent      string `json:"user_agent"`
+		AcceptLanguage string `json:"accept_language"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || p.UserAgent == "" {
+		return "", fmt.Errorf("browser.set_user_agent: user_agent is required")
+	}
+	if err := r.browserMgr.SetUserAgent(ctx, p.UserAgent, p.AcceptLanguage); err != nil {
+		return "", fmt.Errorf("browser.set_user_agent: %w", err)
+	}
+	return fmt.Sprintf("User-Agent set to: %s", p.UserAgent), nil
+}
+
+func (r *Registry) browserSetGeolocation(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		Latitude  float64 `json:"latitude"`
+		Longitude float64 `json:"longitude"`
+		Accuracy  float64 `json:"accuracy"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", fmt.Errorf("browser.set_geolocation: invalid args: %w", err)
+	}
+	if p.Accuracy == 0 {
+		p.Accuracy = 10
+	}
+	if err := r.browserMgr.SetGeolocation(ctx, p.Latitude, p.Longitude, p.Accuracy); err != nil {
+		return "", fmt.Errorf("browser.set_geolocation: %w", err)
+	}
+	return fmt.Sprintf("Geolocation set to %.6f, %.6f (accuracy %.0fm).", p.Latitude, p.Longitude, p.Accuracy), nil
+}
+
+func (r *Registry) browserSetColorScheme(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		Scheme string `json:"scheme"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || p.Scheme == "" {
+		return "", fmt.Errorf("browser.set_color_scheme: scheme is required (dark, light, no-preference)")
+	}
+	switch p.Scheme {
+	case "dark", "light", "no-preference":
+	default:
+		return "", fmt.Errorf("browser.set_color_scheme: invalid scheme %q; use dark, light, or no-preference", p.Scheme)
+	}
+	if err := r.browserMgr.SetColorScheme(ctx, p.Scheme); err != nil {
+		return "", fmt.Errorf("browser.set_color_scheme: %w", err)
+	}
+	return fmt.Sprintf("Color scheme emulation set to %q.", p.Scheme), nil
+}
+
+func (r *Registry) browserSetNetworkThrottle(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		Profile string `json:"profile"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || p.Profile == "" {
+		return "", fmt.Errorf("browser.set_network_throttle: profile is required (offline, slow-3g, fast-3g, 4g, none)")
+	}
+	if err := r.browserMgr.SetNetworkThrottle(ctx, p.Profile); err != nil {
+		return "", fmt.Errorf("browser.set_network_throttle: %w", err)
+	}
+	return fmt.Sprintf("Network throttle set to %q.", p.Profile), nil
+}
+
+func (r *Registry) browserClearEmulation(ctx context.Context, args json.RawMessage) (string, error) {
+	if err := r.browserMgr.ClearEmulation(ctx); err != nil {
+		return "", fmt.Errorf("browser.clear_emulation: %w", err)
+	}
+	return "All browser emulation cleared.", nil
 }
 
 // ── CAPTCHA solver ────────────────────────────────────────────────────────────
