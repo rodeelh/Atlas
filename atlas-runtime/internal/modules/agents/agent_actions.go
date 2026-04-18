@@ -1095,6 +1095,7 @@ func (m *Module) delegateTask(ctx context.Context, def storage.AgentDefinitionRo
 	tools := subRegistry.ToolDefinitions()
 	result := loop.Run(runCtx, agent.LoopConfig{
 		Provider:      provider,
+		Adapter:       agent.NewAdapter(provider),
 		MaxIterations: 8,
 		SupportDir:    m.supportDir,
 		ConvID:        convID,

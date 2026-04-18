@@ -24,14 +24,19 @@ func (m *Module) registerAgentActions() {
 	m.skills.RegisterExternal(skills.SkillEntry{
 		Def: skills.ToolDef{
 			Name:        "automation.create",
-			Description: "Create a new Atlas automation. Prefer automation.upsert when the request might refer to an existing automation. For Telegram/WhatsApp/Slack/Discord delivery, call communication.list_channels first and pass the returned channel id as destinationID.",
+			Description: "Create a new Atlas automation. The automation can run a direct prompt or target an existing workflow. Prefer automation.upsert when the request might refer to an existing automation. For Telegram/WhatsApp/Slack/Discord delivery, call communication.list_channels first and pass the returned channel id as destinationID.",
 			Properties: map[string]skills.ToolParam{
 				"name":        {Description: "Short display name for the automation.", Type: "string"},
-				"prompt":      {Description: "Task prompt Atlas should run.", Type: "string"},
+				"prompt":      {Description: "Task prompt Atlas should run. Optional when workflowID is provided.", Type: "string"},
 				"schedule":    {Description: "Human-readable schedule such as 'daily 08:00' or 'every Monday at 9am'.", Type: "string"},
 				"emoji":       {Description: "Optional emoji for display.", Type: "string"},
 				"description": {Description: "Optional description.", Type: "string"},
 				"enabled":     {Description: "Whether the automation starts enabled. Defaults to true.", Type: "boolean"},
+				"workflowID":  {Description: "Optional workflow ID or exact workflow name for a workflow-backed automation.", Type: "string"},
+				"workflowInputValuesJSON": {
+					Description: "Optional JSON object of workflow input values when workflowID is provided.",
+					Type:        "string",
+				},
 				"destinationID": {
 					Description: "Optional authorized communication channel id from communication.list_channels, for example telegram:123: or whatsapp:me@s.whatsapp.net:.",
 					Type:        "string",
@@ -50,16 +55,21 @@ func (m *Module) registerAgentActions() {
 	m.skills.RegisterExternal(skills.SkillEntry{
 		Def: skills.ToolDef{
 			Name:        "automation.upsert",
-			Description: "Create a new Atlas automation or update an existing one by ID or exact name. Prefer this when the user might already have a matching automation.",
+			Description: "Create a new Atlas automation or update an existing one by ID or exact name. Supports direct prompt automations and workflow-backed automations. Prefer this when the user might already have a matching automation.",
 			Properties: map[string]skills.ToolParam{
 				"id":          {Description: "Automation ID when updating a known automation.", Type: "string"},
 				"name":        {Description: "Automation name. Required when creating a new automation.", Type: "string"},
 				"newName":     {Description: "Optional new display name for updates.", Type: "string"},
-				"prompt":      {Description: "Prompt text. Required when creating a new automation.", Type: "string"},
+				"prompt":      {Description: "Prompt text. Required only when creating a prompt-backed automation.", Type: "string"},
 				"schedule":    {Description: "Schedule string. Required when creating a new automation.", Type: "string"},
 				"emoji":       {Description: "Optional emoji for display.", Type: "string"},
 				"description": {Description: "Optional description.", Type: "string"},
 				"enabled":     {Description: "Whether the automation is enabled.", Type: "boolean"},
+				"workflowID":  {Description: "Optional workflow ID or exact workflow name for a workflow-backed automation.", Type: "string"},
+				"workflowInputValuesJSON": {
+					Description: "Optional JSON object of workflow input values for workflow-backed automations.",
+					Type:        "string",
+				},
 				"destinationID": {
 					Description: "Authorized communication channel id from communication.list_channels. Use clearDestination=true to clear delivery on update.",
 					Type:        "string",
@@ -67,6 +77,7 @@ func (m *Module) registerAgentActions() {
 				"platform":         {Description: "Optional delivery platform when destinationID is not provided.", Type: "string"},
 				"channelID":        {Description: "Optional delivery channel/chat ID when destinationID is not provided.", Type: "string"},
 				"threadID":         {Description: "Optional delivery thread ID for Slack or Discord.", Type: "string"},
+				"clearTarget":      {Description: "If true, clear any workflow target and revert to prompt-only execution.", Type: "boolean"},
 				"clearDestination": {Description: "If true, clear the delivery destination on update.", Type: "boolean"},
 			},
 			Required: []string{},
@@ -79,7 +90,7 @@ func (m *Module) registerAgentActions() {
 	m.skills.RegisterExternal(skills.SkillEntry{
 		Def: skills.ToolDef{
 			Name:        "automation.update",
-			Description: "Update an existing Atlas automation by ID or exact name. For delivery changes, call communication.list_channels first and pass the returned channel id as destinationID.",
+			Description: "Update an existing Atlas automation by ID or exact name. Supports switching between prompt-only and workflow-backed execution. For delivery changes, call communication.list_channels first and pass the returned channel id as destinationID.",
 			Properties: map[string]skills.ToolParam{
 				"id":          {Description: "Automation ID. Preferred for exact targeting.", Type: "string"},
 				"name":        {Description: "Automation name to target when ID is not known.", Type: "string"},
@@ -89,6 +100,11 @@ func (m *Module) registerAgentActions() {
 				"emoji":       {Description: "New emoji.", Type: "string"},
 				"enabled":     {Description: "Enable or disable the automation.", Type: "boolean"},
 				"description": {Description: "New description.", Type: "string"},
+				"workflowID":  {Description: "Optional workflow ID or exact workflow name for a workflow-backed automation.", Type: "string"},
+				"workflowInputValuesJSON": {
+					Description: "Optional JSON object of workflow input values for workflow-backed automations.",
+					Type:        "string",
+				},
 				"destinationID": {
 					Description: "Authorized communication channel id from communication.list_channels. Use clearDestination=true to clear delivery.",
 					Type:        "string",
@@ -96,6 +112,7 @@ func (m *Module) registerAgentActions() {
 				"platform":         {Description: "Delivery platform when destinationID is not provided.", Type: "string"},
 				"channelID":        {Description: "Delivery channel/chat ID when destinationID is not provided.", Type: "string"},
 				"threadID":         {Description: "Optional delivery thread ID.", Type: "string"},
+				"clearTarget":      {Description: "If true, clear any workflow target and revert to prompt-only execution.", Type: "boolean"},
 				"clearDestination": {Description: "If true, clear the automation delivery destination.", Type: "boolean"},
 			},
 			Required: []string{},
@@ -231,37 +248,48 @@ func actionClass(name string) skills.ActionClass {
 
 func (m *Module) agentCreate(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
 	var p struct {
-		Name          string  `json:"name"`
-		Prompt        string  `json:"prompt"`
-		Schedule      string  `json:"schedule"`
-		Emoji         string  `json:"emoji"`
-		Description   *string `json:"description"`
-		Enabled       *bool   `json:"enabled"`
-		DestinationID string  `json:"destinationID"`
-		Platform      string  `json:"platform"`
-		ChannelID     string  `json:"channelID"`
-		ThreadID      string  `json:"threadID"`
+		Name                    string  `json:"name"`
+		Prompt                  string  `json:"prompt"`
+		Schedule                string  `json:"schedule"`
+		Emoji                   string  `json:"emoji"`
+		Description             *string `json:"description"`
+		Enabled                 *bool   `json:"enabled"`
+		WorkflowID              string  `json:"workflowID"`
+		WorkflowInputValuesJSON string  `json:"workflowInputValuesJSON"`
+		DestinationID           string  `json:"destinationID"`
+		Platform                string  `json:"platform"`
+		ChannelID               string  `json:"channelID"`
+		ThreadID                string  `json:"threadID"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return skills.ToolResult{}, fmt.Errorf("invalid arguments: %w", err)
 	}
-	if strings.TrimSpace(p.Name) == "" || strings.TrimSpace(p.Prompt) == "" || strings.TrimSpace(p.Schedule) == "" {
-		return skills.ToolResult{}, fmt.Errorf("name, prompt, and schedule are required")
+	target, workflowInputs, err := m.resolveAgentWorkflowTarget(p.WorkflowID, p.WorkflowInputValuesJSON)
+	if err != nil {
+		return skills.ToolResult{}, err
+	}
+	if strings.TrimSpace(p.Name) == "" || strings.TrimSpace(p.Schedule) == "" {
+		return skills.ToolResult{}, fmt.Errorf("name and schedule are required")
+	}
+	if strings.TrimSpace(p.Prompt) == "" && target == nil {
+		return skills.ToolResult{}, fmt.Errorf("prompt is required when workflowID is not provided")
 	}
 	enabled := true
 	if p.Enabled != nil {
 		enabled = *p.Enabled
 	}
 	item := features.GremlinItem{
-		Name:               strings.TrimSpace(p.Name),
-		Prompt:             strings.TrimSpace(p.Prompt),
-		ScheduleRaw:        strings.TrimSpace(p.Schedule),
-		Emoji:              strings.TrimSpace(p.Emoji),
-		IsEnabled:          enabled,
-		SourceType:         "agent",
-		CreatedAt:          time.Now().Format("2006-01-02"),
-		GremlinDescription: p.Description,
-		Tags:               []string{},
+		Name:                strings.TrimSpace(p.Name),
+		Prompt:              strings.TrimSpace(p.Prompt),
+		ScheduleRaw:         strings.TrimSpace(p.Schedule),
+		Emoji:               strings.TrimSpace(p.Emoji),
+		IsEnabled:           enabled,
+		SourceType:          "agent",
+		CreatedAt:           time.Now().Format("2006-01-02"),
+		ExecutableTarget:    target,
+		WorkflowInputValues: workflowInputs,
+		GremlinDescription:  p.Description,
+		Tags:                []string{},
 	}
 	if hasAgentDestinationArgs(p.DestinationID, p.Platform, p.ChannelID, p.ThreadID) {
 		dest, err := m.resolveAgentDestination(p.DestinationID, p.Platform, p.ChannelID, p.ThreadID)
@@ -274,24 +302,27 @@ func (m *Module) agentCreate(_ context.Context, args json.RawMessage) (skills.To
 		return skills.ToolResult{}, fmt.Errorf("failed to create automation: %w", err)
 	}
 	created, _ := m.resolveAutomation(automationRefArgs{Name: item.Name}, false)
-	return skills.OKResult(fmt.Sprintf("Automation %q created.", item.Name), map[string]any{"automation": created}), nil
+	return skills.OKResult(m.automationCreatedSummary(created), map[string]any{"automation": m.automationArtifact(created)}), nil
 }
 
 func (m *Module) agentUpsert(ctx context.Context, args json.RawMessage) (skills.ToolResult, error) {
 	var p struct {
-		ID               string  `json:"id"`
-		Name             string  `json:"name"`
-		NewName          string  `json:"newName"`
-		Prompt           *string `json:"prompt"`
-		Schedule         *string `json:"schedule"`
-		Emoji            *string `json:"emoji"`
-		Enabled          *bool   `json:"enabled"`
-		Description      *string `json:"description"`
-		DestinationID    string  `json:"destinationID"`
-		Platform         string  `json:"platform"`
-		ChannelID        string  `json:"channelID"`
-		ThreadID         string  `json:"threadID"`
-		ClearDestination *bool   `json:"clearDestination"`
+		ID                      string  `json:"id"`
+		Name                    string  `json:"name"`
+		NewName                 string  `json:"newName"`
+		Prompt                  *string `json:"prompt"`
+		Schedule                *string `json:"schedule"`
+		Emoji                   *string `json:"emoji"`
+		Enabled                 *bool   `json:"enabled"`
+		Description             *string `json:"description"`
+		WorkflowID              string  `json:"workflowID"`
+		WorkflowInputValuesJSON string  `json:"workflowInputValuesJSON"`
+		DestinationID           string  `json:"destinationID"`
+		Platform                string  `json:"platform"`
+		ChannelID               string  `json:"channelID"`
+		ThreadID                string  `json:"threadID"`
+		ClearTarget             *bool   `json:"clearTarget"`
+		ClearDestination        *bool   `json:"clearDestination"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return skills.ToolResult{}, fmt.Errorf("invalid arguments: %w", err)
@@ -300,19 +331,22 @@ func (m *Module) agentUpsert(ctx context.Context, args json.RawMessage) (skills.
 	ref := automationRefArgs{ID: p.ID, Name: p.Name}
 	if existing, err := m.resolveAutomation(ref, false); err == nil {
 		updateArgs, _ := json.Marshal(map[string]any{
-			"id":               existing.ID,
-			"name":             existing.Name,
-			"newName":          p.NewName,
-			"prompt":           p.Prompt,
-			"schedule":         p.Schedule,
-			"emoji":            p.Emoji,
-			"enabled":          p.Enabled,
-			"description":      p.Description,
-			"destinationID":    p.DestinationID,
-			"platform":         p.Platform,
-			"channelID":        p.ChannelID,
-			"threadID":         p.ThreadID,
-			"clearDestination": p.ClearDestination,
+			"id":                      existing.ID,
+			"name":                    existing.Name,
+			"newName":                 p.NewName,
+			"prompt":                  p.Prompt,
+			"schedule":                p.Schedule,
+			"emoji":                   p.Emoji,
+			"enabled":                 p.Enabled,
+			"description":             p.Description,
+			"workflowID":              p.WorkflowID,
+			"workflowInputValuesJSON": p.WorkflowInputValuesJSON,
+			"destinationID":           p.DestinationID,
+			"platform":                p.Platform,
+			"channelID":               p.ChannelID,
+			"threadID":                p.ThreadID,
+			"clearTarget":             p.ClearTarget,
+			"clearDestination":        p.ClearDestination,
 		})
 		res, err := m.agentUpdate(ctx, updateArgs)
 		if err != nil {
@@ -331,23 +365,25 @@ func (m *Module) agentUpsert(ctx context.Context, args json.RawMessage) (skills.
 	if name == "" {
 		return skills.ToolResult{}, fmt.Errorf("name is required when creating a new automation")
 	}
-	if p.Prompt == nil || strings.TrimSpace(*p.Prompt) == "" {
-		return skills.ToolResult{}, fmt.Errorf("prompt is required when creating a new automation")
-	}
 	if p.Schedule == nil || strings.TrimSpace(*p.Schedule) == "" {
 		return skills.ToolResult{}, fmt.Errorf("schedule is required when creating a new automation")
 	}
+	if (p.Prompt == nil || strings.TrimSpace(*p.Prompt) == "") && strings.TrimSpace(p.WorkflowID) == "" {
+		return skills.ToolResult{}, fmt.Errorf("prompt is required when creating a new automation unless workflowID is provided")
+	}
 	createArgs, _ := json.Marshal(map[string]any{
-		"name":          name,
-		"prompt":        strings.TrimSpace(*p.Prompt),
-		"schedule":      strings.TrimSpace(*p.Schedule),
-		"emoji":         p.Emoji,
-		"description":   p.Description,
-		"enabled":       p.Enabled,
-		"destinationID": p.DestinationID,
-		"platform":      p.Platform,
-		"channelID":     p.ChannelID,
-		"threadID":      p.ThreadID,
+		"name":                    name,
+		"prompt":                  stringPtrValue(p.Prompt),
+		"schedule":                strings.TrimSpace(*p.Schedule),
+		"emoji":                   p.Emoji,
+		"description":             p.Description,
+		"enabled":                 p.Enabled,
+		"workflowID":              p.WorkflowID,
+		"workflowInputValuesJSON": p.WorkflowInputValuesJSON,
+		"destinationID":           p.DestinationID,
+		"platform":                p.Platform,
+		"channelID":               p.ChannelID,
+		"threadID":                p.ThreadID,
 	})
 	res, err := m.agentCreate(ctx, createArgs)
 	if err != nil {
@@ -362,19 +398,22 @@ func (m *Module) agentUpsert(ctx context.Context, args json.RawMessage) (skills.
 
 func (m *Module) agentUpdate(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
 	var p struct {
-		ID               string  `json:"id"`
-		Name             string  `json:"name"`
-		NewName          string  `json:"newName"`
-		Prompt           *string `json:"prompt"`
-		Schedule         *string `json:"schedule"`
-		Emoji            *string `json:"emoji"`
-		Enabled          *bool   `json:"enabled"`
-		Description      *string `json:"description"`
-		DestinationID    string  `json:"destinationID"`
-		Platform         string  `json:"platform"`
-		ChannelID        string  `json:"channelID"`
-		ThreadID         string  `json:"threadID"`
-		ClearDestination *bool   `json:"clearDestination"`
+		ID                      string  `json:"id"`
+		Name                    string  `json:"name"`
+		NewName                 string  `json:"newName"`
+		Prompt                  *string `json:"prompt"`
+		Schedule                *string `json:"schedule"`
+		Emoji                   *string `json:"emoji"`
+		Enabled                 *bool   `json:"enabled"`
+		Description             *string `json:"description"`
+		WorkflowID              string  `json:"workflowID"`
+		WorkflowInputValuesJSON string  `json:"workflowInputValuesJSON"`
+		DestinationID           string  `json:"destinationID"`
+		Platform                string  `json:"platform"`
+		ChannelID               string  `json:"channelID"`
+		ThreadID                string  `json:"threadID"`
+		ClearTarget             *bool   `json:"clearTarget"`
+		ClearDestination        *bool   `json:"clearDestination"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return skills.ToolResult{}, fmt.Errorf("invalid arguments: %w", err)
@@ -402,6 +441,28 @@ func (m *Module) agentUpdate(_ context.Context, args json.RawMessage) (skills.To
 	if p.Description != nil {
 		updates.GremlinDescription = p.Description
 	}
+	if p.ClearTarget != nil && *p.ClearTarget {
+		updates.ExecutableTarget = nil
+		updates.WorkflowID = nil
+		updates.WorkflowInputValues = nil
+	} else if strings.TrimSpace(p.WorkflowID) != "" {
+		target, workflowInputs, err := m.resolveAgentWorkflowTarget(p.WorkflowID, p.WorkflowInputValuesJSON)
+		if err != nil {
+			return skills.ToolResult{}, err
+		}
+		updates.ExecutableTarget = target
+		updates.WorkflowID = nil
+		updates.WorkflowInputValues = workflowInputs
+	} else if strings.TrimSpace(p.WorkflowInputValuesJSON) != "" {
+		if updates.ExecutableTarget == nil || strings.TrimSpace(updates.ExecutableTarget.Type) != "workflow" {
+			return skills.ToolResult{}, fmt.Errorf("workflowInputValuesJSON requires an existing workflow target or workflowID")
+		}
+		workflowInputs, err := parseWorkflowInputValuesJSON(p.WorkflowInputValuesJSON)
+		if err != nil {
+			return skills.ToolResult{}, err
+		}
+		updates.WorkflowInputValues = workflowInputs
+	}
 	if p.ClearDestination != nil && *p.ClearDestination {
 		updates.CommunicationDestination = nil
 	} else if hasAgentDestinationArgs(p.DestinationID, p.Platform, p.ChannelID, p.ThreadID) {
@@ -416,7 +477,182 @@ func (m *Module) agentUpdate(_ context.Context, args json.RawMessage) (skills.To
 	if err != nil {
 		return skills.ToolResult{}, fmt.Errorf("failed to update automation: %w", err)
 	}
-	return skills.OKResult(fmt.Sprintf("Automation %q updated.", updated.Name), map[string]any{"automation": updated}), nil
+	return skills.OKResult(m.automationUpdatedSummary(updated), map[string]any{"automation": m.automationArtifact(updated)}), nil
+}
+
+func (m *Module) resolveAgentWorkflowTarget(workflowRef, inputValuesJSON string) (*features.ExecutableTarget, map[string]string, error) {
+	ref := strings.TrimSpace(workflowRef)
+	if ref == "" {
+		if strings.TrimSpace(inputValuesJSON) != "" {
+			return nil, nil, fmt.Errorf("workflowInputValuesJSON requires workflowID")
+		}
+		return nil, nil, nil
+	}
+	if m.workflows == nil {
+		return nil, nil, fmt.Errorf("workflow targets are not available")
+	}
+	canonicalID, err := m.resolveWorkflowTargetRef(ref)
+	if err != nil {
+		return nil, nil, err
+	}
+	inputs, err := parseWorkflowInputValuesJSON(inputValuesJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &features.ExecutableTarget{Type: "workflow", Ref: canonicalID}, inputs, nil
+}
+
+func (m *Module) resolveWorkflowTargetRef(ref string) (string, error) {
+	if row, err := m.workflows.GetWorkflow(ref); err != nil {
+		return "", fmt.Errorf("load workflow %q: %w", ref, err)
+	} else if row != nil {
+		return row.ID, nil
+	}
+	rows, err := m.workflows.ListWorkflows()
+	if err != nil {
+		return "", fmt.Errorf("list workflows: %w", err)
+	}
+	var matchID string
+	for _, row := range rows {
+		if strings.EqualFold(strings.TrimSpace(row.Name), ref) {
+			if matchID != "" {
+				return "", fmt.Errorf("multiple workflows named %q; use the workflow ID", ref)
+			}
+			matchID = row.ID
+		}
+	}
+	if matchID == "" {
+		return "", fmt.Errorf("workflow %q not found", ref)
+	}
+	return matchID, nil
+}
+
+func parseWorkflowInputValuesJSON(raw string) (map[string]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	values := map[string]string{}
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, fmt.Errorf("workflowInputValuesJSON must be a JSON object: %w", err)
+	}
+	return values, nil
+}
+
+func stringPtrValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
+}
+
+func (m *Module) automationArtifact(item features.GremlinItem) map[string]any {
+	item = normalizeAutomationItem(item)
+	data, err := json.Marshal(item)
+	if err != nil {
+		return map[string]any{
+			"id":   item.ID,
+			"name": item.Name,
+		}
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return map[string]any{
+			"id":   item.ID,
+			"name": item.Name,
+		}
+	}
+	out["displayName"] = item.Name
+	if target := m.automationTargetDisplay(item); len(target) > 0 {
+		out["targetDisplay"] = target
+		if name, ok := target["name"].(string); ok && strings.TrimSpace(name) != "" {
+			out["targetDisplayName"] = name
+		}
+	}
+	return out
+}
+
+func (m *Module) automationArtifacts(items []features.GremlinItem) []map[string]any {
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		out = append(out, m.automationArtifact(item))
+	}
+	return out
+}
+
+func (m *Module) automationTargetDisplay(item features.GremlinItem) map[string]any {
+	item = normalizeAutomationItem(item)
+	if item.ExecutableTarget == nil {
+		return nil
+	}
+	targetType := strings.TrimSpace(item.ExecutableTarget.Type)
+	targetRef := strings.TrimSpace(item.ExecutableTarget.Ref)
+	if targetType == "" || targetRef == "" {
+		return nil
+	}
+	name := targetRef
+	if targetType == "workflow" {
+		name = m.workflowDisplayName(targetRef)
+	}
+	if strings.TrimSpace(name) == "" {
+		name = targetRef
+	}
+	return map[string]any{
+		"type": targetType,
+		"ref":  targetRef,
+		"name": name,
+	}
+}
+
+func (m *Module) workflowDisplayName(id string) string {
+	if m.workflows == nil {
+		return id
+	}
+	row, err := m.workflows.GetWorkflow(id)
+	if err != nil || row == nil {
+		return id
+	}
+	if strings.TrimSpace(row.Name) == "" {
+		return id
+	}
+	return strings.TrimSpace(row.Name)
+}
+
+func (m *Module) automationCreatedSummary(item features.GremlinItem) string {
+	return fmt.Sprintf("Automation %q created%s.", item.Name, m.automationTargetSummarySuffix(item))
+}
+
+func (m *Module) automationUpdatedSummary(item features.GremlinItem) string {
+	return fmt.Sprintf("Automation %q updated%s.", item.Name, m.automationTargetSummarySuffix(item))
+}
+
+func (m *Module) automationLoadedSummary(item features.GremlinItem) string {
+	return fmt.Sprintf("Automation %q loaded%s.", item.Name, m.automationTargetSummarySuffix(item))
+}
+
+func (m *Module) automationDuplicatedSummary(item features.GremlinItem) string {
+	return fmt.Sprintf("Automation duplicated as %q and left disabled for review%s.", item.Name, m.automationTargetSummarySuffix(item))
+}
+
+func (m *Module) automationTargetSummarySuffix(item features.GremlinItem) string {
+	target := m.automationTargetDisplay(item)
+	if len(target) == 0 {
+		return ""
+	}
+	targetType, _ := target["type"].(string)
+	targetName, _ := target["name"].(string)
+	if strings.TrimSpace(targetName) == "" {
+		return ""
+	}
+	switch targetType {
+	case "workflow":
+		return fmt.Sprintf(" and linked to workflow %q", targetName)
+	case "skill":
+		return fmt.Sprintf(" and targeting skill %q", targetName)
+	case "command":
+		return fmt.Sprintf(" and targeting command %q", targetName)
+	default:
+		return fmt.Sprintf(" and targeting %s %q", targetType, targetName)
+	}
 }
 
 func (m *Module) agentDelete(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
@@ -443,7 +679,7 @@ func (m *Module) agentList(_ context.Context, _ json.RawMessage) (skills.ToolRes
 	if err != nil {
 		return skills.ToolResult{}, err
 	}
-	return skills.OKResult(fmt.Sprintf("Found %d automations.", len(items)), map[string]any{"automations": items}), nil
+	return skills.OKResult(fmt.Sprintf("Found %d automations.", len(items)), map[string]any{"automations": m.automationArtifacts(items)}), nil
 }
 
 func (m *Module) agentGet(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
@@ -455,7 +691,7 @@ func (m *Module) agentGet(_ context.Context, args json.RawMessage) (skills.ToolR
 	if err != nil {
 		return skills.ToolResult{}, err
 	}
-	return skills.OKResult(fmt.Sprintf("Automation %q loaded.", item.Name), map[string]any{"automation": item}), nil
+	return skills.OKResult(m.automationLoadedSummary(item), map[string]any{"automation": m.automationArtifact(item)}), nil
 }
 
 func (m *Module) agentEnable(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
@@ -534,7 +770,7 @@ func (m *Module) agentRunHistory(_ context.Context, args json.RawMessage) (skill
 		return skills.ToolResult{}, fmt.Errorf("failed to read run history: %w", err)
 	}
 	return skills.OKResult(fmt.Sprintf("Found %d run records for %q.", len(rows), item.Name), map[string]any{
-		"automation": item,
+		"automation": m.automationArtifact(item),
 		"runs":       toGremlinRunRecords(rows),
 	}), nil
 }
@@ -555,7 +791,7 @@ func (m *Module) agentNextRun(_ context.Context, args json.RawMessage) (skills.T
 		next = runAt.UTC().Format(time.RFC3339)
 	}
 	return skills.OKResult(fmt.Sprintf("Automation %q next run: %s.", item.Name, next), map[string]any{
-		"automation": item,
+		"automation": m.automationArtifact(item),
 		"nextRun":    next,
 	}), nil
 }
@@ -589,7 +825,7 @@ func (m *Module) agentDuplicate(_ context.Context, args json.RawMessage) (skills
 		return skills.ToolResult{}, fmt.Errorf("failed to duplicate automation: %w", err)
 	}
 	created, _ := m.resolveAutomation(automationRefArgs{Name: duplicate.Name}, false)
-	return skills.OKResult(fmt.Sprintf("Automation duplicated as %q and left disabled for review.", duplicate.Name), map[string]any{"automation": created}), nil
+	return skills.OKResult(m.automationDuplicatedSummary(created), map[string]any{"automation": m.automationArtifact(created)}), nil
 }
 
 func (m *Module) agentValidateSchedule(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {

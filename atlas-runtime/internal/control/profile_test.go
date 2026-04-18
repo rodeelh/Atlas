@@ -1,8 +1,12 @@
 package control
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"atlas-runtime-go/internal/preferences"
 )
 
 func TestProfileService_UpdatePreferencesNormalizesCurrency(t *testing.T) {
@@ -13,6 +17,31 @@ func TestProfileService_UpdatePreferencesNormalizesCurrency(t *testing.T) {
 	}
 	if resp.TemperatureUnit != "celsius" || resp.UnitSystem != "metric" {
 		t.Fatalf("unexpected preferences response: %+v", resp)
+	}
+}
+
+func TestProfileService_GetPreferencesReloadsPersistedValues(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	goConfigDir := filepath.Join(tmpHome, "Library", "Application Support", "ProjectAtlas")
+	if err := os.MkdirAll(goConfigDir, 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	goConfigPath := filepath.Join(goConfigDir, "go-runtime-config.json")
+	if err := os.WriteFile(goConfigPath, []byte(`{
+  "userTemperatureUnit": "fahrenheit",
+  "userCurrency": "USD",
+  "userUnitSystem": "imperial",
+  "userPreferencesInitialized": true
+}`), 0o600); err != nil {
+		t.Fatalf("write go config: %v", err)
+	}
+
+	preferences.LoadFromConfig()
+	resp := NewProfileService().GetPreferences()
+	if resp.TemperatureUnit != "fahrenheit" || resp.UnitSystem != "imperial" || resp.Currency != "USD" {
+		t.Fatalf("expected persisted preferences, got %+v", resp)
 	}
 }
 

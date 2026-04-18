@@ -60,7 +60,7 @@ func (s *ProfileService) DetectLocation() (LocationResponse, error) {
 }
 
 func (s *ProfileService) GetPreferences() PreferencesResponse {
-	p := preferences.Get()
+	p := preferences.Resolved()
 	return PreferencesResponse{
 		TemperatureUnit: p.TemperatureUnit,
 		Currency:        p.Currency,
@@ -69,7 +69,7 @@ func (s *ProfileService) GetPreferences() PreferencesResponse {
 }
 
 func (s *ProfileService) UpdatePreferences(tempUnit, currency, unitSystem string) PreferencesResponse {
-	p := preferences.Get()
+	p := preferences.Resolved()
 	if tempUnit != "" {
 		p.TemperatureUnit = tempUnit
 	}
@@ -150,7 +150,7 @@ func (s *ProfileService) FetchLinkPreview(rawURL string) (LinkPreviewResult, err
 	}
 	transport := previewHTTPTransport()
 	client := &http.Client{
-		Timeout: 8 * time.Second,
+		Timeout:   8 * time.Second,
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {

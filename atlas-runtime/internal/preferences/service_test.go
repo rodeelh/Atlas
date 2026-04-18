@@ -82,6 +82,29 @@ func TestLoadFromConfigRestoresFromKeychainFallback(t *testing.T) {
 	}
 }
 
+func TestResolvedReloadsPersistedPreferencesWhenMemoryIsEmpty(t *testing.T) {
+	tmpHome := resetForTest(t)
+
+	goConfigPath := filepath.Join(tmpHome, "Library", "Application Support", "ProjectAtlas", "go-runtime-config.json")
+	if err := os.WriteFile(goConfigPath, []byte(`{
+  "userTemperatureUnit": "fahrenheit",
+  "userCurrency": "USD",
+  "userUnitSystem": "imperial",
+  "userPreferencesInitialized": true
+}`), 0o600); err != nil {
+		t.Fatalf("write go config: %v", err)
+	}
+
+	current = Prefs{}
+	got := Resolved()
+	if got.TemperatureUnit != "fahrenheit" || got.UnitSystem != "imperial" || got.Currency != "USD" {
+		t.Fatalf("expected persisted prefs to be reloaded, got %+v", got)
+	}
+	if !got.Initialized {
+		t.Fatalf("expected reloaded prefs to be marked initialized")
+	}
+}
+
 func resetForTest(t *testing.T) string {
 	t.Helper()
 

@@ -47,6 +47,36 @@ func Get() Prefs {
 	return current
 }
 
+// Resolved returns the active preferences with a lazy reload from persisted
+// config when the in-memory state is unexpectedly empty, plus stable fallback
+// defaults for any unresolved fields.
+func Resolved() Prefs {
+	mu.RLock()
+	p := current
+	mu.RUnlock()
+
+	if p.TemperatureUnit == "" && p.Currency == "" && p.UnitSystem == "" && !p.Initialized {
+		LoadFromConfig()
+		mu.RLock()
+		p = current
+		mu.RUnlock()
+	}
+
+	if p.TemperatureUnit == "" {
+		p.TemperatureUnit = "celsius"
+	}
+	if p.Currency == "" {
+		p.Currency = "USD"
+	}
+	if p.UnitSystem == "" {
+		p.UnitSystem = "metric"
+	}
+	if p.TemperatureUnit != "" || p.Currency != "" || p.UnitSystem != "" {
+		p.Initialized = p.Initialized || current.Initialized
+	}
+	return p
+}
+
 // Set stores preferences in memory and persists them.
 func Set(p Prefs) {
 	if p.TemperatureUnit != "" || p.Currency != "" || p.UnitSystem != "" {
@@ -60,34 +90,29 @@ func Set(p Prefs) {
 
 // TemperatureUnit returns "celsius" or "fahrenheit".
 func TemperatureUnit() string {
-	mu.RLock()
-	defer mu.RUnlock()
-	if current.TemperatureUnit == "" {
-		return "celsius"
+	if p := Resolved(); p.TemperatureUnit != "" {
+		return p.TemperatureUnit
 	}
-	return current.TemperatureUnit
+	return "celsius"
 }
 
 // Currency returns the ISO 4217 currency code.
 func Currency() string {
-	mu.RLock()
-	defer mu.RUnlock()
-	if current.Currency == "" {
-		return "USD"
+	if p := Resolved(); p.Currency != "" {
+		return p.Currency
 	}
-	return current.Currency
+	return "USD"
 }
 
 // UnitSystem returns "metric" or "imperial".
 func UnitSystem() string {
-	mu.RLock()
-	defer mu.RUnlock()
-	if current.UnitSystem == "" {
-		// Last-resort fallback — LoadFromConfig should have resolved this from
-		// the OS locale, but if not, default to metric (international standard).
-		return "metric"
+	if p := Resolved(); p.UnitSystem != "" {
+		return p.UnitSystem
 	}
-	return current.UnitSystem
+	// Last-resort fallback — LoadFromConfig should have resolved this from
+	// persisted config, keychain, or the OS locale, but if not, default to
+	// metric (international standard).
+	return "metric"
 }
 
 // LoadFromConfig reads persisted preferences from GoRuntimeConfig into memory.

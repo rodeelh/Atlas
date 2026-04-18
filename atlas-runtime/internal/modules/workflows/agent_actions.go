@@ -116,7 +116,7 @@ func (m *Module) agentCreate(_ context.Context, args json.RawMessage) (skills.To
 	if err != nil {
 		return skills.ToolResult{}, fmt.Errorf("failed to create workflow: %w", err)
 	}
-	return skills.OKResult(fmt.Sprintf("Workflow %q created.", stringValue(def, "name")), map[string]any{"workflow": def}), nil
+	return skills.OKResult(m.workflowCreatedSummary(def), map[string]any{"workflow": workflowArtifact(def)}), nil
 }
 
 func (m *Module) agentUpdate(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
@@ -152,7 +152,7 @@ func (m *Module) agentUpdate(_ context.Context, args json.RawMessage) (skills.To
 	if err != nil {
 		return skills.ToolResult{}, fmt.Errorf("failed to update workflow: %w", err)
 	}
-	return skills.OKResult(fmt.Sprintf("Workflow %q updated.", stringValue(updated, "name")), map[string]any{"workflow": updated}), nil
+	return skills.OKResult(m.workflowUpdatedSummary(updated), map[string]any{"workflow": workflowArtifact(updated)}), nil
 }
 
 func (m *Module) agentDelete(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
@@ -180,7 +180,7 @@ func (m *Module) agentList(_ context.Context, _ json.RawMessage) (skills.ToolRes
 	if err != nil {
 		return skills.ToolResult{}, err
 	}
-	return skills.OKResult(fmt.Sprintf("Found %d workflows.", len(items)), map[string]any{"workflows": items}), nil
+	return skills.OKResult(fmt.Sprintf("Found %d workflows.", len(items)), map[string]any{"workflows": workflowArtifacts(items)}), nil
 }
 
 func (m *Module) agentGet(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
@@ -192,7 +192,7 @@ func (m *Module) agentGet(_ context.Context, args json.RawMessage) (skills.ToolR
 	if err != nil {
 		return skills.ToolResult{}, err
 	}
-	return skills.OKResult(fmt.Sprintf("Workflow %q loaded.", stringValue(item, "name")), map[string]any{"workflow": item}), nil
+	return skills.OKResult(m.workflowLoadedSummary(item), map[string]any{"workflow": workflowArtifact(item)}), nil
 }
 
 func (m *Module) agentRun(ctx context.Context, args json.RawMessage) (skills.ToolResult, error) {
@@ -219,9 +219,9 @@ func (m *Module) agentRun(ctx context.Context, args json.RawMessage) (skills.Too
 		return skills.ToolResult{}, err
 	}
 	if status, _ := record["status"].(string); status == "waiting_for_approval" {
-		return skills.OKResult(fmt.Sprintf("Workflow %q is waiting for approval before the next step.", stringValue(item, "name")), map[string]any{"run": record}), nil
+		return skills.OKResult(fmt.Sprintf("Workflow %q is waiting for approval before the next step.", stringValue(item, "name")), map[string]any{"workflow": workflowArtifact(item), "run": record}), nil
 	}
-	return skills.OKResult(fmt.Sprintf("Workflow %q ran successfully.", stringValue(item, "name")), map[string]any{"run": record}), nil
+	return skills.OKResult(fmt.Sprintf("Workflow %q ran successfully.", stringValue(item, "name")), map[string]any{"workflow": workflowArtifact(item), "run": record}), nil
 }
 
 func (m *Module) agentRunHistory(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
@@ -244,7 +244,7 @@ func (m *Module) agentRunHistory(_ context.Context, args json.RawMessage) (skill
 	if err != nil {
 		return skills.ToolResult{}, err
 	}
-	return skills.OKResult(fmt.Sprintf("Found %d run records for %q.", len(runs), stringValue(item, "name")), map[string]any{"workflow": item, "runs": runs}), nil
+	return skills.OKResult(fmt.Sprintf("Found %d run records for %q.", len(runs), stringValue(item, "name")), map[string]any{"workflow": workflowArtifact(item), "runs": runs}), nil
 }
 
 func (m *Module) agentDuplicate(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
@@ -275,7 +275,7 @@ func (m *Module) agentDuplicate(_ context.Context, args json.RawMessage) (skills
 	if err != nil {
 		return skills.ToolResult{}, err
 	}
-	return skills.OKResult(fmt.Sprintf("Workflow duplicated as %q and left disabled for review.", stringValue(created, "name")), map[string]any{"workflow": created}), nil
+	return skills.OKResult(m.workflowDuplicatedSummary(created), map[string]any{"workflow": workflowArtifact(created)}), nil
 }
 
 func (m *Module) agentValidate(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
@@ -288,7 +288,7 @@ func (m *Module) agentValidate(_ context.Context, args json.RawMessage) (skills.
 		return skills.ToolResult{}, err
 	}
 	warnings := workflowWarnings(item)
-	result := skills.OKResult(fmt.Sprintf("Workflow %q is valid with %d warning(s).", stringValue(item, "name"), len(warnings)), map[string]any{"workflow": item, "warnings": warnings})
+	result := skills.OKResult(fmt.Sprintf("Workflow %q is valid with %d warning(s).", stringValue(item, "name"), len(warnings)), map[string]any{"workflow": workflowArtifact(item), "warnings": warnings})
 	result.Warnings = warnings
 	return result, nil
 }
@@ -302,7 +302,40 @@ func (m *Module) agentExplain(_ context.Context, args json.RawMessage) (skills.T
 	if err != nil {
 		return skills.ToolResult{}, err
 	}
-	return skills.OKResult(fmt.Sprintf("Workflow %q runs a reusable process with %d configured step(s).", stringValue(item, "name"), len(stepList(item))), map[string]any{"workflow": item, "warnings": workflowWarnings(item)}), nil
+	return skills.OKResult(fmt.Sprintf("Workflow %q runs a reusable process with %d configured step(s).", stringValue(item, "name"), len(stepList(item))), map[string]any{"workflow": workflowArtifact(item), "warnings": workflowWarnings(item)}), nil
+}
+
+func workflowArtifact(item map[string]any) map[string]any {
+	out := make(map[string]any, len(item)+1)
+	for key, value := range item {
+		out[key] = value
+	}
+	out["displayName"] = stringValue(item, "name")
+	return out
+}
+
+func workflowArtifacts(items []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		out = append(out, workflowArtifact(item))
+	}
+	return out
+}
+
+func (m *Module) workflowCreatedSummary(item map[string]any) string {
+	return fmt.Sprintf("Workflow %q created.", stringValue(item, "name"))
+}
+
+func (m *Module) workflowUpdatedSummary(item map[string]any) string {
+	return fmt.Sprintf("Workflow %q updated.", stringValue(item, "name"))
+}
+
+func (m *Module) workflowLoadedSummary(item map[string]any) string {
+	return fmt.Sprintf("Workflow %q loaded.", stringValue(item, "name"))
+}
+
+func (m *Module) workflowDuplicatedSummary(item map[string]any) string {
+	return fmt.Sprintf("Workflow duplicated as %q and left disabled for review.", stringValue(item, "name"))
 }
 
 func (m *Module) resolveWorkflow(ref workflowRefArgs, allowFuzzy bool) (map[string]any, error) {

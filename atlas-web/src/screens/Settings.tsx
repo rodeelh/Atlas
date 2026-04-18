@@ -10,6 +10,26 @@ import type { RuntimeConfigUpdateResponse, StorageStats } from '../api/client'
 
 type RestartPhase = 'confirm' | 'restarting' | 'done'
 
+type UserPreferences = {
+  temperatureUnit: string
+  currency: string
+  unitSystem: string
+}
+
+function normalizePreferences(p: UserPreferences | null): UserPreferences | null {
+  if (!p) return p
+  const temperatureUnit = p.temperatureUnit || (p.unitSystem === 'imperial' ? 'fahrenheit' : 'celsius')
+  let unitSystem = p.unitSystem
+  if (unitSystem !== 'metric' && unitSystem !== 'imperial') {
+    unitSystem = temperatureUnit === 'fahrenheit' ? 'imperial' : 'metric'
+  }
+  return {
+    temperatureUnit,
+    currency: p.currency || 'USD',
+    unitSystem,
+  }
+}
+
 export function Settings() {
   const [config, setConfig] = useState<RuntimeConfig | null>(null)
   const [draft, setDraft] = useState<RuntimeConfig | null>(null)
@@ -22,7 +42,7 @@ export function Settings() {
   const [locationEdit, setLocationEdit] = useState('')
   const [locationSaving, setLocationSaving] = useState(false)
   const [locationError, setLocationError] = useState<string | null>(null)
-  const [prefs, setPrefs] = useState<{ temperatureUnit: string; currency: string; unitSystem: string } | null>(null)
+  const [prefs, setPrefs] = useState<UserPreferences | null>(null)
   const [restartPhase, setRestartPhase] = useState<RestartPhase | null>(null)
   const [restartStatus, setRestartStatus] = useState('Restarting Atlas…')
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
@@ -89,7 +109,7 @@ export function Settings() {
             setLocationEdit(loc.city ? loc.city + (loc.country ? ', ' + loc.country : '') : '')
           })
           .catch(() => {})
-        api.preferences().then(setPrefs).catch(() => {})
+        api.preferences().then((p) => setPrefs(normalizePreferences(p))).catch(() => {})
         api.getStorageStats().then(setStorageStats).catch(() => {})
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load config.')
@@ -133,6 +153,7 @@ export function Settings() {
       setRestartStatus('Reconnecting…')
       const recovered = await waitForAtlasRestart()
       if (!recovered) throw new Error('Atlas did not come back online in time.')
+      api.preferences().then((p) => setPrefs(normalizePreferences(p))).catch(() => {})
       setRestartPhase('done')
       window.setTimeout(() => setRestartPhase(null), 2500)
     } catch (err) {
@@ -309,7 +330,7 @@ export function Settings() {
               onChange={async (e) => {
                 const v = (e.target as HTMLSelectElement).value
                 const tempUnit = v === 'imperial' ? 'fahrenheit' : 'celsius'
-                setPrefs((p) => (p ? { ...p, unitSystem: v, temperatureUnit: tempUnit } : p))
+                setPrefs((p) => normalizePreferences(p ? { ...p, unitSystem: v, temperatureUnit: tempUnit } : p))
                 await api.setPreferences({ unitSystem: v, temperatureUnit: tempUnit }).catch(() => {})
               }}
             >

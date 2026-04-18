@@ -155,7 +155,7 @@ export function AIProviders() {
       const next = await api.modelsForProvider(backend, refresh)
       if (seq !== localFetchSeq.current) return
       // Finding 41: distinguish empty list from connection error
-      if (next.availableModels.length === 0) {
+      if (!next.availableModels || next.availableModels.length === 0) {
         setLocalModels(emptyModelSelector('No models found.'))
         return
       }
