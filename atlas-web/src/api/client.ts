@@ -487,6 +487,11 @@ export const api = {
   engineRouterStart: (model?: string) => post<EngineStatus>('/engine/router/start', { model }),
   engineRouterStop: () => post<EngineStatus>('/engine/router/stop', {}),
 
+  // Embedding Sidecar (Phase 4)
+  engineEmbedStatus: () => get<any>('/engine/embed/status'),
+  engineEmbedStart: (model?: string, port?: number) => post<void>('/engine/embed/start', { model, port }),
+  engineEmbedStop: () => post<void>('/engine/embed/stop', {}),
+
   // MLX-LM (Apple Silicon only)
   mlxStatus: () => get<MLXStatus>('/engine/mlx/status'),
   mlxModels: () => get<MLXModelInfo[]>('/engine/mlx/models'),

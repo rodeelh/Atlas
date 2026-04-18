@@ -92,6 +92,9 @@ export interface RuntimeConfig {
   atlasEngineRouterModel: string;
   atlasEngineRouterForAll: boolean;
   atlasEngineDraftModel: string;
+  atlasEmbedEnabled: boolean;
+  atlasEmbedPort: number;
+  atlasEmbedModel: string;
   atlasMLXPort: number;
   selectedAtlasMLXModel: string;
   atlasMLXCtxSize: number;

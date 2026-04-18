@@ -14,6 +14,7 @@ import (
 	"atlas-runtime-go/internal/capabilities"
 	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/logstore"
+	"atlas-runtime-go/internal/memory"
 	"atlas-runtime-go/internal/skills"
 	"atlas-runtime-go/internal/storage"
 )
@@ -101,7 +102,7 @@ func (p *Pipeline) Run(ctx context.Context, req MessageRequest) (*TurnState, err
 	if p.tryVisionDegradation(s) {
 		return s, nil // earlyExit — response already fully built
 	}
-	p.buildInput(s)
+	p.buildInput(ctx, s)
 	p.selectTools(ctx, s)
 	p.execute(ctx, s)
 	if s.Status == "error" || s.Status == "cancelled" || s.Status == "pendingApproval" {
@@ -439,11 +440,12 @@ func (p *Pipeline) tryVisionDegradation(s *TurnState) bool {
 	return false
 }
 
-func (p *Pipeline) buildInput(s *TurnState) {
+func (p *Pipeline) buildInput(ctx context.Context, s *TurnState) {
 	capPlan, capPolicy := capabilityPolicy(s.Req.Message, config.SupportDir(), p.svc.db, p.svc.db)
 	s.CapPlan = capPlan
+	queryVec := memory.HyDEVector(ctx, s.Provider, s.Req.Message)
 	s.OAIMessages, s.HistoryChars, s.SystemPrompt = p.svc.buildTurnMessages(
-		s.Cfg, s.Req, s.History, s.ConvID, s.UserMsgID, capPolicy.PromptBlock,
+		s.Cfg, s.Req, s.History, s.ConvID, s.UserMsgID, capPolicy.PromptBlock, queryVec,
 	)
 }
 

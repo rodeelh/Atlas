@@ -1,6 +1,6 @@
 # Atlas Architecture
 
-**Last updated: 2026-04-17** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md) · Internal modules: [`docs/internal-modules.md`](internal-modules.md) · Agent boundary: [`docs/agent-boundary.md`](agent-boundary.md) · Migration verification: [`docs/migration-verification.md`](migration-verification.md) · Manual smoke: [`docs/manual-smoke-checklist.md`](manual-smoke-checklist.md) · Teams spec: [`docs/teams-v1-implementation-spec.md`](teams-v1-implementation-spec.md)
+**Last updated: 2026-04-18** · Custom Skills guide: [`docs/custom-skills.md`](custom-skills.md) · Internal modules: [`docs/internal-modules.md`](internal-modules.md) · Agent boundary: [`docs/agent-boundary.md`](agent-boundary.md) · Migration verification: [`docs/migration-verification.md`](migration-verification.md) · Manual smoke: [`docs/manual-smoke-checklist.md`](manual-smoke-checklist.md) · Teams spec: [`docs/teams-v1-implementation-spec.md`](teams-v1-implementation-spec.md)
 
 Atlas is a local AI operator. A Go binary runs as a launchd daemon (`Atlas`), serves a web UI, and connects to any supported AI provider. No Swift required.
 
@@ -31,6 +31,7 @@ Atlas/
 │       │   ├── adapter_anthropic.go    # Anthropic Messages API adapter (stream via SSE + prompt caching)
 │       │   ├── adapter_mlx.go          # Atlas MLX adapter (stream → non-stream fallback, 503 retry loop)
 │       │   ├── adapter_local.go        # Local non-streaming adapter (LMStudio/Ollama coalesce path)
+│       │   ├── embed.go                # Embed(ctx, provider, text) dispatcher + sidecar URL override (atomic.Pointer)
 │       │   ├── selector.go             # ToolSelector interface + IdentitySelector (zero-value default)
 │       │   └── stream/                 # stdlib-only SSE parsing primitives (no agent imports)
 │       │       ├── types.go            # Chunk, ToolDelta, StreamUsage
@@ -138,7 +139,9 @@ Atlas/
 │       │   ├── sink.go                 # In-memory ring buffer (500 entries) — backs GET /logs
 │       │   └── action_log.go           # ActionLogEntry type, WriteAction helper
 │       ├── memory/
-│       │   └── extractor.go            # Per-turn memory extraction, deduplication
+│       │   ├── extractor.go            # Per-turn memory extraction: Stage 1 (regex) + Stage 2 (LLM) + Stage 3 (entities)
+│       │   ├── llm.go                  # extractWithLLM (memory candidates) + extractEntitiesNonBlocking (entity graph)
+│       │   └── recall.go               # HyDEVector — hypothetical document embedding for semantic recall
 │       ├── mind/
 │       │   ├── reflection.go           # Two-tier MIND.md pipeline (Today's Read + deep reflect)
 │       │   ├── skills.go               # SKILLS.md learned-routine detection + selective injection
@@ -628,7 +631,7 @@ assistant message → store in SQLite → emit done SSE
 
 ### 9.2 Memory Extraction Pipeline
 
-`memory.ExtractAndPersist` runs a two-stage pipeline after each turn:
+`memory.ExtractAndPersist` runs a three-stage pipeline after each turn:
 
 ```
 Stage 1 — Regex extraction (fast, no API call)
@@ -643,15 +646,30 @@ Stage 1 — Regex extraction (fast, no API call)
 
     Threshold check: confidence ≥ cfg.MemoryAutoSaveThreshold (default 0.75) to save
     Deduplication: FindDuplicateMemory(category, title) — merge (take max scores, union tags)
+    Each saved/updated memory triggers asyncEmbed (search_document: prefix, outlives turn ctx)
     │
 Stage 2 — LLM extraction (skipped if explicit "remember" command found in Stage 1)
     Runs when: novel facts may exist OR tool results are present
     Catches facts the regex misses; also detects tool_learning signals from tool outcomes
+    │
+Stage 3 — Entity extraction (non-blocking goroutine, internal/memory/llm.go)
+    LLM returns {entities[], edges[]} JSON
+    UpsertEntity → memory_entities; entity embeddings stored async
+    SupersedeEdge closes prior same-pair edge; SaveEdge adds directed edge with valid_from/valid_until
 ```
 
 **Memory categories:** `commitment`, `profile`, `preference`, `project`, `workflow`, `episodic`, `tool_learning`
 
-**Memory recall:** `RelevantMemories(query, limit)` — BM25 FTS5 keyword search on `memories_fts`, ranked by importance. Commitment memories receive a +0.20 importance boost so they always surface first. Injected into the system prompt before each turn. Invalidated memories (`valid_until` in the past) are excluded.
+**Memory recall:** `RelevantMemories(query, limit, queryVec)` — hybrid retrieval pipeline:
+1. FTS5 BM25 selects top-50 candidates; native `rank` column normalized to [0,1]
+2. Cosine re-rank over candidate embeddings when `queryVec` is present (HyDE path)
+3. Score: `cosine×0.45 + bm25×0.25 + importance×0.20 + recency×0.10 − diversity` (or `bm25×0.50 + importance×0.30 + recency×0.20` without vector)
+
+**HyDE:** `memory.HyDEVector(ctx, provider, userMessage)` in `internal/memory/recall.go` generates a hypothetical memory sentence, embeds it with the `search_query:` Nomic prefix, and passes the vector into `RelevantMemories`. 4-second timeout; degrades to BM25-only on failure.
+
+Commitment memories receive a +0.20 importance boost so they always surface first. Injected into the system prompt before each turn via `<recalled_memories>`. Invalidated memories (`valid_until` in the past) are excluded.
+
+**Entity context:** `buildEntityContext(db, queryVec)` in `internal/chat/prompt.go` finds the nearest entity nodes via cosine scan, BFS-traverses valid edges up to 2 hops, and injects a `<entity_context>` block (e.g. `Rami → works_at → RXA Labs`) alongside recalled memories when the HyDE vector is available.
 
 **Opinion reinforcement** (dream cycle):
 - `reinforce` → +0.20 confidence
@@ -816,7 +834,9 @@ All endpoints return `409 Conflict` when `ThoughtsEnabled: false`.
 |-------|---------|
 | `conversations` | Conversation records |
 | `messages` | All messages (user + assistant + tool) |
-| `memories` | Extracted long-term memories (with `valid_until` for contradiction; `memories_fts` FTS5 index for BM25 recall) |
+| `memories` | Extracted long-term memories — `valid_until` for contradiction; `embedding` BLOB for cosine recall; `memories_fts` FTS5 index for BM25 candidate selection |
+| `memory_entities` | Named entities extracted per-turn (person/place/org/concept/technology/event/other) with embeddings for vector-nearest search |
+| `memory_edges` | Directed temporal relations between entities (`valid_until NULL` = currently true; set by `SupersedeEdge` when a fact changes) |
 | `gremlin_runs` | Automation run records |
 | `deferred_executions` | Pending approval tool calls; `agent_id` column (nullable) identifies sub-agent requester |
 | `web_sessions` | HMAC session tokens |
@@ -1013,4 +1033,4 @@ team.delegate
 | Custom skill live-reload | Daemon restart required after install or remove |
 | Custom skill ZIP/URL install | Local path only; URL download deferred |
 | Custom skill vault credential injection | Skills read credentials from env; direct vault injection deferred |
-| Embedding-based memory retrieval | BM25 FTS5 keyword search implemented; vector/embedding retrieval deferred |
+| Parallel squad execution | Deferred to Teams M5 — requires resolving `turnCancels` single-turn-per-conv constraint |

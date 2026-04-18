@@ -31,6 +31,7 @@ type Module struct {
 	supportDir string
 	store      platform.AutomationStore
 	commsStore platform.CommunicationsStore
+	agents     platform.AgentStore
 	workflows  platform.WorkflowStore
 	agent      platform.AgentRuntime
 	bus        platform.EventBus
@@ -78,6 +79,7 @@ func (m *Module) Manifest() platform.Manifest {
 func (m *Module) Register(host platform.Host) error {
 	m.store = host.Storage().Automations()
 	m.commsStore = host.Storage().Communications()
+	m.agents = host.Storage().Agents()
 	m.workflows = host.Storage().Workflows()
 	m.agent = host.AgentRuntime()
 	m.bus = host.Bus()
@@ -338,14 +340,8 @@ func (m *Module) runAutomation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	target := automationTarget(item)
-	explicitTarget := item.ExecutableTarget != nil
-	if target.Type == "skill" && m.skills == nil {
-		writeError(w, http.StatusNotImplemented, "skill registry not available")
-		return
-	}
-	if (!explicitTarget || target.Type != "skill") && m.agent == nil {
-		writeError(w, http.StatusNotImplemented, "agent loop not available")
+	if err := m.validateAutomationExecution(item); err != nil {
+		writeError(w, http.StatusNotImplemented, err.Error())
 		return
 	}
 
@@ -397,13 +393,8 @@ func (m *Module) runAutomationSync(ctx context.Context, id, trigger string) (Run
 	if !ok {
 		return RunResult{}, fmt.Errorf("automation not found: %s", id)
 	}
-	target := automationTarget(item)
-	explicitTarget := item.ExecutableTarget != nil
-	if target.Type == "skill" && m.skills == nil {
-		return RunResult{}, fmt.Errorf("skill registry not available")
-	}
-	if (!explicitTarget || target.Type != "skill") && m.agent == nil {
-		return RunResult{}, fmt.Errorf("agent loop not available")
+	if err := m.validateAutomationExecution(item); err != nil {
+		return RunResult{}, err
 	}
 
 	runID := newID()
@@ -575,6 +566,24 @@ func (m *Module) prepareAutomationExecution(item features.GremlinItem, runID, co
 			ActionID: target.Ref,
 			Args:     args,
 		}, nil
+	case "agent":
+		args := map[string]any{
+			"agentID":       target.Ref,
+			"task":          strings.TrimSpace(item.Prompt),
+			"executionMode": "sync_assist",
+		}
+		if goal := strings.TrimSpace(automationInputValues(item)["goal"]); goal != "" {
+			args["goal"] = goal
+		}
+		payload, err := json.Marshal(args)
+		if err != nil {
+			return automationExecutionPlan{}, err
+		}
+		return automationExecutionPlan{
+			Mode:     automationExecutionSkill,
+			ActionID: "team.delegate",
+			Args:     payload,
+		}, nil
 	case "workflow":
 		workflowID := target.Ref
 		workflowRunID := "workflow-" + runID
@@ -610,6 +619,19 @@ func (m *Module) prepareAutomationExecution(item features.GremlinItem, runID, co
 	}
 }
 
+func (m *Module) validateAutomationExecution(item features.GremlinItem) error {
+	target := automationTarget(item)
+	explicitTarget := item.ExecutableTarget != nil
+	useSkillExecution := explicitTarget && (target.Type == "skill" || target.Type == "command" || target.Type == "agent")
+	if useSkillExecution && m.skills == nil {
+		return fmt.Errorf("skill registry not available")
+	}
+	if !useSkillExecution && m.agent == nil {
+		return fmt.Errorf("agent loop not available")
+	}
+	return nil
+}
+
 func (m *Module) executeAutomationSkill(ctx context.Context, plan automationExecutionPlan) (automationExecutionResult, error) {
 	if m.skills == nil {
 		return automationExecutionResult{}, fmt.Errorf("skill registry not available")
@@ -628,8 +650,12 @@ func (m *Module) executeAutomationSkill(ctx context.Context, plan automationExec
 	if plan.ActionID != "" {
 		artifacts["actionID"] = plan.ActionID
 	}
+	output := result.FormatForModel()
+	if plan.ActionID == "team.delegate" && strings.TrimSpace(result.Summary) != "" {
+		output = strings.TrimSpace(result.Summary)
+	}
 	return automationExecutionResult{
-		Output:    result.FormatForModel(),
+		Output:    output,
 		Artifacts: artifacts,
 	}, nil
 }

@@ -84,7 +84,7 @@ func TestDetectTurnMode(t *testing.T) {
 
 func TestBuildSystemPromptAddsResponseContract(t *testing.T) {
 	cfg := storageTestDefaults()
-	prompt := buildSystemPrompt(cfg, nil, t.TempDir(), "Verify the current OpenAI CEO from the official website.", "")
+	prompt := buildSystemPrompt(cfg, nil, t.TempDir(), "Verify the current OpenAI CEO from the official website.", "", nil)
 	if !strings.Contains(prompt, "<response_contract>") {
 		t.Fatal("expected response contract block in prompt")
 	}
@@ -101,7 +101,7 @@ func TestAutomationResponseContractDistinguishesAutomationFromAgent(t *testing.T
 	}
 	defer db.Close()
 
-	prompt := buildSystemPrompt(cfg, db, t.TempDir(), "Create an agent that checks my email every 3 hours and sends useful items to Telegram.", "")
+	prompt := buildSystemPrompt(cfg, db, t.TempDir(), "Create an agent that checks my email every 3 hours and sends useful items to Telegram.", "", nil)
 	if !strings.Contains(prompt, "Mode: automation") {
 		t.Fatalf("expected automation response contract, got: %q", prompt)
 	}
@@ -124,7 +124,7 @@ func TestExecutionResponseContractDistinguishesWorkflowAutomationAndAgent(t *tes
 	}
 	defer db.Close()
 
-	prompt := buildSystemPrompt(cfg, db, t.TempDir(), "Create an agent for triaging requests using the existing workflow tools.", "")
+	prompt := buildSystemPrompt(cfg, db, t.TempDir(), "Create an agent for triaging requests using the existing workflow tools.", "", nil)
 	if !strings.Contains(prompt, "Mode: execution") {
 		t.Fatalf("expected execution response contract, got: %q", prompt)
 	}

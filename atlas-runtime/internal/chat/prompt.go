@@ -28,7 +28,7 @@ type PromptBuilder struct {
 // capabilityPolicyBlock is injected by the capability planner; pass "" when
 // none applies (e.g. MLX warm-prompt prefill, tests).
 func (pb *PromptBuilder) Build(userMessage, capabilityPolicyBlock string) string {
-	return buildSystemPrompt(pb.cfg, pb.db, pb.supportDir, userMessage, capabilityPolicyBlock)
+	return buildSystemPrompt(pb.cfg, pb.db, pb.supportDir, userMessage, capabilityPolicyBlock, nil)
 }
 
 // ── Turn mode ─────────────────────────────────────────────────────────────────
@@ -346,7 +346,7 @@ func buildCredsBlock() string {
 //  2. Recalled memories (relevance-scored for current turn)
 //  3. SKILLS.md context (matched routines)
 //  4. Diary (last 3 days — trimmed first when over budget)
-func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, supportDir, userMessage, capabilityPolicyBlock string) string {
+func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, supportDir, userMessage, capabilityPolicyBlock string, queryVec []float32) string {
 	budget := cfg.SystemPromptRuneBudget()
 	mode := detectTurnMode(userMessage)
 
@@ -386,7 +386,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 		if limit > 2 {
 			limit = 2
 		}
-		mems, _ = db.RelevantMemories(userMessage, limit)
+		mems, _ = db.RelevantMemories(userMessage, limit, queryVec)
 	}
 
 	var memText string
@@ -587,6 +587,14 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 		sb.WriteString("</recalled_memories>")
 	}
 
+	if len(queryVec) > 0 {
+		if entityCtx := buildEntityContext(db, queryVec); entityCtx != "" {
+			sb.WriteString("\n\n<entity_context>\n")
+			sb.WriteString(entityCtx)
+			sb.WriteString("\n</entity_context>")
+		}
+	}
+
 	if cfg.ThoughtsEnabled && shouldInjectThoughts(userMessage) {
 		if thoughtsBlock := buildThoughtsBlock(supportDir); thoughtsBlock != "" {
 			sb.WriteString("\n\n<thoughts_on_your_mind>\n")
@@ -596,4 +604,68 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	}
 
 	return sb.String()
+}
+
+// buildEntityContext returns a compact representation of the entity subgraph
+// most relevant to the current query. Returns "" when no entities exist yet
+// or the graph is empty. Called only when queryVec is non-nil (HyDE path).
+func buildEntityContext(db *storage.DB, queryVec []float32) string {
+	if db == nil || len(queryVec) == 0 {
+		return ""
+	}
+	seedEntities, err := db.FindNearestEntities(queryVec, 5)
+	if err != nil || len(seedEntities) == 0 {
+		return ""
+	}
+	seedIDs := make([]string, len(seedEntities))
+	nameByID := make(map[string]string, len(seedEntities))
+	for i, e := range seedEntities {
+		seedIDs[i] = e.EntityID
+		nameByID[e.EntityID] = e.Name
+	}
+	edges, err := db.TraverseEntityGraph(seedIDs, 2)
+	if err != nil || len(edges) == 0 {
+		// No edges yet — just list seed entities.
+		var sb strings.Builder
+		for _, e := range seedEntities {
+			sb.WriteString(fmt.Sprintf("- %s (%s)\n", e.Name, e.EntityType))
+		}
+		return strings.TrimRight(sb.String(), "\n")
+	}
+
+	// Collect edge-endpoint IDs not already in nameByID and fetch them in one query.
+	var missing []string
+	for _, edge := range edges {
+		if _, ok := nameByID[edge.SourceEntity]; !ok {
+			missing = append(missing, edge.SourceEntity)
+		}
+		if _, ok := nameByID[edge.TargetEntity]; !ok {
+			missing = append(missing, edge.TargetEntity)
+		}
+	}
+	if len(missing) > 0 {
+		fetched, err := db.FetchEntitiesByIDs(missing)
+		if err == nil {
+			for _, ent := range fetched {
+				nameByID[ent.EntityID] = ent.Name
+			}
+		}
+	}
+
+	var sb strings.Builder
+	seen := make(map[string]bool, len(edges))
+	for _, edge := range edges {
+		src := nameByID[edge.SourceEntity]
+		tgt := nameByID[edge.TargetEntity]
+		if src == "" || tgt == "" {
+			continue
+		}
+		line := fmt.Sprintf("- %s → %s → %s\n", src, edge.Relation, tgt)
+		if seen[line] {
+			continue
+		}
+		seen[line] = true
+		sb.WriteString(line)
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }

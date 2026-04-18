@@ -123,7 +123,7 @@ func TestValidUntilFiltering(t *testing.T) {
 	}
 
 	// RelevantMemories should also exclude it.
-	relevant, err := db.RelevantMemories("active expired memory", 10)
+	relevant, err := db.RelevantMemories("active expired memory", 10, nil)
 	if err != nil {
 		t.Fatalf("RelevantMemories: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestRelevantMemoriesCommitmentBoost(t *testing.T) {
 		t.Fatalf("SaveMemory preference: %v", err)
 	}
 
-	results, err := db.RelevantMemories("metric units", 5)
+	results, err := db.RelevantMemories("metric units", 5, nil)
 	if err != nil {
 		t.Fatalf("RelevantMemories: %v", err)
 	}
@@ -393,7 +393,7 @@ func TestRelevantMemoriesEmptyDB(t *testing.T) {
 	db, cleanup := openMemTestDB(t)
 	defer cleanup()
 
-	results, err := db.RelevantMemories("anything at all", 5)
+	results, err := db.RelevantMemories("anything at all", 5, nil)
 	if err != nil {
 		t.Fatalf("RelevantMemories on empty DB: unexpected error: %v", err)
 	}
@@ -638,13 +638,73 @@ func TestRelevantMemoriesNoKeywords(t *testing.T) {
 	}
 
 	// "a the is" — all stop words → extractKeywords returns []
-	results, err := db.RelevantMemories("a the is", 5)
+	results, err := db.RelevantMemories("a the is", 5, nil)
 	if err != nil {
 		t.Fatalf("RelevantMemories no-keywords: %v", err)
 	}
 	// Should still return the memory via fallback.
 	if len(results) == 0 {
 		t.Error("RelevantMemories no-keywords: expected fallback to return memories")
+	}
+}
+
+// TestNormalizeBM25 — unit tests for the BM25 normalization helper.
+func TestNormalizeBM25(t *testing.T) {
+	t.Run("nil input returns nil", func(t *testing.T) {
+		if normalizeBM25(nil) != nil {
+			t.Error("expected nil for nil input")
+		}
+	})
+	t.Run("empty input returns nil", func(t *testing.T) {
+		if normalizeBM25(map[string]float64{}) != nil {
+			t.Error("expected nil for empty input")
+		}
+	})
+	t.Run("single entry gets 0.5", func(t *testing.T) {
+		out := normalizeBM25(map[string]float64{"a": -1.5})
+		if out["a"] != 0.5 {
+			t.Errorf("single entry: expected 0.5, got %v", out["a"])
+		}
+	})
+	t.Run("best match gets 1.0, worst gets 0.0", func(t *testing.T) {
+		// FTS5 rank: more negative = better
+		ranks := map[string]float64{"best": -3.0, "mid": -2.0, "worst": -1.0}
+		out := normalizeBM25(ranks)
+		if out["best"] != 1.0 {
+			t.Errorf("best: expected 1.0, got %v", out["best"])
+		}
+		if out["worst"] != 0.0 {
+			t.Errorf("worst: expected 0.0, got %v", out["worst"])
+		}
+		if out["mid"] <= 0.0 || out["mid"] >= 1.0 {
+			t.Errorf("mid: expected (0,1), got %v", out["mid"])
+		}
+	})
+}
+
+// TestRelevantMemoriesBM25Ranking — BM25 ranks higher-relevance memories first.
+func TestRelevantMemoriesBM25Ranking(t *testing.T) {
+	db, cleanup := openMemTestDB(t)
+	defer cleanup()
+
+	// Two memories: one mentions "golang" prominently, one barely.
+	prominent := testMemoryRow("bm25-1", "project", "Golang expertise", "Prefers golang for backend services and uses golang daily.", 0.7, 0.7)
+	weak := testMemoryRow("bm25-2", "project", "Frontend work", "Occasionally uses golang but mainly writes TypeScript.", 0.7, 0.7)
+	for _, r := range []MemoryRow{prominent, weak} {
+		if err := db.SaveMemory(r); err != nil {
+			t.Fatalf("SaveMemory: %v", err)
+		}
+	}
+
+	results, err := db.RelevantMemories("golang", 5, nil)
+	if err != nil {
+		t.Fatalf("RelevantMemories: %v", err)
+	}
+	if len(results) < 2 {
+		t.Fatalf("expected at least 2 results, got %d", len(results))
+	}
+	if results[0].ID != "bm25-1" {
+		t.Errorf("expected prominent golang memory first, got %q", results[0].ID)
 	}
 }
 
@@ -745,3 +805,355 @@ func TestSetValidUntilPreservesHistory(t *testing.T) {
 
 // Ensure the test file passes vet even if os is used only for temp dir.
 var _ = os.TempDir
+
+// ── Embedding tests ───────────────────────────────────────────────────────────
+
+// TestUpdateMemoryEmbedding — save a memory, write an embedding, verify it round-trips.
+func TestUpdateMemoryEmbedding(t *testing.T) {
+	db, cleanup := openMemTestDB(t)
+	defer cleanup()
+
+	row := testMemoryRow("emb-1", "profile", "Embed Title", "Embed content.", 0.8, 0.9)
+	if err := db.SaveMemory(row); err != nil {
+		t.Fatalf("SaveMemory: %v", err)
+	}
+
+	vec := []float32{0.1, 0.2, 0.3, 0.4}
+	if err := db.UpdateMemoryEmbedding("emb-1", "test-model", vec); err != nil {
+		t.Fatalf("UpdateMemoryEmbedding: %v", err)
+	}
+
+	// fetchEmbeddings is internal; verify via RelevantMemories with a matching vector.
+	results, err := db.RelevantMemories("Embed content", 5, vec)
+	if err != nil {
+		t.Fatalf("RelevantMemories: %v", err)
+	}
+	found := false
+	for _, r := range results {
+		if r.ID == "emb-1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("embedded memory emb-1 should appear in hybrid recall results")
+	}
+}
+
+// TestRelevantMemoriesHybridScoring — the memory with an exact-match embedding
+// should rank first over a keyword-only match when queryVec is provided.
+func TestRelevantMemoriesHybridScoring(t *testing.T) {
+	db, cleanup := openMemTestDB(t)
+	defer cleanup()
+
+	// mem-A: has a high-cosine embedding relative to our query vector.
+	memA := testMemoryRow("hsc-a", "profile", "Semantic match", "semantic content here", 0.5, 0.5)
+	// mem-B: has a low-importance score and no embedding.
+	memB := testMemoryRow("hsc-b", "profile", "Keyword match", "semantic content here", 0.5, 0.5)
+
+	if err := db.SaveMemory(memA); err != nil {
+		t.Fatalf("SaveMemory A: %v", err)
+	}
+	if err := db.SaveMemory(memB); err != nil {
+		t.Fatalf("SaveMemory B: %v", err)
+	}
+
+	// Give mem-A a near-unit embedding along axis 0.
+	vecA := []float32{1.0, 0.0, 0.0, 0.0}
+	if err := db.UpdateMemoryEmbedding("hsc-a", "test-model", vecA); err != nil {
+		t.Fatalf("UpdateMemoryEmbedding: %v", err)
+	}
+
+	// Query vector also points along axis 0 → mem-A gets cosine ≈ 1.0.
+	queryVec := []float32{1.0, 0.0, 0.0, 0.0}
+	results, err := db.RelevantMemories("semantic content", 5, queryVec)
+	if err != nil {
+		t.Fatalf("RelevantMemories: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least one result")
+	}
+	if results[0].ID != "hsc-a" {
+		t.Errorf("expected hsc-a (high cosine) to rank first, got %s", results[0].ID)
+	}
+}
+
+// TestUpdateMemoryClearsEmbeddingAt — UpdateMemory must null embedding_at so stale
+// vectors are re-generated on the next extraction cycle.
+func TestUpdateMemoryClearsEmbeddingAt(t *testing.T) {
+	db, cleanup := openMemTestDB(t)
+	defer cleanup()
+
+	row := testMemoryRow("clr-1", "preference", "Old title", "Old content.", 0.7, 0.8)
+	if err := db.SaveMemory(row); err != nil {
+		t.Fatalf("SaveMemory: %v", err)
+	}
+	if err := db.UpdateMemoryEmbedding("clr-1", "test-model", []float32{0.5, 0.5}); err != nil {
+		t.Fatalf("UpdateMemoryEmbedding: %v", err)
+	}
+
+	// Now update the content — embedding_at should be cleared.
+	row.Title = "New title"
+	row.Content = "New content."
+	row.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := db.UpdateMemory(row); err != nil {
+		t.Fatalf("UpdateMemory: %v", err)
+	}
+
+	var embeddingAt *string
+	err := db.Conn().QueryRow(`SELECT embedding_at FROM memories WHERE memory_id='clr-1'`).Scan(&embeddingAt)
+	if err != nil {
+		t.Fatalf("scan embedding_at: %v", err)
+	}
+	if embeddingAt != nil {
+		t.Errorf("embedding_at should be NULL after UpdateMemory, got %q", *embeddingAt)
+	}
+}
+
+// ── Entity graph tests ────────────────────────────────────────────────────────
+
+func testNow() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+
+// TestUpsertEntity — first call creates; second call bumps last_seen.
+func TestUpsertEntity(t *testing.T) {
+	db, cleanup := openMemTestDB(t)
+	defer cleanup()
+
+	now := testNow()
+	id1, err := db.UpsertEntity("Alice", "person", now)
+	if err != nil {
+		t.Fatalf("UpsertEntity (create): %v", err)
+	}
+	if id1 == "" {
+		t.Fatal("expected non-empty entity_id")
+	}
+
+	// Second upsert same name+type: should return the same ID and update last_seen.
+	later := time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano)
+	id2, err := db.UpsertEntity("Alice", "person", later)
+	if err != nil {
+		t.Fatalf("UpsertEntity (bump): %v", err)
+	}
+	if id2 != id1 {
+		t.Errorf("expected same entity_id on re-upsert: want %s, got %s", id1, id2)
+	}
+
+	ents, err := db.ListEntities(10)
+	if err != nil {
+		t.Fatalf("ListEntities: %v", err)
+	}
+	if len(ents) != 1 {
+		t.Fatalf("expected 1 entity, got %d", len(ents))
+	}
+	if ents[0].LastSeen != later {
+		t.Errorf("last_seen should be updated: want %s, got %s", later, ents[0].LastSeen)
+	}
+}
+
+// TestSaveEdgeAndTraverse — save two entities + one edge, traverse from source.
+func TestSaveEdgeAndTraverse(t *testing.T) {
+	db, cleanup := openMemTestDB(t)
+	defer cleanup()
+
+	now := testNow()
+	srcID, _ := db.UpsertEntity("Rami", "person", now)
+	tgtID, _ := db.UpsertEntity("RXA Labs", "organization", now)
+
+	edge := EdgeRow{
+		EdgeID:       "edge-1",
+		SourceEntity: srcID,
+		TargetEntity: tgtID,
+		Relation:     "works_at",
+		ValidFrom:    now,
+		Confidence:   1.0,
+	}
+	if err := db.SaveEdge(edge); err != nil {
+		t.Fatalf("SaveEdge: %v", err)
+	}
+
+	edges, err := db.TraverseEntityGraph([]string{srcID}, 1)
+	if err != nil {
+		t.Fatalf("TraverseEntityGraph: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	if edges[0].Relation != "works_at" {
+		t.Errorf("expected relation works_at, got %s", edges[0].Relation)
+	}
+	if edges[0].SourceEntity != srcID || edges[0].TargetEntity != tgtID {
+		t.Error("edge endpoints do not match")
+	}
+}
+
+// TestSupersedeEdge — superseding closes the old edge before inserting the new one.
+func TestSupersedeEdge(t *testing.T) {
+	db, cleanup := openMemTestDB(t)
+	defer cleanup()
+
+	now := testNow()
+	srcID, _ := db.UpsertEntity("Bob", "person", now)
+	tgtID, _ := db.UpsertEntity("AcmeCorp", "organization", now)
+
+	db.SaveEdge(EdgeRow{ //nolint:errcheck
+		EdgeID: "old-edge", SourceEntity: srcID, TargetEntity: tgtID,
+		Relation: "works_at", ValidFrom: now, Confidence: 1.0,
+	})
+
+	later := time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano)
+	db.SupersedeEdge(srcID, tgtID, "works_at", later) //nolint:errcheck
+	db.SaveEdge(EdgeRow{                               //nolint:errcheck
+		EdgeID: "new-edge", SourceEntity: srcID, TargetEntity: tgtID,
+		Relation: "works_at", ValidFrom: later, Confidence: 1.0,
+	})
+
+	// Only the new edge should be returned (valid_until IS NULL).
+	edges, err := db.TraverseEntityGraph([]string{srcID}, 1)
+	if err != nil {
+		t.Fatalf("TraverseEntityGraph: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 valid edge after supersede, got %d", len(edges))
+	}
+	if edges[0].EdgeID != "new-edge" {
+		t.Errorf("expected new-edge, got %s", edges[0].EdgeID)
+	}
+}
+
+// TestPruneExpiredEdges — edge whose endpoint is deleted gets closed.
+func TestPruneExpiredEdges(t *testing.T) {
+	db, cleanup := openMemTestDB(t)
+	defer cleanup()
+
+	now := testNow()
+	srcID, _ := db.UpsertEntity("Carol", "person", now)
+	tgtID, _ := db.UpsertEntity("GhostOrg", "organization", now)
+
+	db.SaveEdge(EdgeRow{ //nolint:errcheck
+		EdgeID: "dangling", SourceEntity: srcID, TargetEntity: tgtID,
+		Relation: "member_of", ValidFrom: now, Confidence: 1.0,
+	})
+
+	// Delete the target entity to create a dangling edge.
+	db.Conn().Exec(`DELETE FROM memory_entities WHERE entity_id=?`, tgtID) //nolint:errcheck
+
+	pruned := db.PruneExpiredEdges()
+	if pruned != 1 {
+		t.Errorf("expected 1 pruned edge, got %d", pruned)
+	}
+
+	// Confirm the edge is now closed.
+	edges, err := db.TraverseEntityGraph([]string{srcID}, 1)
+	if err != nil {
+		t.Fatalf("TraverseEntityGraph after prune: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 valid edges after prune, got %d", len(edges))
+	}
+}
+
+// TestDeduplicateEntitiesKeepsEmbedding — when duplicates exist, the one with
+// an embedding is kept (not necessarily the oldest).
+func TestDeduplicateEntitiesKeepsEmbedding(t *testing.T) {
+	db, cleanup := openMemTestDB(t)
+	defer cleanup()
+
+	// Insert two entities with the same name+type directly (bypassing UpsertEntity
+	// so we can control first_seen ordering and embedding presence).
+	earlier := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+	later := testNow()
+
+	db.Conn().Exec( //nolint:errcheck
+		`INSERT INTO memory_entities (entity_id,name,entity_type,first_seen,last_seen,metadata_json)
+		 VALUES ('old-id','Dave','person',?,?,'{}')`, earlier, earlier)
+	db.Conn().Exec( //nolint:errcheck
+		`INSERT INTO memory_entities (entity_id,name,entity_type,first_seen,last_seen,metadata_json)
+		 VALUES ('new-id','Dave','person',?,?,'{}')`, later, later)
+
+	// Give the newer (new-id) an embedding.
+	vec := []float32{0.9, 0.1}
+	if err := db.UpdateEntityEmbedding("new-id", vec); err != nil {
+		t.Fatalf("UpdateEntityEmbedding: %v", err)
+	}
+
+	removed := db.DeduplicateEntities()
+	if removed != 1 {
+		t.Fatalf("expected 1 removed, got %d", removed)
+	}
+
+	ents, err := db.ListEntities(10)
+	if err != nil {
+		t.Fatalf("ListEntities: %v", err)
+	}
+	if len(ents) != 1 {
+		t.Fatalf("expected 1 entity after dedup, got %d", len(ents))
+	}
+	// The survivor must be new-id (has embedding), not old-id (oldest).
+	if ents[0].EntityID != "new-id" {
+		t.Errorf("expected new-id (has embedding) to survive, got %s", ents[0].EntityID)
+	}
+}
+
+// TestDeduplicateEntitiesRepoinstsEdges — edges to the removed duplicate must
+// be repointed to the survivor.
+func TestDeduplicateEntitiesRepointsEdges(t *testing.T) {
+	db, cleanup := openMemTestDB(t)
+	defer cleanup()
+
+	now := testNow()
+	earlier := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+
+	// Two duplicate entity nodes.
+	db.Conn().Exec(`INSERT INTO memory_entities (entity_id,name,entity_type,first_seen,last_seen,metadata_json) VALUES ('e-old','Eve','person',?,?,'{}')`, earlier, earlier) //nolint:errcheck
+	db.Conn().Exec(`INSERT INTO memory_entities (entity_id,name,entity_type,first_seen,last_seen,metadata_json) VALUES ('e-new','Eve','person',?,?,'{}')`, now, now)           //nolint:errcheck
+
+	// A third entity connected to the duplicate (e-old).
+	otherID, _ := db.UpsertEntity("SomeOrg", "organization", now)
+	db.SaveEdge(EdgeRow{EdgeID: "ep-edge", SourceEntity: "e-old", TargetEntity: otherID, Relation: "member_of", ValidFrom: now, Confidence: 1.0}) //nolint:errcheck
+
+	db.DeduplicateEntities()
+
+	// The edge should now point from the survivor to otherID.
+	ents, _ := db.ListEntities(10)
+	var survivorID string
+	for _, e := range ents {
+		if e.Name == "Eve" {
+			survivorID = e.EntityID
+		}
+	}
+	if survivorID == "" {
+		t.Fatal("survivor entity Eve not found after dedup")
+	}
+	edges, err := db.TraverseEntityGraph([]string{survivorID}, 1)
+	if err != nil {
+		t.Fatalf("TraverseEntityGraph: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Errorf("expected 1 repointed edge, got %d", len(edges))
+	}
+}
+
+// TestFetchEntitiesByIDs — fetches a subset of entities by ID.
+func TestFetchEntitiesByIDs(t *testing.T) {
+	db, cleanup := openMemTestDB(t)
+	defer cleanup()
+
+	now := testNow()
+	id1, _ := db.UpsertEntity("Frank", "person", now)
+	id2, _ := db.UpsertEntity("Grace", "person", now)
+	_, _ = db.UpsertEntity("Henry", "person", now) // not requested
+
+	got, err := db.FetchEntitiesByIDs([]string{id1, id2})
+	if err != nil {
+		t.Fatalf("FetchEntitiesByIDs: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 entities, got %d", len(got))
+	}
+	names := map[string]bool{}
+	for _, e := range got {
+		names[e.Name] = true
+	}
+	if !names["Frank"] || !names["Grace"] {
+		t.Errorf("expected Frank and Grace, got %v", names)
+	}
+}

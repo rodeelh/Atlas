@@ -19,6 +19,7 @@ type Module struct {
 	routerMgr    *runtimeengine.Manager
 	mlxMgr       *runtimeengine.MLXManager
 	mlxRouterMgr *runtimeengine.MLXManager
+	embedMgr     *runtimeengine.EmbedManager
 	cfgStore     *config.Store
 }
 
@@ -31,6 +32,12 @@ func New(mgr *runtimeengine.Manager, routerMgr *runtimeengine.Manager, cfgStore 
 func (m *Module) WithMLX(mlxMgr, mlxRouterMgr *runtimeengine.MLXManager) *Module {
 	m.mlxMgr = mlxMgr
 	m.mlxRouterMgr = mlxRouterMgr
+	return m
+}
+
+// WithEmbed wires in the local embedding sidecar manager.
+func (m *Module) WithEmbed(embedMgr *runtimeengine.EmbedManager) *Module {
+	m.embedMgr = embedMgr
 	return m
 }
 
@@ -61,6 +68,13 @@ func (m *Module) registerRoutes(r chi.Router) {
 	r.Get("/engine/router/status", m.getRouterStatus)
 	r.Post("/engine/router/start", m.postRouterStart)
 	r.Post("/engine/router/stop", m.postRouterStop)
+
+	// Embedding sidecar routes — only mounted when an EmbedManager is wired in.
+	if m.embedMgr != nil {
+		r.Get("/engine/embed/status", m.getEmbedStatus)
+		r.Post("/engine/embed/start", m.postEmbedStart)
+		r.Post("/engine/embed/stop", m.postEmbedStop)
+	}
 
 	// MLX-LM routes — only mounted when an MLXManager is wired in.
 	// The /engine/mlx/* namespace mirrors /engine/* exactly.
@@ -653,4 +667,60 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+// ── Embedding sidecar handlers ────────────────────────────────────────────────
+
+func (m *Module) getEmbedStatus(w http.ResponseWriter, _ *http.Request) {
+	cfg := m.cfgStore.Load()
+	port := cfg.AtlasEmbedPort
+	if port <= 0 {
+		port = 11988
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":     cfg.AtlasEmbedEnabled,
+		"running":     m.embedMgr.IsRunning(),
+		"model":       m.embedMgr.LoadedModel(),
+		"port":        m.embedMgr.Port(),
+		"baseURL":     m.embedMgr.BaseURL(),
+		"lastError":   m.embedMgr.LastError(),
+		"binaryReady": m.embedMgr.BinaryReady(),
+		"configModel": cfg.AtlasEmbedModel,
+		"configPort":  port,
+	})
+}
+
+func (m *Module) postEmbedStart(w http.ResponseWriter, r *http.Request) {
+	cfg := m.cfgStore.Load()
+	var req struct {
+		Model string `json:"model"`
+		Port  int    `json:"port"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.Model == "" {
+		req.Model = cfg.AtlasEmbedModel
+	}
+	if req.Model == "" {
+		writeError(w, http.StatusBadRequest, "model is required")
+		return
+	}
+	if req.Port <= 0 {
+		req.Port = cfg.AtlasEmbedPort
+	}
+	if req.Port <= 0 {
+		req.Port = 11988
+	}
+	if err := m.embedMgr.Start(req.Model, req.Port); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *Module) postEmbedStop(w http.ResponseWriter, _ *http.Request) {
+	if err := m.embedMgr.Stop(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

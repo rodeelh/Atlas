@@ -142,6 +142,14 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
   const [routerModelSaving, setRouterModelSaving] = useState(false)
   const [routerActing, setRouterActing]     = useState(false)
 
+  // Embedding Sidecar (Phase 4)
+  const [embedStatus, setEmbedStatus]       = useState<any | null>(null)
+  const [embedEnabled, setEmbedEnabled]     = useState(false)
+  const [embedEnabledSaving, setEmbedEnabledSaving] = useState(false)
+  const [embedModel, setEmbedModel]         = useState('')
+  const [embedModelSaving, setEmbedModelSaving] = useState(false)
+  const [embedActing, setEmbedActing]       = useState(false)
+
   const [tpsHistory, setTpsHistory]             = useState<number[]>(_tpsHistory)
   const [promptTpsHistory, setPromptTpsHistory] = useState<number[]>(_promptTpsHistory)
   const wasRunningRef = useRef(_wasRunning)
@@ -239,7 +247,11 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
       if (cfg.atlasEngineMlock !== undefined) setMlock(cfg.atlasEngineMlock)
       if (cfg.atlasEngineRouterModel) setRouterModel(cfg.atlasEngineRouterModel)
       if (cfg.atlasEngineDraftModel) setDraftModel(cfg.atlasEngineDraftModel)
+      if (cfg.atlasEmbedEnabled !== undefined) setEmbedEnabled(!!cfg.atlasEmbedEnabled)
+      if (cfg.atlasEmbedModel) setEmbedModel(cfg.atlasEmbedModel)
     }).catch(() => {})
+
+    api.engineEmbedStatus().then((s: any) => setEmbedStatus(s)).catch(() => {})
 
     // Fetch latest llama.cpp release tag from GitHub.
     fetch('https://api.github.com/repos/ggml-org/llama.cpp/releases/latest')
@@ -348,6 +360,37 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
     } finally {
       setRouterModelSaving(false)
     }
+  }
+
+  const handleEmbedEnabledChange = async (enabled: boolean) => {
+    setEmbedEnabled(enabled)
+    setEmbedEnabledSaving(true)
+    try {
+      await api.updateConfig({ atlasEmbedEnabled: enabled } as any)
+      if (enabled && embedModel) {
+        await api.engineEmbedStart(embedModel)
+        setEmbedStatus(await api.engineEmbedStatus())
+      } else if (!enabled) {
+        await api.engineEmbedStop().catch(() => {})
+        setEmbedStatus(await api.engineEmbedStatus())
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Embed sidecar operation failed.')
+    } finally { setEmbedEnabledSaving(false) }
+  }
+
+  const handleEmbedModelChange = async (model: string) => {
+    setEmbedModel(model)
+    setEmbedModelSaving(true)
+    try {
+      await api.updateConfig({ atlasEmbedModel: model } as any)
+      if (embedEnabled && model) {
+        await api.engineEmbedStart(model)
+        setEmbedStatus(await api.engineEmbedStatus())
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Embed model change failed.')
+    } finally { setEmbedModelSaving(false) }
   }
 
   const handleStart = async (modelName: string) => {
@@ -841,6 +884,88 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
                     </option>
                   )
                 })}
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Embedding Sidecar card ─────────────────────────────────────────── */}
+      <div>
+        <div class="section-label">Embedding Sidecar</div>
+        <div class="card">
+          {/* Enable toggle */}
+          <div class="settings-row">
+            <div class="settings-label-col">
+              <div class="settings-label">Local embedding</div>
+              <div class="settings-sublabel">
+                Runs <strong>nomic-embed-text-v1.5</strong> via llama-server on a dedicated port.
+                When enabled, all memory embeddings use the local model — no API cost,
+                works with any chat provider including Anthropic.
+                {embedStatus?.running && (
+                  <span style={{ color: 'var(--accent)', marginLeft: 6 }}>● Running on :{embedStatus.port}</span>
+                )}
+              </div>
+            </div>
+            <div class="settings-field">
+              <label class="toggle">
+                <input
+                  type="checkbox"
+                  checked={embedEnabled}
+                  disabled={embedEnabledSaving || !embedStatus?.binaryReady}
+                  onChange={e => handleEmbedEnabledChange((e.target as HTMLInputElement).checked)}
+                />
+                <span class="toggle-slider" />
+              </label>
+              {!embedStatus?.binaryReady && (
+                <div class="settings-sublabel" style={{ marginTop: 4 }}>
+                  Requires the Engine LM binary — install it above first.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div class="settings-divider" />
+
+          {/* Model picker */}
+          <div class="settings-row">
+            <div class="settings-label-col">
+              <div class="settings-label">Embedding model</div>
+              <div class="settings-sublabel">
+                Select a downloaded GGUF embedding model.
+                Download <strong>nomic-embed-text-v1.5.Q4_K_M.gguf</strong> via the model
+                downloader above (≈80 MB, 768-dim, 8K context).
+              </div>
+            </div>
+            <div class="settings-field">
+              <select
+                class="input"
+                value={embedModel}
+                onChange={e => handleEmbedModelChange((e.target as HTMLSelectElement).value)}
+                disabled={embedModelSaving}
+              >
+                <option value="">Select a model…</option>
+                {models.filter(m => m.name.toLowerCase().includes('embed')).map(m => {
+                  const { display, quant } = parseModelInfo(m.name)
+                  return (
+                    <option key={m.name} value={m.name}>
+                      {display}{quant ? ` · ${quant}` : ''} · {m.sizeHuman}
+                    </option>
+                  )
+                })}
+                {models.filter(m => !m.name.toLowerCase().includes('embed')).length > 0 && (
+                  <>
+                    <option disabled>── Other models ──</option>
+                    {models.filter(m => !m.name.toLowerCase().includes('embed')).map(m => {
+                      const { display, quant } = parseModelInfo(m.name)
+                      return (
+                        <option key={m.name} value={m.name}>
+                          {display}{quant ? ` · ${quant}` : ''} · {m.sizeHuman}
+                        </option>
+                      )
+                    })}
+                  </>
+                )}
               </select>
             </div>
           </div>

@@ -24,6 +24,7 @@ type TargetType string
 const (
 	TargetSkill    TargetType = "skill"
 	TargetWorkflow TargetType = "workflow"
+	TargetAgent    TargetType = "agent"
 	TargetCommand  TargetType = "command"
 )
 
@@ -192,6 +193,9 @@ func automationToRecord(row storage.AutomationRow) Record {
 		case strings.HasPrefix(rawTarget, "skill:"):
 			target = ExecutableTarget{Type: TargetSkill, Ref: strings.TrimSpace(strings.TrimPrefix(rawTarget, "skill:"))}
 			requiredCapabilities = append(requiredCapabilities, "skill:"+target.Ref)
+		case strings.HasPrefix(rawTarget, "agent:"):
+			target = ExecutableTarget{Type: TargetAgent, Ref: strings.TrimSpace(strings.TrimPrefix(rawTarget, "agent:"))}
+			requiredCapabilities = append(requiredCapabilities, "agent:"+target.Ref)
 		case strings.HasPrefix(rawTarget, "command:"):
 			target = ExecutableTarget{Type: TargetCommand, Ref: strings.TrimSpace(strings.TrimPrefix(rawTarget, "command:"))}
 		default:
@@ -335,6 +339,8 @@ func executableTarget(raw any) ExecutableTarget {
 	switch targetType {
 	case string(TargetWorkflow):
 		return ExecutableTarget{Type: TargetWorkflow, Ref: ref}
+	case string(TargetAgent):
+		return ExecutableTarget{Type: TargetAgent, Ref: ref}
 	case string(TargetCommand):
 		return ExecutableTarget{Type: TargetCommand, Ref: ref}
 	case "custom_skill", string(TargetSkill):

@@ -189,7 +189,7 @@ The native companion app should not own the canonical storage model. It may call
 
 ## Memories Table
 
-The `memories` table is the primary long-term memory store. It is queried before every agent turn via BM25 FTS5 search and updated non-blocking after each turn.
+The `memories` table is the primary long-term memory store. It is queried before every agent turn via hybrid BM25 + vector recall and updated non-blocking after each turn.
 
 ```sql
 CREATE TABLE memories (
@@ -208,7 +208,10 @@ CREATE TABLE memories (
   related_conversation_id TEXT,
   last_retrieved_at      TEXT,                   -- ISO8601, updated on each recall
   retrieval_count        INTEGER NOT NULL DEFAULT 0,
-  valid_until            TEXT                    -- ISO8601; NULL = active, past = invalidated (contradicted)
+  valid_until            TEXT,                   -- ISO8601; NULL = active, past = invalidated (contradicted)
+  embedding              BLOB,                   -- JSON float32 array (nomic / OpenAI / Gemini)
+  embedding_model        TEXT,                   -- model ID used to produce the embedding
+  embedding_at           TEXT                    -- ISO8601 timestamp of last embed
 );
 
 -- FTS5 virtual table kept in sync via INSERT/UPDATE/DELETE triggers
@@ -222,8 +225,57 @@ CREATE VIRTUAL TABLE memories_fts USING fts5(
 **Key behaviors:**
 - `valid_until` — set to `now` when a memory is contradicted by the dream cycle (opinion: `contradict`). Excluded from all recall queries.
 - `last_retrieved_at` + `retrieval_count` — updated each time `RelevantMemories()` returns the memory. Used by the dream cycle to identify never-retrieved memories for pruning.
-- `memories_fts` — BM25 full-text index on `title`, `content`, `tags_json`. Recall query: OR of all keywords extracted from the user message, filtered to active memories (`valid_until IS NULL OR valid_until > now`).
+- `memories_fts` — BM25 full-text index on `title`, `content`, `tags_json`. Used as the candidate selection stage before vector re-ranking.
+- `embedding` — stored as a JSON float32 array. Written asynchronously after every `SaveMemory`/`UpdateMemory` call via `asyncEmbed`. Nomic task prefix `search_document:` applied at write time.
 - Commitment memories (`category = 'commitment'`) receive +0.20 importance boost in `RelevantMemories()` so they always surface first in the system prompt.
+
+**Retrieval pipeline (`RelevantMemories`):**
+1. FTS5 BM25 search selects top-50 candidates
+2. `normalizeBM25` maps raw FTS5 `rank` (negative, more negative = better) to [0, 1]
+3. If `queryVec` present (HyDE path): cosine re-rank over candidate embeddings
+4. Hybrid score: `cosine×0.45 + bm25×0.25 + importance×0.20 + recency×0.10 − diversity`
+5. Without vector: `bm25×0.50 + importance×0.30 + recency×0.20 − diversity`
+
+**HyDE (Hypothetical Document Embedding):** `internal/memory/recall.go` generates a hypothetical memory sentence from the user query, embeds it with `search_query:` prefix, and passes the vector to `RelevantMemories`. 4-second timeout; falls back to nil vector (BM25-only) on failure.
+
+## Entity Knowledge Graph
+
+Two additive tables sit alongside `memories` to capture relationships between named entities extracted from conversation turns.
+
+```sql
+CREATE TABLE memory_entities (
+  entity_id     TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  entity_type   TEXT NOT NULL,   -- person|place|organization|concept|technology|event|other
+  first_seen    TEXT NOT NULL,   -- ISO8601
+  last_seen     TEXT NOT NULL,   -- ISO8601; bumped on every UpsertEntity call
+  embedding     BLOB,            -- JSON float32 array for vector-nearest search
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+-- Unique constraint enables upsert-by-identity
+CREATE UNIQUE INDEX idx_entities_name_type ON memory_entities(name, entity_type);
+
+CREATE TABLE memory_edges (
+  edge_id          TEXT PRIMARY KEY,
+  source_entity    TEXT NOT NULL REFERENCES memory_entities(entity_id),
+  target_entity    TEXT NOT NULL REFERENCES memory_entities(entity_id),
+  relation         TEXT NOT NULL,   -- snake_case verb phrase: works_at, uses, located_in, part_of …
+  valid_from       TEXT NOT NULL,   -- ISO8601
+  valid_until      TEXT,            -- NULL = currently true; set by SupersedeEdge when fact changes
+  confidence       REAL NOT NULL DEFAULT 1.0,
+  source_memory_id TEXT             -- conversation ID that produced this edge
+);
+CREATE INDEX idx_edges_source_valid ON memory_edges(source_entity, valid_until);
+CREATE INDEX idx_edges_target       ON memory_edges(target_entity);
+```
+
+**Key behaviors:**
+- `UpsertEntity` — INSERT or bump `last_seen`; returns the entity_id. Entity embedding stored asynchronously via `UpdateEntityEmbedding`.
+- `SupersedeEdge` — sets `valid_until = now` on any currently-valid edge with the same source/target/relation before inserting a new one. Preserves temporal history rather than overwriting.
+- `TraverseEntityGraph(seedIDs, maxHops)` — BFS over valid edges (valid_until IS NULL); returns all edges reachable within maxHops hops.
+- `FindNearestEntities(queryVec, limit)` — cosine scan over entity embeddings; falls back to recency order when embeddings absent.
+- Dream cycle Phase 1 calls `PruneExpiredEdges` (closes edges whose endpoints were deleted). Dream cycle Phase 2 calls `DeduplicateEntities` (merges duplicate name+type nodes, repoints all edges to the oldest survivor).
+- `<entity_context>` block is injected into the system prompt alongside `<recalled_memories>` when a HyDE query vector is available.
 
 ## Non-Goals
 

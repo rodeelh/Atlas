@@ -176,6 +176,29 @@ func main() {
 	// Shares the same binary and models dir as the primary engine; just a different port + model.
 	routerMgr := engine.NewManager(config.AtlasInstallDir(), config.ModelsDir())
 
+	// Embedding sidecar — llama-server in --embedding mode (nomic-embed-text-v1.5).
+	// Runs on a dedicated port (default 11987) and is preferred over the chat provider's
+	// embedding API when enabled. Allows Anthropic + local users to get memory embeddings.
+	embedMgr := engine.NewEmbedManager(config.AtlasInstallDir(), config.ModelsDir())
+	if cfg.AtlasEmbedEnabled && cfg.AtlasEmbedModel != "" {
+		embedPort := cfg.AtlasEmbedPort
+		if embedPort <= 0 {
+			embedPort = 11988
+		}
+		go func() {
+			if err := embedMgr.Start(cfg.AtlasEmbedModel, embedPort); err != nil {
+				logstore.Write("warn", "embed sidecar start failed", map[string]string{"error": err.Error()})
+				return
+			}
+			if err := embedMgr.WaitUntilReady(embedPort, 60*time.Second); err != nil {
+				logstore.Write("warn", "embed sidecar not ready", map[string]string{"error": err.Error()})
+				return
+			}
+			agent.SetEmbedSidecarURL(embedMgr.BaseURL())
+			logstore.Write("info", "embed sidecar ready", map[string]string{"url": embedMgr.BaseURL()})
+		}()
+	}
+
 	engineMgr.SetIdleTimeout(60 * time.Minute) // eject primary model after 60 min idle
 	routerMgr.SetIdleTimeout(12 * time.Hour)   // eject router model after 12 hr idle
 	engineMgr.SetMlock(cfg.AtlasEngineMlock)   // pin model in RAM (configurable via UI)
@@ -313,7 +336,7 @@ func main() {
 	if err := moduleRegistry.Register(apiValidationModule); err != nil {
 		log.Fatalf("Atlas: register api validation module: %v", err)
 	}
-	engineModule := enginemodule.New(engineMgr, routerMgr, cfgStore).WithMLX(mlxMgr, mlxRouterMgr)
+	engineModule := enginemodule.New(engineMgr, routerMgr, cfgStore).WithMLX(mlxMgr, mlxRouterMgr).WithEmbed(embedMgr)
 	if err := moduleRegistry.Register(engineModule); err != nil {
 		log.Fatalf("Atlas: register engine module: %v", err)
 	}

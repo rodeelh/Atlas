@@ -183,6 +183,7 @@ func ExtractAndPersist(
 			upd.UpdatedAt = now
 			if db.UpdateMemory(upd) == nil { //nolint:errcheck
 				updated++
+				asyncEmbed(ctx, provider, db, upd.ID, agent.NomicPrefixDocument+upd.Title+": "+upd.Content)
 			}
 		} else {
 			row := storage.MemoryRow{
@@ -202,6 +203,7 @@ func ExtractAndPersist(
 			}
 			if db.SaveMemory(row) == nil { //nolint:errcheck
 				saved++
+				asyncEmbed(ctx, provider, db, row.ID, agent.NomicPrefixDocument+row.Title+": "+row.Content)
 			}
 		}
 	}
@@ -220,6 +222,11 @@ func ExtractAndPersist(
 	hasToolResults := len(toolResultSummaries) > 0
 	if (!hadExplicit || hasToolResults) && provider.Type != "" {
 		extractWithLLM(ctx, provider, userMsg, assistantMsg, toolSummaries, toolResultSummaries, convID, db)
+	}
+
+	// Stage 3: entity + relation extraction (additive, non-blocking).
+	if provider.Type != "" && (userMsg != "" || assistantMsg != "") {
+		extractEntitiesNonBlocking(ctx, provider, userMsg, assistantMsg, convID, db)
 	}
 }
 
@@ -818,4 +825,34 @@ func newMemoryID() string {
 	b := make([]byte, 16)
 	rand.Read(b) //nolint:errcheck
 	return hex.EncodeToString(b)
+}
+
+// asyncEmbed calls the provider embedding API in a background goroutine and
+// stores the result on the memory row. It is a best-effort operation — any
+// error is silently dropped so extraction is never blocked by embed failures.
+func asyncEmbed(ctx context.Context, provider agent.ProviderConfig, db *storage.DB, memID, text string) {
+	if provider.Type == "" || memID == "" || text == "" {
+		return
+	}
+	go func() {
+		vec, err := agent.Embed(context.WithoutCancel(ctx), provider, text)
+		if err != nil || len(vec) == 0 {
+			return
+		}
+		db.UpdateMemoryEmbedding(memID, embedModelName(provider), vec) //nolint:errcheck
+	}()
+}
+
+// embedModelName returns the embedding model identifier for a given provider,
+// used to tag the embedding_model column so stale vectors can be detected if
+// the provider changes.
+func embedModelName(p agent.ProviderConfig) string {
+	switch p.Type {
+	case agent.ProviderOpenAI, agent.ProviderOpenRouter:
+		return "text-embedding-3-small"
+	case agent.ProviderGemini:
+		return "text-embedding-004"
+	default:
+		return ""
+	}
 }

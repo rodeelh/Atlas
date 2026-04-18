@@ -230,6 +230,11 @@ func phasePrune(db *storage.DB) int {
 	if pruned > 0 {
 		logstore.Write("info", fmt.Sprintf("Dream: pruned %d stale memories", pruned), nil)
 	}
+	// Also close dangling entity edges whose endpoints no longer exist.
+	prunedEdges := db.PruneExpiredEdges()
+	if prunedEdges > 0 {
+		logstore.Write("info", fmt.Sprintf("Dream: closed %d dangling entity edges", prunedEdges), nil)
+	}
 	return pruned
 }
 
@@ -355,6 +360,11 @@ func phaseMerge(db *storage.DB) int {
 
 	if merged > 0 {
 		logstore.Write("info", fmt.Sprintf("Dream: merged %d duplicate memories", merged), nil)
+	}
+	// Deduplicate entity nodes that share the same name+type.
+	dedupedEntities := db.DeduplicateEntities()
+	if dedupedEntities > 0 {
+		logstore.Write("info", fmt.Sprintf("Dream: deduplicated %d entity nodes", dedupedEntities), nil)
 	}
 	return merged
 }

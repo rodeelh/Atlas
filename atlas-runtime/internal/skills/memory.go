@@ -136,7 +136,7 @@ func (r *Registry) registerMemory() {
 				return "", fmt.Errorf("memory.recall: query is required")
 			}
 
-			mems, err := r.db.RelevantMemories(p.Query, 8)
+			mems, err := r.db.RelevantMemories(p.Query, 8, nil)
 			if err != nil {
 				return "", fmt.Errorf("memory.recall: db query: %w", err)
 			}

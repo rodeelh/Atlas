@@ -30,6 +30,23 @@ Keep the Engine LM tab up to date with the latest models and tooling.
 
 ## UI Bugs
 
+## v1.5 — Agent-Backed Automation Polish
+
+These are the follow-on improvements after the v1 backend support for automations that target team members lands. Keep v1 focused on reliable create/update/run behavior; use this section for the “feels magical” layer.
+
+- Team HQ scheduling affordance:
+  Add a first-class “schedule this team member” path from Team HQ so users can create and inspect automations without dropping into the generic automations surface.
+- Structured assignment output:
+  Let agent-backed automations define expected output style and structure, such as brief summary, findings list, executive digest, or richer report formatting tuned to the delivery channel.
+- Agent preflight checks:
+  Validate target agent existence, enabled/paused state, autonomy compatibility, and missing dependencies before saving or enabling an automation.
+- Dry-run / preview before enable:
+  Show which team member will run, what task they will receive, and where the result will be delivered before the automation is activated.
+- Richer run artifacts and history:
+  Persist friendly team member name, delegated task ID, execution mode, and delivery metadata so debugging and UI timelines feel first-class.
+- Delivery-aware result shaping:
+  Adapt final formatting for chat destinations like Telegram, WhatsApp, Slack, and Discord so scheduled agent results feel intentionally composed for the destination.
+
 ### Browser STT Bridge → Whisper Runtime Migration
 
 The chat composer now supports browser-native speech-to-text as a temporary bridge for voice input validation. Keep the current UX, but replace the transcription source with a runtime-owned local Whisper pipeline once the interaction model feels right.
@@ -224,6 +241,19 @@ These are high-potential improvements to Atlas's memory and personality systems 
 **Risk and deferral rationale:** This adds latency, cost, and provider lock-in. At Atlas's current scale (dozens to low hundreds of memories), keyword matching from T1.1 may be sufficient. Only pursue this if keyword retrieval proves inadequate after real-world usage. If implemented, add a config flag (`EnableEmbeddingRetrieval`) that defaults to `false`.
 
 **Prior art:** Mem0 (hybrid vector + graph + key-value), Zep (embedding-enhanced retrieval achieving 94.8% on Deep Memory Retrieval benchmark).
+
+---
+
+## Memory — Embedding-Based Retrieval Roadmap ✅ SHIPPED
+
+All 5 phases implemented and shipped (2026-04-18). The memory system now matches or exceeds Mem0/Zep/OpenClaw on retrieval quality while preserving Atlas's unique confidence-lifecycle and commitment-boosting advantages.
+
+**What shipped:**
+- **Phase 1** — Embedding column on `memories` (`embedding BLOB`, `embedding_model`, `embedding_at`); async embed after every `SaveMemory`/`UpdateMemory`; cosine re-rank over FTS5 candidates (`internal/agent/embed.go`, `internal/storage/db.go`)
+- **Phase 2** — HyDE recall: LLM generates a hypothetical memory sentence, embeds it as the search vector instead of the raw user query (`internal/memory/recall.go`); injected via `chat/pipeline.go`
+- **Phase 3** — Hybrid scoring formula: `cosine×0.45 + bm25_norm×0.25 + importance×0.20 + recency×0.10 − diversity`; FTS5 native BM25 `rank` column replaces hand-rolled keyword overlap (`internal/storage/db.go`)
+- **Phase 4** — Local embed sidecar: llama.cpp in `--embedding` mode (nomic-embed-text-v1.5 Q4_K_M, port 11988); atomic URL override so all `Embed()` calls prefer sidecar; Engine UI toggle (`internal/engine/embed_manager.go`, `internal/agent/embed.go`, `atlas-web/src/screens/AtlasEngine.tsx`)
+- **Phase 5** — Entity extraction + temporal knowledge graph: `memory_entities` + `memory_edges` tables; `extractEntitiesNonBlocking` Stage 3 after each turn; `<entity_context>` block injected via BFS graph traversal; dream cycle prunes/deduplicates entity nodes (`internal/storage/db.go`, `internal/memory/llm.go`, `internal/chat/prompt.go`, `internal/mind/dream.go`)
 
 ---
 

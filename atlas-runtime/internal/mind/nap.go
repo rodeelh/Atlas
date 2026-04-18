@@ -310,7 +310,7 @@ func gatherNapInputs(deps NapDeps) (NapInputs, string, error) {
 		if len(query) > 2000 {
 			query = query[:2000]
 		}
-		memories, merr := deps.DB.RelevantMemories(query, napMemoryCount)
+		memories, merr := deps.DB.RelevantMemories(query, napMemoryCount, nil)
 		if merr == nil {
 			inputs.RelevantMemories = memories
 		}

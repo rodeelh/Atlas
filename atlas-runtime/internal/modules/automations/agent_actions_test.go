@@ -5,11 +5,30 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"atlas-runtime-go/internal/features"
 	"atlas-runtime-go/internal/platform"
 	"atlas-runtime-go/internal/storage"
 )
+
+func seedAgentDefinition(t *testing.T, db *storage.DB, id, name string) {
+	t.Helper()
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := db.SaveAgentDefinition(storage.AgentDefinitionRow{
+		ID:                id,
+		Name:              name,
+		Role:              "Researcher",
+		Mission:           "Own scheduled specialist tasks",
+		AllowedSkillsJSON: `["web.search"]`,
+		Autonomy:          "assistive",
+		IsEnabled:         true,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}); err != nil {
+		t.Fatalf("SaveAgentDefinition: %v", err)
+	}
+}
 
 func TestAgentUpsertCreatesWhenMissing(t *testing.T) {
 	module := New(t.TempDir())
@@ -241,6 +260,147 @@ func TestAgentUpdateCanConvertAutomationToWorkflowTarget(t *testing.T) {
 	}
 	if item.WorkflowInputValues["city"] != "Miami" {
 		t.Fatalf("unexpected workflow inputs: %+v", item.WorkflowInputValues)
+	}
+}
+
+func TestAgentUpsertCreatesAgentBackedAutomation(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	seedAgentDefinition(t, db, "scout", "Research Scout")
+
+	host := platform.NewHost(
+		stubConfig{},
+		platform.NewSQLiteStorage(db),
+		&stubAgentRuntime{},
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(8),
+	)
+
+	module := New(dir)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	args, err := json.Marshal(map[string]any{
+		"name":     "Weekly Scout Check-In",
+		"agentID":  "Research Scout",
+		"task":     "Review the latest market shifts and summarize the top changes.",
+		"goal":     "Surface the three most important changes.",
+		"schedule": "every Monday at 09:00",
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	res, err := module.agentUpsert(context.Background(), args)
+	if err != nil {
+		t.Fatalf("agentUpsert(create agent target): %v", err)
+	}
+	if got := res.Artifacts["operation"]; got != "created" {
+		t.Fatalf("operation = %v, want created", got)
+	}
+	if res.Summary != `Automation "Weekly Scout Check-In" created and linked to team member "Research Scout".` {
+		t.Fatalf("unexpected summary: %q", res.Summary)
+	}
+	artifact, ok := res.Artifacts["automation"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected automation artifact map, got %#v", res.Artifacts["automation"])
+	}
+	if artifact["targetDisplayName"] != "Research Scout" {
+		t.Fatalf("unexpected targetDisplayName: %#v", artifact["targetDisplayName"])
+	}
+
+	item, err := module.resolveAutomation(automationRefArgs{Name: "Weekly Scout Check-In"}, false)
+	if err != nil {
+		t.Fatalf("resolveAutomation: %v", err)
+	}
+	if item.ExecutableTarget == nil {
+		t.Fatalf("expected agent target, got nil")
+	}
+	if item.ExecutableTarget.Type != "agent" || item.ExecutableTarget.Ref != "scout" {
+		t.Fatalf("unexpected target: %+v", item.ExecutableTarget)
+	}
+	if item.Prompt != "Review the latest market shifts and summarize the top changes." {
+		t.Fatalf("unexpected stored task prompt: %q", item.Prompt)
+	}
+	if item.WorkflowInputValues["goal"] != "Surface the three most important changes." {
+		t.Fatalf("unexpected agent goal inputs: %+v", item.WorkflowInputValues)
+	}
+}
+
+func TestAgentUpdateCanConvertAutomationToAgentTarget(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	seedAgentDefinition(t, db, "scout", "Research Scout")
+
+	host := platform.NewHost(
+		stubConfig{},
+		platform.NewSQLiteStorage(db),
+		&stubAgentRuntime{},
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(8),
+	)
+
+	module := New(dir)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	created, err := module.createDefinition(agentActionTestItem("Daily Weather", "Send me the Orlando forecast.", "daily 08:00"))
+	if err != nil {
+		t.Fatalf("createDefinition: %v", err)
+	}
+
+	args, err := json.Marshal(map[string]any{
+		"id":      created.ID,
+		"agentID": "scout",
+		"task":    "Review tomorrow's travel weather and flag anything risky.",
+		"goal":    "Keep me aware of weather-related issues.",
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	res, err := module.agentUpdate(context.Background(), args)
+	if err != nil {
+		t.Fatalf("agentUpdate(agent target): %v", err)
+	}
+	if res.Summary != `Automation "Daily Weather" updated and linked to team member "Research Scout".` {
+		t.Fatalf("unexpected summary: %q", res.Summary)
+	}
+	artifact, ok := res.Artifacts["automation"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected automation artifact map, got %#v", res.Artifacts["automation"])
+	}
+	if artifact["targetDisplayName"] != "Research Scout" {
+		t.Fatalf("unexpected targetDisplayName: %#v", artifact["targetDisplayName"])
+	}
+
+	item, err := module.resolveAutomation(automationRefArgs{ID: created.ID}, false)
+	if err != nil {
+		t.Fatalf("resolveAutomation: %v", err)
+	}
+	if item.ExecutableTarget == nil {
+		t.Fatalf("expected agent target, got nil")
+	}
+	if item.ExecutableTarget.Type != "agent" || item.ExecutableTarget.Ref != "scout" {
+		t.Fatalf("unexpected target: %+v", item.ExecutableTarget)
+	}
+	if item.Prompt != "Review tomorrow's travel weather and flag anything risky." {
+		t.Fatalf("unexpected task prompt: %q", item.Prompt)
+	}
+	if item.WorkflowInputValues["goal"] != "Keep me aware of weather-related issues." {
+		t.Fatalf("unexpected goal inputs: %+v", item.WorkflowInputValues)
 	}
 }
 

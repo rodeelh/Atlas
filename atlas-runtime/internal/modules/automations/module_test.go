@@ -822,6 +822,116 @@ func TestModule_SkillTargetAutomationExecutesSkillDirectly(t *testing.T) {
 	}
 }
 
+func TestModule_AgentTargetAutomationExecutesDelegationAndDelivers(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+	seedCommSession(t, db, "telegram", "123")
+	seedAgentDefinition(t, db, "scout", "Research Scout")
+
+	if err := features.AppendGremlin(dir, features.GremlinItem{
+		Name:        "Scout Automation",
+		Emoji:       "⚡",
+		Prompt:      "Research the top three market changes and summarize them.",
+		ScheduleRaw: "daily 09:00",
+		IsEnabled:   true,
+		SourceType:  "manual",
+		CreatedAt:   "2026-04-05",
+		ExecutableTarget: &features.ExecutableTarget{
+			Type: "agent",
+			Ref:  "scout",
+		},
+		WorkflowInputValues: map[string]string{
+			"goal": "Keep the update concise and decision-ready.",
+		},
+		CommunicationDestination: &features.CommunicationDestination{
+			ID:        "telegram:123:",
+			Platform:  "telegram",
+			ChannelID: "123",
+		},
+	}); err != nil {
+		t.Fatalf("AppendGremlin: %v", err)
+	}
+	items := features.ParseGremlins(dir)
+	if len(items) != 1 {
+		t.Fatalf("expected one automation, got %d", len(items))
+	}
+
+	registry := skills.NewRegistry(dir, db, nil)
+	registry.RegisterExternal(skills.SkillEntry{
+		Def: skills.ToolDef{
+			Name:        "team.delegate",
+			Description: "Stub team delegation for automation tests",
+		},
+		PermLevel:   "execute",
+		ActionClass: skills.ActionClassLocalWrite,
+		FnResult: func(_ context.Context, args json.RawMessage) (skills.ToolResult, error) {
+			var payload map[string]any
+			if err := json.Unmarshal(args, &payload); err != nil {
+				return skills.ToolResult{}, err
+			}
+			if payload["agentID"] != "scout" {
+				t.Fatalf("unexpected agent payload: %#v", payload)
+			}
+			if payload["task"] != "Research the top three market changes and summarize them." {
+				t.Fatalf("unexpected task payload: %#v", payload)
+			}
+			if payload["goal"] != "Keep the update concise and decision-ready." {
+				t.Fatalf("unexpected goal payload: %#v", payload)
+			}
+			return skills.OKResult("Research Scout completed the market scan.", map[string]any{
+				"taskID":           "teamtask-123",
+				"agentID":          "scout",
+				"agentDisplayName": "Research Scout",
+				"status":           "completed",
+			}), nil
+		},
+	})
+
+	delivery := &stubDelivery{}
+	host := platform.NewHost(
+		stubConfig{},
+		platform.NewSQLiteStorage(db),
+		nil,
+		platform.NoopContextAssembler{},
+		platform.NewInProcessBus(8),
+	)
+	module := New(dir)
+	module.SetSkillRegistry(registry)
+	module.SetDeliveryService(delivery)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	result, err := module.runAutomationSync(context.Background(), items[0].ID, "agent")
+	if err != nil {
+		t.Fatalf("runAutomationSync: %v", err)
+	}
+	if result.Status != "completed" {
+		t.Fatalf("expected completed agent automation, got %+v", result)
+	}
+	if result.Output != "Research Scout completed the market scan." {
+		t.Fatalf("unexpected automation output: %q", result.Output)
+	}
+	called, dest, text, _ := delivery.Snapshot()
+	if !called || dest.Platform != "telegram" || text != "Research Scout completed the market scan." {
+		t.Fatalf("expected delivered agent output, got called=%v dest=%+v text=%q", called, dest, text)
+	}
+	runs, err := db.ListGremlinRuns(items[0].ID, 10)
+	if err != nil {
+		t.Fatalf("ListGremlinRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Output == nil || *runs[0].Output != "Research Scout completed the market scan." {
+		t.Fatalf("unexpected run rows: %+v", runs)
+	}
+	if runs[0].ArtifactsJSON == nil || !strings.Contains(*runs[0].ArtifactsJSON, `"type":"agent"`) || !strings.Contains(*runs[0].ArtifactsJSON, `"taskID":"teamtask-123"`) {
+		t.Fatalf("expected agent execution artifacts, got %+v", runs[0].ArtifactsJSON)
+	}
+}
+
 func TestModule_ListAutomationsReturnsCurrentShape(t *testing.T) {
 	dir := t.TempDir()
 	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))

@@ -201,6 +201,17 @@ type MultiAgentConfig struct {
 	WorkerMaxIterations           int  `json:"workerMaxIterations"`
 }
 
+// EmbedSidecarConfig groups the local embedding sidecar settings.
+// The sidecar runs llama-server in --embedding mode with a GGUF embedding
+// model (default: nomic-embed-text-v1.5.Q4_K_M.gguf) on a dedicated port.
+// When enabled, all memory embedding calls use the sidecar regardless of
+// which chat provider is active — including Anthropic (no embedding API).
+type EmbedSidecarConfig struct {
+	AtlasEmbedEnabled bool   `json:"atlasEmbedEnabled"` // toggle the embedding sidecar
+	AtlasEmbedPort    int    `json:"atlasEmbedPort"`    // default 11988
+	AtlasEmbedModel   string `json:"atlasEmbedModel"`   // GGUF filename under models dir
+}
+
 // RuntimeConfigSnapshot is the portable config contract shared between the
 // Swift and Go runtimes. All JSON keys are identical to the Swift CodingKeys.
 //
@@ -241,6 +252,7 @@ type RuntimeConfigSnapshot struct {
 	VoiceAudioConfig
 	ThoughtsConfig
 	MultiAgentConfig
+	EmbedSidecarConfig
 }
 
 // EffectiveContextWindow returns the model's context window in tokens for the

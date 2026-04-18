@@ -5,6 +5,7 @@ package storage
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -425,16 +426,61 @@ func (db *DB) migrate() error {
 			ON mind_telemetry(ts DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_mind_telemetry_thought
 			ON mind_telemetry(thought_id) WHERE thought_id IS NOT NULL`,
+
+		// memory_entities — named entities extracted from memories.
+		// The unique index on (name, entity_type) enables upsert-by-identity:
+		// INSERT OR IGNORE + UPDATE last_seen keeps one canonical node per entity.
+		`CREATE TABLE IF NOT EXISTS memory_entities (
+			entity_id     TEXT PRIMARY KEY,
+			name          TEXT NOT NULL,
+			entity_type   TEXT NOT NULL,
+			first_seen    TEXT NOT NULL,
+			last_seen     TEXT NOT NULL,
+			embedding     BLOB,
+			metadata_json TEXT NOT NULL DEFAULT '{}'
+		)`,
+		// No UNIQUE INDEX on (name, entity_type) — uniqueness is enforced at the
+		// application level by UpsertEntity's SELECT-before-INSERT logic.
+		// A database-level unique constraint would prevent DeduplicateEntities
+		// from ever finding rows to clean up (making it untestable and the safety
+		// net useless). UpsertEntity is the sole write path for normal operation.
+		`CREATE INDEX IF NOT EXISTS idx_entities_name_type
+			ON memory_entities(name, entity_type)`,
+		`CREATE INDEX IF NOT EXISTS idx_entities_last_seen
+			ON memory_entities(last_seen DESC)`,
+
+		// memory_edges — typed, time-bounded relationships between entities.
+		// valid_until IS NULL means the relationship is currently true.
+		// When a relationship is superseded (e.g. user moves city), valid_until
+		// is stamped and a new edge is inserted — preserving history.
+		`CREATE TABLE IF NOT EXISTS memory_edges (
+			edge_id          TEXT PRIMARY KEY,
+			source_entity    TEXT NOT NULL REFERENCES memory_entities(entity_id),
+			target_entity    TEXT NOT NULL REFERENCES memory_entities(entity_id),
+			relation         TEXT NOT NULL,
+			valid_from       TEXT NOT NULL,
+			valid_until      TEXT,
+			confidence       REAL NOT NULL DEFAULT 1.0,
+			source_memory_id TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_edges_source_valid
+			ON memory_edges(source_entity, valid_until)`,
+		`CREATE INDEX IF NOT EXISTS idx_edges_target
+			ON memory_edges(target_entity)`,
 	}
 
 	// Idempotent migrations for memories columns added after initial creation.
 	// valid_until: ISO8601 timestamp after which a contradicted memory is excluded
 	// from retrieval but preserved for history. NULL = still valid.
+	// embedding/embedding_model/embedding_at: vector stored as JSON float32 array.
 	alterMemories := []string{
 		`ALTER TABLE memories ADD COLUMN valid_until TEXT`,
 		// Backfill FTS5 index for memories that existed before the FTS5 table was added.
 		`INSERT OR IGNORE INTO memories_fts(memory_id, title, content, tags_json)
 		    SELECT memory_id, title, content, tags_json FROM memories`,
+		`ALTER TABLE memories ADD COLUMN embedding BLOB`,
+		`ALTER TABLE memories ADD COLUMN embedding_model TEXT`,
+		`ALTER TABLE memories ADD COLUMN embedding_at TEXT`,
 	}
 
 	// Idempotent migrations for rows added to deferred_executions after its initial creation.
@@ -2693,9 +2739,14 @@ func (db *DB) SaveMemory(r MemoryRow) error {
 
 // UpdateMemory updates the mutable fields of an existing memory row.
 func (db *DB) UpdateMemory(r MemoryRow) error {
+	// Null out embedding_at so any path that changes title/content triggers a
+	// fresh async embed on the next recall cycle. The asyncEmbed goroutines called
+	// by extractors will repopulate it; direct UI edits that don't call asyncEmbed
+	// will also correctly clear the stale vector marker.
 	_, err := db.conn.Exec(
 		`UPDATE memories SET title=?, content=?, confidence=?, importance=?, updated_at=?,
-		 is_user_confirmed=?, is_sensitive=?, tags_json=?, valid_until=? WHERE memory_id=?`,
+		 is_user_confirmed=?, is_sensitive=?, tags_json=?, valid_until=?, embedding_at=NULL
+		 WHERE memory_id=?`,
 		r.Title, r.Content, r.Confidence, r.Importance, r.UpdatedAt,
 		boolToInt(r.IsUserConfirmed), boolToInt(r.IsSensitive),
 		r.TagsJSON, r.ValidUntil, r.ID,
@@ -2712,6 +2763,60 @@ func (db *DB) SetValidUntil(id, until string) error {
 		until, time.Now().UTC().Format(time.RFC3339Nano), id,
 	)
 	return err
+}
+
+// UpdateMemoryEmbedding stores a precomputed embedding vector on an existing
+// memory row. vec is serialised as a JSON float32 array in the embedding BLOB
+// column. Callers should invoke this from a goroutine so it doesn't block the
+// extraction pipeline.
+func (db *DB) UpdateMemoryEmbedding(id, model string, vec []float32) error {
+	data, err := json.Marshal(vec)
+	if err != nil {
+		return err
+	}
+	_, err = db.conn.Exec(
+		`UPDATE memories SET embedding=?, embedding_model=?, embedding_at=? WHERE memory_id=?`,
+		data, model, time.Now().UTC().Format(time.RFC3339Nano), id,
+	)
+	return err
+}
+
+// fetchEmbeddings returns a map of memory_id → float32 vector for the given IDs.
+// Rows with no embedding are omitted from the map. Used by RelevantMemories to
+// cosine re-rank FTS5 candidates when a query vector is available.
+func (db *DB) fetchEmbeddings(ids []string) map[string][]float32 {
+	if len(ids) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	rows, err := db.conn.Query(
+		`SELECT memory_id, embedding FROM memories WHERE memory_id IN (`+
+			strings.Join(placeholders, ",")+`) AND embedding IS NOT NULL`,
+		args...,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := make(map[string][]float32, len(ids))
+	for rows.Next() {
+		var memID string
+		var blob []byte
+		if err := rows.Scan(&memID, &blob); err != nil {
+			continue
+		}
+		var vec []float32
+		if err := json.Unmarshal(blob, &vec); err != nil {
+			continue
+		}
+		out[memID] = vec
+	}
+	return out
 }
 
 // FetchMemory returns a single memory by ID, or nil if not found.
@@ -2807,21 +2912,41 @@ func (db *DB) DeleteStaleMemories(maxAgeDays, unretrievedMaxAgeDays int, minConf
 // FTS5 is used for candidate selection when available, falling back to
 // importance-ordered pre-filter. Invalidated memories (valid_until in the past)
 // are excluded.
-func (db *DB) RelevantMemories(query string, limit int) ([]MemoryRow, error) {
+// RelevantMemories returns up to limit memories ranked by relevance to query.
+//
+// When queryVec is non-nil (a precomputed embedding of the query — optionally
+// generated via HyDE), scoring uses a hybrid formula:
+//
+//	cosine×0.45 + keyword×0.25 + importance×0.20 + recency×0.10 − diversity
+//
+// When queryVec is nil the legacy keyword-dominant formula is used:
+//
+//	keyword×0.50 + importance×0.30 + recency×0.20 − diversity
+//
+// In both modes FTS5 provides the candidate set and commitment memories are
+// importance-boosted and exempt from the diversity penalty.
+func (db *DB) RelevantMemories(query string, limit int, queryVec []float32) ([]MemoryRow, error) {
 	if limit <= 0 {
 		limit = 4
 	}
 	keywords := extractKeywords(query)
-	if len(keywords) == 0 {
+	if len(keywords) == 0 && queryVec == nil {
 		return db.listActiveMemories(limit)
 	}
 
-	// Try FTS5 candidate selection — gives better recall than importance-only pre-filter.
-	// Falls back silently if the FTS5 table is unavailable or the query fails.
-	ftsQuery := strings.Join(keywords, " OR ")
-	all, err := db.ftsSearch(ftsQuery, 50)
+	// FTS5 candidate selection — gives better recall than importance-only pre-filter.
+	// Falls back silently if FTS5 is unavailable or the query produces no results.
+	var all []MemoryRow
+	var rawBM25 map[string]float64 // FTS5 rank values (negative; more negative = better)
+	var err error
+	if len(keywords) > 0 {
+		ftsQuery := strings.Join(keywords, " OR ")
+		all, err = db.ftsSearch(ftsQuery, 50)
+		if err == nil && len(all) > 0 {
+			rawBM25, _ = db.ftsRanks(ftsQuery, 50)
+		}
+	}
 	if err != nil || len(all) == 0 {
-		// Fall back to importance-ordered active memories.
 		all, err = db.listActiveMemories(50)
 		if err != nil {
 			return nil, err
@@ -2829,6 +2954,21 @@ func (db *DB) RelevantMemories(query string, limit int) ([]MemoryRow, error) {
 	}
 	if len(all) == 0 {
 		return nil, nil
+	}
+
+	// Normalize BM25 ranks to [0, 1] across the candidate set.
+	// FTS5 rank is negative; more negative = better match.
+	// Best (most negative) → 1.0, worst (least negative) → 0.0.
+	bm25Norm := normalizeBM25(rawBM25)
+
+	// Fetch stored embeddings for the candidate set when a query vector is present.
+	var embeddings map[string][]float32
+	if queryVec != nil {
+		ids := make([]string, len(all))
+		for i, m := range all {
+			ids[i] = m.ID
+		}
+		embeddings = db.fetchEmbeddings(ids)
 	}
 
 	now := time.Now()
@@ -2840,19 +2980,23 @@ func (db *DB) RelevantMemories(query string, limit int) ([]MemoryRow, error) {
 	var results []scored
 
 	for _, m := range all {
-		// Keyword relevance: fraction of query keywords found in title+content+tags.
-		haystack := strings.ToLower(m.Title + " " + m.Content + " " + m.TagsJSON)
-		hits := 0
-		for _, kw := range keywords {
-			if strings.Contains(haystack, kw) {
-				hits++
+		// BM25 signal: normalized FTS5 rank when available; falls back to keyword
+		// overlap fraction for memories surfaced via listActiveMemories fallback.
+		keywordScore := bm25Norm[m.ID]
+		if len(rawBM25) == 0 && len(keywords) > 0 {
+			haystack := strings.ToLower(m.Title + " " + m.Content + " " + m.TagsJSON)
+			hits := 0
+			for _, kw := range keywords {
+				if strings.Contains(haystack, kw) {
+					hits++
+				}
 			}
+			keywordScore = float64(hits) / float64(len(keywords))
 		}
-		keywordScore := float64(hits) / float64(len(keywords))
 
 		// Time-decayed recency: exponential decay with 7-day half-life.
 		var hoursAge float64
-		if t, err := time.Parse(time.RFC3339Nano, m.UpdatedAt); err == nil {
+		if t, err2 := time.Parse(time.RFC3339Nano, m.UpdatedAt); err2 == nil {
 			hoursAge = now.Sub(t).Hours()
 		}
 		recencyScore := math.Exp(-0.693 * hoursAge / (7.0 * 24.0))
@@ -2863,20 +3007,30 @@ func (db *DB) RelevantMemories(query string, limit int) ([]MemoryRow, error) {
 			importance = math.Min(importance+0.2, 1.0)
 		}
 
-		// Retrieval diversity penalty: if this memory was retrieved very recently
-		// (within the last hour — roughly the last few turns), reduce its score
-		// so fresh, unseen memories can surface. Commitments are exempt.
+		// Retrieval diversity penalty: fades over 1 hour; commitments exempt.
 		diversityPenalty := 0.0
 		if m.Category != "commitment" && m.LastRetrievedAt != nil && *m.LastRetrievedAt != "" {
-			if lastRetr, err := time.Parse(time.RFC3339Nano, *m.LastRetrievedAt); err == nil {
+			if lastRetr, err2 := time.Parse(time.RFC3339Nano, *m.LastRetrievedAt); err2 == nil {
 				hoursSinceRetrieval := now.Sub(lastRetr).Hours()
 				if hoursSinceRetrieval < 1.0 {
-					diversityPenalty = 0.15 * (1.0 - hoursSinceRetrieval) // fades over 1 hour
+					diversityPenalty = 0.15 * (1.0 - hoursSinceRetrieval)
 				}
 			}
 		}
 
-		combined := keywordScore*0.5 + importance*0.3 + recencyScore*0.2 - diversityPenalty
+		var combined float64
+		if queryVec != nil {
+			// Full hybrid: cosine×0.45 + bm25×0.25 + importance×0.20 + recency×0.10
+			cosine := 0.0
+			if vec, ok := embeddings[m.ID]; ok {
+				cosine = cosineSim32(queryVec, vec)
+			}
+			combined = cosine*0.45 + keywordScore*0.25 + importance*0.20 + recencyScore*0.10 - diversityPenalty
+		} else {
+			// BM25-dominant: bm25×0.50 + importance×0.30 + recency×0.20
+			combined = keywordScore*0.5 + importance*0.3 + recencyScore*0.2 - diversityPenalty
+		}
+
 		results = append(results, scored{row: m, score: combined})
 	}
 
@@ -2892,6 +3046,76 @@ func (db *DB) RelevantMemories(query string, limit int) ([]MemoryRow, error) {
 		out[i] = r.row
 	}
 	return out, nil
+}
+
+// ftsRanks queries the memories_fts virtual table for BM25 rank values.
+// Returns a map of memory_id → raw FTS5 rank (negative float; more negative = better).
+// Returns nil on any error — callers treat missing ranks as BM25 unavailable.
+func (db *DB) ftsRanks(ftsQuery string, limit int) (map[string]float64, error) {
+	rows, err := db.conn.Query(
+		`SELECT memory_id, rank FROM memories_fts WHERE memories_fts MATCH ? LIMIT ?`,
+		ftsQuery, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]float64)
+	for rows.Next() {
+		var id string
+		var rank float64
+		if err := rows.Scan(&id, &rank); err != nil {
+			return nil, err
+		}
+		out[id] = rank
+	}
+	return out, rows.Err()
+}
+
+// normalizeBM25 converts a map of raw FTS5 rank values (negative; more negative
+// = better) into [0,1]-normalized scores. Best match → 1.0, worst → 0.0.
+// Returns nil when ranks is empty or nil.
+func normalizeBM25(ranks map[string]float64) map[string]float64 {
+	if len(ranks) == 0 {
+		return nil
+	}
+	minR, maxR := math.MaxFloat64, -math.MaxFloat64
+	for _, r := range ranks {
+		if r < minR {
+			minR = r
+		}
+		if r > maxR {
+			maxR = r
+		}
+	}
+	out := make(map[string]float64, len(ranks))
+	span := minR - maxR // minR < maxR (both negative); span is negative
+	for id, r := range ranks {
+		if span == 0 {
+			out[id] = 0.5
+		} else {
+			out[id] = (r - maxR) / span
+		}
+	}
+	return out
+}
+
+// cosineSim32 computes cosine similarity between two float32 vectors.
+// Returns 0 if either vector is nil, empty, or zero-magnitude.
+func cosineSim32(a, b []float32) float64 {
+	if len(a) == 0 || len(a) != len(b) {
+		return 0
+	}
+	var dot, magA, magB float64
+	for i := range a {
+		ai, bi := float64(a[i]), float64(b[i])
+		dot += ai * bi
+		magA += ai * ai
+		magB += bi * bi
+	}
+	if magA == 0 || magB == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(magA) * math.Sqrt(magB))
 }
 
 // listActiveMemories returns up to limit active memories (valid_until IS NULL or
@@ -2981,6 +3205,376 @@ func extractKeywords(query string) []string {
 		out = append(out, w)
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// Entity Knowledge Graph — memory_entities + memory_edges
+// ---------------------------------------------------------------------------
+
+// EntityRow is a named, typed entity extracted from conversation memories.
+type EntityRow struct {
+	EntityID     string
+	Name         string
+	EntityType   string // person, place, organization, concept, technology, event, other
+	FirstSeen    string
+	LastSeen     string
+	Embedding    []float32 // nil when not yet embedded
+	MetadataJSON string    // arbitrary JSON for future fields
+}
+
+// EdgeRow is a directed, temporal relation between two entities.
+type EdgeRow struct {
+	EdgeID         string
+	SourceEntity   string
+	TargetEntity   string
+	Relation       string  // e.g. "works_at", "uses", "located_in"
+	ValidFrom      string
+	ValidUntil     *string // nil = currently true
+	Confidence     float64
+	SourceMemoryID *string // memory that produced this edge
+}
+
+// UpsertEntity inserts a new entity or bumps last_seen if it already exists.
+// Returns the entity_id (existing or newly created).
+func (db *DB) UpsertEntity(name, entityType, now string) (string, error) {
+	var existing string
+	err := db.conn.QueryRow(
+		`SELECT entity_id FROM memory_entities WHERE name=? AND entity_type=?`,
+		name, entityType,
+	).Scan(&existing)
+	if err == nil {
+		// Already exists — update last_seen.
+		_, uerr := db.conn.Exec(
+			`UPDATE memory_entities SET last_seen=? WHERE entity_id=?`,
+			now, existing,
+		)
+		return existing, uerr
+	}
+	if err != sql.ErrNoRows {
+		return "", err
+	}
+	// New entity.
+	id := fmt.Sprintf("ent_%d", time.Now().UnixNano())
+	_, err = db.conn.Exec(
+		`INSERT INTO memory_entities (entity_id, name, entity_type, first_seen, last_seen, metadata_json)
+		 VALUES (?, ?, ?, ?, ?, '{}')`,
+		id, name, entityType, now, now,
+	)
+	return id, err
+}
+
+// UpdateEntityEmbedding stores the embedding vector for an entity.
+func (db *DB) UpdateEntityEmbedding(entityID string, vec []float32) error {
+	blob, err := json.Marshal(vec)
+	if err != nil {
+		return err
+	}
+	_, err = db.conn.Exec(
+		`UPDATE memory_entities SET embedding=? WHERE entity_id=?`, blob, entityID,
+	)
+	return err
+}
+
+// SaveEdge inserts a new entity relation edge.
+func (db *DB) SaveEdge(e EdgeRow) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO memory_edges
+		 (edge_id, source_entity, target_entity, relation, valid_from, valid_until, confidence, source_memory_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.EdgeID, e.SourceEntity, e.TargetEntity, e.Relation,
+		e.ValidFrom, e.ValidUntil, e.Confidence, e.SourceMemoryID,
+	)
+	return err
+}
+
+// SupersedeEdge closes any currently-valid edges between the same source/target/relation
+// pair by setting valid_until = now. Call before SaveEdge when a fact changes.
+func (db *DB) SupersedeEdge(sourceEntity, targetEntity, relation, now string) error {
+	_, err := db.conn.Exec(
+		`UPDATE memory_edges SET valid_until=?
+		 WHERE source_entity=? AND target_entity=? AND relation=? AND valid_until IS NULL`,
+		now, sourceEntity, targetEntity, relation,
+	)
+	return err
+}
+
+// FindNearestEntities returns up to limit entities ranked by cosine similarity
+// to queryVec. Falls back to returning the most-recently-seen entities when
+// no embeddings are stored yet.
+func (db *DB) FindNearestEntities(queryVec []float32, limit int) ([]EntityRow, error) {
+	rows, err := db.conn.Query(
+		`SELECT entity_id, name, entity_type, first_seen, last_seen, embedding, metadata_json
+		 FROM memory_entities ORDER BY last_seen DESC LIMIT ?`, limit*4)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type candidate struct {
+		e    EntityRow
+		sim  float32
+		hasV bool
+	}
+	var cands []candidate
+	for rows.Next() {
+		var e EntityRow
+		var blob []byte
+		if err := rows.Scan(&e.EntityID, &e.Name, &e.EntityType,
+			&e.FirstSeen, &e.LastSeen, &blob, &e.MetadataJSON); err != nil {
+			continue
+		}
+		c := candidate{e: e}
+		if len(blob) > 0 {
+			var v []float32
+			if err := json.Unmarshal(blob, &v); err == nil {
+				e.Embedding = v
+				c.sim = float32(cosineSim32(queryVec, v))
+				c.hasV = true
+			}
+		}
+		c.e = e
+		cands = append(cands, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].hasV != cands[j].hasV {
+			return cands[i].hasV
+		}
+		if cands[i].sim != cands[j].sim {
+			return cands[i].sim > cands[j].sim
+		}
+		return cands[i].e.LastSeen > cands[j].e.LastSeen
+	})
+
+	out := make([]EntityRow, 0, limit)
+	for i, c := range cands {
+		if i >= limit {
+			break
+		}
+		out = append(out, c.e)
+	}
+	return out, nil
+}
+
+// TraverseEntityGraph performs BFS starting from seedIDs and returns all valid
+// edges reachable within maxHops. Duplicate edges are excluded.
+func (db *DB) TraverseEntityGraph(seedIDs []string, maxHops int) ([]EdgeRow, error) {
+	if len(seedIDs) == 0 || maxHops <= 0 {
+		return nil, nil
+	}
+	visited := make(map[string]bool, len(seedIDs))
+	for _, id := range seedIDs {
+		visited[id] = true
+	}
+	frontier := seedIDs
+	seenEdges := make(map[string]bool)
+	var result []EdgeRow
+
+	for hop := 0; hop < maxHops && len(frontier) > 0; hop++ {
+		var nextFrontier []string
+		for _, entityID := range frontier {
+			rows, err := db.conn.Query(
+				`SELECT edge_id, source_entity, target_entity, relation,
+				        valid_from, valid_until, confidence, source_memory_id
+				 FROM memory_edges
+				 WHERE (source_entity=? OR target_entity=?) AND valid_until IS NULL`,
+				entityID, entityID,
+			)
+			if err != nil {
+				continue
+			}
+			for rows.Next() {
+				var e EdgeRow
+				if err := rows.Scan(&e.EdgeID, &e.SourceEntity, &e.TargetEntity, &e.Relation,
+					&e.ValidFrom, &e.ValidUntil, &e.Confidence, &e.SourceMemoryID); err != nil {
+					continue
+				}
+				if seenEdges[e.EdgeID] {
+					continue
+				}
+				seenEdges[e.EdgeID] = true
+				result = append(result, e)
+				// Add the other end to next frontier.
+				other := e.TargetEntity
+				if other == entityID {
+					other = e.SourceEntity
+				}
+				if !visited[other] {
+					visited[other] = true
+					nextFrontier = append(nextFrontier, other)
+				}
+			}
+			rows.Close()
+		}
+		frontier = nextFrontier
+	}
+	return result, nil
+}
+
+// PruneExpiredEdges sets valid_until on edges whose target entity no longer
+// exists. Returns the number of edges closed. Used by dream Phase 1.
+func (db *DB) PruneExpiredEdges() int {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := db.conn.Exec(
+		`UPDATE memory_edges SET valid_until=?
+		 WHERE valid_until IS NULL AND (
+		     source_entity NOT IN (SELECT entity_id FROM memory_entities) OR
+		     target_entity NOT IN (SELECT entity_id FROM memory_entities)
+		 )`, now,
+	)
+	if err != nil {
+		return 0
+	}
+	n, _ := res.RowsAffected()
+	return int(n)
+}
+
+// DeduplicateEntities merges entity nodes that share the same name+type by
+// repointing all edges to the oldest entity and deleting the duplicates.
+// Returns the number of nodes removed. Used by dream Phase 2.
+func (db *DB) DeduplicateEntities() int {
+	rows, err := db.conn.Query(
+		`SELECT name, entity_type, COUNT(*) AS cnt
+		 FROM memory_entities GROUP BY name, entity_type HAVING cnt > 1`,
+	)
+	if err != nil {
+		return 0
+	}
+	type dup struct{ name, entityType string }
+	var dups []dup
+	for rows.Next() {
+		var d dup
+		var cnt int
+		if err := rows.Scan(&d.name, &d.entityType, &cnt); err == nil {
+			dups = append(dups, d)
+		}
+	}
+	rows.Close()
+
+	removed := 0
+	for _, d := range dups {
+		// Fetch all duplicates oldest-first, including whether they have an embedding.
+		type dupRow struct {
+			id          string
+			hasEmbedding bool
+		}
+		var candidates []dupRow
+		r2, err := db.conn.Query(
+			`SELECT entity_id, (embedding IS NOT NULL) AS has_emb
+			 FROM memory_entities WHERE name=? AND entity_type=? ORDER BY first_seen ASC`,
+			d.name, d.entityType,
+		)
+		if err != nil {
+			continue
+		}
+		for r2.Next() {
+			var row dupRow
+			var hasEmb int
+			if err := r2.Scan(&row.id, &hasEmb); err == nil {
+				row.hasEmbedding = hasEmb != 0
+				candidates = append(candidates, row)
+			}
+		}
+		r2.Close()
+		if len(candidates) < 2 {
+			continue
+		}
+		// Prefer the node that already has an embedding; fall back to oldest.
+		keep := candidates[0].id
+		for _, c := range candidates {
+			if c.hasEmbedding {
+				keep = c.id
+				break
+			}
+		}
+		for _, c := range candidates {
+			if c.id == keep {
+				continue
+			}
+			// Repoint edges then delete the duplicate node.
+			db.conn.Exec(`UPDATE memory_edges SET source_entity=? WHERE source_entity=?`, keep, c.id) //nolint:errcheck
+			db.conn.Exec(`UPDATE memory_edges SET target_entity=? WHERE target_entity=?`, keep, c.id) //nolint:errcheck
+			if _, err := db.conn.Exec(`DELETE FROM memory_entities WHERE entity_id=?`, c.id); err == nil {
+				removed++
+			}
+		}
+	}
+	return removed
+}
+
+// FetchEntitiesByIDs returns EntityRows for all requested IDs in one query.
+// IDs not found in the table are silently omitted.
+func (db *DB) FetchEntitiesByIDs(ids []string) ([]EntityRow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	rows, err := db.conn.Query(
+		`SELECT entity_id, name, entity_type, first_seen, last_seen, embedding, metadata_json
+		 FROM memory_entities WHERE entity_id IN (`+strings.Join(placeholders, ",")+`)`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EntityRow
+	for rows.Next() {
+		var e EntityRow
+		var blob []byte
+		if err := rows.Scan(&e.EntityID, &e.Name, &e.EntityType,
+			&e.FirstSeen, &e.LastSeen, &blob, &e.MetadataJSON); err != nil {
+			continue
+		}
+		if len(blob) > 0 {
+			var v []float32
+			if err := json.Unmarshal(blob, &v); err == nil {
+				e.Embedding = v
+			}
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// ListEntities returns up to limit entity rows ordered by last_seen DESC.
+func (db *DB) ListEntities(limit int) ([]EntityRow, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := db.conn.Query(
+		`SELECT entity_id, name, entity_type, first_seen, last_seen, embedding, metadata_json
+		 FROM memory_entities ORDER BY last_seen DESC LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EntityRow
+	for rows.Next() {
+		var e EntityRow
+		var blob []byte
+		if err := rows.Scan(&e.EntityID, &e.Name, &e.EntityType,
+			&e.FirstSeen, &e.LastSeen, &blob, &e.MetadataJSON); err != nil {
+			continue
+		}
+		if len(blob) > 0 {
+			var v []float32
+			if err := json.Unmarshal(blob, &v); err == nil {
+				e.Embedding = v
+			}
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // FetchTelegramSession returns the telegram_sessions row for chatID, or nil if not found.

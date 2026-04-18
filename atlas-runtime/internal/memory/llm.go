@@ -168,6 +168,7 @@ Rules:
 				updated.Importance = c.Importance
 			}
 			db.UpdateMemory(updated) //nolint:errcheck
+			asyncEmbed(ctx, provider, db, updated.ID, agent.NomicPrefixDocument+updated.Title+": "+updated.Content)
 		} else {
 			// New memory — start with moderate confidence.
 			row := storage.MemoryRow{
@@ -184,6 +185,7 @@ Rules:
 				RelatedConversationID: &convID,
 			}
 			db.SaveMemory(row) //nolint:errcheck
+			asyncEmbed(ctx, provider, db, row.ID, agent.NomicPrefixDocument+row.Title+": "+row.Content)
 			saved++
 		}
 	}
@@ -226,6 +228,152 @@ func compressToolResults(summaries []string) string {
 	}
 	combined := strings.Join(parts, "; ")
 	return truncateRunes(combined, totalCap)
+}
+
+// entityCandidate is the JSON shape for one entity returned by entity extraction.
+type entityCandidate struct {
+	Name       string `json:"name"`
+	EntityType string `json:"type"` // person, place, organization, concept, technology, event, other
+}
+
+// edgeCandidate is the JSON shape for one edge returned by entity extraction.
+type edgeCandidate struct {
+	Source     string  `json:"source"`
+	Target     string  `json:"target"`
+	Relation   string  `json:"relation"`
+	Confidence float64 `json:"confidence"`
+}
+
+// entityExtractionResult is the top-level JSON shape from the entity extraction call.
+type entityExtractionResult struct {
+	Entities []entityCandidate `json:"entities"`
+	Edges    []edgeCandidate   `json:"edges"`
+}
+
+// extractEntitiesNonBlocking runs entity + relation extraction in a goroutine.
+// It adds typed entities and directed edges to memory_entities / memory_edges.
+// Failures are logged and silently dropped — this is an additive, graceful layer.
+func extractEntitiesNonBlocking(
+	ctx context.Context,
+	provider agent.ProviderConfig,
+	userMsg, assistantMsg string,
+	convID string,
+	db *storage.DB,
+) {
+	if provider.Type == "" {
+		return
+	}
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 12*time.Second)
+		defer cancel()
+
+		system := `You extract named entities and their relations from a conversation turn.
+
+Return JSON with two keys:
+- "entities": array of {name, type} objects
+  type must be one of: person, place, organization, concept, technology, event, other
+- "edges": array of {source, target, relation, confidence} objects
+  source/target are entity names from your entities array
+  relation is a short snake_case verb phrase (e.g. "works_at", "uses", "located_in", "part_of")
+  confidence is 0.0-1.0
+
+Rules:
+- Only extract entities that appear explicitly in the text
+- Only extract edges where both endpoints are in your entities list
+- Skip pronouns, generic terms, and single-word adjectives
+- Return {"entities":[],"edges":[]} if nothing clear is present
+- Max 8 entities, 6 edges`
+
+		content := fmt.Sprintf("User: %s\nAtlas: %s",
+			truncateRunes(userMsg, 300),
+			truncateRunes(assistantMsg, 300),
+		)
+		messages := []agent.OAIMessage{
+			{Role: "system", Content: system},
+			{Role: "user", Content: content},
+		}
+
+		reply, _, _, err := agent.CallAINonStreamingExported(bgCtx, provider, messages, nil)
+		if err != nil {
+			return
+		}
+		replyStr, ok := reply.Content.(string)
+		if !ok {
+			return
+		}
+		replyStr = stripCodeFence(strings.TrimSpace(replyStr))
+
+		var result entityExtractionResult
+		if err := json.Unmarshal([]byte(replyStr), &result); err != nil {
+			logstore.Write("debug", "entity extraction: invalid JSON: "+err.Error(),
+				map[string]string{"conv": convID[:min(8, len(convID))]})
+			return
+		}
+
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		validTypes := map[string]bool{
+			"person": true, "place": true, "organization": true,
+			"concept": true, "technology": true, "event": true, "other": true,
+		}
+
+		// Upsert entities; build a name→ID map for edge creation.
+		nameToID := make(map[string]string, len(result.Entities))
+		for _, e := range result.Entities {
+			if e.Name == "" || !validTypes[e.EntityType] {
+				continue
+			}
+			id, err := db.UpsertEntity(e.Name, e.EntityType, now)
+			if err != nil {
+				continue
+			}
+			nameToID[e.Name] = id
+			// Embed entity name asynchronously. Use bgCtx (which has a 12s deadline)
+			// so a hung sidecar cannot leak this goroutine beyond the extraction window.
+			if id != "" {
+				go func(eid, name string) {
+					embedCtx, c := context.WithTimeout(bgCtx, 10*time.Second)
+					defer c()
+					vec, err := agent.Embed(embedCtx, provider, agent.NomicPrefixDocument+name)
+					if err == nil && len(vec) > 0 {
+						db.UpdateEntityEmbedding(eid, vec) //nolint:errcheck
+					}
+				}(id, e.Name)
+			}
+		}
+
+		// Insert edges; supersede any prior same-pair edges first.
+		for _, edge := range result.Edges {
+			srcID, ok1 := nameToID[edge.Source]
+			tgtID, ok2 := nameToID[edge.Target]
+			if !ok1 || !ok2 || edge.Relation == "" {
+				continue
+			}
+			if edge.Confidence <= 0 {
+				edge.Confidence = 0.8
+			}
+			if edge.Confidence > 1 {
+				edge.Confidence = 1
+			}
+			db.SupersedeEdge(srcID, tgtID, edge.Relation, now) //nolint:errcheck
+			memID := convID
+			e := storage.EdgeRow{
+				EdgeID:         fmt.Sprintf("edg_%d", time.Now().UnixNano()),
+				SourceEntity:   srcID,
+				TargetEntity:   tgtID,
+				Relation:       edge.Relation,
+				ValidFrom:      now,
+				Confidence:     edge.Confidence,
+				SourceMemoryID: &memID,
+			}
+			db.SaveEdge(e) //nolint:errcheck
+		}
+
+		if len(nameToID) > 0 {
+			logstore.Write("debug",
+				fmt.Sprintf("entity extraction: %d entities, %d edges", len(nameToID), len(result.Edges)),
+				map[string]string{"conv": convID[:min(8, len(convID))]})
+		}
+	}()
 }
 
 // stripCodeFence removes ```json ... ``` wrapping if present.

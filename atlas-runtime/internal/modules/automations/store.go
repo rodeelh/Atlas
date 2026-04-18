@@ -546,6 +546,9 @@ func decodeAutomationTarget(raw *string) *features.ExecutableTarget {
 	if strings.HasPrefix(value, "skill:") {
 		return &features.ExecutableTarget{Type: "skill", Ref: strings.TrimSpace(strings.TrimPrefix(value, "skill:"))}
 	}
+	if strings.HasPrefix(value, "agent:") {
+		return &features.ExecutableTarget{Type: "agent", Ref: strings.TrimSpace(strings.TrimPrefix(value, "agent:"))}
+	}
 	if strings.HasPrefix(value, "command:") {
 		return &features.ExecutableTarget{Type: "command", Ref: strings.TrimSpace(strings.TrimPrefix(value, "command:"))}
 	}

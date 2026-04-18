@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'preact/hooks'
 import { ComponentChildren } from 'preact'
-import { api, AutomationSummary, CapabilityRecord, CommunicationChannel, ExecutableTarget, GremlinItem, GremlinRun, WorkflowDefinition } from '../api/client'
+import { api, AutomationSummary, CapabilityRecord, CommunicationChannel, ExecutableTarget, GremlinItem, GremlinRun, TeamAgent, WorkflowDefinition } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { Portal } from '../components/Portal'
 import { EmptyState } from '../components/EmptyState'
@@ -181,11 +181,14 @@ function automationTarget(item: GremlinItem): ExecutableTarget | undefined {
   return undefined
 }
 
-function targetLabel(item: GremlinItem, workflows: WorkflowDefinition[], capabilities: CapabilityRecord[]) {
+function targetLabel(item: GremlinItem, workflows: WorkflowDefinition[], capabilities: CapabilityRecord[], agents: TeamAgent[]) {
   const target = automationTarget(item)
   if (!target) return 'Prompt only'
   if (target.type === 'workflow') {
     return workflows.find(workflow => workflow.id === target.ref)?.name ?? target.ref
+  }
+  if (target.type === 'agent') {
+    return agents.find(agent => agent.id === target.ref)?.name ?? target.ref
   }
   if (target.type === 'skill') {
     return capabilities.find(capability => capability.id === target.ref)?.name ?? target.ref
@@ -251,11 +254,12 @@ function RunsPanel({ gremlin, onClose }: { gremlin: GremlinItem; onClose: () => 
 interface EditModalProps {
   gremlin?: GremlinItem
   capabilities: CapabilityRecord[]
+  agents: TeamAgent[]
   onSave: (item: GremlinItem) => Promise<void>
   onClose: () => void
 }
 
-function EditModal({ gremlin, capabilities, onSave, onClose }: EditModalProps) {
+function EditModal({ gremlin, capabilities, agents, onSave, onClose }: EditModalProps) {
   const [name, setName]               = useState(gremlin?.name ?? '')
   const [emoji, setEmoji]             = useState(gremlin?.emoji ?? '⚡')
   const [prompt, setPrompt]           = useState(gremlin?.prompt ?? '')
@@ -311,6 +315,10 @@ function EditModal({ gremlin, capabilities, onSave, onClose }: EditModalProps) {
       setError('Choose a workflow target or switch to another execution mode.')
       return
     }
+    if (targetType === 'agent' && !targetRef.trim()) {
+      setError('Choose a team member target or switch to another execution mode.')
+      return
+    }
     if (targetType === 'skill' && !targetRef.trim()) {
       setError('Add a target reference for this automation.')
       return
@@ -328,11 +336,13 @@ function EditModal({ gremlin, capabilities, onSave, onClose }: EditModalProps) {
       const target: ExecutableTarget | undefined =
         targetType === 'workflow' && workflowID
           ? { type: 'workflow', ref: workflowID }
+          : (targetType === 'agent' && targetRef.trim()
+            ? { type: 'agent', ref: targetRef.trim() }
           : (targetType === 'skill' && targetRef.trim()
             ? { type: 'skill', ref: targetRef.trim() }
             : (targetType === 'command' && targetRef.trim()
               ? { type: 'command', ref: targetRef.trim() }
-              : undefined))
+              : undefined)))
       const item: GremlinItem = {
         id: gremlin?.id ?? slugify(name),
         name: name.trim(),
@@ -392,13 +402,19 @@ function EditModal({ gremlin, capabilities, onSave, onClose }: EditModalProps) {
 
           {/* Prompt */}
           <div class="automation-field-group">
-            <label class="field-label">Prompt</label>
-            <span class="workflow-field-hint">What Atlas should do each run. Workflow runs first if a workflow is bound.</span>
+            <label class="field-label">{targetType === 'agent' ? 'Task' : 'Prompt'}</label>
+            <span class="workflow-field-hint">
+              {targetType === 'workflow'
+                ? 'What Atlas should do each run. Workflow runs first if a workflow is bound.'
+                : targetType === 'agent'
+                  ? 'What the selected team member should do each run.'
+                  : 'What Atlas should do each run.'}
+            </span>
             <textarea
               class="field-input workflow-textarea"
               value={prompt}
               onInput={(e) => setPrompt((e.target as HTMLTextAreaElement).value)}
-              placeholder="What should Atlas do when this automation runs?"
+              placeholder={targetType === 'agent' ? 'What should this team member do when the automation runs?' : 'What should Atlas do when this automation runs?'}
             />
           </div>
 
@@ -406,12 +422,13 @@ function EditModal({ gremlin, capabilities, onSave, onClose }: EditModalProps) {
           <div class="workflow-aligned-grid">
             <label class="field-label">Execution Target</label>
             <label class="field-label">Delivery Destination <span class="automation-optional-label">(optional)</span></label>
-            <span class="workflow-field-hint">Choose whether this automation runs a prompt, workflow, skill, or command target</span>
+            <span class="workflow-field-hint">Choose whether this automation runs a prompt, workflow, team member, skill, or command target</span>
             <span class="workflow-field-hint">Where results are delivered after each run</span>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <select class="field-input" value={targetType} onChange={(e) => setTargetType((e.target as HTMLSelectElement).value)}>
                 <option value="command">Prompt / command</option>
                 <option value="workflow">Workflow</option>
+                <option value="agent">Team member</option>
                 <option value="skill">Skill</option>
               </select>
               {targetType === 'workflow' && (
@@ -427,6 +444,14 @@ function EditModal({ gremlin, capabilities, onSave, onClose }: EditModalProps) {
                   <option value="">— Select skill target —</option>
                   {skillTargets.map(capability => (
                     <option key={capability.id} value={capability.id}>{capability.name}</option>
+                  ))}
+                </select>
+              )}
+              {targetType === 'agent' && (
+                <select class="field-input" value={targetRef} onChange={(e) => setTargetRef((e.target as HTMLSelectElement).value)}>
+                  <option value="">— Select team member —</option>
+                  {agents.map(agent => (
+                    <option key={agent.id} value={agent.id}>{agent.name}</option>
                   ))}
                 </select>
               )}
@@ -476,6 +501,7 @@ export function Automations() {
   const [summaries, setSummaries]   = useState<Record<string, AutomationSummary>>({})
   const [workflows, setWorkflows]   = useState<WorkflowDefinition[]>([])
   const [capabilities, setCapabilities] = useState<CapabilityRecord[]>([])
+  const [agents, setAgents]         = useState<TeamAgent[]>([])
   const [loading, setLoading]       = useState(true)
   const [error, setError]           = useState<string | null>(null)
   const [editTarget, setEditTarget] = useState<GremlinItem | 'new' | null>(null)
@@ -485,16 +511,18 @@ export function Automations() {
   const [pendingDelete, setPendingDelete] = useState<GremlinItem | null>(null)
 
   async function fetchAll() {
-    const [data, summaryData, workflowData, capabilityData] = await Promise.all([
+    const [data, summaryData, workflowData, capabilityData, agentData] = await Promise.all([
       api.automations(),
       api.automationSummaries().catch(() => [] as AutomationSummary[]),
       api.workflows().catch(() => [] as WorkflowDefinition[]),
       api.capabilities().catch(() => [] as CapabilityRecord[]),
+      api.teamAgents().catch(() => [] as TeamAgent[]),
     ])
     setItems(data)
     setSummaries(Object.fromEntries(summaryData.map(summary => [summary.id, summary])))
     setWorkflows(workflowData)
     setCapabilities(capabilityData)
+    setAgents(agentData)
   }
 
   async function load() {
@@ -639,7 +667,7 @@ export function Automations() {
               <div class="automation-console-grid">
                 <div class="automation-console-cell">
                   <span class="automation-console-label">Task</span>
-                  <strong>{targetLabel(item, workflows, capabilities)}</strong>
+                  <strong>{targetLabel(item, workflows, capabilities, agents)}</strong>
                   <span>{target?.type ? `${target.type} target` : 'Prompt-driven run'}</span>
                 </div>
                 <div class="automation-console-cell">
@@ -672,6 +700,7 @@ export function Automations() {
         <EditModal
           gremlin={editTarget === 'new' ? undefined : editTarget}
           capabilities={capabilities}
+          agents={agents}
           onSave={handleSave}
           onClose={() => setEditTarget(null)}
         />

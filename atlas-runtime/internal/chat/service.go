@@ -108,13 +108,6 @@ type conversationSummary struct {
 // summaryTTL is how long a cached conversation summary stays valid.
 const summaryTTL = 10 * time.Minute
 
-// compactHistoryChars caps how much prior conversation is replayed in compact
-// mode. 1200 was far too low — a single PDF summary easily exceeds it, causing
-// the agent to lose all document context on the very next turn. 8000 chars
-// (~2000 words) is enough to cover a thorough document analysis while still
-// trimming genuinely long histories.
-const compactHistoryChars = 8000
-const compactHistoryMessages = 4
 
 type Service struct {
 	db                *storage.DB
@@ -587,7 +580,7 @@ func (s *Service) ensureEngineRunning(cfg config.RuntimeConfigSnapshot, provider
 				go func(snapCfg config.RuntimeConfigSnapshot, snapPort int, snapModel string) {
 					ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 					defer cancel()
-					warmPrompt := buildSystemPrompt(snapCfg, s.db, config.SupportDir(), "", "")
+					warmPrompt := buildSystemPrompt(snapCfg, s.db, config.SupportDir(), "", "", nil)
 					p.PrefillPrompt(ctx, snapPort, snapModel, warmPrompt)
 				}(cfg, port, filepath.Base(cfg.SelectedAtlasMLXModel))
 			}
@@ -621,68 +614,52 @@ func (s *Service) buildTurnMessages(
 	req MessageRequest,
 	history []storage.MessageRow,
 	convID, userMsgID, capabilityPolicyBlock string,
+	queryVec []float32,
 ) (oaiMessages []agent.OAIMessage, historyChars int, systemPrompt string) {
-	limit := cfg.ConversationWindowLimit
-	if limit == 0 {
-		limit = 15
-	}
-	systemPrompt = buildSystemPrompt(cfg, s.db, config.SupportDir(), req.Message, capabilityPolicyBlock)
+	systemPrompt = buildSystemPrompt(cfg, s.db, config.SupportDir(), req.Message, capabilityPolicyBlock, queryVec)
 	oaiMessages = []agent.OAIMessage{
 		{Role: "system", Content: systemPrompt},
 	}
-	start := 0
-	if len(history) > limit {
-		start = len(history) - limit
-	}
-	if start > 0 {
+
+	// ── Proactive history pruning ────────────────────────────────────────────
+	// Compute an explicit token budget for history before sending to the
+	// provider, so we never hit a context_length_exceeded error in the first
+	// place. The budget accounts for the system prompt, a tool-definition
+	// reserve (15 %), and a response reserve (20 %). Compact mode (new-topic
+	// turns with no referential pronouns) reduces the history share further,
+	// leaving more headroom for active reasoning.
+	compact := shouldCompactHistory(req.Message)
+	sysTokens := estimateTokens(systemPrompt)
+	budget := historyBudgetTokens(cfg.EffectiveContextWindow(), sysTokens, compact)
+	keepFrom := proactiveKeepFrom(history, userMsgID, budget)
+
+	if keepFrom > 0 {
+		// Background: run regex-only memory extraction on the dropped span so
+		// information that falls out of the context window is still persisted.
 		if cfg.MemoryEnabled {
-			if cached, ok := s.summaryCache[convID]; !ok || cached.trimCount < start {
+			if cached, ok := s.summaryCache[convID]; !ok || cached.trimCount < keepFrom {
 				go func(trimmed []storage.MessageRow) {
 					for _, m := range trimmed {
 						if m.Role == "user" {
 							memory.ExtractRegexOnly(cfg, m.Content, convID, s.db)
 						}
 					}
-				}(history[:start])
+				}(history[:keepFrom])
 			}
 		}
-		note := s.buildTrimmedHistoryNote(convID, start, history[:start], userMsgID)
+		// Inject a condensed note so the model knows what was omitted.
+		note := s.buildTrimmedHistoryNote(convID, keepFrom, history[:keepFrom], userMsgID)
 		if note != "" {
 			oaiMessages = append(oaiMessages, agent.OAIMessage{Role: "user", Content: note})
 			oaiMessages = append(oaiMessages, agent.OAIMessage{Role: "assistant", Content: "Understood."})
 		}
+		logstore.Write("debug", fmt.Sprintf(
+			"chat: pruned %d/%d history messages (budget %d tokens, compact=%v)",
+			keepFrom, len(history), budget, compact,
+		), map[string]string{"conv": convID})
 	}
-	replayStart := start
-	if shouldCompactHistory(req.Message) {
-		replayStart = max(replayStart, len(history)-compactHistoryMessages)
-		scanChars := 0
-		for i := len(history) - 1; i >= replayStart; i-- {
-			if history[i].ID == userMsgID {
-				continue
-			}
-			scanChars += len(history[i].Content)
-			if scanChars > compactHistoryChars {
-				replayStart = i + 1
-				break
-			}
-		}
-		for i := len(history) - 1; i >= start; i-- {
-			if history[i].Role == "user" && history[i].ID != userMsgID {
-				if replayStart > i {
-					replayStart = i
-				}
-				break
-			}
-		}
-		if replayStart > start {
-			note := s.buildTrimmedHistoryNote(convID, replayStart, history[:replayStart], userMsgID)
-			if note != "" {
-				oaiMessages = append(oaiMessages, agent.OAIMessage{Role: "user", Content: note})
-				oaiMessages = append(oaiMessages, agent.OAIMessage{Role: "assistant", Content: "Understood."})
-			}
-		}
-	}
-	for _, m := range history[replayStart:] {
+
+	for _, m := range history[keepFrom:] {
 		if m.ID == userMsgID {
 			continue
 		}
