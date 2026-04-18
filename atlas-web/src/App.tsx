@@ -9,6 +9,7 @@ import { Mind } from './screens/Mind'
 import { Activity } from './screens/Activity'
 import { Settings } from './screens/Settings'
 import { AIProviders } from './screens/AIProviders'
+import { AudioProviders } from './screens/AudioProviders'
 import { Automations } from './screens/Automations'
 import { Workflows } from './screens/Workflows'
 import { Dashboards } from './screens/Dashboards'
@@ -40,6 +41,7 @@ type Screen =
   | 'activity'
   | 'settings'
   | 'ai-providers'
+  | 'audio'
   | 'api-keys'
   | 'theme'
   | 'local-lm'
@@ -48,7 +50,7 @@ type Screen =
 
 const VALID_SCREENS: Screen[] = [
   'chat', 'onboarding', 'communications', 'approvals', 'skills', 'forge', 'mind',
-  'automations', 'workflows', 'dashboards', 'activity', 'settings', 'ai-providers', 'api-keys', 'theme',
+  'automations', 'workflows', 'dashboards', 'activity', 'settings', 'ai-providers', 'audio', 'api-keys', 'theme',
   'team',
   'local-lm', 'usage',
   'docs',
@@ -289,6 +291,14 @@ const Icon = {
       <path d="M9.5 11.75c.4-1.4 1.45-2.2 2.95-2.2 1.05 0 1.9.4 2.55 1.2" />
     </svg>
   ),
+  audio: (
+    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="5.5" y="1.5" width="5" height="7.5" rx="2.5" />
+      <path d="M3 7.5a5 5 0 0010 0" />
+      <line x1="8" y1="12.5" x2="8" y2="14.5" />
+      <line x1="5.5" y1="14.5" x2="10.5" y2="14.5" />
+    </svg>
+  ),
 }
 
 const SCREEN_LABELS: Partial<Record<Screen, string>> = {
@@ -306,6 +316,7 @@ const SCREEN_LABELS: Partial<Record<Screen, string>> = {
   activity: 'Activity',
   settings: 'General',
   'ai-providers': 'AI Providers',
+  'audio': 'Audio',
   'api-keys': 'Credentials',
   theme: 'Appearance',
   'local-lm': 'Local LM',
@@ -351,6 +362,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'settings',        icon: Icon.settings,        label: 'General' },
       { id: 'ai-providers',    icon: Icon.aiProviders,     label: 'AI Providers' },
+      { id: 'audio',           icon: Icon.audio,           label: 'Audio' },
       { id: 'api-keys',        icon: Icon.apiKeys,         label: 'Credentials' },
       { id: 'communications',  icon: Icon.communications,  label: 'Communications' },
       { id: 'theme',           icon: Icon.theme,           label: 'Appearance' },
@@ -657,7 +669,7 @@ export function App() {
               <span class="sidebar-wordmark-name">atlas</span>
             </div>
           )}
-          {collapsed && <div class="sidebar-wordmark-block sidebar-wordmark-block--collapsed" aria-label="atlas" />}
+
           <button
             class="sidebar-collapse-btn"
             onClick={isMobile && mobileNavOpen ? closeMobileNav : toggleCollapsed}
@@ -852,6 +864,7 @@ export function App() {
         {screen === 'activity'    && <Activity />}
         {screen === 'settings'    && <Settings />}
         {screen === 'ai-providers' && <AIProviders />}
+        {screen === 'audio'       && <AudioProviders />}
         {screen === 'api-keys'    && <APIKeys />}
         {screen === 'theme'       && <Theme activePreset={themeConfig.preset} onPresetChange={setActivePreset} activeTheme={activeTheme} onThemeChange={setActiveTheme} activeAccent={themeConfig.accent} onAccentChange={setActiveAccent} activeDensity={themeConfig.density} onDensityChange={setActiveDensity} activeChatFontSize={themeConfig.chatFontSize} onChatFontSizeChange={setChatFontSize} activeChatRadius={themeConfig.chatRadius} onChatRadiusChange={setChatRadius} activeChatFont={themeConfig.chatFont} onChatFontChange={setChatFont} activeChatAvatarStyle={themeConfig.chatAvatarStyle} onChatAvatarStyleChange={setChatAvatarStyle} activeChatBubbleStyle={themeConfig.chatBubbleStyle} onChatBubbleStyleChange={setChatBubbleStyle} activeChatWidth={themeConfig.chatWidth} onChatWidthChange={setChatWidth} activeUIRadius={themeConfig.uiRadius} onUIRadiusChange={setUIRadius} activeUIBlur={themeConfig.uiBlur} onUIBlurChange={setUIBlur} activeUIFont={themeConfig.uiFont} onUIFontChange={setUIFont} />}
         {screen === 'local-lm'    && <LocalLM />}

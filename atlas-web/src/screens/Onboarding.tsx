@@ -2,7 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { api, type APIKeyStatus, type CommunicationPlatformStatus, type CommunicationsSnapshot, type RuntimeConfig } from '../api/client'
 import { ErrorBanner } from '../components/ErrorBanner'
 
-type StepID = 'mind' | 'provider' | 'channel' | 'finish'
+type StepID = 'mind' | 'provider' | 'audio' | 'channel' | 'finish'
 type ProviderID = 'openai' | 'anthropic' | 'gemini' | 'lm_studio' | 'ollama' | 'atlas_engine' | 'atlas_mlx'
 type PlatformID = CommunicationPlatformStatus['platform']
 
@@ -22,19 +22,34 @@ const STEPS: Array<{ id: StepID; label: string; eyebrow: string; title: string; 
     subtitle: 'Pick the provider you want to start with and save the key Atlas needs.',
   },
   {
+    id: 'audio',
+    label: 'Audio',
+    eyebrow: 'Step 3',
+    title: 'Choose your audio provider',
+    subtitle: 'Pick how Atlas listens and speaks. Local runs on-device; cloud providers use your API key.',
+  },
+  {
     id: 'channel',
     label: 'Channels',
-    eyebrow: 'Step 3',
+    eyebrow: 'Step 4',
     title: 'Wire up a communication path',
     subtitle: 'Connect a bot channel now, or skip and finish it later.',
   },
   {
     id: 'finish',
     label: 'Ready',
-    eyebrow: 'Step 4',
+    eyebrow: 'Step 5',
     title: 'Atlas is ready to talk',
     subtitle: 'Local file and system permissions can wait until a real feature needs them.',
   },
+]
+
+type AudioProviderOnboardingID = 'local' | 'openai' | 'gemini' | 'elevenlabs'
+const AUDIO_PROVIDERS_ONBOARDING: Array<{ id: AudioProviderOnboardingID; label: string; hint: string }> = [
+  { id: 'local',      label: 'Local',      hint: 'Whisper for transcription, Kokoro for speech. Fully on-device, no API key needed.' },
+  { id: 'openai',     label: 'OpenAI',     hint: 'GPT-4o Transcribe + TTS-1. Requires an OpenAI API key.' },
+  { id: 'gemini',     label: 'Gemini',     hint: 'Gemini multimodal transcription + 2.5 Flash TTS. Requires a Gemini API key.' },
+  { id: 'elevenlabs', label: 'ElevenLabs', hint: 'Scribe v1 transcription + Turbo TTS. Requires an ElevenLabs API key.' },
 ]
 
 const PROVIDERS: Array<{ id: ProviderID; label: string; hint: string; statusKey?: keyof APIKeyStatus }> = [
@@ -143,6 +158,8 @@ export function Onboarding({ onCompleted }: { onCompleted: () => void }) {
   const [lmStudioBaseURL, setLMStudioBaseURL] = useState('http://localhost:1234')
   const [ollamaBaseURL, setOllamaBaseURL] = useState('http://localhost:11434')
 
+  const [selectedAudioProvider, setSelectedAudioProvider] = useState<AudioProviderOnboardingID>('local')
+
   const [selectedPlatformID, setSelectedPlatformID] = useState<PlatformID | 'skip'>('skip')
   const [channelValues, setChannelValues] = useState<Record<string, string>>(EMPTY_CHANNEL_VALUES)
 
@@ -243,9 +260,24 @@ export function Onboarding({ onCompleted }: { onCompleted: () => void }) {
       setConfig(updatedConfig)
       setKeyStatus(await api.apiKeys())
       setProviderKey('')
-      setStep('channel')
+      setStep('audio')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save provider setup.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const continueFromAudio = async () => {
+    if (!config) return
+    setSaving(true)
+    setError(null)
+    try {
+      const { config: updatedConfig } = await api.updateConfig({ ...config, activeAudioProvider: selectedAudioProvider })
+      setConfig(updatedConfig)
+      setStep('channel')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save audio provider.')
     } finally {
       setSaving(false)
     }
@@ -489,6 +521,36 @@ export function Onboarding({ onCompleted }: { onCompleted: () => void }) {
             </div>
           )}
 
+          {step === 'audio' && (
+            <div class="onboarding-section">
+              <div class="onboarding-choice-grid">
+                {AUDIO_PROVIDERS_ONBOARDING.map((ap) => (
+                  <button
+                    key={ap.id}
+                    class={`onboarding-choice-card${selectedAudioProvider === ap.id ? ' selected' : ''}`}
+                    onClick={() => setSelectedAudioProvider(ap.id)}
+                  >
+                    <div class="onboarding-choice-header">
+                      <strong>{ap.label}</strong>
+                    </div>
+                    <p>{ap.hint}</p>
+                  </button>
+                ))}
+              </div>
+              {selectedAudioProvider !== 'local' && (
+                <p class="onboarding-hint">
+                  Atlas will use your configured {selectedAudioProvider === 'openai' ? 'OpenAI' : 'Gemini'} API key.
+                  You can change voice models and other audio settings later from <strong>Settings → Audio</strong>.
+                </p>
+              )}
+              {selectedAudioProvider === 'local' && (
+                <p class="onboarding-hint">
+                  Local audio models are downloaded and managed from <strong>Settings → Audio</strong>. Whisper and Kokoro run entirely on this machine.
+                </p>
+              )}
+            </div>
+          )}
+
           {step === 'channel' && (
             <div class="onboarding-section">
               <div class="onboarding-choice-grid">
@@ -584,6 +646,12 @@ export function Onboarding({ onCompleted }: { onCompleted: () => void }) {
             {step === 'provider' && (
               <button class="btn btn-primary btn-sm" onClick={() => void continueFromProvider()} disabled={saving}>
                 {saving ? 'Saving…' : 'Connect model'}
+              </button>
+            )}
+
+            {step === 'audio' && (
+              <button class="btn btn-primary btn-sm" onClick={() => void continueFromAudio()} disabled={saving}>
+                {saving ? 'Saving…' : 'Set audio provider'}
               </button>
             )}
 

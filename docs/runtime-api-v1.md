@@ -376,6 +376,46 @@ Required payload expectations:
 - Both routes use `{ "content": string }`
 - `AppendDiaryEntry` enforces the max-3-per-day limit; direct PUT bypasses this limit
 
+### Voice API
+
+Mounted at `/voice/*` by `internal/modules/voice`. Manages STT (Whisper), TTS (Kokoro), and cloud audio provider routing.
+
+**Provider model** — `config.activeAudioProvider` selects the backend: `"local"` (Whisper + Kokoro on-device), `"openai"`, `"gemini"`, or `"elevenlabs"`. Resolved at request time by `resolveAudioProvider()` in `internal/voice/keychain.go`. Falls back to `"local"` if the selected cloud provider has no API key configured.
+
+**Routes:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/voice/status` | Session state, running processes, version info |
+| `GET` | `/voice/voices` | Curated voice list for active (or `?provider=`) provider |
+| `POST` | `/voice/session/start` | Start Whisper subprocess; blocks until ready (15 s timeout) |
+| `POST` | `/voice/session/end` | Kill Whisper + Kokoro subprocesses |
+| `POST` | `/voice/transcribe` | Multipart `audio` field → transcript. Auto-starts session if needed. |
+| `POST` | `/voice/synthesize` | SSE stream of PCM audio chunks from active TTS provider |
+| `POST` | `/voice/kokoro/warmup` | Pre-warm Kokoro subprocess (idempotent) |
+| `GET` | `/voice/models/{whisper\|kokoro}` | List downloaded models |
+| `POST` | `/voice/models/{component}/download` | Download a model; SSE progress stream |
+| `DELETE` | `/voice/models/{component}/{name}` | Delete a model file |
+| `GET` | `/voice/models/download/status` | Current download progress snapshot |
+| `DELETE` | `/voice/models/download` | Clear download progress state |
+| `POST` | `/voice/whisper/update` | Rebuild whisper-server binary; SSE progress stream |
+| `POST` | `/voice/kokoro/update` | `pip install --upgrade kokoro-onnx`; SSE progress stream |
+
+**Key contracts:**
+
+- `POST /voice/transcribe` — multipart form, field name `"audio"`, optional `?language=` query param. Returns `{ text, language, duration, sessionID }`.
+- `POST /voice/synthesize` — JSON body `{ text, voice? }`. SSE events: `start`, `voice_audio` `{ chunk: base64, index, sampleRate }`, `voice_audio_end`, `error`.
+- Update routes emit SSE: `progress { line }`, `done { version, ... }`, `error { error }`.
+
+**Local provider constraints:**
+
+- Whisper subprocess launched with `DYLD_LIBRARY_PATH=$INSTALL_DIR/voice` so its bundled dylibs are always found, even after rebuilds.
+- `POST /voice/transcribe` with local provider requires **WAV format** (16 kHz mono PCM). The web client converts via `AudioContext` before upload. The `voice.transcribe` skill requires pre-converted WAV; non-WAV returns a descriptive error with an ffmpeg hint.
+- Kokoro is a Python subprocess running `kokoro_server.py` from the venv at `$INSTALL_DIR/voice/venv`. Python 3.14+ requires venv recreation with Python ≤3.13 (kokoro-onnx constraint); `UpgradeKokoro` handles this automatically via `findBestVoicePython()`.
+- Idle session timeout (default 300 s, configurable via `VoiceSessionIdleSec`) kills both subprocesses. Activity is recorded at the **start** of each transcription so long requests are not evicted mid-flight.
+
+**Skills:** `voice.transcribe` (read, WAV required for local) and `voice.synthesize` (draft, writes WAV file). Both use the Manager's adapter dispatch, so they automatically follow `activeAudioProvider`.
+
 ## Compatibility baseline in code
 
 The current codebase now has a compatibility baseline in the Go runtime and web contract layer:

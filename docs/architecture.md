@@ -518,7 +518,44 @@ type VaultEntry struct {
 
 ---
 
-## 7. Forge Pipeline
+## 7. Voice Pipeline
+
+`internal/voice/Manager` owns two subprocesses — whisper-server (STT) and a Python Kokoro HTTP server (TTS) — and routes audio through a provider adapter layer.
+
+```
+POST /voice/transcribe
+    │  multipart audio (WAV for local, any format for cloud)
+    ▼
+Manager.Transcribe()
+    │
+    ├─ resolveAdapters() → STTAdapter (local | openai | gemini | elevenlabs)
+    │
+    ├─ localSTT.Transcribe()
+    │     ├─ auto-start whisper-server (DYLD_LIBRARY_PATH set)
+    │     ├─ WaitWhisperReady (15 s)
+    │     └─ POST audio/wav → http://127.0.0.1:11987/inference
+    │
+    └─ cloudSTT.Transcribe() → cloud API → text
+
+POST /voice/synthesize
+    │  { text, voice? }
+    ▼
+Manager.Synthesize()
+    │
+    ├─ localTTS → StartKokoro (lazy) → stream PCM from kokoro HTTP server
+    └─ cloudTTS → cloud API → stream PCM chunks
+         └─ SSE: voice_audio { chunk:base64, index, sampleRate }
+```
+
+**Provider selection** — `config.activeAudioProvider` (`"local"` | `"openai"` | `"gemini"` | `"elevenlabs"`). Adapters are rebuilt in-process when the provider changes; no restart required. Falls back to local if the cloud provider has no API key.
+
+**Subprocess lifecycle** — whisper-server starts lazily on first transcribe (or explicit `POST /voice/session/start`). Kokoro starts lazily on first synthesize. Both are killed together on session end or idle timeout. Idle timer is reset at the *start* of each transcription, not the end, so long requests are never evicted mid-flight.
+
+**macOS dylib fix** — whisper-server is launched with `DYLD_LIBRARY_PATH=$INSTALL_DIR/voice` so its bundled `libwhisper.*.dylib` is found regardless of cmake rpath baking. Durable across whisper rebuilds because the fix is in the Go launcher, not the binary.
+
+**Python venv** — Kokoro runs inside `$INSTALL_DIR/voice/venv`. kokoro-onnx 0.5+ requires Python `<3.14`; `UpgradeKokoro` detects a Python 3.14 venv and recreates it with the best available Python 3.10–3.13 via `findBestVoicePython()`.
+
+## 8. Forge Pipeline
 
 ```
 POST /forge/proposals  {name, description, apiURL}
@@ -553,7 +590,7 @@ identically to any other custom skill — one JSON line in, one JSON line out.
 
 ---
 
-## 8. API Validation Gate
+## 9. API Validation Gate
 
 `internal/validate/gate.go` — `Gate.Run(ctx, req) ValidationResult`
 
@@ -573,7 +610,7 @@ Phase 3 — Audit
 
 ---
 
-## 9. Memory System
+## 10. Memory System
 
 Atlas maintains long-term memory across conversations through three coordinated subsystems: per-turn extraction, MIND.md reflection, and the nightly dream cycle.
 
@@ -771,7 +808,7 @@ All endpoints return `409 Conflict` when `ThoughtsEnabled: false`.
 
 ---
 
-## 10. Data Storage
+## 11. Data Storage
 
 **SQLite** — `~/Library/Application Support/ProjectAtlas/atlas.sqlite3`
 
@@ -822,7 +859,7 @@ All endpoints return `409 Conflict` when `ThoughtsEnabled: false`.
 
 ---
 
-## 11. Auth Model
+## 12. Auth Model
 
 | Request type | Auth mechanism |
 |-------------|----------------|
@@ -835,7 +872,7 @@ All endpoints return `409 Conflict` when `ThoughtsEnabled: false`.
 
 ---
 
-## 12. Atlas Teams
+## 13. Atlas Teams
 
 Atlas Teams is the delegated multi-agent capability for V1.0. See [`PLAN.md`](../PLAN.md) for the full product specification and milestone roadmap. See [`docs/agent-boundary.md`](agent-boundary.md) for the architectural boundary and delegation mechanism.
 
@@ -965,7 +1002,7 @@ team.delegate
 
 ---
 
-## 13. Deferred (V1.0)
+## 14. Deferred (V1.0)
 
 | Feature | Status |
 |---------|--------|

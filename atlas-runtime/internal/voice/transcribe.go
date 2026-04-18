@@ -13,13 +13,9 @@ import (
 	"time"
 )
 
-// Transcribe sends raw audio bytes to whisper-server for transcription.
-// Auto-starts a session (using the provided model/port) if one is not already
-// active. mimeType is the MIME type of the audio (e.g. "audio/webm", "audio/wav").
-// If language is empty whisper auto-detects.
-//
-// Returns the transcribed text wrapped in TranscribeResult.
-func (m *Manager) Transcribe(
+// transcribeLocal sends raw audio bytes to the local whisper-server.
+// Called by localSTT.Transcribe — not called directly outside the voice package.
+func (m *Manager) transcribeLocal(
 	ctx context.Context,
 	audio []byte,
 	mimeType, language string,
@@ -29,6 +25,17 @@ func (m *Manager) Transcribe(
 	if len(audio) == 0 {
 		return TranscribeResult{}, fmt.Errorf("audio is empty")
 	}
+
+	if !strings.Contains(mimeType, "wav") && !strings.Contains(mimeType, "pcm") {
+		return TranscribeResult{}, fmt.Errorf(
+			"local whisper-server requires WAV format (got %s); convert first with: ffmpeg -i input.mp3 output.wav",
+			mimeType,
+		)
+	}
+
+	// Reset idle timer at the start so a long transcription doesn't get evicted
+	// mid-request by the idle watcher.
+	m.RecordActivity()
 
 	// Ensure a session is running. Auto-start with defaults if not.
 	if !m.SessionActive() {

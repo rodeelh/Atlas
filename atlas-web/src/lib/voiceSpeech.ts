@@ -21,6 +21,7 @@ type TranscribeFn = (blob: Blob, language?: string) => Promise<{ text: string }>
 interface StartVoiceSpeechOptions {
   lang?: string
   maxDurationMs?: number
+  skipWavConversion?: boolean
   onStart?: () => void
   onRecording?: (elapsedMs: number) => void
   onResult: (update: VoiceSpeechUpdate) => void
@@ -97,11 +98,10 @@ export function startVoiceSpeech(options: StartVoiceSpeechOptions): VoiceSpeechS
         options.onEnd?.()
         return
       }
-      // whisper-server (without --ffmpeg-converter) only accepts WAV. Decode
-      // the recorded blob to PCM in the browser and re-encode as 16 kHz mono
-      // WAV before uploading. This keeps the server dependency-free.
-      const wavBlob = await encodeBlobAsWav(blob)
-      const result = await options.transcribe(wavBlob, options.lang?.split('-')[0])
+      // whisper.cpp requires 16 kHz mono WAV. Cloud providers (OpenAI, Gemini)
+      // accept raw WebM directly — skip the conversion for them.
+      const uploadBlob = options.skipWavConversion ? blob : await encodeBlobAsWav(blob)
+      const result = await options.transcribe(uploadBlob, options.lang?.split('-')[0])
       options.onResult({ finalText: (result.text || '').trim(), interimText: '' })
       options.onEnd?.()
     } catch (err) {

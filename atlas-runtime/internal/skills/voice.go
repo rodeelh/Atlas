@@ -23,9 +23,10 @@ func (r *Registry) registerVoice() {
 	r.register(SkillEntry{
 		Def: ToolDef{
 			Name: "voice.transcribe",
-			Description: "Transcribes a local audio file to text using the bundled Whisper server. " +
-				"Accepts WAV, WebM/Opus, MP3, M4A, or OGG. Reads the file, auto-starts a voice session if " +
-				"not already running, and returns the transcript.",
+			Description: "Transcribes a local audio file to text using the active STT provider. " +
+				"Requires WAV format for the local Whisper provider; cloud providers (OpenAI, Gemini, ElevenLabs) " +
+				"accept any format. Auto-starts a voice session if not already running. " +
+				"To convert: terminal.run 'ffmpeg -i input.mp3 output.wav'",
 			Properties: map[string]ToolParam{
 				"file_path": {
 					Description: "Absolute or home-relative path to an audio file on the local filesystem.",
@@ -113,7 +114,7 @@ func (r *Registry) voiceTranscribe(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 
-	result, err := r.voiceMgr.Transcribe(ctx, data, mime, p.Language, "ggml-base.en.bin", 11987)
+	result, err := r.voiceMgr.Transcribe(ctx, data, mime, p.Language)
 	if err != nil {
 		return "", err
 	}
@@ -156,7 +157,7 @@ func (r *Registry) voiceSynthesize(ctx context.Context, args json.RawMessage) (s
 	if voiceName == "" {
 		voiceName = voice.KokoroVoiceDefault
 	}
-	result, err := r.voiceMgr.SynthesizeKokoroWav(ctx, p.Text, voiceName, 1.0, "en-us", 11989)
+	result, err := r.voiceMgr.SynthesizeKokoroWav(ctx, p.Text, voiceName, 1.0, "en-us", r.voiceMgr.DefaultKokoroPort())
 	if err != nil {
 		return "", err
 	}

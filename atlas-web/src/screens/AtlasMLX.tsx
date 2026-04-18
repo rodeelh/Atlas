@@ -877,8 +877,8 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
               {isInstalling && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <span class="spinner spinner-sm" />
-                  <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--theme-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                    {install?.line || 'Installing mlx-lm…'}
+                  <span style={{ fontSize: 13, color: 'var(--theme-text-secondary)' }}>
+                    Installing mlx-lm…
                   </span>
                 </div>
               )}

@@ -142,7 +142,7 @@ func main() {
 	// Voice manager — whisper-server (Phase 1) + piper (Phase 2) subprocess lifecycle.
 	// Both servers start when a voice session begins and stop together on session
 	// end or idle timeout, so no voice-related RAM is resident when voice is off.
-	voiceMgr := voice.NewManager(config.AtlasInstallDir(), config.VoiceModelsDir())
+	voiceMgr := voice.NewManager(config.AtlasInstallDir(), config.VoiceModelsDir(), cfgStore)
 	voiceIdle := cfg.VoiceSessionIdleSec
 	if voiceIdle <= 0 {
 		voiceIdle = 300
@@ -270,7 +270,7 @@ func main() {
 		}
 		wavMime := "audio/wav"
 
-		result, err := voiceMgr.Transcribe(ctx, wavData, wavMime, c.VoiceWhisperLanguage, model, port)
+		result, err := voiceMgr.Transcribe(ctx, wavData, wavMime, c.VoiceWhisperLanguage)
 		if err != nil {
 			return "", err
 		}

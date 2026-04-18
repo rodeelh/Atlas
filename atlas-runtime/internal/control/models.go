@@ -14,7 +14,6 @@ import (
 
 	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/engine"
-	"atlas-runtime-go/internal/logstore"
 )
 
 type ModelsService struct {
@@ -293,19 +292,7 @@ func (s *ModelsService) OpenRouterModels(refresh bool, limit int) map[string]any
 func (s *ModelsService) OpenRouterModelHealth(model string) map[string]any {
 	now := s.now().UTC().Format(time.RFC3339)
 	model = strings.TrimSpace(model)
-	logResult := func(level, status, message string, extra map[string]string) {
-		meta := map[string]string{
-			"provider": "openrouter",
-			"model":    model,
-			"status":   status,
-		}
-		for k, v := range extra {
-			meta[k] = v
-		}
-		logstore.Write(level, "OpenRouter model health check", meta)
-	}
 	if model == "" {
-		logResult("warn", "unknown", "No model selected.", nil)
 		return map[string]any{
 			"status":    "unknown",
 			"message":   "No model selected.",
@@ -316,7 +303,6 @@ func (s *ModelsService) OpenRouterModelHealth(model string) map[string]any {
 	bundle, _ := readRawBundle()
 	apiKey, _ := bundle["openRouterAPIKey"].(string)
 	if strings.TrimSpace(apiKey) == "" {
-		logResult("warn", "missing_key", "OpenRouter API key is not configured.", nil)
 		return map[string]any{
 			"status":    "missing_key",
 			"message":   "OpenRouter API key is not configured.",
@@ -332,7 +318,6 @@ func (s *ModelsService) OpenRouterModelHealth(model string) map[string]any {
 	})
 	req, err := http.NewRequest("POST", "https://openrouter.ai/api/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		logResult("error", "unavailable", "Could not construct OpenRouter health request.", nil)
 		return map[string]any{
 			"status":    "unavailable",
 			"message":   "Could not construct OpenRouter health request.",
@@ -346,7 +331,6 @@ func (s *ModelsService) OpenRouterModelHealth(model string) map[string]any {
 
 	resp, err := s.httpDo(req)
 	if err != nil {
-		logResult("error", "unavailable", "Unable to reach OpenRouter right now.", nil)
 		return map[string]any{
 			"status":    "unavailable",
 			"message":   "Unable to reach OpenRouter right now.",
@@ -367,7 +351,6 @@ func (s *ModelsService) OpenRouterModelHealth(model string) map[string]any {
 		if msg == "" {
 			msg = "This model is currently rate limited on OpenRouter."
 		}
-		logResult("warn", "rate_limited", msg, map[string]string{"http_status": strconv.Itoa(resp.StatusCode)})
 		return map[string]any{
 			"status":    "rate_limited",
 			"message":   msg,
@@ -375,7 +358,6 @@ func (s *ModelsService) OpenRouterModelHealth(model string) map[string]any {
 		}
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		logResult("info", "ok", "Model is currently available.", map[string]string{"http_status": strconv.Itoa(resp.StatusCode)})
 		return map[string]any{
 			"status":    "ok",
 			"message":   "Model is currently available.",
@@ -385,7 +367,6 @@ func (s *ModelsService) OpenRouterModelHealth(model string) map[string]any {
 	if msg == "" {
 		msg = fmt.Sprintf("OpenRouter returned %d for this model health check.", resp.StatusCode)
 	}
-	logResult("warn", "warning", msg, map[string]string{"http_status": strconv.Itoa(resp.StatusCode)})
 	return map[string]any{
 		"status":    "warning",
 		"message":   msg,
@@ -490,11 +471,6 @@ func (s *ModelsService) CloudModelHealth(provider, model string) map[string]any 
 
 	info, reqErr := makeReq()
 	if reqErr == "missing_key" {
-		logstore.Write("warn", "Cloud model health check", map[string]string{
-			"provider": provider,
-			"model":    model,
-			"status":   "missing_key",
-		})
 		return map[string]any{
 			"status":    "missing_key",
 			"message":   "API key is not configured for this provider.",
@@ -512,12 +488,6 @@ func (s *ModelsService) CloudModelHealth(provider, model string) map[string]any 
 	body, _ := json.Marshal(info.body)
 	req, err := http.NewRequest("POST", info.url, bytes.NewReader(body))
 	if err != nil {
-		logstore.Write("error", "Cloud model health check", map[string]string{
-			"provider": provider,
-			"model":    model,
-			"status":   "unavailable",
-			"error":    err.Error(),
-		})
 		return map[string]any{
 			"status":    "unavailable",
 			"message":   "Could not construct health request.",
@@ -530,12 +500,6 @@ func (s *ModelsService) CloudModelHealth(provider, model string) map[string]any 
 
 	resp, err := s.httpDo(req)
 	if err != nil {
-		logstore.Write("error", "Cloud model health check", map[string]string{
-			"provider": provider,
-			"model":    model,
-			"status":   "unavailable",
-			"error":    err.Error(),
-		})
 		return map[string]any{
 			"status":    "unavailable",
 			"message":   "Unable to reach provider right now.",
@@ -556,13 +520,6 @@ func (s *ModelsService) CloudModelHealth(provider, model string) map[string]any 
 	// Some providers/models may return a token-cap probe error even though the
 	// model is reachable and authenticated. Treat this as healthy for status UI.
 	if strings.Contains(lowerMsg, "max_tokens") && strings.Contains(lowerMsg, "output limit was reached") {
-		logstore.Write("info", "Cloud model health check", map[string]string{
-			"provider":    provider,
-			"model":       model,
-			"status":      "ok",
-			"http_status": strconv.Itoa(resp.StatusCode),
-			"probe_note":  "token_cap_reached",
-		})
 		return map[string]any{
 			"status":    "ok",
 			"message":   "Model is reachable (health probe hit output token cap).",
@@ -574,12 +531,6 @@ func (s *ModelsService) CloudModelHealth(provider, model string) map[string]any 
 		if msg == "" {
 			msg = "This model is currently rate limited."
 		}
-		logstore.Write("warn", "Cloud model health check", map[string]string{
-			"provider":    provider,
-			"model":       model,
-			"status":      "rate_limited",
-			"http_status": strconv.Itoa(resp.StatusCode),
-		})
 		return map[string]any{
 			"status":    "rate_limited",
 			"message":   msg,
@@ -587,12 +538,6 @@ func (s *ModelsService) CloudModelHealth(provider, model string) map[string]any 
 		}
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		logstore.Write("info", "Cloud model health check", map[string]string{
-			"provider":    provider,
-			"model":       model,
-			"status":      "ok",
-			"http_status": strconv.Itoa(resp.StatusCode),
-		})
 		return map[string]any{
 			"status":    "ok",
 			"message":   "Model is currently available.",
@@ -613,12 +558,6 @@ func (s *ModelsService) CloudModelHealth(provider, model string) map[string]any 
 		}
 		msg = fmt.Sprintf("%s returned %d for this model health check.", displayProvider, resp.StatusCode)
 	}
-	logstore.Write("warn", "Cloud model health check", map[string]string{
-		"provider":    provider,
-		"model":       model,
-		"status":      "warning",
-		"http_status": strconv.Itoa(resp.StatusCode),
-	})
 	return map[string]any{
 		"status":    "warning",
 		"message":   msg,

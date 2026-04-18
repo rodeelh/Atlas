@@ -20,6 +20,7 @@ const KNOWN_PROVIDERS = [
   { id: 'openai',      label: 'OpenAI',              sublabel: 'API key for OpenAI models (GPT-5.4, GPT-5.4 Mini, GPT-4.1 etc.)',     key: 'openAIKeySet'      },
   { id: 'anthropic',   label: 'Anthropic',           sublabel: 'API key for Claude models (Sonnet, Opus, Haiku)',                     key: 'anthropicKeySet'   },
   { id: 'gemini',      label: 'Google Gemini',       sublabel: 'API key for Gemini models (Flash, Pro etc.)',                        key: 'geminiKeySet'      },
+  { id: 'elevenlabs',  label: 'ElevenLabs',          sublabel: 'API key for ElevenLabs speech synthesis and transcription',                key: 'elevenLabsKeySet'  },
   { id: 'openrouter',  label: 'OpenRouter',          sublabel: 'API key for OpenRouter models and routers',                           key: 'openRouterKeySet'  },
   { id: 'lm_studio',   label: 'LM Studio',           sublabel: 'Optional Bearer token for LM Studio v0.4.8+ authentication',         key: 'lmStudioKeySet'    },
   { id: 'telegram',    label: 'Telegram Bot',        sublabel: 'Required for Telegram integration',                                   key: 'telegramTokenSet'  },

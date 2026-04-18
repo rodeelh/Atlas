@@ -124,10 +124,31 @@ type RuntimeConfigSnapshot struct {
 	VoiceTTSAutoPlay     bool   `json:"voiceTTSAutoPlay"`
 	VoiceSessionIdleSec  int    `json:"voiceSessionIdleSec"`
 
-	// Kokoro TTS (OHF-Voice, ONNX). Voice is hardcoded to am_onyx in
-	// internal/voice/kokoro.go (KokoroVoiceDefault); only the port survives
-	// in config so multiple instances can use different ports if ever needed.
-	VoiceKokoroPort int `json:"voiceKokoroPort"`
+	// Kokoro TTS local voice and port.
+	VoiceKokoroPort  int    `json:"voiceKokoroPort"`
+	VoiceKokoroVoice string `json:"voiceKokoroVoice"` // default: am_onyx
+
+	// ── Audio provider ────────────────────────────────────────────────────────
+	//
+	// ActiveAudioProvider selects the STT + TTS backend: "local" (Whisper +
+	// Kokoro), "openai", or "gemini". Defaults to "local".
+	ActiveAudioProvider string `json:"activeAudioProvider"`
+
+	// AudioSTTModel is the provider-specific STT model ID.
+	// OpenAI: "gpt-4o-mini-transcribe" | "gpt-4o-transcribe" | "whisper-1"
+	// Gemini: "gemini-2.0-flash" | "gemini-2.5-flash"
+	// Empty means use the provider default.
+	AudioSTTModel    string `json:"audioSTTModel"`
+	AudioSTTLanguage string `json:"audioSTTLanguage"` // BCP-47 hint; "" = auto-detect
+
+	// AudioTTSModel is the provider-specific TTS model ID.
+	// OpenAI: "tts-1" | "tts-1-hd" | "gpt-4o-mini-tts"
+	// Gemini: "gemini-2.5-flash-preview-tts" | "gemini-2.5-pro-preview-tts"
+	// Empty means use the provider default.
+	AudioTTSModel       string  `json:"audioTTSModel"`
+	AudioTTSVoice       string  `json:"audioTTSVoice"`       // provider voice ID; "" = provider default
+	AudioTTSSpeed       float64 `json:"audioTTSSpeed"`       // 0.25–4.0 (OpenAI); ignored by Gemini
+	AudioTTSStylePrompt string  `json:"audioTTSStylePrompt"` // delivery directive (Gemini / gpt-4o-mini-tts)
 
 	// ── Mind thoughts / nap scheduler ─────────────────────────────────────
 	//

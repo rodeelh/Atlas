@@ -4529,14 +4529,14 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   position: absolute;
   inset: 0;
   background-image: radial-gradient(circle, color-mix(in srgb, var(--accent) 45%, transparent) 1px, transparent 1px);
-  background-size: 26px 26px;
+  background-size: 16px 16px;
   -webkit-mask-image: radial-gradient(ellipse 48% 55% at 50% 50%, black 0%, transparent 100%);
   mask-image:         radial-gradient(ellipse 48% 55% at 50% 50%, black 0%, transparent 100%);
   -webkit-mask-size: 200% 200%;
   mask-size:         200% 200%;
   pointer-events: none;
   z-index: 0;
-  animation: ai-dot-drift 16s ease-in-out infinite;
+  animation: ai-dot-drift 32s ease-in-out infinite;
 }
 
 @keyframes ai-setup-border-pulse {
@@ -4633,6 +4633,33 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   font-size: 14px;
   line-height: 1.5;
   color: var(--theme-text-secondary);
+}
+
+/* ── Audio tab provider picker — audio wave dot animation ───────────────── */
+.ai-provider-setup-card--voice::before {
+  animation: voice-dot-wave 2.2s ease-in-out infinite !important;
+}
+
+/* ── Audio tab voices card — no dot grid ────────────────────────────────── */
+.ai-provider-setup-card--no-anim::before {
+  display: none;
+}
+
+@keyframes voice-dot-wave {
+  0%   { -webkit-mask-size: 200% 30%;  mask-size: 200% 30%;  -webkit-mask-position: 50% 50%; mask-position: 50% 50%; }
+  18%  { -webkit-mask-size: 200% 130%; mask-size: 200% 130%; -webkit-mask-position: 50% 42%; mask-position: 50% 42%; }
+  35%  { -webkit-mask-size: 200% 25%;  mask-size: 200% 25%;  -webkit-mask-position: 50% 58%; mask-position: 50% 58%; }
+  52%  { -webkit-mask-size: 200% 110%; mask-size: 200% 110%; -webkit-mask-position: 50% 44%; mask-position: 50% 44%; }
+  68%  { -webkit-mask-size: 200% 35%;  mask-size: 200% 35%;  -webkit-mask-position: 50% 55%; mask-position: 50% 55%; }
+  84%  { -webkit-mask-size: 200% 100%; mask-size: 200% 100%; -webkit-mask-position: 50% 47%; mask-position: 50% 47%; }
+  100% { -webkit-mask-size: 200% 30%;  mask-size: 200% 30%;  -webkit-mask-position: 50% 50%; mask-position: 50% 50%; }
+}
+
+/* ── Local LM screen — picker scrolls with content, no sticky header ─────── */
+.local-lm-screen > .page-header {
+  position: static;
+  margin: 0 0 4px;
+  padding: 0;
 }
 
 .ai-provider-row-actions {

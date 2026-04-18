@@ -18,9 +18,10 @@ type VoiceStatus struct {
 	WhisperModel    string `json:"whisperModel,omitempty"`
 	WhisperBuildTag string `json:"whisperBuildTag,omitempty"`
 
-	KokoroRunning bool `json:"kokoroRunning"`
-	KokoroReady   bool `json:"kokoroReady"`
-	KokoroPort    int  `json:"kokoroPort"`
+	KokoroRunning  bool   `json:"kokoroRunning"`
+	KokoroReady    bool   `json:"kokoroReady"`
+	KokoroPort     int    `json:"kokoroPort"`
+	KokoroVersion  string `json:"kokoroVersion,omitempty"`
 
 	LastError string `json:"lastError,omitempty"`
 }

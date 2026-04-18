@@ -1139,6 +1139,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
   const [userName, setUserName]               = useState('')
   const [speechAvailable]                     = useState(() => voiceSpeechSupported())
   const [speechListening, setSpeechListening] = useState(false)
+  const [activeAudioProvider, setActiveAudioProvider] = useState<string>('local')
   const [ttsEnabled, setTtsEnabled]           = useState<boolean>(() => {
     try { return localStorage.getItem('atlas.ttsEnabled') === '1' } catch { return false }
   })
@@ -1286,6 +1287,11 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
   const streamingFinishedRef   = useRef<boolean>(false) // model done emitting deltas
   const streamingMsgIdRef      = useRef<string | null>(null)
   const streamingAbortsRef     = useRef<Array<() => void>>([])
+  // Sentence ordering — ensures chunks from parallel cloud TTS requests are
+  // enqueued into the ring buffer in sentence order, not network-arrival order.
+  const streamingOrderRef      = useRef<number>(0)
+  const streamingNextEnqRef    = useRef<number>(0)
+  const streamingBufsRef       = useRef<Map<number, { chunks: Array<{ b64: string; idx: number; sr: number }>; done: boolean }>>(new Map())
 
   // Unread-reply tracking for the sidebar notification dot.
   // isActiveRef — always current, used in stale-closure contexts (SSE handler).
@@ -1641,6 +1647,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
       if (s.userName) setUserName(s.userName)
       if (s.activeAIProvider) setActiveProvider(s.activeAIProvider as ChatProvider)
       if (s.selectedLocalEngine) setSelectedLocalEngine(s.selectedLocalEngine as ChatProvider)
+      if (s.activeAudioProvider) setActiveAudioProvider(s.activeAudioProvider)
       setModelByProvider({
         openai:    s.selectedOpenAIPrimaryModel?.trim() || '',
         anthropic: s.selectedAnthropicModel?.trim() || '',
@@ -1828,6 +1835,9 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     streamingPendingRef.current = 0
     streamingFinishedRef.current = false
     streamingMsgIdRef.current = null
+    streamingOrderRef.current = 0
+    streamingNextEnqRef.current = 0
+    streamingBufsRef.current.clear()
     setSpeakingMsgId(null)
   }, [])
 
@@ -1893,6 +1903,9 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
         streamingFinishedRef.current = false
         streamingMsgIdRef.current = null
         streamingAbortsRef.current = []
+        streamingOrderRef.current = 0
+        streamingNextEnqRef.current = 0
+        streamingBufsRef.current.clear()
         setSpeakingMsgId(null)
       }
     }
@@ -1906,31 +1919,59 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
         streamingFinishedRef.current = false
         streamingMsgIdRef.current = null
         streamingAbortsRef.current = []
+        streamingOrderRef.current = 0
+        streamingNextEnqRef.current = 0
+        streamingBufsRef.current.clear()
         setSpeakingMsgId(null)
       }
     }
     return player
   }
 
-  // Fire one sentence into the shared player. Bumps the in-flight count so
-  // we know when to call player.finish() once everything has been processed.
+  // Fire one sentence into the shared player. Chunks are buffered locally
+  // and flushed to the ring buffer only after all earlier sentences have been
+  // fully enqueued — this prevents cloud-provider network jitter from
+  // interleaving chunks from different sentences in the ring buffer.
   const speakSentence = (sentence: string, player: VoicePlayer) => {
     const text = cleanForSpeech(sentence)
     if (!text) return
     streamingPendingRef.current += 1
+    const myOrder = streamingOrderRef.current++
+    streamingBufsRef.current.set(myOrder, { chunks: [], done: false })
+
+    const flushOrdered = () => {
+      while (true) {
+        const next = streamingNextEnqRef.current
+        const entry = streamingBufsRef.current.get(next)
+        if (!entry?.done) break
+        if (streamingPlayerRef.current === player) {
+          for (const { b64, idx, sr } of entry.chunks) {
+            player.enqueueChunk(b64, idx, sr)
+          }
+        }
+        streamingBufsRef.current.delete(next)
+        streamingNextEnqRef.current++
+      }
+    }
+
     const stream = api.voiceSynthesize(text, {
       onChunk: (b64, index, sampleRate) => {
-        if (streamingPlayerRef.current === player) {
-          player.enqueueChunk(b64, index, sampleRate)
-        }
+        const entry = streamingBufsRef.current.get(myOrder)
+        if (entry) entry.chunks.push({ b64, idx: index, sr: sampleRate })
       },
       onEnd: () => {
+        const entry = streamingBufsRef.current.get(myOrder)
+        if (entry) entry.done = true
+        flushOrdered()
         streamingPendingRef.current -= 1
         if (streamingFinishedRef.current && streamingPendingRef.current === 0) {
           if (streamingPlayerRef.current === player) player.finish()
         }
       },
       onError: (msg) => {
+        const entry = streamingBufsRef.current.get(myOrder)
+        if (entry) { entry.chunks = []; entry.done = true }
+        flushOrdered()
         streamingPendingRef.current -= 1
         setError(msg)
       },
@@ -2071,6 +2112,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     try {
       speechSessionRef.current = startVoiceSpeech({
         lang: navigator.language || 'en-US',
+        skipWavConversion: activeAudioProvider !== 'local',
         transcribe: (blob, language) => api.voiceTranscribe(blob, language),
         onStart: () => {
           setSpeechListening(true)

@@ -33,6 +33,7 @@ export interface APIKeyStatus {
   lmStudioKeySet: boolean;
   ollamaKeySet: boolean;
   finnhubKeySet: boolean;
+  elevenLabsKeySet: boolean;
   customKeys: string[];
   customKeyLabels: Record<string, string>;
 }
@@ -123,6 +124,16 @@ export interface RuntimeConfig {
   voiceTTSAutoPlay?: boolean;
   voiceSessionIdleSec?: number;
   voiceKokoroPort?: number;
+  voiceKokoroVoice?: string;
+
+  // Audio provider — "local" | "openai" | "gemini"
+  activeAudioProvider?: string;
+  audioSTTModel?: string;
+  audioSTTLanguage?: string;
+  audioTTSModel?: string;
+  audioTTSVoice?: string;
+  audioTTSSpeed?: number;
+  audioTTSStylePrompt?: string;
 
   // Mind-thoughts — opt-in feature suite. thoughtsEnabled is the master
   // switch; when false the entire subsystem is dormant. napsEnabled is
@@ -823,7 +834,7 @@ export interface TokenUsageEvent {
   recordedAt: string;
 }
 
-// ── Voice (Phase 1: Whisper STT; Phase 2 reserved for Piper TTS) ─────────────
+// ── Voice ─────────────────────────────────────────────────────────────────────
 
 export interface VoiceStatus {
   sessionActive: boolean;
@@ -837,7 +848,16 @@ export interface VoiceStatus {
   kokoroRunning: boolean;
   kokoroReady: boolean;
   kokoroPort: number;
+  kokoroVersion?: string;
   lastError?: string;
+}
+
+export interface VoiceOption {
+  id: string;
+  label: string;
+  description: string;
+  featured: boolean;
+  modelGate?: string; // only shown when this TTS model is selected
 }
 
 export interface VoiceModelInfo {

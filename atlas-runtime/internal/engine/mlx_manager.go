@@ -18,6 +18,20 @@ import (
 	"atlas-runtime-go/internal/logstore"
 )
 
+// pipProgressWriter routes pip stdout+stderr line-by-line to a progress callback.
+// Using a shared io.Writer on both cmd.Stdout and cmd.Stderr avoids the
+// StdoutPipe() + cmd.Stderr = cmd.Stdout anti-pattern where cmd.Stdout is nil.
+type pipProgressWriter struct{ fn func(string) }
+
+func (pw *pipProgressWriter) Write(p []byte) (int, error) {
+	for _, line := range strings.Split(strings.TrimRight(string(p), "\n"), "\n") {
+		if line != "" {
+			pw.fn(line)
+		}
+	}
+	return len(p), nil
+}
+
 // MLXManager controls the mlx_lm.server subprocess lifecycle.
 // It mirrors the Manager (llama.cpp) design: one process per port,
 // idle auto-eject, and the same EngineAutoStarter interface consumed
@@ -823,31 +837,13 @@ func (m *MLXManager) InstallOrUpgrade(progress func(line string)) error {
 
 	// Step 3: install or upgrade mlx-lm.
 	pip := filepath.Join(m.venvDir, "bin", "pip")
-	args := []string{"install", "--upgrade", "mlx-lm"}
-	cmd := exec.Command(pip, args...)
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("pipe: %w", err)
+	cmd := exec.Command(pip, "install", "--upgrade", "mlx-lm")
+	if progress != nil {
+		pw := &pipProgressWriter{fn: progress}
+		cmd.Stdout = pw
+		cmd.Stderr = pw
 	}
-	cmd.Stderr = cmd.Stdout // merge stderr so progress lines are visible
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("pip install failed to start: %w", err)
-	}
-
-	buf := make([]byte, 4096)
-	for {
-		n, readErr := stdout.Read(buf)
-		if n > 0 && progress != nil {
-			progress(strings.TrimSpace(string(buf[:n])))
-		}
-		if readErr != nil {
-			break
-		}
-	}
-
-	if err := cmd.Wait(); err != nil {
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("pip install mlx-lm failed: %w", err)
 	}
 	// Refresh the cached package version so Status() and the UI reflect the new version.

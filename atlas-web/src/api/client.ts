@@ -57,6 +57,7 @@ import type {
   VoiceStatus,
   VoiceModelInfo,
   VoiceTranscribeResult,
+  VoiceOption,
   StorageStats,
 } from './contracts'
 
@@ -121,6 +122,7 @@ export type {
   VoiceStatus,
   VoiceModelInfo,
   VoiceTranscribeResult,
+  VoiceOption,
   StorageStats,
 } from './contracts'
 
@@ -532,13 +534,21 @@ export const api = {
    * pay the ~600 ms cold-start cost. Idempotent.
    */
   voiceKokoroWarmup: () => post<{ ok: boolean; port: number }>('/voice/kokoro/warmup', {}),
+  voiceWhisperUpdateBaseURL: () => BASE(),
+  voiceKokoroUpdateBaseURL: () => BASE(),
+  voiceVoices: (provider?: string) =>
+    get<VoiceOption[]>('/voice/voices' + (provider ? `?provider=${encodeURIComponent(provider)}` : '')),
   voiceTranscribe: async (blob: Blob, language?: string): Promise<VoiceTranscribeResult> => {
     const form = new FormData()
     const ext = blob.type.includes('wav') ? 'wav' : 'webm'
     form.append('audio', blob, `audio.${ext}`)
     const q = language ? `?language=${encodeURIComponent(language)}` : ''
-    const res = await fetch(`${BASE()}/voice/transcribe${q}`, { method: 'POST', body: form })
+    const res = await fetch(`${BASE()}/voice/transcribe${q}`, { method: 'POST', body: form, credentials: 'include' })
     if (!res.ok) {
+      if (res.status === 401 && typeof window !== 'undefined') {
+        window.location.reload()
+        throw new Error('Session expired — reloading')
+      }
       const text = await res.text().catch(() => res.statusText)
       let message = text
       try { const j = JSON.parse(text); if (j?.error) message = j.error } catch { /* use raw */ }
@@ -558,11 +568,12 @@ export const api = {
       onEnd: () => void
       onError?: (message: string) => void
     },
+    voice?: string,
   ): { abort: () => void } => {
     const ctrl = new AbortController()
     void (async () => {
       try {
-        const body: Record<string, unknown> = { text }
+        const body: Record<string, unknown> = { text, ...(voice ? { voice } : {}) }
         const res = await fetch(`${BASE()}/voice/synthesize`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
