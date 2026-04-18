@@ -188,6 +188,9 @@ func compactToolArtifacts(artifacts map[string]any) map[string]any {
 
 	out := make(map[string]any)
 	for _, key := range keys {
+		if strings.HasPrefix(key, "_") {
+			continue // underscore-prefixed keys are loop-internal (file paths, etc.) — never sent to the model
+		}
 		if value, ok := compactArtifactValue(artifacts[key]); ok {
 			out[key] = value
 		}

@@ -19,6 +19,12 @@ marked.use({
   gfm: true,
   breaks: true,
   renderer: {
+    image({ href, text }: { href: string; text?: string | null }) {
+      const safeHref = encodeURI(href ?? '')
+      const altAttr  = text ? ` alt="${text.replace(/"/g, '&quot;')}"` : ''
+      const downloadIcon = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v8M5 7l3 3 3-3M3 13h10"/></svg>`
+      return `<div class="generated-image-wrap"><img src="${safeHref}"${altAttr} /><a href="${safeHref}" download class="img-download-btn chat-copy-btn" title="Download image" aria-label="Download image">${downloadIcon}</a></div>`
+    },
     link({ href, title, text }: { href: string; title?: string | null; text: string }) {
       const safeHref = encodeURI(href ?? '')
       const titleAttr = title ? ` title="${title.replace(/"/g, '&quot;')}"` : ''
@@ -596,14 +602,16 @@ function renderMessageContent(
   const safeHtml = DOMPurify.sanitize(rawHtml, {
     ADD_ATTR: ['target', 'rel', 'class', 'type', 'title', 'aria-label', 'aria-hidden',
                'width', 'height', 'viewBox', 'fill', 'stroke', 'stroke-width',
-               'stroke-linecap', 'stroke-linejoin', 'd', 'x', 'y', 'rx', 'ry'],
+               'stroke-linecap', 'stroke-linejoin', 'd', 'x', 'y', 'rx', 'ry',
+               'src', 'alt', 'download'],
     FORCE_BODY: false,
     ALLOWED_TAGS: [
       'p', 'br', 'strong', 'b', 'em', 'i', 'code', 'pre', 'a',
       'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
       'table', 'thead', 'tbody', 'tr', 'th', 'td',
       'blockquote', 'hr', 's', 'del', 'span', 'div', 'button',
-      'svg', 'path', 'rect', 'circle', 'line', 'polyline', 'polygon'
+      'svg', 'path', 'rect', 'circle', 'line', 'polyline', 'polygon',
+      'img'
     ]
   })
 
@@ -804,6 +812,33 @@ function fileIcon(mimeType: string): JSX.Element {
 const FileAttachmentCard = ({ file }: { file: FileAttachment }) => {
   const downloadUrl = `/artifacts/${file.fileToken}`
   const isImage = file.mimeType.startsWith('image/')
+
+  if (isImage) {
+    return (
+      <div class="file-attachment-image" onClick={(e) => e.stopPropagation()}>
+        <img
+          src={downloadUrl}
+          class="file-attachment-image-img"
+          alt="Generated image"
+          loading="lazy"
+          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+        />
+        <a
+          href={downloadUrl}
+          download={file.filename}
+          class="file-attachment-image-dl"
+          aria-label="Download image"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 3v8M5 8l3 3 3-3"/>
+            <path d="M3 13h10"/>
+          </svg>
+        </a>
+      </div>
+    )
+  }
+
   return (
     <a
       href={downloadUrl}
@@ -813,17 +848,7 @@ const FileAttachmentCard = ({ file }: { file: FileAttachment }) => {
       class="file-attachment-card"
       onClick={(e) => e.stopPropagation()}
     >
-      {isImage ? (
-        <img
-          src={downloadUrl}
-          class="file-attachment-preview"
-          alt={file.filename}
-          loading="lazy"
-          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-        />
-      ) : (
-        <span class="file-attachment-icon">{fileIcon(file.mimeType)}</span>
-      )}
+      <span class="file-attachment-icon">{fileIcon(file.mimeType)}</span>
       <div class="file-attachment-meta">
         <span class="file-attachment-name">{file.filename}</span>
         <span class="file-attachment-size">{formatFileSize(file.fileSize)}</span>
@@ -2538,15 +2563,55 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
 
-  const copyMessage = async (id: string, content: string) => {
+  const copyMessage = async (id: string, msg: Message) => {
     if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current)
     setRevealedCopyId(id)
 
+    // Collect image attachments from both fileAttachments and blocks
+    const imageFiles: FileAttachment[] = [
+      ...(msg.fileAttachments ?? []).filter(f => f.mimeType.startsWith('image/')),
+      ...(msg.blocks ?? [])
+        .filter((b): b is Extract<MessageBlock, { type: 'file' }> => b.type === 'file')
+        .map(b => b.file)
+        .filter(f => f.mimeType.startsWith('image/')),
+    ]
+
     try {
-      await navigator.clipboard.writeText(content)
+      if (imageFiles.length > 0 && typeof ClipboardItem !== 'undefined') {
+        const token = imageFiles[0].fileToken
+        // Build an HTML blob with the image embedded as a data URL + the caption text.
+        // Using text/html (not image/png) means plain-text fields use text/plain while
+        // rich-text apps (Notes, Mail, Notion) paste both image and text together.
+        // Pass a Promise<Blob> so clipboard.write() fires within the user gesture.
+        const htmlBlobPromise: Promise<Blob> = fetch(`/artifacts/${token}`)
+          .then(r => r.blob())
+          .then(raw => new Promise<Blob>((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => {
+              const dataURL = reader.result as string
+              const caption = msg.content
+                ? `<p>${msg.content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</p>`
+                : ''
+              resolve(new Blob([`<img src="${dataURL}" />${caption}`], { type: 'text/html' }))
+            }
+            reader.onerror = reject
+            reader.readAsDataURL(raw)
+          }))
+
+        const types: Record<string, Blob | Promise<Blob>> = { 'text/html': htmlBlobPromise }
+        if (msg.content) types['text/plain'] = new Blob([msg.content], { type: 'text/plain' })
+        await navigator.clipboard.write([new ClipboardItem(types)])
+      } else {
+        await navigator.clipboard.writeText(msg.content)
+      }
       setCopyFeedback({ id, status: 'copied' })
     } catch {
-      setCopyFeedback({ id, status: 'failed' })
+      try {
+        await navigator.clipboard.writeText(msg.content)
+        setCopyFeedback({ id, status: 'copied' })
+      } catch {
+        setCopyFeedback({ id, status: 'failed' })
+      }
     }
 
     copyFeedbackTimer.current = setTimeout(() => {
@@ -2831,6 +2896,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                       setRevealedCopyId(current => current === msg.id ? null : msg.id)
                     }}
                   >
+                    {renderBlockList(messageRenderableBlocks(msg))}
                     {msg.content
                       ? (msg.role === 'assistant'
                           ? renderMessageContent(msg.content, msg.linkPreviews)
@@ -2839,7 +2905,6 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                           ? <TypingDots />
                           : null
                     }
-                    {renderBlockList(messageRenderableBlocks(msg))}
                   </div>
                   {!msg.isTyping && (msg.content || hasBlocks || msg.createdAt) && (
                     <div class="chat-message-meta">
@@ -2855,7 +2920,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                             class={`chat-meta-copy-btn${copyState !== 'idle' ? ` ${copyState}` : ''}`}
                             onClick={(e) => {
                               e.stopPropagation()
-                              copyMessage(msg.id, msg.content)
+                              copyMessage(msg.id, msg)
                             }}
                             title="Copy message"
                             aria-label={label}

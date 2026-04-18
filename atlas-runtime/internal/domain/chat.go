@@ -676,12 +676,7 @@ func (d *ChatDomain) getArtifact(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
-	// Serve images inline so the browser can preview; everything else as attachment.
-	if strings.HasPrefix(mimeType, "image/") {
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, filename))
-	} else {
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 
 	http.ServeContent(w, r, filename, info.ModTime(), f)

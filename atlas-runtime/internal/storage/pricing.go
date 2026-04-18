@@ -224,6 +224,57 @@ func lookupPrice(model string) (ModelPrice, bool) {
 	return ModelPrice{}, false
 }
 
+// ImageQualityPrice holds per-image USD cost for each quality tier.
+// Auto is treated the same as Medium (balanced default).
+// Sources: https://openai.com/api/pricing/ · https://ai.google.dev/gemini-api/docs/pricing
+// Last verified: April 2026.
+type ImageQualityPrice struct {
+	Low    float64
+	Medium float64
+	High   float64
+}
+
+// imageModelPricing is the per-image pricing table keyed by model ID.
+// Gemini models are priced per image regardless of quality (flat rate).
+var imageModelPricing = map[string]ImageQualityPrice{
+	// OpenAI — gpt-image-1 series (1024×1024)
+	"gpt-image-1":      {Low: 0.011, Medium: 0.042, High: 0.167},
+	"gpt-image-1-mini": {Low: 0.005, Medium: 0.011, High: 0.036},
+	"gpt-image-1.5":    {Low: 0.009, Medium: 0.034, High: 0.133},
+
+	// Gemini — flat per-image rate regardless of quality
+	"gemini-2.5-flash-image":          {Low: 0.039, Medium: 0.039, High: 0.039},
+	"gemini-3.1-flash-image-preview":  {Low: 0.039, Medium: 0.039, High: 0.039},
+}
+
+// ComputeImageCost returns the estimated USD cost for one generated image.
+// auto quality maps to Medium. Returns (0, false) for unknown models.
+func ComputeImageCost(model, quality string) (costPerImage float64, known bool) {
+	p, ok := imageModelPricing[model]
+	if !ok {
+		// Family fallback for gpt-image-1 variants.
+		if strings.HasPrefix(model, "gpt-image-1-mini") {
+			p = imageModelPricing["gpt-image-1-mini"]
+		} else if strings.HasPrefix(model, "gpt-image-1.5") {
+			p = imageModelPricing["gpt-image-1.5"]
+		} else if strings.HasPrefix(model, "gpt-image-1") {
+			p = imageModelPricing["gpt-image-1"]
+		} else if strings.HasPrefix(model, "gemini-") {
+			p = imageModelPricing["gemini-2.5-flash-image"]
+		} else {
+			return 0, false
+		}
+	}
+	switch quality {
+	case "low":
+		return p.Low, true
+	case "high":
+		return p.High, true
+	default: // medium, auto, ""
+		return p.Medium, true
+	}
+}
+
 // ComputeCost returns estimated USD costs for one turn.
 // Local providers (lm_studio, ollama, atlas_engine) always return $0, known=true.
 // Unknown cloud models return $0, known=false so the caller can log a warning.

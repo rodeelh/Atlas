@@ -2854,6 +2854,51 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   background: transparent;
 }
 
+/* Generated images — constrain to bubble width, never overflow */
+.generated-image-wrap {
+  position: relative;
+  display: inline-block;
+  margin-top: 6px;
+  max-width: 100%;
+}
+
+.generated-image-wrap img,
+.message-markdown img {
+  max-width: 100%;
+  max-height: 480px;
+  width: auto;
+  height: auto;
+  border-radius: 8px;
+  display: block;
+}
+
+.img-download-btn {
+  position: absolute;
+  bottom: 7px;
+  right: 7px;
+  width: 14px !important;
+  height: 14px !important;
+  padding: 4px !important;
+  opacity: 0;
+  background: rgba(0, 0, 0, 0.35) !important;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2) !important;
+  border-radius: 6px !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.generated-image-wrap:hover .img-download-btn {
+  opacity: 1;
+}
+
+.img-download-btn:hover {
+  background: rgba(0, 0, 0, 0.55) !important;
+  opacity: 1;
+}
+
 /* Prevent .message-markdown pre from double-styling code-block pre */
 .message-markdown .code-block pre {
   margin: 0;
@@ -3282,7 +3327,7 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 10px;
+  margin-bottom: 10px;
 }
 
 .chat-rich-card {
@@ -3552,6 +3597,47 @@ input[type="checkbox"]:not(.toggle input):checked::after {
 .file-attachment-card:hover .file-attachment-dl {
   opacity: 1;
   color: var(--accent);
+}
+
+/* Image attachment — full image with download overlay, no metadata row */
+.file-attachment-image {
+  display: inline-block;
+  position: relative;
+  border-radius: 10px;
+  max-width: 480px;
+  cursor: default;
+  text-decoration: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.file-attachment-image-img {
+  display: block;
+  width: 100%;
+  max-width: 480px;
+  height: auto;
+  border-radius: 10px;
+  background: var(--surface-3, rgba(0,0,0,0.05));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.file-attachment-image-dl {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.32);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.file-attachment-image:hover .file-attachment-image-dl {
+  opacity: 1;
 }
 
 /* ── Map cards ───────────────────────────────────────────────────────────────── */

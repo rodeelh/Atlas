@@ -40,6 +40,8 @@ type CloudModelsConfig struct {
 	SelectedGeminiFastModel     string               `json:"selectedGeminiFastModel"`
 	SelectedOpenRouterFastModel string               `json:"selectedOpenRouterFastModel"`
 	OpenRouterModelCache        OpenRouterModelCache `json:"openRouterModelCache"`
+	SelectedOpenAIImageModel    string               `json:"selectedOpenAIImageModel"`
+	SelectedGeminiImageModel    string               `json:"selectedGeminiImageModel"`
 }
 
 // LMStudioConfig groups LM Studio local provider settings.

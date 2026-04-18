@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,6 +20,8 @@ import (
 	"atlas-runtime-go/internal/mind"
 	"atlas-runtime-go/internal/skills"
 	"atlas-runtime-go/internal/storage"
+
+	"github.com/google/uuid"
 )
 
 // MessageAttachment is a file attached to a message. Data is raw base64 (no
@@ -138,6 +141,13 @@ func NewService(db *storage.DB, cfgStore *config.Store, bc *Broadcaster, reg *sk
 	// research, and other direct LLM calls are tracked alongside chat turns.
 	agent.NonAgenticUsageHook = func(ctx context.Context, provider agent.ProviderConfig, usage agent.TokenUsage) {
 		s.recordTokenUsage("", provider, usage)
+	}
+	// Wire the image usage hook to persist image generation events.
+	skills.ImageUsageHook = func(provider, model, quality string, count int) {
+		cost, _ := storage.ComputeImageCost(model, quality)
+		if err := db.RecordImageUsage(provider, model, quality, count, cost*float64(count)); err != nil {
+			logstore.Write("warn", "image usage record failed: "+err.Error(), nil)
+		}
 	}
 	return s
 }
@@ -276,6 +286,39 @@ func appendRequestToolsMeta(tools []map[string]any) []map[string]any {
 	return out
 }
 
+// saveImageAttachments writes each image attachment to the generated-images
+// directory and returns the saved absolute paths in the same order as the
+// input slice. Non-image attachments produce an empty string entry.
+// Errors are silently ignored — the caller still gets the base64 inline data.
+func saveImageAttachments(attachments []MessageAttachment) []string {
+	paths := make([]string, len(attachments))
+	for i, a := range attachments {
+		if !strings.HasPrefix(a.MimeType, "image/") {
+			continue
+		}
+		decoded, err := base64.StdEncoding.DecodeString(a.Data)
+		if err != nil {
+			continue
+		}
+		ext := ".png"
+		switch a.MimeType {
+		case "image/jpeg":
+			ext = ".jpg"
+		case "image/gif":
+			ext = ".gif"
+		case "image/webp":
+			ext = ".webp"
+		}
+		filename := "upload-" + uuid.New().String() + ext
+		dest := filepath.Join(config.GeneratedImagesDir(), filename)
+		if err := os.WriteFile(dest, decoded, 0o644); err != nil {
+			continue
+		}
+		paths[i] = dest
+	}
+	return paths
+}
+
 // buildUserContent converts the message text and any attachments into the
 // content value for the user OAIMessage.
 //
@@ -288,14 +331,39 @@ func appendRequestToolsMeta(tools []map[string]any) []map[string]any {
 // Images are embedded for cloud providers (OpenAI, Anthropic, Gemini) only.
 // Call sites are responsible for handling LM Studio separately (degradation).
 // PDFs are always embedded for all providers that accept them.
-func buildUserContent(text string, attachments []MessageAttachment) any {
+//
+// savedPaths, if non-nil, must be the same length as attachments and contain
+// the local file path for each saved image (empty string if not saved).
+// These paths are appended as a text note so the model can reference them
+// when calling image.edit.
+func buildUserContent(text string, attachments []MessageAttachment, savedPaths []string) any {
 	if len(attachments) == 0 {
 		return text
 	}
 	var parts []map[string]any
-	if text != "" {
-		parts = append(parts, map[string]any{"type": "text", "text": text})
+
+	// Collect saved paths for the trailing note.
+	var localPaths []string
+	for i, a := range attachments {
+		if strings.HasPrefix(a.MimeType, "image/") && i < len(savedPaths) && savedPaths[i] != "" {
+			localPaths = append(localPaths, savedPaths[i])
+		}
 	}
+
+	// Build the text part, appending local paths so the model can use image.edit.
+	msgText := text
+	if len(localPaths) > 0 {
+		note := "\n\n[Attached image(s) saved locally for editing]"
+		for _, p := range localPaths {
+			note += "\n• " + p
+		}
+		note += "\nUse these absolute paths with image.edit if you need to edit an attached image."
+		msgText += note
+	}
+	if msgText != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": msgText})
+	}
+
 	for _, a := range attachments {
 		parts = append(parts, map[string]any{
 			"type": "image_url",
@@ -671,9 +739,10 @@ func (s *Service) buildTurnMessages(
 			historyChars += len(m.Content)
 		}
 	}
+	savedPaths := saveImageAttachments(req.Attachments)
 	oaiMessages = append(oaiMessages, agent.OAIMessage{
 		Role:    "user",
-		Content: buildUserContent(req.Message, req.Attachments),
+		Content: buildUserContent(req.Message, req.Attachments, savedPaths),
 	})
 	return
 }

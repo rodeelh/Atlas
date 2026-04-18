@@ -87,7 +87,15 @@ func MLXVenvDir() string {
 // receives, or sends — unless the user or a skill specifies a different path.
 // Created on first access if it does not exist.
 func FilesDir() string {
-	dir := filepath.Join(SupportDir(), "files")
+	dir := filepath.Join(AtlasInstallDir(), "files")
+	_ = os.MkdirAll(dir, 0o755)
+	return dir
+}
+
+// GeneratedImagesDir returns the directory where AI-generated images are saved.
+// Created on first access if it does not exist.
+func GeneratedImagesDir() string {
+	dir := filepath.Join(FilesDir(), "images")
 	_ = os.MkdirAll(dir, 0o755)
 	return dir
 }

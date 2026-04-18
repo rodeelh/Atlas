@@ -399,6 +399,21 @@ func (db *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_token_usage_provider_model
 			ON token_usage(provider, model)`,
 
+		// image_usage — one row per image generation call.
+		`CREATE TABLE IF NOT EXISTS image_usage (
+			id           TEXT PRIMARY KEY,
+			provider     TEXT NOT NULL,
+			model        TEXT NOT NULL,
+			quality      TEXT NOT NULL,
+			image_count  INTEGER NOT NULL DEFAULT 1,
+			cost_usd     REAL NOT NULL DEFAULT 0.0,
+			recorded_at  TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_image_usage_recorded_at
+			ON image_usage(recorded_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_image_usage_provider_model
+			ON image_usage(provider, model)`,
+
 		// mind_telemetry — event log for the mind-thoughts subsystem.
 		// Every interesting event (nap start/complete/fail, thought
 		// add/update/reinforce/discard/merge, surfacing, engagement,
@@ -3975,6 +3990,88 @@ func (db *DB) TokenUsageDeleteBefore(before string) (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// ── Image usage ───────────────────────────────────────────────────────────────
+
+// ImageUsageRow is one recorded image generation event.
+type ImageUsageRow struct {
+	Provider   string
+	Model      string
+	Quality    string
+	ImageCount int
+	CostUSD    float64
+	RecordedAt string
+}
+
+// ImageUsageSummary holds aggregated image generation stats.
+type ImageUsageSummary struct {
+	TotalImages  int64
+	TotalCostUSD float64
+	ByModel      []ImageModelBreakdown
+}
+
+// ImageModelBreakdown is per-model image stats.
+type ImageModelBreakdown struct {
+	Provider    string
+	Model       string
+	ImageCount  int64
+	TotalCostUSD float64
+}
+
+// RecordImageUsage persists one image generation event.
+func (db *DB) RecordImageUsage(provider, model, quality string, count int, costUSD float64) error {
+	id := fmt.Sprintf("img-%d", time.Now().UnixNano())
+	recordedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := db.conn.Exec(
+		`INSERT INTO image_usage (id, provider, model, quality, image_count, cost_usd, recorded_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, provider, model, quality, count, costUSD, recordedAt,
+	)
+	return err
+}
+
+// GetImageUsageSummary returns aggregated image usage stats for the given date range.
+func (db *DB) GetImageUsageSummary(since, until string) (ImageUsageSummary, error) {
+	var summary ImageUsageSummary
+
+	args := []any{}
+	where := "1=1"
+	if since != "" {
+		where += " AND recorded_at >= ?"
+		args = append(args, since)
+	}
+	if until != "" {
+		where += " AND recorded_at <= ?"
+		args = append(args, until)
+	}
+
+	row := db.conn.QueryRow(
+		"SELECT COALESCE(SUM(image_count),0), COALESCE(SUM(cost_usd),0) FROM image_usage WHERE "+where,
+		args...,
+	)
+	if err := row.Scan(&summary.TotalImages, &summary.TotalCostUSD); err != nil {
+		return summary, err
+	}
+
+	rows, err := db.conn.Query(
+		`SELECT provider, model, SUM(image_count), SUM(cost_usd)
+		 FROM image_usage WHERE `+where+`
+		 GROUP BY provider, model ORDER BY SUM(cost_usd) DESC`,
+		args...,
+	)
+	if err != nil {
+		return summary, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var b ImageModelBreakdown
+		if err := rows.Scan(&b.Provider, &b.Model, &b.ImageCount, &b.TotalCostUSD); err != nil {
+			return summary, err
+		}
+		summary.ByModel = append(summary.ByModel, b)
+	}
+	return summary, rows.Err()
 }
 
 // ── Local auth credentials ────────────────────────────────────────────────────

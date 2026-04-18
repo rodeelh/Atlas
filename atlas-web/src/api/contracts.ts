@@ -71,6 +71,8 @@ export interface RuntimeConfig {
   selectedAnthropicFastModel: string;
   selectedGeminiFastModel: string;
   selectedOpenRouterFastModel: string;
+  selectedOpenAIImageModel?: string;
+  selectedGeminiImageModel?: string;
   selectedLMStudioModel: string;
   selectedLMStudioModelFast: string;
   lmStudioContextWindowLimit: number;
@@ -791,6 +793,13 @@ export interface LinkPreview {
   domain?: string;
 }
 
+export interface ImageModelBreakdown {
+  provider: string;
+  model: string;
+  imageCount: number;
+  totalCostUSD: number;
+}
+
 export interface TokenUsageSummary {
   totalInputTokens: number;
   totalCachedInputTokens: number;
@@ -800,6 +809,9 @@ export interface TokenUsageSummary {
   turnCount: number;
   byModel: ModelUsageBreakdown[];
   dailySeries: DailyUsageSeries[];
+  imageTotalCount: number;
+  imageTotalCostUSD: number;
+  imageByModel: ImageModelBreakdown[];
 }
 
 export interface ModelUsageBreakdown {

@@ -28,6 +28,17 @@ const CLOUD_PROVIDERS = [
   { id: 'openrouter', label: 'OpenRouter',         recommended: false },
 ] as const
 
+const OPENAI_IMAGE_MODELS = [
+  { id: 'gpt-image-1.5',    label: 'GPT Image 1.5 (recommended)' },
+  { id: 'gpt-image-1',      label: 'GPT Image 1' },
+  { id: 'gpt-image-1-mini', label: 'GPT Image 1 Mini' },
+] as const
+
+const GEMINI_IMAGE_MODELS = [
+  { id: 'gemini-2.5-flash-image',          label: 'Gemini 2.5 Flash Image (default)' },
+  { id: 'gemini-3.1-flash-image-preview',  label: 'Gemini 3.1 Flash Image (preview)' },
+] as const
+
 const LOCAL_BACKENDS = [
   { id: 'atlas_engine', label: 'Llama' },
   { id: 'atlas_mlx', label: 'MLX' },
@@ -364,6 +375,24 @@ export function AIProviders() {
     }
   }
 
+  const cloudImageValue = (() => {
+    switch (cloudProvider) {
+      case 'gemini': return draft.selectedGeminiImageModel ?? ''
+      case 'openai': return draft.selectedOpenAIImageModel ?? ''
+      default: return ''
+    }
+  })()
+
+  const setCloudImageValue = (value: string) => {
+    switch (cloudProvider) {
+      case 'gemini': update('selectedGeminiImageModel', value); break
+      case 'openai': update('selectedOpenAIImageModel', value); break
+    }
+  }
+
+  const cloudImageModels = cloudProvider === 'gemini' ? GEMINI_IMAGE_MODELS : OPENAI_IMAGE_MODELS
+  const supportsImageGen = cloudProvider === 'openai' || cloudProvider === 'gemini'
+
   const setLocalPrimaryValue = (value: string) => {
     switch (localBackend) {
       case 'ollama': update('selectedOllamaModel', value); break
@@ -569,6 +598,24 @@ export function AIProviders() {
                 options={cloudModels?.availableModels ?? []}
                 optionFormatter={(model) => model.displayName}
               />
+              {supportsImageGen && (
+                <SettingsRow
+                  label="Image generation model"
+                  sublabel="Model used by the image.generate skill"
+                  fieldId="ai-provider-cloud-image-model"
+                >
+                  <select
+                    id="ai-provider-cloud-image-model"
+                    class="input"
+                    value={cloudImageValue}
+                    onChange={(e) => setCloudImageValue((e.target as HTMLSelectElement).value)}
+                  >
+                    {cloudImageModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                </SettingsRow>
+              )}
               <SettingsRow
                 label="API key"
                 sublabel="Stored in Keychain and used for live requests"
@@ -652,6 +699,24 @@ export function AIProviders() {
           <details class="ai-provider-advanced-panel">
             <summary>Advanced hybrid options</summary>
             <div class="ai-provider-advanced-panel-body">
+              {supportsImageGen && (
+                <SettingsRow
+                  label="Image generation model"
+                  sublabel="Model used by the image.generate skill"
+                  fieldId="ai-provider-hybrid-image-model"
+                >
+                  <select
+                    id="ai-provider-hybrid-image-model"
+                    class="input"
+                    value={cloudImageValue}
+                    onChange={(e) => setCloudImageValue((e.target as HTMLSelectElement).value)}
+                  >
+                    {cloudImageModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                </SettingsRow>
+              )}
               {localBackendSupportsHeavyBackgroundToggle(hybridBackend) && (
                 <SettingsRow
                   label="Use local for memory and reflection"

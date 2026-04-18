@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -71,6 +72,18 @@ func (d *ControlDomain) Register(r chi.Router) {
 	r.Get("/storage/stats", d.getStorageStats)
 	r.Delete("/storage/files", d.deleteStorageFiles)
 	r.Post("/storage/open-folder", d.postStorageOpenFolder)
+
+	// Serve locally-saved generated images (DALL-E downloads, etc.).
+	imagesDir := config.GeneratedImagesDir()
+	r.Get("/files/images/{filename}", func(w http.ResponseWriter, req *http.Request) {
+		filename := chi.URLParam(req, "filename")
+		// Only allow simple filenames — no path traversal.
+		if strings.ContainsAny(filename, "/\\") || strings.HasPrefix(filename, ".") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.ServeFile(w, req, filepath.Join(imagesDir, filename))
+	})
 }
 
 func (d *ControlDomain) getStatus(w http.ResponseWriter, _ *http.Request) {
@@ -319,22 +332,18 @@ type StorageStats struct {
 
 func (d *ControlDomain) getStorageStats(w http.ResponseWriter, _ *http.Request) {
 	dir := config.FilesDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		writeJSON(w, http.StatusOK, StorageStats{Dir: dir})
-		return
-	}
 	var count int
 	var total int64
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
+	_ = filepath.WalkDir(dir, func(_ string, de fs.DirEntry, err error) error {
+		if err != nil || de.IsDir() {
+			return nil
 		}
 		count++
-		if info, err := e.Info(); err == nil {
+		if info, err := de.Info(); err == nil {
 			total += info.Size()
 		}
-	}
+		return nil
+	})
 	writeJSON(w, http.StatusOK, StorageStats{Dir: dir, FileCount: count, TotalSize: total})
 }
 
@@ -355,10 +364,12 @@ func (d *ControlDomain) deleteStorageFiles(w http.ResponseWriter, _ *http.Reques
 		return
 	}
 	for _, e := range entries {
+		path := filepath.Join(dir, e.Name())
 		if e.IsDir() {
-			continue
+			_ = os.RemoveAll(path)
+		} else {
+			_ = os.Remove(path)
 		}
-		_ = os.Remove(filepath.Join(dir, e.Name()))
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

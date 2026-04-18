@@ -3,7 +3,7 @@ import { api } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { PageSpinner } from '../components/PageSpinner'
 import { ErrorBanner } from '../components/ErrorBanner'
-import type { TokenUsageSummary, TokenUsageEvent, DailyUsageSeries } from '../api/contracts'
+import type { TokenUsageSummary, TokenUsageEvent, DailyUsageSeries, ImageModelBreakdown } from '../api/contracts'
 import { formatProviderModelName } from '../modelName'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 
@@ -483,7 +483,7 @@ export function Usage() {
       {/* ── Model breakdown ────────────────────────────────── */}
       <div class="card">
         <div class="card-header">
-          <span class="card-title">By Model</span>
+          <span class="card-title">LLM Usage — By Model</span>
         </div>
 
         {!summary || summary.byModel.length === 0 ? (
@@ -736,6 +736,87 @@ export function Usage() {
           )
         })()}
       </div>
+
+      {/* ── Image generation ──────────────────────────────── */}
+      {summary && (summary.imageTotalCount > 0 || summary.imageByModel?.length > 0) && (
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Image Generation — By Model</span>
+          </div>
+
+          {summary.imageByModel?.length === 0 ? (
+            <div class="empty-state" style={{ padding: '32px 0', minHeight: 'unset' }}>
+              <p>No data for this period</p>
+            </div>
+          ) : (
+            <>
+              {/* Column headers */}
+              <div class="row" style={{ paddingTop: '8px', paddingBottom: '8px', background: 'var(--surface-2)', position: 'sticky', top: 0, zIndex: 1 }}>
+                <div style={{ flex: '0 0 96px' }}>
+                  <span class="stat-label" style={{ marginBottom: 0 }}>Provider</span>
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <span class="stat-label" style={{ marginBottom: 0 }}>Model</span>
+                </div>
+                <div style={{ flex: '0 0 80px', textAlign: 'right' }}>
+                  <span class="stat-label" style={{ marginBottom: 0 }}>Images</span>
+                </div>
+                <div style={{ flex: '0 0 80px', textAlign: 'right' }}>
+                  <span class="stat-label" style={{ marginBottom: 0 }}>Cost</span>
+                </div>
+                <div style={{ flex: '0 0 96px', textAlign: 'right' }}>
+                  <span class="stat-label" style={{ marginBottom: 0 }}>Avg / Image</span>
+                </div>
+              </div>
+
+              {/* Rows */}
+              {summary.imageByModel.map((im: ImageModelBreakdown, i: number) => (
+                <div class="row" key={i} style={{ background: i % 2 === 1 ? 'var(--row-alt)' : undefined }}>
+                  <div style={{ flex: '0 0 96px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: providerDotColor(im.provider), flexShrink: 0, display: 'inline-block' }} />
+                    <span style={{ fontSize: '12px', color: 'var(--theme-text-primary)', whiteSpace: 'nowrap' }}>{providerLabel(im.provider)}</span>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                    <span class="skill-name" style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 400, display: 'block', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                      {im.model}
+                    </span>
+                  </div>
+                  <div style={{ flex: '0 0 80px', textAlign: 'right' }}>
+                    <span class="stat-value">{im.imageCount}</span>
+                  </div>
+                  <div style={{ flex: '0 0 80px', textAlign: 'right' }}>
+                    <span class="stat-value">{fmtCost(im.totalCostUSD)}</span>
+                  </div>
+                  <div style={{ flex: '0 0 96px', textAlign: 'right' }}>
+                    <span class="stat-value">
+                      {im.imageCount > 0 ? fmtCost(im.totalCostUSD / im.imageCount) : '—'}
+                    </span>
+                  </div>
+                </div>
+              ))}
+
+              {/* Totals footer */}
+              <div class="row" style={{ paddingTop: '8px', paddingBottom: '8px', borderTop: '1px solid var(--theme-border-subtle)', background: 'var(--surface-2)' }}>
+                <div style={{ flex: '0 0 96px' }} />
+                <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                  <span class="stat-label" style={{ marginBottom: 0, display: 'block', whiteSpace: 'nowrap' }}>Total</span>
+                </div>
+                <div style={{ flex: '0 0 80px', textAlign: 'right' }}>
+                  <span class="stat-note">{summary.imageTotalCount}</span>
+                </div>
+                <div style={{ flex: '0 0 80px', textAlign: 'right' }}>
+                  <span class="stat-note">{fmtCost(summary.imageTotalCostUSD)}</span>
+                </div>
+                <div style={{ flex: '0 0 96px', textAlign: 'right' }}>
+                  <span class="stat-note">
+                    {summary.imageTotalCount > 0 ? fmtCost(summary.imageTotalCostUSD / summary.imageTotalCount) : '—'}
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* ── Recent events (collapsible) ────────────────────── */}
       <div class="section-label activity-log-header">

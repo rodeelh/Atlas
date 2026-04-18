@@ -74,15 +74,29 @@ func (m *Module) getSummary(w http.ResponseWriter, r *http.Request) {
 		CostUSD           float64 `json:"costUSD"`
 		TurnCount         int64   `json:"turnCount"`
 	}
+	imageSummary, err := m.db.GetImageUsageSummary(since, until)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to query image usage: "+err.Error())
+		return
+	}
+	type imageModelBreakdown struct {
+		Provider     string  `json:"provider"`
+		Model        string  `json:"model"`
+		ImageCount   int64   `json:"imageCount"`
+		TotalCostUSD float64 `json:"totalCostUSD"`
+	}
 	type response struct {
-		TotalInputTokens       int64            `json:"totalInputTokens"`
-		TotalCachedInputTokens int64            `json:"totalCachedInputTokens"`
-		TotalOutputTokens      int64            `json:"totalOutputTokens"`
-		TotalTokens            int64            `json:"totalTokens"`
-		TotalCostUSD           float64          `json:"totalCostUSD"`
-		TurnCount              int64            `json:"turnCount"`
-		ByModel                []modelBreakdown `json:"byModel"`
-		DailySeries            []dailySeries    `json:"dailySeries"`
+		TotalInputTokens       int64                 `json:"totalInputTokens"`
+		TotalCachedInputTokens int64                 `json:"totalCachedInputTokens"`
+		TotalOutputTokens      int64                 `json:"totalOutputTokens"`
+		TotalTokens            int64                 `json:"totalTokens"`
+		TotalCostUSD           float64               `json:"totalCostUSD"`
+		TurnCount              int64                 `json:"turnCount"`
+		ByModel                []modelBreakdown      `json:"byModel"`
+		DailySeries            []dailySeries         `json:"dailySeries"`
+		ImageTotalCount        int64                 `json:"imageTotalCount"`
+		ImageTotalCostUSD      float64               `json:"imageTotalCostUSD"`
+		ImageByModel           []imageModelBreakdown `json:"imageByModel"`
 	}
 	resp := response{
 		TotalInputTokens:       summary.TotalInputTokens,
@@ -93,6 +107,9 @@ func (m *Module) getSummary(w http.ResponseWriter, r *http.Request) {
 		TurnCount:              summary.TurnCount,
 		ByModel:                make([]modelBreakdown, 0, len(summary.ByModel)),
 		DailySeries:            make([]dailySeries, 0, len(summary.DailySeries)),
+		ImageTotalCount:        imageSummary.TotalImages,
+		ImageTotalCostUSD:      imageSummary.TotalCostUSD,
+		ImageByModel:           make([]imageModelBreakdown, 0, len(imageSummary.ByModel)),
 	}
 	for _, bm := range summary.ByModel {
 		resp.ByModel = append(resp.ByModel, modelBreakdown{
@@ -104,6 +121,11 @@ func (m *Module) getSummary(w http.ResponseWriter, r *http.Request) {
 		resp.DailySeries = append(resp.DailySeries, dailySeries{
 			Date: ds.Date, InputTokens: ds.InputTokens, CachedInputTokens: ds.CachedInputTokens, OutputTokens: ds.OutputTokens,
 			TotalTokens: ds.TotalTokens, CostUSD: ds.CostUSD, TurnCount: ds.TurnCount,
+		})
+	}
+	for _, im := range imageSummary.ByModel {
+		resp.ImageByModel = append(resp.ImageByModel, imageModelBreakdown{
+			Provider: im.Provider, Model: im.Model, ImageCount: im.ImageCount, TotalCostUSD: im.TotalCostUSD,
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
