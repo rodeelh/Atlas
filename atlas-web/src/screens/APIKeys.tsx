@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'preact/hooks'
+import { useState, useEffect, useRef } from 'preact/hooks' // useRef kept for loadingRef
 import { api, APIKeyStatus } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { PageSpinner } from '../components/PageSpinner'
@@ -17,18 +17,26 @@ function fromKeychainKey(key: string): string {
 }
 
 const KNOWN_PROVIDERS = [
-  { id: 'openai',      label: 'OpenAI',              sublabel: 'API key for OpenAI models (GPT-5.4, GPT-5.4 Mini, GPT-4.1 etc.)',     key: 'openAIKeySet'      },
-  { id: 'anthropic',   label: 'Anthropic',           sublabel: 'API key for Claude models (Sonnet, Opus, Haiku)',                     key: 'anthropicKeySet'   },
-  { id: 'gemini',      label: 'Google Gemini',       sublabel: 'API key for Gemini models (Flash, Pro etc.)',                        key: 'geminiKeySet'      },
-  { id: 'elevenlabs',  label: 'ElevenLabs',          sublabel: 'API key for ElevenLabs speech synthesis and transcription',                key: 'elevenLabsKeySet'  },
-  { id: 'openrouter',  label: 'OpenRouter',          sublabel: 'API key for OpenRouter models and routers',                           key: 'openRouterKeySet'  },
-  { id: 'lm_studio',   label: 'LM Studio',           sublabel: 'Optional Bearer token for LM Studio v0.4.8+ authentication',         key: 'lmStudioKeySet'    },
-  { id: 'telegram',    label: 'Telegram Bot',        sublabel: 'Required for Telegram integration',                                   key: 'telegramTokenSet'  },
-  { id: 'discord',     label: 'Discord Bot',         sublabel: 'Connects Atlas through your Discord bot token',                      key: 'discordTokenSet'   },
-  { id: 'slackBot',    label: 'Slack Bot Token',     sublabel: 'Use the Bot User OAuth Token (xoxb-) for Slack DMs and @mentions',   key: 'slackBotTokenSet'  },
-  { id: 'slackApp',    label: 'Slack App Token',     sublabel: 'Use the App-Level Token (xapp-) for Slack Socket Mode connectivity', key: 'slackAppTokenSet'  },
-  { id: 'braveSearch', label: 'Brave Search',        sublabel: 'Enables the Web Search skill (websearch.query)',                      key: 'braveSearchKeySet' },
-  { id: 'finnhub',     label: 'Finnhub',             sublabel: 'Enables real-time stock quotes via the Finance skill (optional — falls back to Yahoo Finance)', key: 'finnhubKeySet'     },
+  { id: 'openai',      label: 'OpenAI',          group: 'ai',       sublabel: 'API key for OpenAI models (GPT-5.4, GPT-5.4 Mini, GPT-4.1 etc.)',                      key: 'openAIKeySet'      },
+  { id: 'anthropic',   label: 'Anthropic',       group: 'ai',       sublabel: 'API key for Claude models (Sonnet, Opus, Haiku)',                                       key: 'anthropicKeySet'   },
+  { id: 'gemini',      label: 'Google Gemini',   group: 'ai',       sublabel: 'API key for Gemini models (Flash, Pro etc.)',                                           key: 'geminiKeySet'      },
+  { id: 'openrouter',  label: 'OpenRouter',      group: 'ai',       sublabel: 'API key for OpenRouter models and routers',                                             key: 'openRouterKeySet'  },
+  { id: 'lm_studio',   label: 'LM Studio',       group: 'ai',       sublabel: 'Optional Bearer token for LM Studio v0.4.8+ authentication',                           key: 'lmStudioKeySet'    },
+  { id: 'elevenlabs',  label: 'ElevenLabs',      group: 'ai',       sublabel: 'API key for ElevenLabs speech synthesis and transcription',                            key: 'elevenLabsKeySet'  },
+  { id: 'telegram',    label: 'Telegram Bot',    group: 'messaging', sublabel: 'Required for Telegram integration',                                                    key: 'telegramTokenSet'  },
+  { id: 'discord',     label: 'Discord Bot',     group: 'messaging', sublabel: 'Connects Atlas through your Discord bot token',                                       key: 'discordTokenSet'   },
+  { id: 'slackBot',    label: 'Slack Bot Token', group: 'messaging', sublabel: 'Use the Bot User OAuth Token (xoxb-) for Slack DMs and @mentions',                    key: 'slackBotTokenSet'  },
+  { id: 'slackApp',    label: 'Slack App Token', group: 'messaging', sublabel: 'Use the App-Level Token (xapp-) for Slack Socket Mode connectivity',                  key: 'slackAppTokenSet'  },
+  { id: 'braveSearch', label: 'Brave Search',    group: 'skills',   sublabel: 'Enables web search skills — preferred over DuckDuckGo fallback',                       key: 'braveSearchKeySet' },
+  { id: 'finnhub',     label: 'Finnhub',         group: 'skills',   sublabel: 'Real-time stock quotes via the Finance skill (optional — falls back to Yahoo Finance)', key: 'finnhubKeySet'     },
+  { id: 'x',           label: 'X (Twitter)',     group: 'skills',   sublabel: 'Bearer token for the X API v2 — enables web.search_x to search posts',                 key: 'xTokenSet'         },
+  { id: 'perplexity',  label: 'Perplexity',      group: 'skills',   sublabel: 'Perplexity Sonar API key — enables web.ask AI-synthesized answers with citations',     key: 'perplexityKeySet'  },
+] as const
+
+const PROVIDER_GROUPS = [
+  { id: 'ai',        title: 'AI Models'   },
+  { id: 'messaging', title: 'Messaging'   },
+  { id: 'skills',    title: 'Skills'      },
 ] as const
 const BADGE_STYLE = { fontSize: '11px', padding: '2px 8px' } as const
 
@@ -52,11 +60,12 @@ export function APIKeys() {
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState<string | null>(null)
   const [addingNew, setAddingNew] = useState(false)
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const [search, setSearch]       = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
-  const loadingRef                = useRef(false)
-  const searchInputRef            = useRef<HTMLInputElement>(null)
-  const searchContainerRef        = useRef<HTMLDivElement>(null)
+  const loadingRef       = useRef(false)
+  const searchInputRef   = useRef<HTMLInputElement>(null)
+  const searchContainerRef = useRef<HTMLDivElement>(null)
 
   const loadKeys = () => {
     if (loadingRef.current) return
@@ -78,7 +87,6 @@ export function APIKeys() {
     return () => window.removeEventListener('focus', onFocus)
   }, [])
 
-  // Close search on click-outside
   useEffect(() => {
     if (!searchOpen) return
     const handler = (e: MouseEvent) => {
@@ -132,17 +140,7 @@ export function APIKeys() {
     })
   })()
 
-  const keyStatusMap     = keyStatus as Record<string, unknown> | null
-  const searchQuery      = search.trim().toLowerCase()
-  const configuredRows   = providers.filter(p => keyStatusMap?.[p.key] === true)
-  const unconfiguredRows = providers.filter(p => keyStatusMap?.[p.key] !== true)
-
-  const searchResults = searchQuery
-    ? providers.filter(p =>
-        p.label.toLowerCase().includes(searchQuery) ||
-        p.sublabel.toLowerCase().includes(searchQuery)
-      )
-    : null
+  const keyStatusMap = keyStatus as Record<string, unknown> | null
 
   return (
     <div class="screen credentials-screen">
@@ -150,140 +148,163 @@ export function APIKeys() {
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
 
-      {/* Built-in providers */}
-      <div>
-        <div class="card settings-group">
-          <div class="card-header">
-            <span class="card-title">Providers</span>
-            <div ref={searchContainerRef} class={`chat-history-search${searchOpen ? ' open' : ''}`}>
-              <button
-                class="chat-history-search-trigger"
-                onClick={() => {
-                  if (!searchOpen) {
-                    setSearchOpen(true)
-                    setTimeout(() => searchInputRef.current?.focus(), 180)
-                  }
-                }}
-                title="Search providers"
-                aria-label="Search providers"
-              >
-                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="6.5" cy="6.5" r="4.5" /><line x1="10" y1="10" x2="14" y2="14" />
-                </svg>
-              </button>
-              <input
-                ref={searchInputRef}
-                class="chat-history-search-input"
-                type="text"
-                placeholder="Search providers…"
-                value={search}
-                onInput={e => setSearch((e.target as HTMLInputElement).value)}
-                onKeyDown={e => {
-                  if (e.key === 'Escape') { setSearchOpen(false); setSearch('') }
-                }}
-                tabIndex={searchOpen ? 0 : -1}
-              />
-              <button
-                class="chat-history-close-btn"
-                onClick={() => { setSearchOpen(false); setSearch('') }}
-                aria-label="Clear search"
-              >
-                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-                  <line x1="1" y1="1" x2="11" y2="11" /><line x1="11" y1="1" x2="1" y2="11" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {searchResults ? (
-            // Search active — flat list of all matching
-            searchResults.map((p, i) => (
-              <KeyRow
-                key={p.id}
-                providerID={p.id}
-                label={p.label}
-                sublabel={p.sublabel}
-                configured={keyStatusMap?.[p.key] === true}
-                last={i === searchResults.length - 1}
-                onSaved={handleSaved}
-              />
-            ))
-          ) : (
-            <>
-              {configuredRows.map((p, i) => (
-                <KeyRow
-                  key={p.id}
-                  providerID={p.id}
-                  label={p.label}
-                  sublabel={p.sublabel}
-                  configured
-                  last={i === configuredRows.length - 1 && unconfiguredRows.length === 0}
-                  onSaved={handleSaved}
-                />
-              ))}
-              {unconfiguredRows.length > 0 && (
-                <details class="ai-provider-advanced-panel">
-                  <summary>{unconfiguredRows.length} unconfigured</summary>
-                  <div class="ai-provider-advanced-panel-body">
-                    {unconfiguredRows.map((p, i) => (
-                      <KeyRow
-                        key={p.id}
-                        providerID={p.id}
-                        label={p.label}
-                        sublabel={p.sublabel}
-                        configured={false}
-                        last={i === unconfiguredRows.length - 1}
-                        onSaved={handleSaved}
-                      />
-                    ))}
-                  </div>
-                </details>
-              )}
-            </>
-          )}
+      {/* Providers section title + search */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 2px 8px' }}>
+        <span class="card-title">Providers</span>
+        <div ref={searchContainerRef} class={`chat-history-search${searchOpen ? ' open' : ''}`}>
+          <button
+            class="chat-history-search-trigger"
+            onClick={() => { if (!searchOpen) { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 180) } }}
+            title="Search providers"
+            aria-label="Search providers"
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="6.5" cy="6.5" r="4.5" /><line x1="10" y1="10" x2="14" y2="14" />
+            </svg>
+          </button>
+          <input
+            ref={searchInputRef}
+            class="chat-history-search-input"
+            type="text"
+            placeholder="Search providers…"
+            value={search}
+            onInput={e => setSearch((e.target as HTMLInputElement).value)}
+            onKeyDown={e => { if (e.key === 'Escape') { setSearchOpen(false); setSearch('') } }}
+            tabIndex={searchOpen ? 0 : -1}
+          />
+          <button
+            class="chat-history-close-btn"
+            onClick={() => { setSearchOpen(false); setSearch('') }}
+            tabIndex={searchOpen ? 0 : -1}
+            aria-label="Clear search"
+          >
+            <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <line x1="1" y1="1" x2="9" y2="9" /><line x1="9" y1="1" x2="1" y2="9" />
+            </svg>
+          </button>
         </div>
       </div>
 
-      {/* Custom keys */}
-      <div>
-        <div class="card settings-group">
-          <div class="card-header">
-            <span class="card-title">Custom Keys</span>
-            {!addingNew && (
-              <button
-                class="btn btn-sm"
-                style={{ minWidth: '96px' }}
-                onClick={() => setAddingNew(true)}
-              >
-                Add key
-              </button>
+      {/* One card per category */}
+      {PROVIDER_GROUPS.map(group => {
+        const searchQuery  = search.trim().toLowerCase()
+        const allRows      = providers.filter(p => (p as any).group === group.id)
+        const rows         = searchQuery ? allRows.filter(p => p.label.toLowerCase().includes(searchQuery) || p.sublabel.toLowerCase().includes(searchQuery)) : allRows
+        if (searchQuery && rows.length === 0) return null
+        const configured   = rows.filter(p => keyStatusMap?.[p.key] === true)
+        const unconfigured = rows.filter(p => keyStatusMap?.[p.key] !== true)
+        const isCollapsed  = collapsedGroups.has(group.id)
+        const toggle       = () => setCollapsedGroups(prev => {
+          const next = new Set(prev)
+          next.has(group.id) ? next.delete(group.id) : next.add(group.id)
+          return next
+        })
+        return (
+          <div key={group.id} class="card settings-group">
+            <div class="card-header" style={{ cursor: 'pointer', userSelect: 'none' }} onClick={toggle}>
+              <span class="card-title">{group.title}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <svg
+                  width="12" height="12" viewBox="0 0 12 12" fill="none"
+                  stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+                  style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', color: 'var(--text-3)', flexShrink: 0 }}
+                >
+                  <polyline points="2,4 6,8 10,4" />
+                </svg>
+              </div>
+            </div>
+            {!isCollapsed && (
+              <>
+                {configured.map((p, i) => (
+                  <KeyRow
+                    key={p.id}
+                    providerID={p.id}
+                    label={p.label}
+                    sublabel={p.sublabel}
+                    configured
+                    last={i === configured.length - 1 && unconfigured.length === 0}
+                    onSaved={handleSaved}
+                  />
+                ))}
+                {unconfigured.length > 0 && (
+                  <details class="ai-provider-advanced-panel">
+                    <summary>{unconfigured.length} unconfigured</summary>
+                    <div class="ai-provider-advanced-panel-body">
+                      {unconfigured.map((p, i) => (
+                        <KeyRow
+                          key={p.id}
+                          providerID={p.id}
+                          label={p.label}
+                          sublabel={p.sublabel}
+                          configured={false}
+                          last={i === unconfigured.length - 1}
+                          onSaved={handleSaved}
+                        />
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </>
             )}
           </div>
-          {customKeys.map((name, i) => (
-            <CustomKeyRow
-              key={name}
-              name={name}
-              label={keyStatus?.customKeyLabels?.[name]}
-              last={i === customKeys.length - 1 && !addingNew}
-              onSaved={handleSaved}
-              onDeleted={(updated) => { handleSaved(updated); setSearch(''); setSearchOpen(false) }}
-            />
-          ))}
+        )
+      })}
 
-          {addingNew && (
-            <AddKeyRow
-              last
-              onSaved={(updated) => { handleSaved(updated); setAddingNew(false) }}
-              onCancel={() => setAddingNew(false)}
-            />
-          )}
-
-          {customKeys.length === 0 && !addingNew && (
-            <div style={{ padding: '16px 20px', fontSize: '13px', color: 'var(--text-3)' }}>
-              No custom keys yet.
-            </div>
-          )}
+      {/* Custom keys */}
+      <div class="card settings-group">
+        <div
+          class="card-header"
+          style={{ cursor: 'pointer', userSelect: 'none' }}
+          onClick={() => setCollapsedGroups(prev => {
+            const next = new Set(prev)
+            next.has('custom') ? next.delete('custom') : next.add('custom')
+            return next
+          })}
+        >
+          <span class="card-title">Custom Keys</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <svg
+              width="12" height="12" viewBox="0 0 12 12" fill="none"
+              stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+              style={{ transform: collapsedGroups.has('custom') ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', color: 'var(--text-3)', flexShrink: 0 }}
+            >
+              <polyline points="2,4 6,8 10,4" />
+            </svg>
+          </div>
         </div>
+        {!collapsedGroups.has('custom') && (
+          <>
+            {customKeys.map((name, i) => (
+              <CustomKeyRow
+                key={name}
+                name={name}
+                label={keyStatus?.customKeyLabels?.[name]}
+                last={i === customKeys.length - 1 && !addingNew}
+                onSaved={handleSaved}
+                onDeleted={handleSaved}
+              />
+            ))}
+            {addingNew && (
+              <AddKeyRow
+                last
+                onSaved={(updated) => { handleSaved(updated); setAddingNew(false) }}
+                onCancel={() => setAddingNew(false)}
+              />
+            )}
+            {!addingNew && (
+              <div class="settings-row" style={{ borderBottom: 'none' }}>
+                <div class="settings-label-col">
+                  <div class="settings-label" style={{ color: 'var(--text-3)' }}>
+                    {customKeys.length === 0 ? 'No custom keys yet.' : 'Add another key'}
+                  </div>
+                </div>
+                <div class="settings-field credentials-actions">
+                  <button class="btn btn-sm" style={{ minWidth: '96px' }} onClick={() => setAddingNew(true)}>Add key</button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   )
