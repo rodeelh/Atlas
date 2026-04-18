@@ -94,6 +94,11 @@ const drainBatchSize = 32
 // periods where the buffer isn't filling.
 const drainIdleFlush = 500 * time.Millisecond
 
+// drainShutdownTimeout is the maximum time Stop blocks waiting for the drain
+// goroutine to finish flushing. This caps shutdown time even when the caller
+// passes context.Background() and guards against a slow or hanging DB write.
+const drainShutdownTimeout = 5 * time.Second
+
 // New starts a new emitter with its drain goroutine. Stop must be called on
 // shutdown to ensure pending events are written before the process exits.
 func New(db *storage.DB) *Emitter {
@@ -143,23 +148,36 @@ func (e *Emitter) Emit(kind Kind, thoughtID, convID string, payload any) {
 }
 
 // Stop signals the drain goroutine to flush pending events and exit. Blocks
-// until the goroutine has written everything or the context is canceled.
+// until the goroutine has written everything or the deadline is reached.
+// An internal drainShutdownTimeout is applied on top of any deadline already
+// in ctx, so Stop is always bounded even when ctx is context.Background().
 // Call on shutdown before closing the DB.
 func (e *Emitter) Stop(ctx context.Context) error {
 	if e == nil {
 		return nil
 	}
 	close(e.stopCh)
+
+	// Apply an internal deadline so this never hangs indefinitely regardless
+	// of what context the caller provides.
+	shutdownCtx, cancel := context.WithTimeout(ctx, drainShutdownTimeout)
+	defer cancel()
+
 	done := make(chan struct{})
 	go func() {
+		// Exits once the drain goroutine finishes its flush — bounded by
+		// drainShutdownTimeout even if a DB write is slow.
 		e.wg.Wait()
 		close(done)
 	}()
 	select {
 	case <-done:
 		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-shutdownCtx.Done():
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("telemetry drain timed out after %s", drainShutdownTimeout)
 	}
 }
 

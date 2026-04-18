@@ -70,6 +70,28 @@ func isLocalProvider(t ProviderType) bool {
 	return t == ProviderAtlasEngine || t == ProviderAtlasMLX || t == ProviderLMStudio || t == ProviderOllama
 }
 
+// isCloudProvider returns true for providers that communicate with a remote API
+// (as opposed to a locally-managed inference server).
+func isCloudProvider(t ProviderType) bool {
+	return !isLocalProvider(t)
+}
+
+// isCloudOAICompatProvider returns true for cloud providers that use the
+// OpenAI-compatible chat-completions API format (Gemini, OpenRouter).
+// These providers require an explicit max_tokens cap in requests; OpenAI uses
+// the Responses API and Anthropic has its own wire format.
+func isCloudOAICompatProvider(t ProviderType) bool {
+	return t == ProviderGemini || t == ProviderOpenRouter
+}
+
+// needsMessageCoalescing returns true for local providers whose Jinja chat
+// templates enforce strict user/assistant alternation (llama-server, Ollama).
+// MLX-LM is a proper OAI-compatible server that accepts tool messages natively
+// and does not need coalescing.
+func needsMessageCoalescing(t ProviderType) bool {
+	return t == ProviderAtlasEngine || t == ProviderLMStudio || t == ProviderOllama
+}
+
 func acquireMLXRequestGate(ctx context.Context, p ProviderConfig) (func(), time.Duration, int, error) {
 	if p.Type != ProviderAtlasMLX {
 		return func() {}, 0, 0, nil
@@ -826,7 +848,7 @@ func callOpenAICompatNonStreaming(
 	// atlas_mlx (mlx_lm.server) is a proper OpenAI-compatible server that
 	// accepts tool-call + tool-result messages natively — skip coalescing so
 	// the model receives tool results and can generate a follow-up response.
-	if p.Type == ProviderAtlasEngine || p.Type == ProviderLMStudio || p.Type == ProviderOllama {
+	if needsMessageCoalescing(p.Type) {
 		messages = coalesceForLocalProvider(messages)
 	}
 
@@ -837,7 +859,7 @@ func callOpenAICompatNonStreaming(
 	}
 	// Cap output tokens for cloud OAI-compat providers (Gemini, OpenRouter).
 	// Local providers manage their own context window limits.
-	if !isLocalProvider(p.Type) && p.Type != ProviderOpenAI {
+	if isCloudOAICompatProvider(p.Type) {
 		reqBody["max_tokens"] = 4096
 	}
 	if len(tools) > 0 {

@@ -20,6 +20,9 @@ func (a *oaiCompatAdapter) Stream(ctx context.Context, req TurnRequest) (<-chan 
 	ch := make(chan TurnEvent, 64)
 	go func() {
 		defer close(ch)
+		if ctx.Err() != nil {
+			return
+		}
 		send := func(ev TurnEvent) bool {
 			select {
 			case ch <- ev:
@@ -35,7 +38,7 @@ func (a *oaiCompatAdapter) Stream(ctx context.Context, req TurnRequest) (<-chan 
 			"stream":         true,
 			"stream_options": map[string]any{"include_usage": true},
 		}
-		if !isLocalProvider(a.p.Type) && a.p.Type != ProviderOpenAI {
+		if isCloudOAICompatProvider(a.p.Type) {
 			reqBody["max_tokens"] = 4096
 		}
 		if len(req.Tools) > 0 {

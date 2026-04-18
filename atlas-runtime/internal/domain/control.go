@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"encoding/json"
 	"net/http"
 	"os"
 	"os/exec"
@@ -229,13 +228,16 @@ func (d *ControlDomain) putLocation(w http.ResponseWriter, r *http.Request) {
 		City    string `json:"city"`
 		Country string `json:"country"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.City) == "" {
-		http.Error(w, "city is required", http.StatusBadRequest)
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.City) == "" {
+		writeError(w, http.StatusBadRequest, "city is required")
 		return
 	}
 	loc, err := d.profile.SetLocation(body.City, body.Country)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, loc)
@@ -244,7 +246,7 @@ func (d *ControlDomain) putLocation(w http.ResponseWriter, r *http.Request) {
 func (d *ControlDomain) postLocationDetect(w http.ResponseWriter, _ *http.Request) {
 	loc, err := d.profile.DetectLocation()
 	if err != nil {
-		http.Error(w, "Location detection failed: "+err.Error(), http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "Location detection failed: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, loc)
@@ -255,13 +257,16 @@ func (d *ControlDomain) postLocationCoords(w http.ResponseWriter, r *http.Reques
 		Latitude  float64 `json:"latitude"`
 		Longitude float64 `json:"longitude"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || (body.Latitude == 0 && body.Longitude == 0) {
-		http.Error(w, "latitude and longitude are required", http.StatusBadRequest)
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.Latitude == 0 && body.Longitude == 0 {
+		writeError(w, http.StatusBadRequest, "latitude and longitude are required")
 		return
 	}
 	loc, err := d.profile.SetLocationFromCoords(body.Latitude, body.Longitude)
 	if err != nil {
-		http.Error(w, "Reverse geocode failed: "+err.Error(), http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "Reverse geocode failed: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, loc)
@@ -277,8 +282,7 @@ func (d *ControlDomain) putPreferences(w http.ResponseWriter, r *http.Request) {
 		Currency        string `json:"currency"`
 		UnitSystem      string `json:"unitSystem"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest)
+	if !decodeJSON(w, r, &body) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d.profile.UpdatePreferences(body.TemperatureUnit, body.Currency, body.UnitSystem))
@@ -337,7 +341,7 @@ func (d *ControlDomain) getStorageStats(w http.ResponseWriter, _ *http.Request) 
 func (d *ControlDomain) postStorageOpenFolder(w http.ResponseWriter, _ *http.Request) {
 	dir := config.FilesDir()
 	if err := exec.Command("open", dir).Start(); err != nil {
-		http.Error(w, "failed to open folder", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "failed to open folder")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

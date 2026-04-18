@@ -18,6 +18,37 @@ import (
 // loop.go can detect and route them into vision content blocks.
 const browserImagePrefix = "__ATLAS_IMAGE__:"
 
+// BrowserManager is the interface the skills package requires from the browser
+// subsystem. *browser.Manager satisfies this interface — defining it here lets
+// callers inject fakes in tests without pulling in the full browser package.
+type BrowserManager interface {
+	Navigate(ctx context.Context, rawURL, waitSelector string, timeoutMs int) (*browser.NavResult, error)
+	Screenshot(ctx context.Context, fullPage bool, selector string) ([]byte, error)
+	ReadPage(ctx context.Context, selector string, maxChars int) (string, error)
+	FindElement(ctx context.Context, selector, attribute string) (string, error)
+	Scroll(ctx context.Context, direction string, amount int, selector string) error
+	Click(ctx context.Context, selector string, waitAfterMs int) error
+	Hover(ctx context.Context, selector string) error
+	SelectOption(ctx context.Context, selector, value string) error
+	WaitForElement(ctx context.Context, selector string, timeoutMs int) error
+	TypeText(ctx context.Context, selector, text string, clearFirst bool) error
+	FillForm(ctx context.Context, fields map[string]string, submitSelector string) error
+	SubmitForm(ctx context.Context, selector string) error
+	SessionCheck(ctx context.Context, host string) (fresh bool, lastUsed time.Time, err error)
+	AutoLogin(ctx context.Context, host, username, password string) *browser.LoginResult
+	Submit2FA(ctx context.Context, code, selector string) error
+	ClearSession(host string) error
+	TabsList() ([]browser.TabInfo, error)
+	TabsNew(ctx context.Context, url string) (int, error)
+	TabsSwitch(index int) error
+	TabsClose(index int) error
+	Eval(ctx context.Context, jsExpr string) (string, error)
+	UploadFile(ctx context.Context, selector, filePath string) error
+	WaitNetworkIdle(ctx context.Context, timeoutMs int) error
+	SwitchFrame(ctx context.Context, selector string) error
+	SwitchMainFrame()
+}
+
 func (r *Registry) registerBrowser() {
 	if r.browserMgr == nil {
 		// Browser skill is unavailable when no manager is wired in.

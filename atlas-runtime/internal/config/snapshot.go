@@ -14,77 +14,79 @@ type OpenRouterModelCache struct {
 	Models    []CachedModelRecord `json:"models"`
 }
 
-// RuntimeConfigSnapshot is the portable config contract shared between the
-// Swift and Go runtimes. All JSON keys are identical to the Swift CodingKeys.
-type RuntimeConfigSnapshot struct {
-	RuntimePort                     int                  `json:"runtimePort"`
-	OnboardingCompleted             bool                 `json:"onboardingCompleted"`
-	TelegramEnabled                 bool                 `json:"telegramEnabled"`
-	DiscordEnabled                  bool                 `json:"discordEnabled"`
-	WhatsAppEnabled                 bool                 `json:"whatsAppEnabled"`
-	DiscordClientID                 string               `json:"discordClientID"`
-	SlackEnabled                    bool                 `json:"slackEnabled"`
-	TelegramPollingTimeoutSeconds   int                  `json:"telegramPollingTimeoutSeconds"`
-	TelegramPollingRetryBaseSeconds int                  `json:"telegramPollingRetryBaseSeconds"`
-	TelegramCommandPrefix           string               `json:"telegramCommandPrefix"`
-	TelegramAllowedUserIDs          []int64              `json:"telegramAllowedUserIDs"`
-	TelegramAllowedChatIDs          []int64              `json:"telegramAllowedChatIDs"`
-	TelegramWebhookURL              string               `json:"telegramWebhookURL"`
-	TelegramWebhookSecret           string               `json:"telegramWebhookSecret"`
-	DefaultOpenAIModel              string               `json:"defaultOpenAIModel"`
-	BaseSystemPrompt                string               `json:"baseSystemPrompt"`
-	MaxAgentIterations              int                  `json:"maxAgentIterations"`
-	ConversationWindowLimit         int                  `json:"conversationWindowLimit"`
-	MemoryEnabled                   bool                 `json:"memoryEnabled"`
-	MaxRetrievedMemoriesPerTurn     int                  `json:"maxRetrievedMemoriesPerTurn"`
-	MemoryAutoSaveThreshold         float64              `json:"memoryAutoSaveThreshold"`
-	PersonaName                     string               `json:"personaName"`
-	UserName                        string               `json:"userName"`
-	ActionSafetyMode                string               `json:"actionSafetyMode"`
-	ActiveImageProvider             string               `json:"activeImageProvider"`
-	ActiveAIProvider                string               `json:"activeAIProvider"`
-	LMStudioBaseURL                 string               `json:"lmStudioBaseURL"`
-	SelectedAnthropicModel          string               `json:"selectedAnthropicModel"`
-	SelectedGeminiModel             string               `json:"selectedGeminiModel"`
-	SelectedOpenRouterModel         string               `json:"selectedOpenRouterModel"`
-	SelectedOpenAIPrimaryModel      string               `json:"selectedOpenAIPrimaryModel"`
-	SelectedOpenAIFastModel         string               `json:"selectedOpenAIFastModel"`
-	SelectedAnthropicFastModel      string               `json:"selectedAnthropicFastModel"`
-	SelectedGeminiFastModel         string               `json:"selectedGeminiFastModel"`
-	SelectedOpenRouterFastModel     string               `json:"selectedOpenRouterFastModel"`
-	OpenRouterModelCache            OpenRouterModelCache `json:"openRouterModelCache"`
-	SelectedLMStudioModel           string               `json:"selectedLMStudioModel"`
-	SelectedLMStudioModelFast       string               `json:"selectedLMStudioModelFast"`
-	LMStudioContextWindowLimit      int                  `json:"lmStudioContextWindowLimit"`
-	LMStudioMaxAgentIterations      int                  `json:"lmStudioMaxAgentIterations"`
-	OllamaBaseURL                   string               `json:"ollamaBaseURL"`
-	SelectedOllamaModel             string               `json:"selectedOllamaModel"`
-	SelectedOllamaModelFast         string               `json:"selectedOllamaModelFast"`
-	OllamaContextWindowLimit        int                  `json:"ollamaContextWindowLimit"`
-	OllamaMaxAgentIterations        int                  `json:"ollamaMaxAgentIterations"`
-	AtlasEnginePort                 int                  `json:"atlasEnginePort"`
-	SelectedAtlasEngineModel        string               `json:"selectedAtlasEngineModel"`
-	SelectedAtlasEngineModelFast    string               `json:"selectedAtlasEngineModelFast"`
-	AtlasEngineContextWindowLimit   int                  `json:"atlasEngineContextWindowLimit"`
-	AtlasEngineMaxAgentIterations   int                  `json:"atlasEngineMaxAgentIterations"`
-	AtlasEngineCtxSize              int                  `json:"atlasEngineCtxSize"`      // llama-server --ctx-size (KV-cache token limit)
-	AtlasEngineKVCacheQuant         string               `json:"atlasEngineKVCacheQuant"` // llama-server -ctk/-ctv quant level (for example: f32, f16, bf16, q8_0, q5_1, q5_0, q4_1, q4_0, iq4_nl)
-	AtlasEngineMlock                bool                 `json:"atlasEngineMlock"`        // llama-server --mlock — pin model in physical RAM
-	AtlasEngineRouterPort           int                  `json:"atlasEngineRouterPort"`   // port for the dedicated tool-router llama-server
-	AtlasEngineRouterModel          string               `json:"atlasEngineRouterModel"`  // GGUF filename for the tool router (e.g. gemma-4-2b-it-Q4_K_M.gguf)
-	AtlasEngineRouterForAll         bool                 `json:"atlasEngineRouterForAll"` // use router for heavy background tasks too (memory, reflection, dream)
-	AtlasEngineDraftModel           string               `json:"atlasEngineDraftModel"`   // GGUF filename for speculative decoding draft model (same family as primary)
+// TelegramConfig groups all Telegram bridge settings.
+type TelegramConfig struct {
+	TelegramEnabled                 bool    `json:"telegramEnabled"`
+	TelegramPollingTimeoutSeconds   int     `json:"telegramPollingTimeoutSeconds"`
+	TelegramPollingRetryBaseSeconds int     `json:"telegramPollingRetryBaseSeconds"`
+	TelegramCommandPrefix           string  `json:"telegramCommandPrefix"`
+	TelegramAllowedUserIDs          []int64 `json:"telegramAllowedUserIDs"`
+	TelegramAllowedChatIDs          []int64 `json:"telegramAllowedChatIDs"`
+	TelegramWebhookURL              string  `json:"telegramWebhookURL"`
+	TelegramWebhookSecret           string  `json:"telegramWebhookSecret"`
+}
 
-	// ── MLX-LM subsystem (Apple Silicon only) ────────────────────────────────
-	//
-	// MLX-LM is a Python-based local inference server that uses Apple's MLX
-	// framework. It is mutually exclusive with llama.cpp (atlas_engine): only
-	// one local engine runs at a time. Active provider switches between
-	// "atlas_engine" (llama.cpp) and "atlas_mlx" (MLX-LM).
-	//
-	// AtlasMLXPort is the primary inference port; AtlasMLXRouterPort is the
-	// dedicated router port (MLX-exclusive — replaces the llama.cpp router
-	// for MLX users). Atlas owns the Python venv at ~/.atlas-mlx.
+// CloudModelsConfig groups cloud AI provider model selections.
+type CloudModelsConfig struct {
+	DefaultOpenAIModel          string               `json:"defaultOpenAIModel"`
+	ActiveAIProvider            string               `json:"activeAIProvider"`
+	ActiveImageProvider         string               `json:"activeImageProvider"`
+	SelectedAnthropicModel      string               `json:"selectedAnthropicModel"`
+	SelectedGeminiModel         string               `json:"selectedGeminiModel"`
+	SelectedOpenRouterModel     string               `json:"selectedOpenRouterModel"`
+	SelectedOpenAIPrimaryModel  string               `json:"selectedOpenAIPrimaryModel"`
+	SelectedOpenAIFastModel     string               `json:"selectedOpenAIFastModel"`
+	SelectedAnthropicFastModel  string               `json:"selectedAnthropicFastModel"`
+	SelectedGeminiFastModel     string               `json:"selectedGeminiFastModel"`
+	SelectedOpenRouterFastModel string               `json:"selectedOpenRouterFastModel"`
+	OpenRouterModelCache        OpenRouterModelCache `json:"openRouterModelCache"`
+}
+
+// LMStudioConfig groups LM Studio local provider settings.
+type LMStudioConfig struct {
+	LMStudioBaseURL            string `json:"lmStudioBaseURL"`
+	SelectedLMStudioModel      string `json:"selectedLMStudioModel"`
+	SelectedLMStudioModelFast  string `json:"selectedLMStudioModelFast"`
+	LMStudioContextWindowLimit int    `json:"lmStudioContextWindowLimit"`
+	LMStudioMaxAgentIterations int    `json:"lmStudioMaxAgentIterations"`
+}
+
+// OllamaConfig groups Ollama local provider settings.
+type OllamaConfig struct {
+	OllamaBaseURL            string `json:"ollamaBaseURL"`
+	SelectedOllamaModel      string `json:"selectedOllamaModel"`
+	SelectedOllamaModelFast  string `json:"selectedOllamaModelFast"`
+	OllamaContextWindowLimit int    `json:"ollamaContextWindowLimit"`
+	OllamaMaxAgentIterations int    `json:"ollamaMaxAgentIterations"`
+}
+
+// AtlasEngineConfig groups the llama.cpp (atlas_engine) local inference settings.
+type AtlasEngineConfig struct {
+	AtlasEnginePort               int    `json:"atlasEnginePort"`
+	SelectedAtlasEngineModel      string `json:"selectedAtlasEngineModel"`
+	SelectedAtlasEngineModelFast  string `json:"selectedAtlasEngineModelFast"`
+	AtlasEngineContextWindowLimit int    `json:"atlasEngineContextWindowLimit"`
+	AtlasEngineMaxAgentIterations int    `json:"atlasEngineMaxAgentIterations"`
+	AtlasEngineCtxSize            int    `json:"atlasEngineCtxSize"`      // llama-server --ctx-size (KV-cache token limit)
+	AtlasEngineKVCacheQuant       string `json:"atlasEngineKVCacheQuant"` // llama-server -ctk/-ctv quant level (for example: f32, f16, bf16, q8_0, q5_1, q5_0, q4_1, q4_0, iq4_nl)
+	AtlasEngineMlock              bool   `json:"atlasEngineMlock"`        // llama-server --mlock — pin model in physical RAM
+	AtlasEngineRouterPort         int    `json:"atlasEngineRouterPort"`   // port for the dedicated tool-router llama-server
+	AtlasEngineRouterModel        string `json:"atlasEngineRouterModel"`  // GGUF filename for the tool router (e.g. gemma-4-2b-it-Q4_K_M.gguf)
+	AtlasEngineRouterForAll       bool   `json:"atlasEngineRouterForAll"` // use router for heavy background tasks too (memory, reflection, dream)
+	AtlasEngineDraftModel         string `json:"atlasEngineDraftModel"`   // GGUF filename for speculative decoding draft model (same family as primary)
+}
+
+// AtlasMLXConfig groups the MLX-LM (Apple Silicon) local inference settings.
+//
+// MLX-LM is a Python-based local inference server that uses Apple's MLX
+// framework. It is mutually exclusive with llama.cpp (atlas_engine): only
+// one local engine runs at a time. Active provider switches between
+// "atlas_engine" (llama.cpp) and "atlas_mlx" (MLX-LM).
+//
+// AtlasMLXPort is the primary inference port; AtlasMLXRouterPort is the
+// dedicated router port (MLX-exclusive — replaces the llama.cpp router
+// for MLX users). Atlas owns the Python venv at ~/.atlas-mlx.
+type AtlasMLXConfig struct {
 	AtlasMLXPort              int     `json:"atlasMLXPort"`              // default 11990
 	SelectedAtlasMLXModel     string  `json:"selectedAtlasMLXModel"`     // directory name under mlx-models/
 	AtlasMLXCtxSize           int     `json:"atlasMLXCtxSize"`           // --max-tokens for mlx_lm.server: max output tokens per response (default 4096)
@@ -97,24 +99,21 @@ type RuntimeConfigSnapshot struct {
 	AtlasMLXRepetitionPenalty float64 `json:"atlasMLXRepetitionPenalty"` // optional repetition penalty
 	AtlasMLXThinkingEnabled   bool    `json:"atlasMLXThinkingEnabled"`   // send enable_thinking=true in chat_template_kwargs for supported models
 	AtlasMLXChatTemplateArgs  string  `json:"atlasMLXChatTemplateArgs"`  // raw JSON object passed as chat_template_kwargs (overrides AtlasMLXThinkingEnabled)
-
 	// SelectedLocalEngine is the user-configured local backend.
 	// "atlas_engine" (llama.cpp) or "atlas_mlx" (MLX-LM).
-	// Used by the chat composer's "Local LM" option to determine which
-	// engine to activate. Defaults to "atlas_engine".
 	SelectedLocalEngine string `json:"selectedLocalEngine"`
+}
 
-	EnableSmartToolSelection      bool   `json:"enableSmartToolSelection"` // legacy — superseded by ToolSelectionMode
-	ToolSelectionMode             string `json:"toolSelectionMode"`        // "off" | "lazy" | "heuristic" | "llm"
-	WebResearchUseJinaReader      bool   `json:"webResearchUseJinaReader"`
-	EnableMultiAgentOrchestration bool   `json:"enableMultiAgentOrchestration"`
-	MaxParallelAgents             int    `json:"maxParallelAgents"`
-	WorkerMaxIterations           int    `json:"workerMaxIterations"`
-	RemoteAccessEnabled           bool   `json:"remoteAccessEnabled"`
-	TailscaleEnabled              bool   `json:"tailscaleEnabled"`
-	ModelContextWindow            int    `json:"modelContextWindow"` // effective context window in tokens; 0 = auto-detect from provider
+// MemoryConfig groups per-turn memory extraction settings.
+type MemoryConfig struct {
+	MemoryEnabled               bool    `json:"memoryEnabled"`
+	MaxRetrievedMemoriesPerTurn int     `json:"maxRetrievedMemoriesPerTurn"`
+	MemoryAutoSaveThreshold     float64 `json:"memoryAutoSaveThreshold"`
+}
 
-	// Voice — Whisper STT + Kokoro TTS.
+// VoiceAudioConfig groups Whisper STT, Kokoro TTS, and cloud audio provider settings.
+type VoiceAudioConfig struct {
+	// Local Whisper STT + Kokoro TTS.
 	VoiceSTTEnabled      bool   `json:"voiceSTTEnabled"`
 	VoiceTTSEnabled      bool   `json:"voiceTTSEnabled"`
 	VoiceContinuousMode  bool   `json:"voiceContinuousMode"`
@@ -123,13 +122,9 @@ type RuntimeConfigSnapshot struct {
 	VoiceWhisperLanguage string `json:"voiceWhisperLanguage"`
 	VoiceTTSAutoPlay     bool   `json:"voiceTTSAutoPlay"`
 	VoiceSessionIdleSec  int    `json:"voiceSessionIdleSec"`
+	VoiceKokoroPort      int    `json:"voiceKokoroPort"`
+	VoiceKokoroVoice     string `json:"voiceKokoroVoice"` // default: am_onyx
 
-	// Kokoro TTS local voice and port.
-	VoiceKokoroPort  int    `json:"voiceKokoroPort"`
-	VoiceKokoroVoice string `json:"voiceKokoroVoice"` // default: am_onyx
-
-	// ── Audio provider ────────────────────────────────────────────────────────
-	//
 	// ActiveAudioProvider selects the STT + TTS backend: "local" (Whisper +
 	// Kokoro), "openai", or "gemini". Defaults to "local".
 	ActiveAudioProvider string `json:"activeAudioProvider"`
@@ -149,42 +144,37 @@ type RuntimeConfigSnapshot struct {
 	AudioTTSVoice       string  `json:"audioTTSVoice"`       // provider voice ID; "" = provider default
 	AudioTTSSpeed       float64 `json:"audioTTSSpeed"`       // 0.25–4.0 (OpenAI); ignored by Gemini
 	AudioTTSStylePrompt string  `json:"audioTTSStylePrompt"` // delivery directive (Gemini / gpt-4o-mini-tts)
+}
 
-	// ── Mind thoughts / nap scheduler ─────────────────────────────────────
-	//
-	// Tunables for the mind-thoughts subsystem. All thresholds are exposed
-	// here so they can be rebalanced from the web config screen during the
-	// few-day review without rebuilding the binary.
-	//
-	// ThoughtsEnabled is the MASTER feature flag — a single switch that
-	// gates the entire mind-thoughts subsystem: presence line, sidebar
-	// dot, greeting flow, surfacing detection, classifier, system prompt
-	// THOUGHTS injection, dispatcher, approval routing, and the nap
-	// scheduler. When false, Atlas behaves as if the feature does not
-	// exist. Ships false by default — users who don't want their agent
-	// having inner life shouldn't have to explain themselves.
+// ThoughtsConfig groups all mind-thoughts / nap scheduler settings.
+//
+// ThoughtsEnabled is the MASTER feature flag — a single switch that
+// gates the entire mind-thoughts subsystem: presence line, sidebar
+// dot, greeting flow, surfacing detection, classifier, system prompt
+// THOUGHTS injection, dispatcher, approval routing, and the nap
+// scheduler. When false, Atlas behaves as if the feature does not
+// exist. Ships false by default — users who don't want their agent
+// having inner life shouldn't have to explain themselves.
+//
+// NapsEnabled is a SUB-FLAG of ThoughtsEnabled. When both are true,
+// the scheduler fires naps on idle/floor triggers. When NapsEnabled
+// is false but ThoughtsEnabled is true, thoughts can still exist
+// (seeded manually, added through the dream cycle) but no automatic
+// curation happens. Ships false so the scheduler is plumbed but
+// dormant until explicitly opted in. A manual POST /mind/nap works
+// regardless of this flag, as long as ThoughtsEnabled is true.
+//
+// Tunables are exposed here so they can be rebalanced from the web
+// config screen during the few-day review without rebuilding the binary.
+type ThoughtsConfig struct {
 	ThoughtsEnabled bool `json:"thoughtsEnabled"`
-
-	// NapsEnabled is a SUB-FLAG of ThoughtsEnabled. When both are true,
-	// the scheduler fires naps on idle/floor triggers. When NapsEnabled
-	// is false but ThoughtsEnabled is true, thoughts can still exist
-	// (seeded manually, added through the dream cycle) but no automatic
-	// curation happens. Ships false so the scheduler is plumbed but
-	// dormant until explicitly opted in. A manual POST /mind/nap works
-	// regardless of this flag, as long as ThoughtsEnabled is true.
-	NapsEnabled bool `json:"napsEnabled"`
+	NapsEnabled     bool `json:"napsEnabled"`
 
 	// NapIdleMinutes is how many minutes of chat idleness trigger a nap.
-	// 60 default — naps fire after an hour of conversational silence, not
-	// mid-coffee-break.
 	NapIdleMinutes int `json:"napIdleMinutes"`
-
 	// NapFloorHours is the maximum time between naps regardless of idleness.
-	// 6 default — ensures naps fire even on quiet days.
 	NapFloorHours int `json:"napFloorHours"`
-
 	// NapMaxOpsPerCycle caps how many thought ops a single nap may apply.
-	// 3 default — more is suspicious per the spec.
 	NapMaxOpsPerCycle int `json:"napMaxOpsPerCycle"`
 
 	// Thought scoring thresholds. See internal/mind/thoughts/score.go for
@@ -199,12 +189,58 @@ type RuntimeConfigSnapshot struct {
 	ThoughtDiscardOnIgnores   int `json:"thoughtDiscardOnIgnores"`   // default 3
 
 	// Auto-execute rate limits. Hard caps on how often the dispatcher is
-	// allowed to run a skill without user approval. The structural safety
-	// ceiling (read-class only) is the primary defense; these are belt-and-
-	// braces to prevent runaway behavior if a nap produces many eligible
-	// thoughts in quick succession.
+	// allowed to run a skill without user approval.
 	ThoughtMaxAutoExecPerNap int `json:"thoughtMaxAutoExecPerNap"` // default 1
 	ThoughtMaxAutoExecPerDay int `json:"thoughtMaxAutoExecPerDay"` // default 3
+}
+
+// MultiAgentConfig groups multi-agent orchestration settings.
+type MultiAgentConfig struct {
+	EnableMultiAgentOrchestration bool `json:"enableMultiAgentOrchestration"`
+	MaxParallelAgents             int  `json:"maxParallelAgents"`
+	WorkerMaxIterations           int  `json:"workerMaxIterations"`
+}
+
+// RuntimeConfigSnapshot is the portable config contract shared between the
+// Swift and Go runtimes. All JSON keys are identical to the Swift CodingKeys.
+//
+// Provider-specific fields are nested into anonymous embedded sub-structs for
+// readability in Go code. Anonymous embedding promotes all fields to the top
+// level in JSON, so the on-disk format is unchanged.
+type RuntimeConfigSnapshot struct {
+	RuntimePort         int    `json:"runtimePort"`
+	OnboardingCompleted bool   `json:"onboardingCompleted"`
+	PersonaName         string `json:"personaName"`
+	UserName            string `json:"userName"`
+
+	DiscordEnabled  bool   `json:"discordEnabled"`
+	DiscordClientID string `json:"discordClientID"`
+	WhatsAppEnabled bool   `json:"whatsAppEnabled"`
+	SlackEnabled    bool   `json:"slackEnabled"`
+
+	BaseSystemPrompt        string `json:"baseSystemPrompt"`
+	MaxAgentIterations      int    `json:"maxAgentIterations"`
+	ConversationWindowLimit int    `json:"conversationWindowLimit"`
+	ActionSafetyMode        string `json:"actionSafetyMode"`
+	ModelContextWindow      int    `json:"modelContextWindow"` // effective context window in tokens; 0 = auto-detect from provider
+
+	EnableSmartToolSelection bool   `json:"enableSmartToolSelection"` // legacy — superseded by ToolSelectionMode
+	ToolSelectionMode        string `json:"toolSelectionMode"`        // "off" | "lazy" | "heuristic" | "llm"
+	WebResearchUseJinaReader bool   `json:"webResearchUseJinaReader"`
+
+	RemoteAccessEnabled bool `json:"remoteAccessEnabled"`
+	TailscaleEnabled    bool `json:"tailscaleEnabled"`
+
+	TelegramConfig
+	CloudModelsConfig
+	LMStudioConfig
+	OllamaConfig
+	AtlasEngineConfig
+	AtlasMLXConfig
+	MemoryConfig
+	VoiceAudioConfig
+	ThoughtsConfig
+	MultiAgentConfig
 }
 
 // EffectiveContextWindow returns the model's context window in tokens for the
@@ -216,7 +252,6 @@ func (c RuntimeConfigSnapshot) EffectiveContextWindow() int {
 	}
 	switch c.ActiveAIProvider {
 	case "lm_studio":
-		// LM Studio: use AtlasEngineCtxSize as a proxy if available, else 8K.
 		return 8192
 	case "ollama":
 		return 8192
@@ -245,7 +280,6 @@ func (c RuntimeConfigSnapshot) EffectiveContextWindow() int {
 // a floor and ceiling.
 func (c RuntimeConfigSnapshot) SystemPromptRuneBudget() int {
 	ctxTokens := c.EffectiveContextWindow()
-	// 15% of context window in tokens, converted to runes (~4 runes/token).
 	budget := int(float64(ctxTokens) * 0.15 * 4)
 	const floor = 4000
 	const ceiling = 20000
@@ -262,106 +296,143 @@ func (c RuntimeConfigSnapshot) SystemPromptRuneBudget() int {
 // RuntimeConfigSnapshot.init() so cold-start behaviour is identical.
 func Defaults() RuntimeConfigSnapshot {
 	return RuntimeConfigSnapshot{
-		RuntimePort:                     1984,
-		OnboardingCompleted:             false,
-		TelegramEnabled:                 false,
-		DiscordEnabled:                  false,
-		WhatsAppEnabled:                 false,
-		DiscordClientID:                 "",
-		SlackEnabled:                    false,
-		TelegramPollingTimeoutSeconds:   30,
-		TelegramPollingRetryBaseSeconds: 2,
-		TelegramCommandPrefix:           "/",
-		TelegramAllowedUserIDs:          []int64{},
-		TelegramAllowedChatIDs:          []int64{},
-		DefaultOpenAIModel:              "gpt-5.4",
-		BaseSystemPrompt:                fallbackSystemPrompt,
-		MaxAgentIterations:              3,
-		ConversationWindowLimit:         15,
-		MemoryEnabled:                   true,
-		MaxRetrievedMemoriesPerTurn:     4,
-		MemoryAutoSaveThreshold:         0.75,
-		PersonaName:                     "Atlas",
-		UserName:                        "",
-		ActionSafetyMode:                "ask_only_for_risky_actions",
-		ActiveImageProvider:             "openai",
-		ActiveAIProvider:                "openai",
-		LMStudioBaseURL:                 "http://localhost:1234",
-		SelectedAnthropicModel:          "",
-		SelectedGeminiModel:             "",
-		SelectedOpenRouterModel:         "",
-		SelectedOpenAIPrimaryModel:      "",
-		SelectedOpenAIFastModel:         "",
-		SelectedAnthropicFastModel:      "",
-		SelectedGeminiFastModel:         "",
-		SelectedOpenRouterFastModel:     "",
-		OpenRouterModelCache:            OpenRouterModelCache{FetchedAt: "", Models: []CachedModelRecord{}},
-		SelectedLMStudioModel:           "",
-		SelectedLMStudioModelFast:       "",
-		LMStudioContextWindowLimit:      10,
-		LMStudioMaxAgentIterations:      2,
-		OllamaBaseURL:                   "http://localhost:11434",
-		SelectedOllamaModel:             "",
-		SelectedOllamaModelFast:         "",
-		OllamaContextWindowLimit:        10,
-		OllamaMaxAgentIterations:        2,
-		AtlasEnginePort:                 11985,
-		SelectedAtlasEngineModel:        "",
-		SelectedAtlasEngineModelFast:    "",
-		AtlasEngineContextWindowLimit:   10,
-		AtlasEngineMaxAgentIterations:   2,
-		AtlasEngineCtxSize:              16384,
-		AtlasEngineKVCacheQuant:         "q4_0",
-		AtlasEngineMlock:                true,
-		AtlasEngineRouterPort:           11986,
-		AtlasEngineRouterModel:          "",
-		AtlasEngineRouterForAll:         false,
-		AtlasEngineDraftModel:           "",
-		AtlasMLXPort:                    11990,
-		SelectedAtlasMLXModel:           "",
-		AtlasMLXCtxSize:                 4096,
-		AtlasMLXRouterPort:              11991,
-		AtlasMLXRouterModel:             "",
-		AtlasMLXRouterForAll:            false,
-		AtlasMLXTemperature:             0,
-		AtlasMLXTopP:                    1,
-		AtlasMLXMinP:                    0,
-		AtlasMLXRepetitionPenalty:       0,
-		AtlasMLXThinkingEnabled:         false,
-		AtlasMLXChatTemplateArgs:        "",
-		EnableSmartToolSelection:        true,
-		ToolSelectionMode:               "lazy",
-		WebResearchUseJinaReader:        false,
-		EnableMultiAgentOrchestration:   false,
-		MaxParallelAgents:               3,
-		WorkerMaxIterations:             4,
-		RemoteAccessEnabled:             false,
-		TailscaleEnabled:                false,
-		VoiceSTTEnabled:                 false,
-		VoiceTTSEnabled:                 false,
-		VoiceContinuousMode:             false,
-		VoiceWhisperPort:                11987,
-		VoiceWhisperModel:               "ggml-base.en.bin",
-		VoiceWhisperLanguage:            "en",
-		VoiceTTSAutoPlay:                false,
-		VoiceSessionIdleSec:             300,
-		VoiceKokoroPort:                 11989,
+		RuntimePort:             1984,
+		OnboardingCompleted:     false,
+		PersonaName:             "Atlas",
+		UserName:                "",
+		DiscordEnabled:          false,
+		DiscordClientID:         "",
+		WhatsAppEnabled:         false,
+		SlackEnabled:            false,
+		BaseSystemPrompt:        fallbackSystemPrompt,
+		MaxAgentIterations:      3,
+		ConversationWindowLimit: 15,
+		ActionSafetyMode:        "ask_only_for_risky_actions",
+		ModelContextWindow:      0,
+		EnableSmartToolSelection: true,
+		ToolSelectionMode:       "lazy",
+		WebResearchUseJinaReader: false,
+		RemoteAccessEnabled:     false,
+		TailscaleEnabled:        false,
 
-		// Mind thoughts / nap scheduler — defaults match the spec.
-		// The whole subsystem ships disabled. Users flip ThoughtsEnabled
-		// first to see the feature at all; NapsEnabled is the second
-		// toggle that turns on autonomous curation.
-		ThoughtsEnabled:             false,
-		NapsEnabled:                 false,
-		NapIdleMinutes:              60,
-		NapFloorHours:               6,
-		NapMaxOpsPerCycle:           3,
-		ThoughtAutoExecuteThreshold: 95,
-		ThoughtProposeThreshold:     80,
-		ThoughtDiscardOnNegatives:   2,
-		ThoughtDiscardOnIgnores:     3,
-		ThoughtMaxAutoExecPerNap:    1,
-		ThoughtMaxAutoExecPerDay:    3,
+		TelegramConfig: TelegramConfig{
+			TelegramEnabled:                 false,
+			TelegramPollingTimeoutSeconds:   30,
+			TelegramPollingRetryBaseSeconds: 2,
+			TelegramCommandPrefix:           "/",
+			TelegramAllowedUserIDs:          []int64{},
+			TelegramAllowedChatIDs:          []int64{},
+			TelegramWebhookURL:              "",
+			TelegramWebhookSecret:           "",
+		},
+
+		CloudModelsConfig: CloudModelsConfig{
+			DefaultOpenAIModel:          "gpt-5.4",
+			ActiveAIProvider:            "openai",
+			ActiveImageProvider:         "openai",
+			SelectedAnthropicModel:      "",
+			SelectedGeminiModel:         "",
+			SelectedOpenRouterModel:     "",
+			SelectedOpenAIPrimaryModel:  "",
+			SelectedOpenAIFastModel:     "",
+			SelectedAnthropicFastModel:  "",
+			SelectedGeminiFastModel:     "",
+			SelectedOpenRouterFastModel: "",
+			OpenRouterModelCache:        OpenRouterModelCache{FetchedAt: "", Models: []CachedModelRecord{}},
+		},
+
+		LMStudioConfig: LMStudioConfig{
+			LMStudioBaseURL:            "http://localhost:1234",
+			SelectedLMStudioModel:      "",
+			SelectedLMStudioModelFast:  "",
+			LMStudioContextWindowLimit: 10,
+			LMStudioMaxAgentIterations: 2,
+		},
+
+		OllamaConfig: OllamaConfig{
+			OllamaBaseURL:            "http://localhost:11434",
+			SelectedOllamaModel:      "",
+			SelectedOllamaModelFast:  "",
+			OllamaContextWindowLimit: 10,
+			OllamaMaxAgentIterations: 2,
+		},
+
+		AtlasEngineConfig: AtlasEngineConfig{
+			AtlasEnginePort:               11985,
+			SelectedAtlasEngineModel:      "",
+			SelectedAtlasEngineModelFast:  "",
+			AtlasEngineContextWindowLimit: 10,
+			AtlasEngineMaxAgentIterations: 2,
+			AtlasEngineCtxSize:            16384,
+			AtlasEngineKVCacheQuant:       "q4_0",
+			AtlasEngineMlock:              true,
+			AtlasEngineRouterPort:         11986,
+			AtlasEngineRouterModel:        "",
+			AtlasEngineRouterForAll:       false,
+			AtlasEngineDraftModel:         "",
+		},
+
+		AtlasMLXConfig: AtlasMLXConfig{
+			AtlasMLXPort:              11990,
+			SelectedAtlasMLXModel:     "",
+			AtlasMLXCtxSize:           4096,
+			AtlasMLXRouterPort:        11991,
+			AtlasMLXRouterModel:       "",
+			AtlasMLXRouterForAll:      false,
+			AtlasMLXTemperature:       0,
+			AtlasMLXTopP:              1,
+			AtlasMLXMinP:              0,
+			AtlasMLXRepetitionPenalty: 0,
+			AtlasMLXThinkingEnabled:   false,
+			AtlasMLXChatTemplateArgs:  "",
+			SelectedLocalEngine:       "",
+		},
+
+		MemoryConfig: MemoryConfig{
+			MemoryEnabled:               true,
+			MaxRetrievedMemoriesPerTurn: 4,
+			MemoryAutoSaveThreshold:     0.75,
+		},
+
+		VoiceAudioConfig: VoiceAudioConfig{
+			VoiceSTTEnabled:      false,
+			VoiceTTSEnabled:      false,
+			VoiceContinuousMode:  false,
+			VoiceWhisperPort:     11987,
+			VoiceWhisperModel:    "ggml-base.en.bin",
+			VoiceWhisperLanguage: "en",
+			VoiceTTSAutoPlay:     false,
+			VoiceSessionIdleSec:  300,
+			VoiceKokoroPort:      11989,
+			VoiceKokoroVoice:     "",
+			ActiveAudioProvider:  "",
+			AudioSTTModel:        "",
+			AudioSTTLanguage:     "",
+			AudioTTSModel:        "",
+			AudioTTSVoice:        "",
+			AudioTTSSpeed:        0,
+			AudioTTSStylePrompt:  "",
+		},
+
+		ThoughtsConfig: ThoughtsConfig{
+			ThoughtsEnabled:             false,
+			NapsEnabled:                 false,
+			NapIdleMinutes:              60,
+			NapFloorHours:               6,
+			NapMaxOpsPerCycle:           3,
+			ThoughtAutoExecuteThreshold: 95,
+			ThoughtProposeThreshold:     80,
+			ThoughtDiscardOnNegatives:   2,
+			ThoughtDiscardOnIgnores:     3,
+			ThoughtMaxAutoExecPerNap:    1,
+			ThoughtMaxAutoExecPerDay:    3,
+		},
+
+		MultiAgentConfig: MultiAgentConfig{
+			EnableMultiAgentOrchestration: false,
+			MaxParallelAgents:             3,
+			WorkerMaxIterations:           4,
+		},
 	}
 }
 

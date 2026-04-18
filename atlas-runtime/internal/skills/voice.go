@@ -12,10 +12,19 @@ import (
 	"atlas-runtime-go/internal/voice"
 )
 
-// SetVoiceManager injects the voice.Manager so voice.* skills can drive the
+// VoiceManager is the interface the skills package requires from the voice
+// subsystem. *voice.Manager satisfies this interface — defining it here lets
+// callers inject fakes in tests without pulling in the full voice package.
+type VoiceManager interface {
+	Transcribe(ctx context.Context, audio []byte, mimeType, language string) (voice.TranscribeResult, error)
+	SynthesizeKokoroWav(ctx context.Context, text, voiceName string, speed float64, lang string, defaultPort int) (voice.SynthesizeResult, error)
+	DefaultKokoroPort() int
+}
+
+// SetVoiceManager injects the VoiceManager so voice.* skills can drive the
 // whisper and kokoro servers. Must be called after the skills registry is
 // constructed. Mirrors SetVisionFn / SetForgePersistFn.
-func (r *Registry) SetVoiceManager(m *voice.Manager) {
+func (r *Registry) SetVoiceManager(m VoiceManager) {
 	r.voiceMgr = m
 }
 

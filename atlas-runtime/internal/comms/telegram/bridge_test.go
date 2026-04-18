@@ -204,7 +204,7 @@ func TestIsAllowed(t *testing.T) {
 	}
 
 	// Chat ID on allowlist.
-	cfg = config.RuntimeConfigSnapshot{TelegramAllowedChatIDs: []int64{100, 200}}
+	cfg = config.RuntimeConfigSnapshot{TelegramConfig: config.TelegramConfig{TelegramAllowedChatIDs: []int64{100, 200}}}
 	if !b.isAllowed(nil, 100, cfg) {
 		t.Error("chat 100 should be allowed")
 	}
@@ -214,7 +214,7 @@ func TestIsAllowed(t *testing.T) {
 
 	// User ID on allowlist.
 	user := &tgUser{ID: 42}
-	cfg = config.RuntimeConfigSnapshot{TelegramAllowedUserIDs: []int64{42}}
+	cfg = config.RuntimeConfigSnapshot{TelegramConfig: config.TelegramConfig{TelegramAllowedUserIDs: []int64{42}}}
 	if !b.isAllowed(user, 999, cfg) {
 		t.Error("user 42 should be allowed")
 	}

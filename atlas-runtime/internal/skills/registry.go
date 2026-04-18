@@ -12,10 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"atlas-runtime-go/internal/browser"
 	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/storage"
-	"atlas-runtime-go/internal/voice"
 )
 
 // ToolParam describes a single JSON schema parameter.
@@ -146,8 +144,8 @@ type Registry struct {
 	publicByAction map[string]string
 	supportDir     string
 	db             *storage.DB
-	browserMgr     *browser.Manager
-	voiceMgr       *voice.Manager
+	browserMgr     BrowserManager
+	voiceMgr       VoiceManager
 	visionFn       VisionFn
 	forgePersistFn ForgePersistFn
 
@@ -184,7 +182,7 @@ const policyCacheTTL = 5 * time.Second
 
 // NewRegistry creates a Registry with all built-in skills registered.
 // Pass a non-nil browserMgr to enable browser control and session skills.
-func NewRegistry(supportDir string, db *storage.DB, browserMgr *browser.Manager) *Registry {
+func NewRegistry(supportDir string, db *storage.DB, browserMgr BrowserManager) *Registry {
 	r := &Registry{
 		entries:        make(map[string]SkillEntry),
 		groupByAction:  make(map[string]string),

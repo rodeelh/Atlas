@@ -22,6 +22,9 @@ func (a *mlxAdapter) Stream(ctx context.Context, req TurnRequest) (<-chan TurnEv
 	ch := make(chan TurnEvent, 64)
 	go func() {
 		defer close(ch)
+		if ctx.Err() != nil {
+			return
+		}
 		send := func(ev TurnEvent) bool {
 			select {
 			case ch <- ev:
