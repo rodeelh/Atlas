@@ -60,7 +60,16 @@ export function APIKeys() {
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState<string | null>(null)
   const [addingNew, setAddingNew] = useState(false)
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
+    try { const s = localStorage.getItem('atlas_creds_collapsed'); return s ? new Set(JSON.parse(s)) : new Set() }
+    catch { return new Set() }
+  })
+  const toggleGroup = (id: string) => setCollapsedGroups(prev => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    try { localStorage.setItem('atlas_creds_collapsed', JSON.stringify([...next])) } catch {}
+    return next
+  })
   const [search, setSearch]       = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const loadingRef       = useRef(false)
@@ -142,48 +151,46 @@ export function APIKeys() {
 
   const keyStatusMap = keyStatus as Record<string, unknown> | null
 
+  const searchWidget = (
+    <div ref={searchContainerRef} class={`chat-history-search${searchOpen ? ' open' : ''}`}>
+      <button
+        class="chat-history-search-trigger"
+        onClick={() => { if (!searchOpen) { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 180) } }}
+        title="Search providers"
+        aria-label="Search providers"
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="6.5" cy="6.5" r="4.5" /><line x1="10" y1="10" x2="14" y2="14" />
+        </svg>
+      </button>
+      <input
+        ref={searchInputRef}
+        class="chat-history-search-input"
+        type="text"
+        placeholder="Search providers…"
+        value={search}
+        onInput={e => setSearch((e.target as HTMLInputElement).value)}
+        onKeyDown={e => { if (e.key === 'Escape') { setSearchOpen(false); setSearch('') } }}
+        tabIndex={searchOpen ? 0 : -1}
+      />
+      <button
+        class="chat-history-close-btn"
+        onClick={() => { setSearchOpen(false); setSearch('') }}
+        tabIndex={searchOpen ? 0 : -1}
+        aria-label="Clear search"
+      >
+        <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <line x1="1" y1="1" x2="9" y2="9" /><line x1="9" y1="1" x2="1" y2="9" />
+        </svg>
+      </button>
+    </div>
+  )
+
   return (
     <div class="screen credentials-screen">
-      <PageHeader title="Credentials" subtitle="Keys, tokens, and provider credentials Atlas uses to operate." />
+      <PageHeader title="Credentials" subtitle="Keys, tokens, and provider credentials Atlas uses to operate." actions={searchWidget} />
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
-
-      {/* Providers section title + search */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 2px 8px' }}>
-        <span class="card-title">Providers</span>
-        <div ref={searchContainerRef} class={`chat-history-search${searchOpen ? ' open' : ''}`}>
-          <button
-            class="chat-history-search-trigger"
-            onClick={() => { if (!searchOpen) { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 180) } }}
-            title="Search providers"
-            aria-label="Search providers"
-          >
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="6.5" cy="6.5" r="4.5" /><line x1="10" y1="10" x2="14" y2="14" />
-            </svg>
-          </button>
-          <input
-            ref={searchInputRef}
-            class="chat-history-search-input"
-            type="text"
-            placeholder="Search providers…"
-            value={search}
-            onInput={e => setSearch((e.target as HTMLInputElement).value)}
-            onKeyDown={e => { if (e.key === 'Escape') { setSearchOpen(false); setSearch('') } }}
-            tabIndex={searchOpen ? 0 : -1}
-          />
-          <button
-            class="chat-history-close-btn"
-            onClick={() => { setSearchOpen(false); setSearch('') }}
-            tabIndex={searchOpen ? 0 : -1}
-            aria-label="Clear search"
-          >
-            <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-              <line x1="1" y1="1" x2="9" y2="9" /><line x1="9" y1="1" x2="1" y2="9" />
-            </svg>
-          </button>
-        </div>
-      </div>
 
       {/* One card per category */}
       {PROVIDER_GROUPS.map(group => {
@@ -194,11 +201,7 @@ export function APIKeys() {
         const configured   = rows.filter(p => keyStatusMap?.[p.key] === true)
         const unconfigured = rows.filter(p => keyStatusMap?.[p.key] !== true)
         const isCollapsed  = collapsedGroups.has(group.id)
-        const toggle       = () => setCollapsedGroups(prev => {
-          const next = new Set(prev)
-          next.has(group.id) ? next.delete(group.id) : next.add(group.id)
-          return next
-        })
+        const toggle = () => toggleGroup(group.id)
         return (
           <div key={group.id} class="card settings-group">
             <div class="card-header" style={{ cursor: 'pointer', userSelect: 'none' }} onClick={toggle}>
@@ -255,11 +258,7 @@ export function APIKeys() {
         <div
           class="card-header"
           style={{ cursor: 'pointer', userSelect: 'none' }}
-          onClick={() => setCollapsedGroups(prev => {
-            const next = new Set(prev)
-            next.has('custom') ? next.delete('custom') : next.add('custom')
-            return next
-          })}
+          onClick={() => toggleGroup('custom')}
         >
           <span class="card-title">Custom Keys</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
