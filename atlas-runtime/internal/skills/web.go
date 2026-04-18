@@ -168,8 +168,11 @@ var (
 	metaTagReAlt = regexp.MustCompile(`(?is)<meta\s+[^>]*content\s*=\s*["']([^"']*)["'][^>]*(?:name|property)\s*=\s*["']([^"']+)["'][^>]*>`)
 	linkCanonicalRe = regexp.MustCompile(`(?is)<link\s+[^>]*rel\s*=\s*["'][^"']*canonical[^"']*["'][^>]*href\s*=\s*["']([^"']+)["'][^>]*>`)
 	headingRe = regexp.MustCompile(`(?is)<h([12])[^>]*>(.*?)</h[12]>`)
-	braveSearchURL = "https://api.search.brave.com/res/v1/web/search"
+	braveSearchURL     = "https://api.search.brave.com/res/v1/web/search"
 	openAIWebSearchURL = "https://api.openai.com/v1/responses"
+	ddgSearchURL       = "https://html.duckduckgo.com/html/"
+	ddgAnchorRe        = regexp.MustCompile(`(?is)<a\b[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
+	ddgSnippetRe       = regexp.MustCompile(`(?is)<a\b[^>]+class="result__snippet"[^>]*>(.*?)</a>`)
 	readCredsBundle = creds.Read
 	searchCacheTTLDefault = 45 * time.Minute
 	searchCacheTTLLatest = 10 * time.Minute
@@ -526,6 +529,88 @@ func braveSearch(ctx context.Context, apiKey string, opts SearchOptions) ([]Sear
 	return results, nil
 }
 
+func extractDDGURL(href string) string {
+	href = strings.ReplaceAll(href, "&amp;", "&")
+	if i := strings.Index(href, "uddg="); i >= 0 {
+		encoded := href[i+5:]
+		if j := strings.IndexByte(encoded, '&'); j >= 0 {
+			encoded = encoded[:j]
+		}
+		if decoded, err := url.QueryUnescape(encoded); err == nil && decoded != "" {
+			return decoded
+		}
+	}
+	if strings.HasPrefix(href, "//") {
+		return "https:" + href
+	}
+	return href
+}
+
+func duckDuckGoSearch(ctx context.Context, opts SearchOptions) ([]SearchResult, error) {
+	formData := url.Values{}
+	formData.Set("q", searchQueryForProvider(opts))
+
+	req, err := http.NewRequestWithContext(ctx, "POST", ddgSearchURL, strings.NewReader(formData.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("ddg request build failed: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+
+	resp, err := newWebClient(15 * time.Second).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("ddg request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ddg error %d", resp.StatusCode)
+	}
+
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 500*1024))
+	if err != nil {
+		return nil, fmt.Errorf("ddg read failed: %w", err)
+	}
+	html := string(bodyBytes)
+
+	anchors := ddgAnchorRe.FindAllStringSubmatch(html, -1)
+	snippets := ddgSnippetRe.FindAllStringSubmatch(html, -1)
+
+	results := make([]SearchResult, 0, opts.Count)
+	for i, anchor := range anchors {
+		if len(results) >= opts.Count {
+			break
+		}
+		if len(anchor) < 3 {
+			continue
+		}
+		rawURL := extractDDGURL(anchor[1])
+		title := stripHTML(anchor[2])
+		if rawURL == "" || title == "" {
+			continue
+		}
+		snippet := ""
+		if i < len(snippets) && len(snippets[i]) > 1 {
+			snippet = compactPreview(stripHTML(snippets[i][1]), 220)
+		}
+		results = append(results, SearchResult{
+			Rank:       len(results) + 1,
+			Title:      compactPreview(title, 120),
+			URL:        rawURL,
+			Domain:     webDomain(rawURL),
+			Snippet:    snippet,
+			Provider:   "duckduckgo",
+			SourceType: webSourceKind(rawURL),
+			Confidence: webConfidence(http.StatusOK, rawURL, snippet),
+		})
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("duckduckgo returned no results")
+	}
+	return results, nil
+}
+
 func searchWebWithFallback(ctx context.Context, opts SearchOptions) (SearchResponse, error) {
 	opts = normaliseSearchOptions(opts)
 	if opts.Query == "" {
@@ -569,9 +654,21 @@ func searchWebWithFallback(ctx context.Context, opts SearchOptions) (SearchRespo
 		failures = append(failures, "OpenAI web search fallback failed: "+err.Error())
 	}
 
-	if len(failures) == 0 {
-		return SearchResponse{}, fmt.Errorf("web search is unavailable: configure a Brave Search or OpenAI API key in Settings → Credentials")
+	// DuckDuckGo — always available, no API key required
+	{
+		results, err := duckDuckGoSearch(ctx, opts)
+		if err == nil {
+			resp.Provider = "duckduckgo"
+			resp.Results = results
+			if len(failures) > 0 {
+				resp.Warnings = append(resp.Warnings, failures...)
+			}
+			storeSearchCache(cacheKey, searchCacheTTL(opts), resp)
+			return resp, nil
+		}
+		failures = append(failures, "DuckDuckGo fallback failed: "+err.Error())
 	}
+
 	return SearchResponse{}, fmt.Errorf("web search is unavailable: %s", strings.Join(failures, "; "))
 }
 
