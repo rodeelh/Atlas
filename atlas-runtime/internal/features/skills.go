@@ -185,6 +185,8 @@ func builtInSkills() []SkillRecord {
 				{ID: "web.search_entities", Name: "Entity Search", Description: "Search for people, companies, products, and other entities.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "web.extract_links", Name: "Extract Links", Description: "Extract links from a page.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "web.summarize_url", Name: "Summarize URL", Description: "Fetch and summarize a page with metadata, headings, and excerpts.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "web.search_x", Name: "X Search", Description: "Search X (Twitter) posts with handle filtering and freshness. Requires X bearer token.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "web.ask", Name: "Web Ask", Description: "AI-synthesized answer with citations via Perplexity or OpenAI web search.", PermissionLevel: "read", IsEnabled: true},
 			},
 		},
 		{

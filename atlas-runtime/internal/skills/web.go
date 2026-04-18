@@ -720,7 +720,7 @@ func openAIWebSearch(ctx context.Context, apiKey string, opts SearchOptions) ([]
 		prompt += " Prefer current reporting and recent updates."
 	}
 	body := map[string]any{
-		"model": "gpt-5-mini",
+		"model": "gpt-4o-mini",
 		"reasoning": map[string]any{
 			"effort": "low",
 		},
@@ -1717,7 +1717,7 @@ func openAIAsk(ctx context.Context, apiKey, query, focus string) (ToolResult, er
 		prompt = "Latest news: " + query
 	}
 	body := map[string]any{
-		"model":             "gpt-5-mini",
+		"model":             "gpt-4o-mini",
 		"reasoning":        map[string]any{"effort": "low"},
 		"tools":            []map[string]any{{"type": "web_search"}},
 		"include":          []string{"web_search_call.action.sources"},
@@ -1741,6 +1741,19 @@ func openAIAsk(ctx context.Context, apiKey, query, focus string) (ToolResult, er
 	}
 	defer resp.Body.Close()
 
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 500*1024))
+	if resp.StatusCode != http.StatusOK {
+		// Try to extract a JSON error message; fall back to HTTP status text.
+		var errBody struct {
+			Error *struct{ Message string `json:"message"` } `json:"error"`
+		}
+		msg := http.StatusText(resp.StatusCode)
+		if json.Unmarshal(bodyBytes, &errBody) == nil && errBody.Error != nil && strings.TrimSpace(errBody.Error.Message) != "" {
+			msg = strings.TrimSpace(errBody.Error.Message)
+		}
+		return ToolResult{}, fmt.Errorf("openai ask error %d: %s", resp.StatusCode, msg)
+	}
+
 	var data struct {
 		OutputText string `json:"output_text"`
 		Output     []struct {
@@ -1751,19 +1764,9 @@ func openAIAsk(ctx context.Context, apiKey, query, focus string) (ToolResult, er
 				} `json:"sources"`
 			} `json:"action"`
 		} `json:"output"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	if err := json.Unmarshal(bodyBytes, &data); err != nil {
 		return ToolResult{}, fmt.Errorf("openai ask parse failed: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		msg := http.StatusText(resp.StatusCode)
-		if data.Error != nil && strings.TrimSpace(data.Error.Message) != "" {
-			msg = strings.TrimSpace(data.Error.Message)
-		}
-		return ToolResult{}, fmt.Errorf("openai ask error %d: %s", resp.StatusCode, msg)
 	}
 	answer := strings.TrimSpace(data.OutputText)
 	if answer == "" {

@@ -140,25 +140,29 @@ func TestNormalizeDefinition_SkillPatternsAreCanonical(t *testing.T) {
 
 func TestModule_SyncCreateAndPauseRoutes(t *testing.T) {
 	dir := t.TempDir()
-	if err := writeAgentsFile(filepath.Join(dir, "AGENTS.md"), []agentDefinition{
-		{
-			Name:          "Scout",
-			ID:            "scout",
-			Role:          "Research Specialist",
-			Mission:       "Gather facts",
-			AllowedSkills: []string{"web.search", "fs.read_file"},
-			Autonomy:      "assistive",
-			Enabled:       true,
-		},
-	}); err != nil {
-		t.Fatalf("writeAgentsFile: %v", err)
-	}
 
 	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
 	if err != nil {
 		t.Fatalf("storage.Open: %v", err)
 	}
 	defer db.Close()
+
+	// SQLite is the sole authority (Phase 8). Seed the Scout agent directly into
+	// the DB — the module no longer imports AGENTS.md on startup.
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := db.SaveAgentDefinition(storage.AgentDefinitionRow{
+		ID:                "scout",
+		Name:              "Scout",
+		Role:              "Research Specialist",
+		Mission:           "Gather facts",
+		AllowedSkillsJSON: `["web.search","fs.read_file"]`,
+		Autonomy:          "assistive",
+		IsEnabled:         true,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}); err != nil {
+		t.Fatalf("SaveAgentDefinition: %v", err)
+	}
 
 	host := platform.NewHost(
 		stubConfig{},
