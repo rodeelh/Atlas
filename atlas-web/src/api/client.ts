@@ -296,6 +296,7 @@ export const api = {
   teamAgents: () => get<TeamAgent[]>('/agents'),
   teamAgent: (id: string) => get<TeamAgent>(`/agents/${encodeURIComponent(id)}`),
   teamEvents: () => get<TeamEvent[]>('/agents/events'),
+  clearTeamEvents: () => del<void>('/agents/events', {}),
   teamTasks: () => get<TeamTask[]>('/agents/tasks'),
   teamTask: (id: string) => get<TeamTask>(`/agents/tasks/${encodeURIComponent(id)}`),
   syncTeam: () => post<{ count: number; source: string; updated: string; agents: TeamAgent[] }>('/agents/sync', {}),

@@ -196,6 +196,7 @@ func (m *Module) registerRoutes(r chi.Router) {
 	r.Get("/agents", m.listAgents)
 	r.Get("/agents/{id}", m.getAgent)
 	r.Get("/agents/events", m.listEvents)
+	r.Delete("/agents/events", m.clearEvents)
 	r.Get("/agents/tasks", m.listTasks)
 	r.Get("/agents/tasks/{id}", m.getTask)
 	r.Post("/agents/tasks", m.assignTask)
@@ -432,6 +433,14 @@ func (m *Module) listEvents(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, events)
+}
+
+func (m *Module) clearEvents(w http.ResponseWriter, _ *http.Request) {
+	if err := m.store.ClearAgentEvents(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clear events: "+err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (m *Module) listTriggers(w http.ResponseWriter, _ *http.Request) {

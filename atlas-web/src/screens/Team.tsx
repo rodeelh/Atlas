@@ -195,6 +195,7 @@ export function Team() {
   const [expandedStepIDs, setExpandedStepIDs] = useState<Set<string>>(new Set())
   const [visibleEventCount, setVisibleEventCount] = useState(3)
   const [visibleTaskCount, setVisibleTaskCount] = useState(3)
+  const [visibleBlockedCount, setVisibleBlockedCount] = useState(3)
   const [expandedEventDetails, setExpandedEventDetails] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -210,6 +211,7 @@ export function Team() {
 
   const EVENT_PAGE_SIZE = 3
   const TASK_PAGE_SIZE = 3
+  const BLOCKED_PAGE_SIZE = 3
   const STEP_CLAMP_CHARS = 240
   const selectedTemplate = AGENT_TEMPLATES.find((tpl) => tpl.name === selectedTemplateName) ?? AGENT_TEMPLATES[0]
 
@@ -359,6 +361,8 @@ export function Team() {
     }
   }
 
+
+
   if (loading) {
     return (
       <div class="screen">
@@ -458,6 +462,7 @@ export function Team() {
 
       {/* ── Atlas Station ──────────────────────────────────────────── */}
       <div class="card team-atlas-card">
+
         <div class="team-atlas-meta">
           <div class="team-section-label">{snapshot?.atlas.name ?? 'Atlas'} Station</div>
           <div class="team-atlas-name-row">
@@ -494,27 +499,6 @@ export function Team() {
         )}
       </div>
 
-      {/* ── Blocked Items — contextual strip, only when non-empty ─── */}
-      {blockedItems.length > 0 && (
-        <div class="team-blocked-strip">
-          <div class="team-blocked-strip-label">
-            <BlockedIcon />
-            Blocked Items
-          </div>
-          <div class="team-blocked-items">
-            {blockedItems.map((item) => (
-              <div class="team-blocked-item" key={`${item.kind}:${item.id}`}>
-                <div>
-                  <div class="team-action-title">{item.title}</div>
-                  <div class="team-action-meta">{item.kind} · {item.blockingKind || item.status}</div>
-                  {item.blockingDetail && <div class="team-action-meta">{item.blockingDetail}</div>}
-                </div>
-                <span class={statusBadgeClass(item.status)}>{item.status}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* ── Agent Stations ─────────────────────────────────────────── */}
       <div class="card">
@@ -740,6 +724,49 @@ export function Team() {
         </div>
       </div>
 
+      {/* ── Blocked Items ──────────────────────────────────────────── */}
+      {blockedItems.length > 0 && (
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Blocked Items</span>
+            <span class="team-event-count-badge">{blockedItems.length} item{blockedItems.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div class="team-panel-body">
+            <div class="team-task-list">
+              {blockedItems.slice(0, visibleBlockedCount).map((item) => (
+                <div class="team-task-item-wrap" key={`${item.kind}:${item.id}`}>
+                  <div class="team-task-row" style={{ cursor: 'default' }}>
+                    <div class="team-task-row-main">
+                      <div class="team-task-title">{item.title}</div>
+                      <div class="team-task-meta">
+                        {item.kind}{item.blockingKind ? ` · ${item.blockingKind}` : ''}{item.blockingDetail ? ` · ${item.blockingDetail}` : ''}
+                      </div>
+                    </div>
+                    <div class="team-task-row-right">
+                      <span class={statusBadgeClass(item.status)}>{item.status}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {(visibleBlockedCount < blockedItems.length || visibleBlockedCount > BLOCKED_PAGE_SIZE) && (
+              <div class="team-event-pagination">
+                {visibleBlockedCount < blockedItems.length ? (
+                  <button class="team-show-more-btn" onClick={() => setVisibleBlockedCount((n) => n + BLOCKED_PAGE_SIZE)}>
+                    Show {Math.min(BLOCKED_PAGE_SIZE, blockedItems.length - visibleBlockedCount)} more
+                  </button>
+                ) : <span />}
+                {visibleBlockedCount > BLOCKED_PAGE_SIZE && (
+                  <button class="team-show-more-btn" onClick={() => setVisibleBlockedCount(BLOCKED_PAGE_SIZE)}>
+                    Show less
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ── Delegated Tasks ─────────────────────────────────────────── */}
       <div class="card">
         <div class="card-header">
@@ -897,6 +924,14 @@ export function Team() {
       <div class="card">
         <div class="card-header">
           <span class="card-title">Recent Activity</span>
+          {events.length > 0 && (
+            <button
+              class="btn btn-sm"
+              onClick={() => void runAction('clear-events', () => api.clearTeamEvents(), 'Activity cleared')}
+            >
+              Clear
+            </button>
+          )}
         </div>
         <div class="team-panel-body">
           <div class="team-event-list">

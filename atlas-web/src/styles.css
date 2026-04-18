@@ -10767,41 +10767,22 @@ select.field-input {
     linear-gradient(160deg, color-mix(in srgb, var(--surface-2) 78%, transparent), var(--surface));
 }
 
-/* Dot grid — spotlight hops between node positions, pulses on arrival */
+/* Dot grid — same pattern + animation as the voice tab */
 .team-atlas-card::before {
   content: '';
   position: absolute;
   inset: 0;
   background-image: radial-gradient(circle, color-mix(in srgb, var(--accent) 22%, transparent) 1px, transparent 1px);
   background-size: 16px 16px;
-  -webkit-mask-image: radial-gradient(ellipse 50px 50px at 50% 50%, black 0%, black 35%, rgba(0,0,0,0.55) 58%, rgba(0,0,0,0.15) 80%, transparent 100%);
-  mask-image:         radial-gradient(ellipse 50px 50px at 50% 50%, black 0%, black 35%, rgba(0,0,0,0.55) 58%, rgba(0,0,0,0.15) 80%, transparent 100%);
-  -webkit-mask-size: 100% 100%;
-  mask-size:         100% 100%;
+  -webkit-mask-image: radial-gradient(ellipse 38% 42% at 50% 50%, black 0%, rgba(0,0,0,0.5) 45%, transparent 100%);
+  mask-image:         radial-gradient(ellipse 38% 42% at 50% 50%, black 0%, rgba(0,0,0,0.5) 45%, transparent 100%);
+  -webkit-mask-size: 200% 200%;
+  mask-size:         200% 200%;
+  -webkit-mask-position: 50% 50%;
+  mask-position:         50% 50%;
   pointer-events: none;
-  z-index: 1;
-  animation: team-node-connect 16s ease-in-out infinite;
-}
-
-@keyframes team-node-connect {
-  /* Node 1 — top-left: arrive, flash, settle */
-  0%   { -webkit-mask-position: 22% 22%; mask-position: 22% 22%; filter: brightness(1); }
-  6%   { -webkit-mask-position: 22% 22%; mask-position: 22% 22%; filter: brightness(4); }
-  13%  { -webkit-mask-position: 22% 22%; mask-position: 22% 22%; filter: brightness(1); }
-  /* Node 2 — top-right */
-  27%  { -webkit-mask-position: 78% 18%; mask-position: 78% 18%; filter: brightness(1); }
-  33%  { -webkit-mask-position: 78% 18%; mask-position: 78% 18%; filter: brightness(4); }
-  40%  { -webkit-mask-position: 78% 18%; mask-position: 78% 18%; filter: brightness(1); }
-  /* Node 3 — bottom-right */
-  54%  { -webkit-mask-position: 76% 80%; mask-position: 76% 80%; filter: brightness(1); }
-  60%  { -webkit-mask-position: 76% 80%; mask-position: 76% 80%; filter: brightness(4); }
-  67%  { -webkit-mask-position: 76% 80%; mask-position: 76% 80%; filter: brightness(1); }
-  /* Node 4 — bottom-left */
-  81%  { -webkit-mask-position: 22% 80%; mask-position: 22% 80%; filter: brightness(1); }
-  87%  { -webkit-mask-position: 22% 80%; mask-position: 22% 80%; filter: brightness(4); }
-  94%  { -webkit-mask-position: 22% 80%; mask-position: 22% 80%; filter: brightness(1); }
-  /* Return to node 1 */
-  100% { -webkit-mask-position: 22% 22%; mask-position: 22% 22%; filter: brightness(1); }
+  z-index: 0;
+  animation: voice-dot-expand 4s ease-in-out infinite;
 }
 
 .team-atlas-meta {
@@ -11224,6 +11205,7 @@ select.field-input {
   border: 1px solid var(--border);
   background: var(--theme-surface-soft);
   color: inherit;
+  font-size: inherit;
   cursor: pointer;
   transition: border-color 140ms ease;
 }

@@ -2306,6 +2306,12 @@ func (db *DB) ListAgentEvents(limit int) ([]AgentEventRow, error) {
 	return out, rows.Err()
 }
 
+// ClearAgentEvents deletes all rows from agent_events.
+func (db *DB) ClearAgentEvents() error {
+	_, err := db.conn.Exec(`DELETE FROM agent_events`)
+	return err
+}
+
 // SaveAgentEvent inserts one team activity event row.
 func (db *DB) SaveAgentEvent(row AgentEventRow) error {
 	_, err := db.conn.Exec(
