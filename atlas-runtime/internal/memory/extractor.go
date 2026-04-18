@@ -836,7 +836,14 @@ func asyncEmbed(ctx context.Context, provider agent.ProviderConfig, db *storage.
 	}
 	go func() {
 		vec, err := agent.Embed(context.WithoutCancel(ctx), provider, text)
-		if err != nil || len(vec) == 0 {
+		if err != nil {
+			logstore.Write("debug", "asyncEmbed: embedding failed — vector not stored",
+				map[string]string{"memID": memID[:min(8, len(memID))], "error": err.Error()})
+			return
+		}
+		if len(vec) == 0 {
+			logstore.Write("debug", "asyncEmbed: provider returned empty vector — skipping",
+				map[string]string{"memID": memID[:min(8, len(memID))], "provider": string(provider.Type)})
 			return
 		}
 		db.UpdateMemoryEmbedding(memID, embedModelName(provider), vec) //nolint:errcheck

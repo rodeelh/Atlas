@@ -29,25 +29,26 @@ func DBPath() string {
 	return filepath.Join(SupportDir(), "atlas.sqlite3")
 }
 
-// AtlasInstallDir returns the directory where the Atlas runtime binary,
-// web assets, and the bundled engine (llama-server) are installed.
-// Distinct from SupportDir() which holds user data (SQLite, config, MIND.md…).
+// AtlasInstallDir returns the Atlas install directory. All downloaded and
+// built artifacts live here: the daemon app bundle, web assets, engine and
+// voice binaries, and all model files. User data (config, SQLite, MIND.md,
+// custom skills, etc.) lives separately under SupportDir().
 func AtlasInstallDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, "Library", "Application Support", "Atlas")
 }
 
-// ModelsDir returns the directory where Engine LM model files are stored.
-// Lives under SupportDir() so models are preserved across uninstalls.
+// ModelsDir returns the directory where Engine LM model files (GGUF) are stored.
+// Lives under AtlasInstallDir() alongside the engine binary.
 func ModelsDir() string {
-	return filepath.Join(SupportDir(), "models")
+	return filepath.Join(AtlasInstallDir(), "models")
 }
 
-// VoiceModelsDir returns the parent directory for Whisper and Piper models
-// (subdirs whisper/ and piper/). Lives under SupportDir() so voice models
-// survive runtime reinstalls.
+// VoiceModelsDir returns the parent directory for Whisper and Kokoro models
+// (subdirs whisper/ and kokoro/). Lives under AtlasInstallDir() alongside the
+// voice binary.
 func VoiceModelsDir() string {
-	return filepath.Join(SupportDir(), "voice-models")
+	return filepath.Join(AtlasInstallDir(), "voice-models")
 }
 
 // TLSDir returns the directory where Atlas stores its built-in HTTPS assets
@@ -69,18 +70,17 @@ func TLSKeyPath() string {
 }
 
 // MLXModelsDir returns the directory where MLX-LM model directories are stored.
-// Each model is a subdirectory (e.g. "Llama-3.2-3B-Instruct-4bit/") containing
-// safetensors shards and a config.json — unlike llama.cpp which uses single .gguf files.
-// Lives under SupportDir() so models are preserved across uninstalls.
+// Each model is a subdirectory containing safetensors shards and config.json.
+// Lives under AtlasInstallDir() alongside other model artifacts.
 func MLXModelsDir() string {
-	return filepath.Join(SupportDir(), "mlx-models")
+	return filepath.Join(AtlasInstallDir(), "mlx-models")
 }
 
 // MLXVenvDir returns the path to the Python virtual environment Atlas manages
-// for the mlx-lm package. Owned entirely by Atlas; never shared with user envs.
+// for the mlx-lm package. Lives under AtlasInstallDir() alongside other
+// install artifacts.
 func MLXVenvDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".atlas-mlx")
+	return filepath.Join(AtlasInstallDir(), "mlx-venv")
 }
 
 // FilesDir returns the default directory where Atlas stores files it generates,

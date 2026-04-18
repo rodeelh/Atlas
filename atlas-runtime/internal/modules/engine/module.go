@@ -123,7 +123,15 @@ func (m *Module) getModels(w http.ResponseWriter, _ *http.Request) {
 	if models == nil {
 		models = []runtimeengine.ModelInfo{}
 	}
-	writeJSON(w, http.StatusOK, models)
+	// Exclude the embed sidecar model — it is managed automatically and
+	// must not appear as a chat model option.
+	filtered := models[:0]
+	for _, mod := range models {
+		if mod.Name != defaultEmbedModel {
+			filtered = append(filtered, mod)
+		}
+	}
+	writeJSON(w, http.StatusOK, filtered)
 }
 
 func (m *Module) postStart(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +235,16 @@ func (m *Module) postDownload(w http.ResponseWriter, r *http.Request) {
 		emit("error", map[string]any{"message": err.Error()})
 		return
 	}
-	models, _ := m.mgr.ListModels()
+	allModels, _ := m.mgr.ListModels()
+	if allModels == nil {
+		allModels = []runtimeengine.ModelInfo{}
+	}
+	var models []runtimeengine.ModelInfo
+	for _, mod := range allModels {
+		if mod.Name != defaultEmbedModel {
+			models = append(models, mod)
+		}
+	}
 	if models == nil {
 		models = []runtimeengine.ModelInfo{}
 	}
@@ -290,6 +307,10 @@ func (m *Module) deleteModel(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	if name == "" {
 		writeError(w, http.StatusBadRequest, "model name required")
+		return
+	}
+	if name == defaultEmbedModel {
+		writeError(w, http.StatusForbidden, "embedding model is managed automatically and cannot be deleted")
 		return
 	}
 	if err := m.mgr.DeleteModel(name); err != nil {
@@ -669,6 +690,16 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
+const defaultEmbedModel = "nomic-embed-text-v1.5.Q4_K_M.gguf"
+
+// effectiveEmbedModel always returns the bundled embed model name.
+// The embed model is not user-configurable — it is installed automatically
+// and there is no UI to select a different one. Config field is ignored to
+// prevent stale values from a previous picker causing startup failures.
+func effectiveEmbedModel() string {
+	return defaultEmbedModel
+}
+
 // ── Embedding sidecar handlers ────────────────────────────────────────────────
 
 func (m *Module) getEmbedStatus(w http.ResponseWriter, _ *http.Request) {
@@ -676,6 +707,15 @@ func (m *Module) getEmbedStatus(w http.ResponseWriter, _ *http.Request) {
 	port := cfg.AtlasEmbedPort
 	if port <= 0 {
 		port = 11988
+	}
+	modelName := effectiveEmbedModel()
+	allModels, _ := m.mgr.ListModels()
+	modelReady := false
+	for _, mod := range allModels {
+		if mod.Name == modelName {
+			modelReady = true
+			break
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":     cfg.AtlasEmbedEnabled,
@@ -685,8 +725,9 @@ func (m *Module) getEmbedStatus(w http.ResponseWriter, _ *http.Request) {
 		"baseURL":     m.embedMgr.BaseURL(),
 		"lastError":   m.embedMgr.LastError(),
 		"binaryReady": m.embedMgr.BinaryReady(),
-		"configModel": cfg.AtlasEmbedModel,
+		"configModel": modelName,
 		"configPort":  port,
+		"modelReady":  modelReady,
 	})
 }
 
@@ -698,11 +739,7 @@ func (m *Module) postEmbedStart(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	if req.Model == "" {
-		req.Model = cfg.AtlasEmbedModel
-	}
-	if req.Model == "" {
-		writeError(w, http.StatusBadRequest, "model is required")
-		return
+		req.Model = effectiveEmbedModel()
 	}
 	if req.Port <= 0 {
 		req.Port = cfg.AtlasEmbedPort

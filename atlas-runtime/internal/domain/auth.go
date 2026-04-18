@@ -77,7 +77,7 @@ func (d *AuthDomain) EnsureRemoteKey() {
 	if key := readRemoteAccessKey(cfg); key != "" {
 		return // already present
 	}
-	newKey, err := generateAndStoreRemoteKey()
+	newKey, err := generateAndStoreRemoteKeyFn()
 	if err != nil {
 		log.Printf("Atlas: warning — could not generate remote access key: %v", err)
 		return
@@ -411,7 +411,7 @@ func (d *AuthDomain) remoteKey(w http.ResponseWriter, r *http.Request) {
 	if key == "" {
 		// Auto-generate if missing (e.g. first run after enabling remote access).
 		var err error
-		key, err = generateAndStoreRemoteKey()
+		key, err = generateAndStoreRemoteKeyFn()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "Could not generate remote access key.")
 			return
@@ -422,7 +422,7 @@ func (d *AuthDomain) remoteKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *AuthDomain) rotateRemoteKey(w http.ResponseWriter, r *http.Request) {
-	newKey, err := generateAndStoreRemoteKey()
+	newKey, err := generateAndStoreRemoteKeyFn()
 	if err != nil {
 		log.Printf("Atlas: key rotation failed: %v", err)
 		writeError(w, http.StatusInternalServerError, "Could not rotate remote access key.")
@@ -437,7 +437,7 @@ func (d *AuthDomain) revokeRemoteSessions(w http.ResponseWriter, r *http.Request
 	log.Printf("Atlas: all remote sessions revoked")
 
 	// Also rotate the key so revoked sessions cannot re-authenticate with the old key.
-	newKey, err := generateAndStoreRemoteKey()
+	newKey, err := generateAndStoreRemoteKeyFn()
 	if err != nil {
 		log.Printf("Atlas: warning — key rotation after revoke failed: %v", err)
 		// Still return success — sessions are revoked even if key rotation failed.
@@ -464,10 +464,13 @@ func readRemoteAccessKey(_ config.RuntimeConfigSnapshot) string {
 	return strings.TrimSpace(out)
 }
 
-// generateAndStoreRemoteKey creates a cryptographically random 32-byte (64-char hex)
+// generateAndStoreRemoteKeyFn is injectable so tests can bypass Keychain dialogs.
+var generateAndStoreRemoteKeyFn = defaultGenerateAndStoreRemoteKey
+
+// defaultGenerateAndStoreRemoteKey creates a cryptographically random 32-byte (64-char hex)
 // key and stores it in the Keychain via the native Security.framework API.
 // The key value never appears in process args (fixes C-1).
-func generateAndStoreRemoteKey() (string, error) {
+func defaultGenerateAndStoreRemoteKey() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("generate key: %w", err)

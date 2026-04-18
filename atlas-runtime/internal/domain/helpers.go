@@ -43,10 +43,10 @@ func nowRFC3339() string {
 }
 
 // execSecurityInDomain runs the macOS `security` CLI tool.
-// Returns (stdout, error).
+// It is a package-level var so tests can stub it without triggering Keychain dialogs.
 // The error message intentionally omits args to prevent Keychain secrets
 // (passed as -w VALUE) from leaking into logs via error strings.
-func execSecurityInDomain(args ...string) (string, error) {
+var execSecurityInDomain = func(args ...string) (string, error) {
 	cmd := exec.Command("security", args...)
 	out, err := cmd.Output()
 	if err != nil {
@@ -61,9 +61,9 @@ func execSecurityInDomain(args ...string) (string, error) {
 	return string(out), nil
 }
 
-// keychainItemExists returns true if the Keychain item exists (exit 0),
-// false if not found (exit 44), and an error for any other failure.
-func keychainItemExists(service, account string) (bool, error) {
+// keychainItemExistsFn checks whether a Keychain item exists.
+// Package-level var so tests can stub it.
+var keychainItemExistsFn = func(service, account string) (bool, error) {
 	cmd := exec.Command("security", "find-generic-password",
 		"-s", service, "-a", account)
 	err := cmd.Run()

@@ -55,7 +55,7 @@ func TestLoadFromConfigRestoresFromKeychainFallback(t *testing.T) {
 		UnitSystem:      "imperial",
 		Initialized:     true,
 	}
-	execSecurity = func(args ...string) (string, error) {
+	ExecSecurityFn = func(args ...string) (string, error) {
 		switch {
 		case len(args) >= 1 && args[0] == "find-generic-password":
 			data, _ := json.Marshal(keychainPrefs)
@@ -111,8 +111,8 @@ func resetForTest(t *testing.T) string {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	oldExec := execSecurity
-	execSecurity = func(args ...string) (string, error) {
+	oldExec := ExecSecurityFn
+	ExecSecurityFn = func(args ...string) (string, error) {
 		switch {
 		case len(args) >= 1 && args[0] == "find-generic-password":
 			return "", os.ErrNotExist
@@ -123,7 +123,7 @@ func resetForTest(t *testing.T) string {
 		}
 	}
 	t.Cleanup(func() {
-		execSecurity = oldExec
+		ExecSecurityFn = oldExec
 	})
 
 	current = Prefs{}

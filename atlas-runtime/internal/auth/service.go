@@ -75,13 +75,17 @@ const (
 	keychainAccount = "signing-key"
 )
 
-// loadOrCreateSigningKey loads the HMAC signing key from the macOS Keychain
+// LoadOrCreateSigningKeyFn is injectable so tests in other packages can bypass
+// Keychain dialogs. Defaults to the real Keychain implementation.
+var LoadOrCreateSigningKeyFn = defaultLoadOrCreateSigningKey
+
+// defaultLoadOrCreateSigningKey loads the HMAC signing key from the macOS Keychain
 // via the native Security.framework API (no subprocess — key never appears
 // in ps-visible process args). If no key exists yet it generates a fresh
 // 32-byte key, persists it, and returns it. Falls back to an ephemeral key
 // (with a warning) if Keychain access fails, preserving availability on
 // headless/CI builds.
-func loadOrCreateSigningKey() []byte {
+func defaultLoadOrCreateSigningKey() []byte {
 	// Try to load an existing key via native API.
 	query := keychain.NewItem()
 	query.SetSecClass(keychain.SecClassGenericPassword)
@@ -121,7 +125,7 @@ func loadOrCreateSigningKey() []byte {
 // open browser tabs and pending launch tokens valid across restarts.
 func NewService(db *storage.DB) *Service {
 	return &Service{
-		signingKey: loadOrCreateSigningKey(),
+		signingKey: LoadOrCreateSigningKeyFn(),
 		sessions:   make(map[string]*Session),
 		usedNonces: make(map[string]struct{}),
 		nonceOrder: nil,

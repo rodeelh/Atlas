@@ -5,6 +5,7 @@
         download-engine engine-update \
         download-whisper download-whisper-model \
         download-voice-venv download-kokoro download-kokoro-model download-voice \
+        download-nomic-model \
         tidy clean check bump \
         test-fast test-standard verify-release scorecard benchmark-chat
 
@@ -83,8 +84,9 @@ dev: build
 # uninstall — unload daemon, remove plist and installed files (data preserved).
 
 download-engine:
-	@mkdir -p "$$HOME/Library/Application Support/Atlas/engine"
-	@if [ ! -f "$$HOME/Library/Application Support/Atlas/engine/llama-server" ]; then \
+	@INSTALL_DIR="$$HOME/Library/Application Support/Atlas"; \
+	mkdir -p "$$INSTALL_DIR/engine"; \
+	if [ ! -f "$$INSTALL_DIR/engine/llama-server" ]; then \
 		echo "→ Downloading llama-server $(LLAMA_VERSION) for $$(uname -m)..."; \
 		ARCH=$$(uname -m); \
 		ZIP="llama-$(LLAMA_VERSION)-bin-macos-$$ARCH.zip"; \
@@ -93,10 +95,10 @@ download-engine:
 		mkdir -p /tmp/llama-extract && \
 		tar -xzf /tmp/llama-engine.tar.gz -C /tmp/llama-extract 2>/dev/null; \
 		EXTRACTED=$$(ls /tmp/llama-extract/); \
-		cp /tmp/llama-extract/$$EXTRACTED/llama-server "$$HOME/Library/Application Support/Atlas/engine/llama-server" || \
+		cp /tmp/llama-extract/$$EXTRACTED/llama-server "$$INSTALL_DIR/engine/llama-server" || \
 			{ echo "✗ Could not extract llama-server from archive"; rm -rf /tmp/llama-extract /tmp/llama-engine.tar.gz; exit 0; }; \
-		cp /tmp/llama-extract/$$EXTRACTED/*.dylib "$$HOME/Library/Application Support/Atlas/engine/" 2>/dev/null; \
-		chmod +x "$$HOME/Library/Application Support/Atlas/engine/llama-server"; \
+		cp /tmp/llama-extract/$$EXTRACTED/*.dylib "$$INSTALL_DIR/engine/" 2>/dev/null; \
+		chmod +x "$$INSTALL_DIR/engine/llama-server"; \
 		rm -rf /tmp/llama-extract /tmp/llama-engine.tar.gz; \
 		echo "✓ llama-server $(LLAMA_VERSION) + shared libraries ready"; \
 	else \
@@ -104,8 +106,9 @@ download-engine:
 	fi
 
 download-whisper:
-	@mkdir -p "$$HOME/Library/Application Support/Atlas/voice"
-	@if [ ! -f "$$HOME/Library/Application Support/Atlas/voice/whisper-server" ]; then \
+	@INSTALL_DIR="$$HOME/Library/Application Support/Atlas"; \
+	mkdir -p "$$INSTALL_DIR/voice"; \
+	if [ ! -f "$$INSTALL_DIR/voice/whisper-server" ]; then \
 		echo "→ Building whisper-server $(WHISPER_VERSION) for $$(uname -m)..."; \
 		SRC=/tmp/atlas-whisper-src; \
 		rm -rf $$SRC; \
@@ -114,11 +117,10 @@ download-whisper:
 		(cd $$SRC && (cmake --build build --target whisper-server -j --config Release 2>/dev/null || cmake --build build --target server -j --config Release) 2>&1 | tail -5) || { echo "✗ whisper.cpp build failed"; exit 0; }; \
 		SERVER_BIN=$$(find $$SRC/build -type f \( -name "whisper-server" -o -name "server" \) -perm -u+x 2>/dev/null | head -1); \
 		if [ -z "$$SERVER_BIN" ]; then echo "✗ whisper server binary not found after build"; exit 0; fi; \
-		cp "$$SERVER_BIN" "$$HOME/Library/Application Support/Atlas/voice/whisper-server"; \
-		chmod +x "$$HOME/Library/Application Support/Atlas/voice/whisper-server"; \
-		find $$SRC/build -type f \( -name "*.dylib" -o -name "*.so" \) -exec cp {} "$$HOME/Library/Application Support/Atlas/voice/" \; 2>/dev/null; \
-		VOICE_DIR="$$HOME/Library/Application Support/Atlas/voice"; \
-		(cd "$$VOICE_DIR" && for f in lib*.dylib; do \
+		cp "$$SERVER_BIN" "$$INSTALL_DIR/voice/whisper-server"; \
+		chmod +x "$$INSTALL_DIR/voice/whisper-server"; \
+		find $$SRC/build -type f \( -name "*.dylib" -o -name "*.so" \) -exec cp {} "$$INSTALL_DIR/voice/" \; 2>/dev/null; \
+		(cd "$$INSTALL_DIR/voice" && for f in lib*.dylib; do \
 			[ -f "$$f" ] || continue; \
 			case "$$f" in *.*.*.*.dylib) ;; *) continue ;; esac; \
 			base=$$(echo "$$f" | sed 's/\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.dylib$$//'); \
@@ -126,8 +128,8 @@ download-whisper:
 			ln -sf "$$f" "$${base}.$${major}.dylib" 2>/dev/null || true; \
 			ln -sf "$$f" "$${base}.dylib" 2>/dev/null || true; \
 		done); \
-		install_name_tool -add_rpath "@executable_path/." "$$VOICE_DIR/whisper-server" 2>/dev/null || true; \
-		codesign --force --sign - "$$VOICE_DIR/whisper-server" 2>/dev/null || true; \
+		install_name_tool -add_rpath "@executable_path/." "$$INSTALL_DIR/voice/whisper-server" 2>/dev/null || true; \
+		codesign --force --sign - "$$INSTALL_DIR/voice/whisper-server" 2>/dev/null || true; \
 		rm -rf $$SRC; \
 		echo "✓ whisper-server $(WHISPER_VERSION) ready"; \
 	else \
@@ -135,22 +137,30 @@ download-whisper:
 	fi
 
 download-whisper-model:
-	@mkdir -p "$$HOME/Library/Application Support/ProjectAtlas/voice-models/whisper"
-	@if [ ! -f "$$HOME/Library/Application Support/ProjectAtlas/voice-models/whisper/$(WHISPER_MODEL)" ]; then \
-		echo "→ Downloading Whisper model $(WHISPER_MODEL)..."; \
-		curl -L --progress-bar \
-			-o "$$HOME/Library/Application Support/ProjectAtlas/voice-models/whisper/$(WHISPER_MODEL)" \
-			"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$(WHISPER_MODEL)" || \
-			{ echo "✗ Whisper model download failed"; rm -f "$$HOME/Library/Application Support/ProjectAtlas/voice-models/whisper/$(WHISPER_MODEL)"; exit 0; }; \
-		echo "✓ $(WHISPER_MODEL) ready"; \
+	@INSTALL_DIR="$$HOME/Library/Application Support/Atlas"; \
+	mkdir -p "$$INSTALL_DIR/voice-models/whisper"; \
+	if [ ! -f "$$INSTALL_DIR/voice-models/whisper/$(WHISPER_MODEL)" ]; then \
+		if [ -f "$$HOME/Library/Application Support/ProjectAtlas/voice-models/whisper/$(WHISPER_MODEL)" ]; then \
+			echo "→ Migrating Whisper model to install directory..."; \
+			mv "$$HOME/Library/Application Support/ProjectAtlas/voice-models/whisper/$(WHISPER_MODEL)" \
+			   "$$INSTALL_DIR/voice-models/whisper/$(WHISPER_MODEL)"; \
+			echo "✓ $(WHISPER_MODEL) migrated"; \
+		else \
+			echo "→ Downloading Whisper model $(WHISPER_MODEL)..."; \
+			curl -L --progress-bar \
+				-o "$$INSTALL_DIR/voice-models/whisper/$(WHISPER_MODEL)" \
+				"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$(WHISPER_MODEL)" || \
+				{ echo "✗ Whisper model download failed"; rm -f "$$INSTALL_DIR/voice-models/whisper/$(WHISPER_MODEL)"; exit 0; }; \
+			echo "✓ $(WHISPER_MODEL) ready"; \
+		fi; \
 	else \
 		echo "→ Whisper model $(WHISPER_MODEL) already present"; \
 	fi
 
 download-voice-venv:
-	@VOICE_DIR="$$HOME/Library/Application Support/Atlas/voice"; \
-	VENV_DIR="$$VOICE_DIR/venv"; \
-	mkdir -p "$$VOICE_DIR"; \
+	@INSTALL_DIR="$$HOME/Library/Application Support/Atlas"; \
+	VENV_DIR="$$INSTALL_DIR/voice/venv"; \
+	mkdir -p "$$INSTALL_DIR/voice"; \
 	if [ -x "$$VENV_DIR/bin/python" ]; then \
 		echo "→ voice venv already exists at $$VENV_DIR"; \
 		exit 0; \
@@ -163,7 +173,6 @@ download-voice-venv:
 	python3 -m venv "$$VENV_DIR" 2>&1 || { echo "✗ venv creation failed"; exit 0; }; \
 	"$$VENV_DIR/bin/pip" install --quiet --upgrade pip 2>&1 | tail -3; \
 	echo "✓ voice venv ready"
-
 
 download-kokoro: download-voice-venv
 	@VENV_DIR="$$HOME/Library/Application Support/Atlas/voice/venv"; \
@@ -179,38 +188,85 @@ download-kokoro: download-voice-venv
 	echo "✓ kokoro-onnx $(KOKORO_PIP_VERSION) installed"
 
 download-kokoro-model:
-	@MODEL_DIR="$$HOME/Library/Application Support/ProjectAtlas/voice-models/kokoro"; \
+	@INSTALL_DIR="$$HOME/Library/Application Support/Atlas"; \
+	MODEL_DIR="$$INSTALL_DIR/voice-models/kokoro"; \
 	mkdir -p "$$MODEL_DIR"; \
 	if [ ! -f "$$MODEL_DIR/kokoro-v1.0.onnx" ]; then \
-		echo "→ Downloading Kokoro model (kokoro-v1.0.onnx, ~325 MB)..."; \
-		curl -L --progress-bar \
-			-o "$$MODEL_DIR/kokoro-v1.0.onnx" \
-			"https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx" || \
-			{ echo "✗ kokoro model download failed"; rm -f "$$MODEL_DIR/kokoro-v1.0.onnx"; exit 0; }; \
-		echo "✓ kokoro-v1.0.onnx ready"; \
+		if [ -f "$$HOME/Library/Application Support/ProjectAtlas/voice-models/kokoro/kokoro-v1.0.onnx" ]; then \
+			echo "→ Migrating Kokoro model to install directory..."; \
+			mv "$$HOME/Library/Application Support/ProjectAtlas/voice-models/kokoro/kokoro-v1.0.onnx" "$$MODEL_DIR/kokoro-v1.0.onnx"; \
+		else \
+			echo "→ Downloading Kokoro model (kokoro-v1.0.onnx, ~325 MB)..."; \
+			curl -L --progress-bar \
+				-o "$$MODEL_DIR/kokoro-v1.0.onnx" \
+				"https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx" || \
+				{ echo "✗ kokoro model download failed"; rm -f "$$MODEL_DIR/kokoro-v1.0.onnx"; exit 0; }; \
+			echo "✓ kokoro-v1.0.onnx ready"; \
+		fi; \
 	else \
 		echo "→ kokoro-v1.0.onnx already present"; \
 	fi; \
 	if [ ! -f "$$MODEL_DIR/voices-v1.0.bin" ]; then \
-		echo "→ Downloading Kokoro voices (voices-v1.0.bin, ~27 MB)..."; \
-		curl -L --progress-bar \
-			-o "$$MODEL_DIR/voices-v1.0.bin" \
-			"https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin" || \
-			{ echo "✗ kokoro voices download failed"; rm -f "$$MODEL_DIR/voices-v1.0.bin"; exit 0; }; \
-		echo "✓ voices-v1.0.bin ready"; \
+		if [ -f "$$HOME/Library/Application Support/ProjectAtlas/voice-models/kokoro/voices-v1.0.bin" ]; then \
+			mv "$$HOME/Library/Application Support/ProjectAtlas/voice-models/kokoro/voices-v1.0.bin" "$$MODEL_DIR/voices-v1.0.bin"; \
+		else \
+			echo "→ Downloading Kokoro voices (voices-v1.0.bin, ~27 MB)..."; \
+			curl -L --progress-bar \
+				-o "$$MODEL_DIR/voices-v1.0.bin" \
+				"https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin" || \
+				{ echo "✗ kokoro voices download failed"; rm -f "$$MODEL_DIR/voices-v1.0.bin"; exit 0; }; \
+			echo "✓ voices-v1.0.bin ready"; \
+		fi; \
 	else \
 		echo "→ voices-v1.0.bin already present"; \
 	fi
 
 download-voice: download-whisper download-whisper-model download-kokoro download-kokoro-model
 
-engine-update:
-	@echo "→ Removing existing llama-server and shared libraries..."
-	@rm -f "$$HOME/Library/Application Support/Atlas/engine/llama-server"
-	@rm -f "$$HOME/Library/Application Support/Atlas/engine/"*.dylib
-	@$(MAKE) download-engine LLAMA_VERSION=$(LLAMA_VERSION)
+NOMIC_MODEL ?= nomic-embed-text-v1.5.Q4_K_M.gguf
+NOMIC_MODEL_URL ?= https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/$(NOMIC_MODEL)
 
-install: build build-tui build-web download-engine download-voice
+download-nomic-model:
+	@INSTALL_DIR="$$HOME/Library/Application Support/Atlas"; \
+	mkdir -p "$$INSTALL_DIR/models"; \
+	if [ ! -f "$$INSTALL_DIR/models/$(NOMIC_MODEL)" ]; then \
+		if [ -f "$$HOME/Library/Application Support/ProjectAtlas/models/$(NOMIC_MODEL)" ]; then \
+			echo "→ Migrating nomic embedding model to install directory..."; \
+			mv "$$HOME/Library/Application Support/ProjectAtlas/models/$(NOMIC_MODEL)" "$$INSTALL_DIR/models/$(NOMIC_MODEL)"; \
+			echo "✓ $(NOMIC_MODEL) migrated"; \
+		else \
+			echo "→ Downloading nomic embedding model ($(NOMIC_MODEL))..."; \
+			curl -L --progress-bar \
+				-o "$$INSTALL_DIR/models/$(NOMIC_MODEL)" \
+				"$(NOMIC_MODEL_URL)" || \
+				{ echo "✗ nomic model download failed"; rm -f "$$INSTALL_DIR/models/$(NOMIC_MODEL)"; exit 0; }; \
+			echo "✓ $(NOMIC_MODEL) ready"; \
+		fi; \
+	else \
+		echo "→ $(NOMIC_MODEL) already present"; \
+	fi
+
+engine-update:
+	@INSTALL_DIR="$$HOME/Library/Application Support/Atlas"; \
+	echo "→ Removing existing llama-server and shared libraries..."; \
+	rm -f "$$INSTALL_DIR/engine/llama-server"; \
+	rm -f "$$INSTALL_DIR/engine/"*.dylib; \
+	$(MAKE) download-engine LLAMA_VERSION=$(LLAMA_VERSION)
+
+install: build build-tui build-web download-engine download-voice download-nomic-model
+	@INSTALL_DIR="$$HOME/Library/Application Support/Atlas"; \
+	OLD_LEGACY="$$HOME/Library/Application Support/ProjectAtlas"; \
+	if [ -d "$$HOME/.atlas-mlx" ]; then \
+		echo "→ Removing stale MLX venv from old location (~/.atlas-mlx)..."; \
+		rm -rf "$$HOME/.atlas-mlx"; \
+	fi; \
+	if [ -d "$$OLD_LEGACY/mlx-models" ]; then \
+		echo "→ Migrating MLX models to install directory..."; \
+		mkdir -p "$$INSTALL_DIR/mlx-models"; \
+		mv "$$OLD_LEGACY/mlx-models/"* "$$INSTALL_DIR/mlx-models/" 2>/dev/null || true; \
+		rmdir "$$OLD_LEGACY/mlx-models" 2>/dev/null || true; \
+		echo "✓ MLX models migrated"; \
+	fi
 	@echo "→ Building Atlas.app bundle..."
 	@APP_DIR="$$HOME/Library/Application Support/Atlas/Atlas.app"; \
 	rm -rf "$$APP_DIR"; \

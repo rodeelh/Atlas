@@ -47,9 +47,13 @@ const (
 // Reads (Read) do not hold the mutex — only Store does.
 var mu sync.Mutex
 
-// Read reads the credential bundle from the macOS Keychain via security CLI.
+// Read reads the credential bundle from the macOS Keychain.
+// It is a package-level var so tests in other packages can stub it without
+// triggering macOS Keychain dialogs.
 // Returns an empty Bundle (not an error) if the key is absent.
-func Read() (Bundle, error) {
+var Read = defaultRead
+
+func defaultRead() (Bundle, error) {
 	out, err := execSecurity("find-generic-password",
 		"-s", bundleService,
 		"-a", bundleAccount,

@@ -1133,6 +1133,86 @@ func TestDeduplicateEntitiesRepointsEdges(t *testing.T) {
 }
 
 // TestFetchEntitiesByIDs — fetches a subset of entities by ID.
+// TestCosineRankStability — verifies that re-writing the same embedding vectors
+// (simulating a sidecar restart followed by re-embedding) preserves the rank
+// order returned by RelevantMemories. Guards against vector drift bugs where a
+// fresh embed pass could silently degrade recall quality.
+func TestCosineRankStability(t *testing.T) {
+	db, cleanup := openMemTestDB(t)
+	defer cleanup()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+
+	// Three memories with distinct cosine angles relative to the query vector.
+	rows := []struct {
+		id    string
+		title string
+		vec   []float32
+	}{
+		{"crs-1", "high cosine match", []float32{1.0, 0.0, 0.0, 0.0}},   // cosine ≈ 1.0
+		{"crs-2", "medium cosine match", []float32{0.7, 0.7, 0.0, 0.0}}, // cosine ≈ 0.71
+		{"crs-3", "low cosine match", []float32{0.0, 0.0, 1.0, 0.0}},    // cosine ≈ 0.0
+	}
+	for _, r := range rows {
+		row := MemoryRow{
+			ID: r.id, Category: "profile", Title: r.title,
+			Content: r.title + " content", Source: "test",
+			Confidence: 0.8, Importance: 0.5,
+			CreatedAt: now, UpdatedAt: now, TagsJSON: "[]",
+		}
+		if err := db.SaveMemory(row); err != nil {
+			t.Fatalf("SaveMemory %s: %v", r.id, err)
+		}
+		if err := db.UpdateMemoryEmbedding(r.id, "nomic-v1.5", r.vec); err != nil {
+			t.Fatalf("UpdateMemoryEmbedding %s: %v", r.id, err)
+		}
+	}
+
+	queryVec := []float32{1.0, 0.0, 0.0, 0.0}
+
+	rankOrder := func(t *testing.T) []string {
+		t.Helper()
+		res, err := db.RelevantMemories("cosine match content", 5, queryVec)
+		if err != nil {
+			t.Fatalf("RelevantMemories: %v", err)
+		}
+		ids := make([]string, len(res))
+		for i, r := range res {
+			ids[i] = r.ID
+		}
+		return ids
+	}
+
+	before := rankOrder(t)
+	if len(before) < 3 {
+		t.Fatalf("expected 3 results, got %d", len(before))
+	}
+	if before[0] != "crs-1" {
+		t.Errorf("before re-embed: expected crs-1 first, got %s", before[0])
+	}
+
+	// Simulate sidecar restart: re-write identical vectors (same bit pattern).
+	for _, r := range rows {
+		if err := db.UpdateMemoryEmbedding(r.id, "nomic-v1.5", r.vec); err != nil {
+			t.Fatalf("re-embed %s: %v", r.id, err)
+		}
+	}
+
+	after := rankOrder(t)
+	if len(after) < 3 {
+		t.Fatalf("after re-embed: expected 3 results, got %d", len(after))
+	}
+
+	for i := range before {
+		if i >= len(after) {
+			break
+		}
+		if before[i] != after[i] {
+			t.Errorf("rank position %d changed after re-embed: was %s, now %s", i, before[i], after[i])
+		}
+	}
+}
+
 func TestFetchEntitiesByIDs(t *testing.T) {
 	db, cleanup := openMemTestDB(t)
 	defer cleanup()

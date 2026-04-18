@@ -142,13 +142,10 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
   const [routerModelSaving, setRouterModelSaving] = useState(false)
   const [routerActing, setRouterActing]     = useState(false)
 
-  // Embedding Sidecar (Phase 4)
+  // Embedding Sidecar
   const [embedStatus, setEmbedStatus]       = useState<any | null>(null)
   const [embedEnabled, setEmbedEnabled]     = useState(false)
   const [embedEnabledSaving, setEmbedEnabledSaving] = useState(false)
-  const [embedModel, setEmbedModel]         = useState('')
-  const [embedModelSaving, setEmbedModelSaving] = useState(false)
-  const [embedActing, setEmbedActing]       = useState(false)
 
   const [tpsHistory, setTpsHistory]             = useState<number[]>(_tpsHistory)
   const [promptTpsHistory, setPromptTpsHistory] = useState<number[]>(_promptTpsHistory)
@@ -248,7 +245,6 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
       if (cfg.atlasEngineRouterModel) setRouterModel(cfg.atlasEngineRouterModel)
       if (cfg.atlasEngineDraftModel) setDraftModel(cfg.atlasEngineDraftModel)
       if (cfg.atlasEmbedEnabled !== undefined) setEmbedEnabled(!!cfg.atlasEmbedEnabled)
-      if (cfg.atlasEmbedModel) setEmbedModel(cfg.atlasEmbedModel)
     }).catch(() => {})
 
     api.engineEmbedStatus().then((s: any) => setEmbedStatus(s)).catch(() => {})
@@ -367,30 +363,16 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
     setEmbedEnabledSaving(true)
     try {
       await api.updateConfig({ atlasEmbedEnabled: enabled } as any)
-      if (enabled && embedModel) {
-        await api.engineEmbedStart(embedModel)
+      if (enabled) {
+        await api.engineEmbedStart()
         setEmbedStatus(await api.engineEmbedStatus())
-      } else if (!enabled) {
+      } else {
         await api.engineEmbedStop().catch(() => {})
         setEmbedStatus(await api.engineEmbedStatus())
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Embed sidecar operation failed.')
     } finally { setEmbedEnabledSaving(false) }
-  }
-
-  const handleEmbedModelChange = async (model: string) => {
-    setEmbedModel(model)
-    setEmbedModelSaving(true)
-    try {
-      await api.updateConfig({ atlasEmbedModel: model } as any)
-      if (embedEnabled && model) {
-        await api.engineEmbedStart(model)
-        setEmbedStatus(await api.engineEmbedStatus())
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Embed model change failed.')
-    } finally { setEmbedModelSaving(false) }
   }
 
   const handleStart = async (modelName: string) => {
@@ -894,17 +876,22 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
       <div>
         <div class="section-label">Embedding Sidecar</div>
         <div class="card">
-          {/* Enable toggle */}
-          <div class="settings-row">
+          <div class="settings-row" style={{ borderBottom: 'none' }}>
             <div class="settings-label-col">
-              <div class="settings-label">Local embedding</div>
+              <div class="settings-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                Local embedding
+                {embedStatus && (() => {
+                  if (embedStatus.running)
+                    return <span style={{ fontSize: 11, fontWeight: 500, padding: '2px 7px', borderRadius: 10, background: 'color-mix(in srgb, var(--accent) 15%, transparent)', color: 'var(--accent)' }}>Running</span>
+                  if (embedStatus.binaryReady && embedStatus.modelReady)
+                    return <span style={{ fontSize: 11, fontWeight: 500, padding: '2px 7px', borderRadius: 10, background: 'var(--surface-2)', color: 'var(--text-2)' }}>Ready</span>
+                  if (!embedStatus.binaryReady)
+                    return <span style={{ fontSize: 11, fontWeight: 500, padding: '2px 7px', borderRadius: 10, background: 'color-mix(in srgb, var(--warning, #f59e0b) 15%, transparent)', color: 'var(--warning, #f59e0b)' }}>Engine not installed</span>
+                  return <span style={{ fontSize: 11, fontWeight: 500, padding: '2px 7px', borderRadius: 10, background: 'color-mix(in srgb, var(--warning, #f59e0b) 15%, transparent)', color: 'var(--warning, #f59e0b)' }}>Model not found</span>
+                })()}
+              </div>
               <div class="settings-sublabel">
-                Runs <strong>nomic-embed-text-v1.5</strong> via llama-server on a dedicated port.
-                When enabled, all memory embeddings use the local model — no API cost,
-                works with any chat provider including Anthropic.
-                {embedStatus?.running && (
-                  <span style={{ color: 'var(--accent)', marginLeft: 6 }}>● Running on :{embedStatus.port}</span>
-                )}
+                Uses <strong>nomic-embed-text-v1.5</strong> for local memory embeddings — no API cost, works with any provider.
               </div>
             </div>
             <div class="settings-field">
@@ -917,54 +904,6 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
                 />
                 <span class="toggle-track" />
               </label>
-              {!embedStatus?.binaryReady && (
-                <div class="settings-sublabel" style={{ marginTop: 4 }}>
-                  Requires the Engine LM binary — install it above first.
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Model picker */}
-          <div class="settings-row" style={{ borderBottom: 'none' }}>
-            <div class="settings-label-col">
-              <div class="settings-label">Embedding model</div>
-              <div class="settings-sublabel">
-                Select a downloaded GGUF embedding model.
-                Download <strong>nomic-embed-text-v1.5.Q4_K_M.gguf</strong> via the model
-                downloader above (≈80 MB, 768-dim, 8K context).
-              </div>
-            </div>
-            <div class="settings-field">
-              <select
-                class="input"
-                value={embedModel}
-                onChange={e => handleEmbedModelChange((e.target as HTMLSelectElement).value)}
-                disabled={embedModelSaving}
-              >
-                <option value="">Select a model…</option>
-                {models.filter(m => m.name.toLowerCase().includes('embed')).map(m => {
-                  const { display, quant } = parseModelInfo(m.name)
-                  return (
-                    <option key={m.name} value={m.name}>
-                      {display}{quant ? ` · ${quant}` : ''} · {m.sizeHuman}
-                    </option>
-                  )
-                })}
-                {models.filter(m => !m.name.toLowerCase().includes('embed')).length > 0 && (
-                  <>
-                    <option disabled>── Other models ──</option>
-                    {models.filter(m => !m.name.toLowerCase().includes('embed')).map(m => {
-                      const { display, quant } = parseModelInfo(m.name)
-                      return (
-                        <option key={m.name} value={m.name}>
-                          {display}{quant ? ` · ${quant}` : ''} · {m.sizeHuman}
-                        </option>
-                      )
-                    })}
-                  </>
-                )}
-              </select>
             </div>
           </div>
         </div>

@@ -180,13 +180,14 @@ func main() {
 	// Runs on a dedicated port (default 11987) and is preferred over the chat provider's
 	// embedding API when enabled. Allows Anthropic + local users to get memory embeddings.
 	embedMgr := engine.NewEmbedManager(config.AtlasInstallDir(), config.ModelsDir())
-	if cfg.AtlasEmbedEnabled && cfg.AtlasEmbedModel != "" {
+	if cfg.AtlasEmbedEnabled {
+		const embedModel = "nomic-embed-text-v1.5.Q4_K_M.gguf"
 		embedPort := cfg.AtlasEmbedPort
 		if embedPort <= 0 {
 			embedPort = 11988
 		}
 		go func() {
-			if err := embedMgr.Start(cfg.AtlasEmbedModel, embedPort); err != nil {
+			if err := embedMgr.Start(embedModel, embedPort); err != nil {
 				logstore.Write("warn", "embed sidecar start failed", map[string]string{"error": err.Error()})
 				return
 			}

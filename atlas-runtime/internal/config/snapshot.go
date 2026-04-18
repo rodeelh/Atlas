@@ -445,6 +445,12 @@ func Defaults() RuntimeConfigSnapshot {
 			MaxParallelAgents:             3,
 			WorkerMaxIterations:           4,
 		},
+
+		EmbedSidecarConfig: EmbedSidecarConfig{
+			AtlasEmbedEnabled: false,
+			AtlasEmbedPort:    11988,
+			AtlasEmbedModel:   "nomic-embed-text-v1.5.Q4_K_M.gguf",
+		},
 	}
 }
 

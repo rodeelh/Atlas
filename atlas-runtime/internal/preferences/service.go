@@ -27,7 +27,9 @@ var (
 	mu      sync.RWMutex
 	current Prefs
 
-	execSecurity = func(args ...string) (string, error) {
+	// ExecSecurityFn is the injectable `security` CLI runner. Tests in other
+	// packages may replace it to avoid macOS Keychain dialogs.
+	ExecSecurityFn = func(args ...string) (string, error) {
 		cmd := exec.Command("security", args...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
@@ -209,7 +211,7 @@ func persist(p Prefs) {
 }
 
 func loadFromKeychain() (Prefs, bool) {
-	out, err := execSecurity("find-generic-password", "-s", "com.projectatlas.preferences", "-a", "locale", "-w")
+	out, err := ExecSecurityFn("find-generic-password", "-s", "com.projectatlas.preferences", "-a", "locale", "-w")
 	if err != nil {
 		return Prefs{}, false
 	}
@@ -234,7 +236,7 @@ func saveToKeychain(p Prefs) error {
 	if err != nil {
 		return err
 	}
-	_, err = execSecurity("add-generic-password", "-U", "-s", "com.projectatlas.preferences", "-a", "locale", "-w", string(data))
+	_, err = ExecSecurityFn("add-generic-password", "-U", "-s", "com.projectatlas.preferences", "-a", "locale", "-w", string(data))
 	return err
 }
 
