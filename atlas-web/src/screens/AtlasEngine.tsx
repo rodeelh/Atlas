@@ -915,7 +915,7 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
                   disabled={embedEnabledSaving || !embedStatus?.binaryReady}
                   onChange={e => handleEmbedEnabledChange((e.target as HTMLInputElement).checked)}
                 />
-                <span class="toggle-slider" />
+                <span class="toggle-track" />
               </label>
               {!embedStatus?.binaryReady && (
                 <div class="settings-sublabel" style={{ marginTop: 4 }}>
@@ -925,10 +925,8 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
             </div>
           </div>
 
-          <div class="settings-divider" />
-
           {/* Model picker */}
-          <div class="settings-row">
+          <div class="settings-row" style={{ borderBottom: 'none' }}>
             <div class="settings-label-col">
               <div class="settings-label">Embedding model</div>
               <div class="settings-sublabel">
