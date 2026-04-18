@@ -4523,15 +4523,15 @@ input[type="checkbox"]:not(.toggle input):checked::after {
     linear-gradient(155deg, color-mix(in srgb, var(--surface-elevated, var(--surface)) 80%, transparent), var(--surface));
 }
 
-/* Drifting dot constellation — same grid spec as team-atlas-card, unique animation */
+/* Drifting dot constellation */
 .ai-provider-setup-card::before {
   content: '';
   position: absolute;
   inset: 0;
-  background-image: radial-gradient(circle, color-mix(in srgb, var(--accent) 45%, transparent) 1px, transparent 1px);
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--accent) 22%, transparent) 1px, transparent 1px);
   background-size: 16px 16px;
-  -webkit-mask-image: radial-gradient(ellipse 48% 55% at 50% 50%, black 0%, transparent 100%);
-  mask-image:         radial-gradient(ellipse 48% 55% at 50% 50%, black 0%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 38% 42% at 50% 50%, black 0%, rgba(0,0,0,0.5) 45%, transparent 100%);
+  mask-image:         radial-gradient(ellipse 38% 42% at 50% 50%, black 0%, rgba(0,0,0,0.5) 45%, transparent 100%);
   -webkit-mask-size: 200% 200%;
   mask-size:         200% 200%;
   pointer-events: none;
@@ -4544,13 +4544,13 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   50%       { box-shadow: 0 0 20px 0 color-mix(in srgb, var(--accent) 14%, transparent); }
 }
 
-/* Slow centered orbit — distinct from team-dot-drift's wide corner sweep */
+/* Mask orbit — illuminated region drifts around the card */
 @keyframes ai-dot-drift {
-  0%   { -webkit-mask-position: 50% 45%; mask-position: 50% 45%; }
-  25%  { -webkit-mask-position: 62% 55%; mask-position: 62% 55%; }
-  50%  { -webkit-mask-position: 50% 62%; mask-position: 50% 62%; }
-  75%  { -webkit-mask-position: 38% 52%; mask-position: 38% 52%; }
-  100% { -webkit-mask-position: 50% 45%; mask-position: 50% 45%; }
+  0%   { -webkit-mask-position: 50% 40%; mask-position: 50% 40%; }
+  25%  { -webkit-mask-position: 72% 58%; mask-position: 72% 58%; }
+  50%  { -webkit-mask-position: 50% 68%; mask-position: 50% 68%; }
+  75%  { -webkit-mask-position: 28% 52%; mask-position: 28% 52%; }
+  100% { -webkit-mask-position: 50% 40%; mask-position: 50% 40%; }
 }
 
 .ai-provider-summary-block {
@@ -4635,24 +4635,21 @@ input[type="checkbox"]:not(.toggle input):checked::after {
   color: var(--theme-text-secondary);
 }
 
-/* ── Audio tab provider picker — audio wave dot animation ───────────────── */
+/* ── Audio tab provider picker — dot grid pulses outward from center ──────── */
 .ai-provider-setup-card--voice::before {
-  animation: voice-dot-wave 2.2s ease-in-out infinite !important;
+  animation: voice-dot-expand 4s ease-in-out infinite;
 }
+
 
 /* ── Audio tab voices card — no dot grid ────────────────────────────────── */
 .ai-provider-setup-card--no-anim::before {
   display: none;
 }
 
-@keyframes voice-dot-wave {
-  0%   { -webkit-mask-size: 200% 30%;  mask-size: 200% 30%;  -webkit-mask-position: 50% 50%; mask-position: 50% 50%; }
-  18%  { -webkit-mask-size: 200% 130%; mask-size: 200% 130%; -webkit-mask-position: 50% 42%; mask-position: 50% 42%; }
-  35%  { -webkit-mask-size: 200% 25%;  mask-size: 200% 25%;  -webkit-mask-position: 50% 58%; mask-position: 50% 58%; }
-  52%  { -webkit-mask-size: 200% 110%; mask-size: 200% 110%; -webkit-mask-position: 50% 44%; mask-position: 50% 44%; }
-  68%  { -webkit-mask-size: 200% 35%;  mask-size: 200% 35%;  -webkit-mask-position: 50% 55%; mask-position: 50% 55%; }
-  84%  { -webkit-mask-size: 200% 100%; mask-size: 200% 100%; -webkit-mask-position: 50% 47%; mask-position: 50% 47%; }
-  100% { -webkit-mask-size: 200% 30%;  mask-size: 200% 30%;  -webkit-mask-position: 50% 50%; mask-position: 50% 50%; }
+@keyframes voice-dot-expand {
+  0%   { -webkit-mask-size: 60%  60%;  mask-size: 60%  60%;  -webkit-mask-position: 50% 50%; mask-position: 50% 50%; }
+  50%  { -webkit-mask-size: 280% 280%; mask-size: 280% 280%; -webkit-mask-position: 50% 50%; mask-position: 50% 50%; }
+  100% { -webkit-mask-size: 60%  60%;  mask-size: 60%  60%;  -webkit-mask-position: 50% 50%; mask-position: 50% 50%; }
 }
 
 /* ── Local LM screen — picker scrolls with content, no sticky header ─────── */
@@ -10770,28 +10767,41 @@ select.field-input {
     linear-gradient(160deg, color-mix(in srgb, var(--surface-2) 78%, transparent), var(--surface));
 }
 
-/* Dot grid — mask animates to create a drifting pool of lit dots */
+/* Dot grid — spotlight hops between node positions, pulses on arrival */
 .team-atlas-card::before {
   content: '';
   position: absolute;
   inset: 0;
-  background-image: radial-gradient(circle, color-mix(in srgb, var(--accent) 45%, transparent) 1px, transparent 1px);
-  background-size: 26px 26px;
-  -webkit-mask-image: radial-gradient(ellipse 48% 55% at 50% 50%, black 0%, transparent 100%);
-  mask-image:         radial-gradient(ellipse 48% 55% at 50% 50%, black 0%, transparent 100%);
-  -webkit-mask-size: 200% 200%;
-  mask-size:         200% 200%;
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--accent) 22%, transparent) 1px, transparent 1px);
+  background-size: 16px 16px;
+  -webkit-mask-image: radial-gradient(ellipse 50px 50px at 50% 50%, black 0%, black 35%, rgba(0,0,0,0.55) 58%, rgba(0,0,0,0.15) 80%, transparent 100%);
+  mask-image:         radial-gradient(ellipse 50px 50px at 50% 50%, black 0%, black 35%, rgba(0,0,0,0.55) 58%, rgba(0,0,0,0.15) 80%, transparent 100%);
+  -webkit-mask-size: 100% 100%;
+  mask-size:         100% 100%;
   pointer-events: none;
   z-index: 1;
-  animation: team-dot-drift 10s ease-in-out infinite;
+  animation: team-node-connect 16s ease-in-out infinite;
 }
 
-@keyframes team-dot-drift {
-  0%   { -webkit-mask-position: 20% 20%; mask-position: 20% 20%; }
-  25%  { -webkit-mask-position: 75% 10%; mask-position: 75% 10%; }
-  50%  { -webkit-mask-position: 80% 75%; mask-position: 80% 75%; }
-  75%  { -webkit-mask-position: 20% 80%; mask-position: 20% 80%; }
-  100% { -webkit-mask-position: 20% 20%; mask-position: 20% 20%; }
+@keyframes team-node-connect {
+  /* Node 1 — top-left: arrive, flash, settle */
+  0%   { -webkit-mask-position: 22% 22%; mask-position: 22% 22%; filter: brightness(1); }
+  6%   { -webkit-mask-position: 22% 22%; mask-position: 22% 22%; filter: brightness(4); }
+  13%  { -webkit-mask-position: 22% 22%; mask-position: 22% 22%; filter: brightness(1); }
+  /* Node 2 — top-right */
+  27%  { -webkit-mask-position: 78% 18%; mask-position: 78% 18%; filter: brightness(1); }
+  33%  { -webkit-mask-position: 78% 18%; mask-position: 78% 18%; filter: brightness(4); }
+  40%  { -webkit-mask-position: 78% 18%; mask-position: 78% 18%; filter: brightness(1); }
+  /* Node 3 — bottom-right */
+  54%  { -webkit-mask-position: 76% 80%; mask-position: 76% 80%; filter: brightness(1); }
+  60%  { -webkit-mask-position: 76% 80%; mask-position: 76% 80%; filter: brightness(4); }
+  67%  { -webkit-mask-position: 76% 80%; mask-position: 76% 80%; filter: brightness(1); }
+  /* Node 4 — bottom-left */
+  81%  { -webkit-mask-position: 22% 80%; mask-position: 22% 80%; filter: brightness(1); }
+  87%  { -webkit-mask-position: 22% 80%; mask-position: 22% 80%; filter: brightness(4); }
+  94%  { -webkit-mask-position: 22% 80%; mask-position: 22% 80%; filter: brightness(1); }
+  /* Return to node 1 */
+  100% { -webkit-mask-position: 22% 22%; mask-position: 22% 22%; filter: brightness(1); }
 }
 
 .team-atlas-meta {

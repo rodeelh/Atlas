@@ -494,13 +494,11 @@ export function AIProviders() {
               onClick={() => void setMode('local')}
             />
           </div>
-          <div class="ai-provider-summary-block">
-            <p class="ai-provider-summary-text">
-              <span class="ai-provider-summary-label">Current setup:</span>{' '}
-              {modeSummary.title}. {modeSummary.copy}
-            </p>
-          </div>
         </div>
+        <p class="ai-provider-summary-text" style={{ marginTop: '10px' }}>
+          <span class="ai-provider-summary-label">Current setup:</span>{' '}
+          {modeSummary.title}. {modeSummary.copy}
+        </p>
       </div>
 
       {mode === 'cloud' && (

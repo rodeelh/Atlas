@@ -260,6 +260,13 @@ func (b *Bridge) connect() error {
 			// Start heartbeat goroutine.
 			interval := time.Duration(hello.HeartbeatInterval) * time.Millisecond
 			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logstore.Write("error", fmt.Sprintf("Discord heartbeat panic: %v", r), map[string]string{"platform": "discord"})
+						// Force conn close so the outer run() loop exits and reconnects.
+						_ = conn.Close()
+					}
+				}()
 				ticker := time.NewTicker(interval)
 				defer ticker.Stop()
 				for {
@@ -270,7 +277,11 @@ func (b *Bridge) connect() error {
 						return
 					case <-ticker.C:
 						hb := map[string]any{"op": 1, "d": seq}
-						conn.WriteJSON(hb) //nolint:errcheck
+						if err := conn.WriteJSON(hb); err != nil {
+							logstore.Write("warn", "Discord heartbeat write failed: "+err.Error(), map[string]string{"platform": "discord"})
+							_ = conn.Close()
+							return
+						}
 					}
 				}
 			}()

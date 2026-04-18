@@ -64,32 +64,69 @@ const (
 	ProviderAtlasMLX    ProviderType = "atlas_mlx" // MLX-LM subsystem — Apple Silicon only
 )
 
+// providerClass groups providers by their wire-format / deployment shape. One
+// entry per class controls dispatching in callAINonStreaming, adapter selection,
+// message coalescing, and default base URLs.
+type providerClass int
+
+const (
+	classCloudResponses  providerClass = iota // OpenAI Responses API
+	classCloudAnthropic                       // Anthropic Messages API
+	classCloudOAICompat                       // OAI-compatible cloud (Gemini, OpenRouter)
+	classLocalJinja                           // local OAI-compatible w/ Jinja templates (Engine, LM Studio, Ollama)
+	classLocalMLX                             // MLX-LM (OAI-compatible, accepts tool messages natively)
+)
+
+// providerInfo is the single source of truth for provider-wide classification.
+// Adding a new provider means adding ONE entry here and the few pieces that
+// genuinely differ (credential read + model selection in chat/keychain.go).
+type providerInfo struct {
+	class          providerClass
+	defaultBaseURL string // used by local providers; empty for cloud-native backends
+}
+
+var providers = map[ProviderType]providerInfo{
+	ProviderOpenAI:      {class: classCloudResponses},
+	ProviderAnthropic:   {class: classCloudAnthropic},
+	ProviderGemini:      {class: classCloudOAICompat, defaultBaseURL: "https://generativelanguage.googleapis.com/v1beta/openai"},
+	ProviderOpenRouter:  {class: classCloudOAICompat, defaultBaseURL: "https://openrouter.ai/api/v1"},
+	ProviderLMStudio:    {class: classLocalJinja, defaultBaseURL: "http://localhost:1234"},
+	ProviderOllama:      {class: classLocalJinja, defaultBaseURL: "http://localhost:11434"},
+	ProviderAtlasEngine: {class: classLocalJinja, defaultBaseURL: "http://localhost:11985"},
+	ProviderAtlasMLX:    {class: classLocalMLX, defaultBaseURL: "http://localhost:11990"},
+}
+
+func providerClassOf(t ProviderType) providerClass {
+	if info, ok := providers[t]; ok {
+		return info.class
+	}
+	return classCloudResponses // default — matches legacy fallthrough to OpenAI
+}
+
 // isLocalProvider returns true for providers backed by a local inference server
 // that may return 503 while loading a model.
 func isLocalProvider(t ProviderType) bool {
-	return t == ProviderAtlasEngine || t == ProviderAtlasMLX || t == ProviderLMStudio || t == ProviderOllama
+	c := providerClassOf(t)
+	return c == classLocalJinja || c == classLocalMLX
 }
 
 // isCloudProvider returns true for providers that communicate with a remote API
 // (as opposed to a locally-managed inference server).
-func isCloudProvider(t ProviderType) bool {
-	return !isLocalProvider(t)
-}
+func isCloudProvider(t ProviderType) bool { return !isLocalProvider(t) }
 
 // isCloudOAICompatProvider returns true for cloud providers that use the
-// OpenAI-compatible chat-completions API format (Gemini, OpenRouter).
-// These providers require an explicit max_tokens cap in requests; OpenAI uses
-// the Responses API and Anthropic has its own wire format.
+// OpenAI-compatible chat-completions API format (Gemini, OpenRouter). These
+// require an explicit max_tokens cap; OpenAI uses the Responses API and
+// Anthropic has its own wire format.
 func isCloudOAICompatProvider(t ProviderType) bool {
-	return t == ProviderGemini || t == ProviderOpenRouter
+	return providerClassOf(t) == classCloudOAICompat
 }
 
 // needsMessageCoalescing returns true for local providers whose Jinja chat
 // templates enforce strict user/assistant alternation (llama-server, Ollama).
-// MLX-LM is a proper OAI-compatible server that accepts tool messages natively
-// and does not need coalescing.
+// MLX-LM accepts tool messages natively and does not need coalescing.
 func needsMessageCoalescing(t ProviderType) bool {
-	return t == ProviderAtlasEngine || t == ProviderLMStudio || t == ProviderOllama
+	return providerClassOf(t) == classLocalJinja
 }
 
 func acquireMLXRequestGate(ctx context.Context, p ProviderConfig) (func(), time.Duration, int, error) {
@@ -333,61 +370,25 @@ func coalesceForLocalProvider(messages []OAIMessage) []OAIMessage {
 // ── OpenAI-compatible (OpenAI, Gemini, LM Studio) ─────────────────────────────
 
 func oaiCompatBaseURL(p ProviderConfig) string {
-	switch p.Type {
-	case ProviderGemini:
-		return "https://generativelanguage.googleapis.com/v1beta/openai"
-	case ProviderOpenRouter:
-		return "https://openrouter.ai/api/v1"
-	case ProviderLMStudio:
-		base := strings.TrimRight(p.BaseURL, "/")
-		if base == "" {
-			base = "http://localhost:1234"
+	// Cloud-native OAI endpoints (Gemini, OpenRouter) have a fixed, non-/v1 path
+	// that must not be re-suffixed.
+	if providerClassOf(p.Type) == classCloudOAICompat {
+		if info, ok := providers[p.Type]; ok && info.defaultBaseURL != "" {
+			return info.defaultBaseURL
 		}
-		if !strings.HasSuffix(base, "/v1") {
-			base += "/v1"
-		}
-		return base
-	case ProviderOllama:
-		base := strings.TrimRight(p.BaseURL, "/")
-		if base == "" {
-			base = "http://localhost:11434"
-		}
-		if !strings.HasSuffix(base, "/v1") {
-			base += "/v1"
-		}
-		return base
-	case ProviderAtlasEngine:
-		// Engine LM runs a managed llama-server process on an internal port.
-		// BaseURL is set by the process manager in Phase 1; defaults to 11985 for dev.
-		base := strings.TrimRight(p.BaseURL, "/")
-		if base == "" {
-			base = "http://localhost:11985"
-		}
-		if !strings.HasSuffix(base, "/v1") {
-			base += "/v1"
-		}
-		return base
-	case ProviderAtlasMLX:
-		// MLX-LM runs a managed mlx_lm.server process on an internal port.
-		// Also exposes an OpenAI-compatible /v1 endpoint on port 11990 by default.
-		base := strings.TrimRight(p.BaseURL, "/")
-		if base == "" {
-			base = "http://localhost:11990"
-		}
-		if !strings.HasSuffix(base, "/v1") {
-			base += "/v1"
-		}
-		return base
-	default: // openai
-		base := strings.TrimRight(p.BaseURL, "/")
-		if base != "" {
-			if !strings.HasSuffix(base, "/v1") {
-				base += "/v1"
-			}
-			return base
-		}
-		return "https://api.openai.com/v1"
 	}
+	base := strings.TrimRight(p.BaseURL, "/")
+	if base == "" {
+		if info, ok := providers[p.Type]; ok && info.defaultBaseURL != "" {
+			base = info.defaultBaseURL
+		} else {
+			base = "https://api.openai.com/v1"
+		}
+	}
+	if !strings.HasSuffix(base, "/v1") {
+		base += "/v1"
+	}
+	return base
 }
 
 func applyOpenAICompatHeaders(req *http.Request, p ProviderConfig) {

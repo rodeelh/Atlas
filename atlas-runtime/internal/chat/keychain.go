@@ -300,249 +300,108 @@ func supportiveLocalProviderType(cfg config.RuntimeConfigSnapshot) agent.Provide
 	}
 }
 
-// resolveFastProvider builds a ProviderConfig that targets the fast model for
-// the active provider. Falls back to the primary model when no fast model is
-// explicitly configured, so callers always get a usable config.
-func resolveFastProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, error) {
-	bundle, _ := readCredentialBundleFn()
+// providerResolver builds a ProviderConfig for one provider kind.
+// fast=true selects the fast-model slot; fast=false selects the primary slot.
+// Adding a new provider: add exactly one entry to providerResolvers.
+type providerResolver func(cfg config.RuntimeConfigSnapshot, bundle credentialBundle, fast bool) (agent.ProviderConfig, error)
 
-	providerType := agent.ProviderType(cfg.ActiveAIProvider)
-	if providerType == "" {
-		providerType = agent.ProviderOpenAI
+// firstNonEmpty returns the first non-empty string from s.
+func firstNonEmpty(s ...string) string {
+	for _, v := range s {
+		if v != "" {
+			return v
+		}
 	}
-
-	switch providerType {
-	case agent.ProviderAnthropic:
-		if bundle.AnthropicAPIKey == "" {
-			return agent.ProviderConfig{}, fmt.Errorf("Anthropic API key not configured")
-		}
-		model := cfg.SelectedAnthropicFastModel
-		if model == "" {
-			model = cfg.SelectedAnthropicModel
-		}
-		if model == "" {
-			model = "claude-haiku-4-5-20251001"
-		}
-		return agent.ProviderConfig{
-			Type:   agent.ProviderAnthropic,
-			APIKey: bundle.AnthropicAPIKey,
-			Model:  model,
-		}, nil
-
-	case agent.ProviderGemini:
-		if bundle.GeminiAPIKey == "" {
-			return agent.ProviderConfig{}, fmt.Errorf("Gemini API key not configured")
-		}
-		model := cfg.SelectedGeminiFastModel
-		if model == "" {
-			model = cfg.SelectedGeminiModel
-		}
-		if model == "" {
-			model = "gemini-2.5-flash"
-		}
-		return agent.ProviderConfig{
-			Type:   agent.ProviderGemini,
-			APIKey: bundle.GeminiAPIKey,
-			Model:  model,
-		}, nil
-
-	case agent.ProviderOpenRouter:
-		if bundle.OpenRouterAPIKey == "" {
-			return agent.ProviderConfig{}, fmt.Errorf("OpenRouter API key not configured")
-		}
-		model := cfg.SelectedOpenRouterFastModel
-		if model == "" {
-			model = cfg.SelectedOpenRouterModel
-		}
-		if model == "" {
-			model = "openrouter/auto:free"
-		}
-		return agent.ProviderConfig{
-			Type:   agent.ProviderOpenRouter,
-			APIKey: bundle.OpenRouterAPIKey,
-			Model:  model,
-			ExtraHeaders: map[string]string{
-				"HTTP-Referer": "https://github.com/rodeelh/project-atlas",
-				"X-Title":      "Atlas",
-			},
-		}, nil
-
-	case agent.ProviderLMStudio:
-		model := cfg.SelectedLMStudioModelFast
-		if model == "" {
-			model = cfg.SelectedLMStudioModel
-		}
-		if model == "" {
-			model = "local-model"
-		}
-		baseURL := cfg.LMStudioBaseURL
-		if baseURL == "" {
-			baseURL = "http://localhost:1234"
-		}
-		return agent.ProviderConfig{
-			Type:    agent.ProviderLMStudio,
-			APIKey:  bundle.LMStudioAPIKey,
-			Model:   model,
-			BaseURL: baseURL,
-		}, nil
-
-	case agent.ProviderOllama:
-		model := cfg.SelectedOllamaModelFast
-		if model == "" {
-			model = cfg.SelectedOllamaModel
-		}
-		if model == "" {
-			model = "llama3.2"
-		}
-		baseURL := cfg.OllamaBaseURL
-		if baseURL == "" {
-			baseURL = "http://localhost:11434"
-		}
-		return agent.ProviderConfig{
-			Type:    agent.ProviderOllama,
-			APIKey:  bundle.OllamaAPIKey,
-			Model:   model,
-			BaseURL: baseURL,
-		}, nil
-
-	case agent.ProviderAtlasEngine:
-		// One-port policy: Engine LM runs a single llama-server process on
-		// one port. Primary and fast models share the same BaseURL. The model name
-		// sent in inference requests is advisory — llama-server always runs the
-		// model that was loaded at startup, so fast/primary names only affect which
-		// model the user intends to load, not which one actually responds.
-		// Normalize to basename — old config values may store full paths.
-		model := filepath.Base(cfg.SelectedAtlasEngineModelFast)
-		if model == "" || model == "." {
-			model = filepath.Base(cfg.SelectedAtlasEngineModel)
-		}
-		if model == "" || model == "." {
-			return agent.ProviderConfig{}, fmt.Errorf("no model configured for Engine LM — select a model in Settings → Engine")
-		}
-		port := cfg.AtlasEnginePort
-		if port == 0 {
-			port = 11985
-		}
-		return agent.ProviderConfig{
-			Type:    agent.ProviderAtlasEngine,
-			APIKey:  "",
-			Model:   model,
-			BaseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
-		}, nil
-
-	case agent.ProviderAtlasMLX:
-		// MLX-LM: one port, one process. Fast and primary share the same BaseURL.
-		// mlx_lm.server 0.30+ matches requests by the full model path (the value
-		// returned in /v1/models). Sending only the directory name causes it to
-		// attempt a HuggingFace lookup and fail with a 401/404.
-		modelName := filepath.Base(cfg.SelectedAtlasMLXModel)
-		if modelName == "" || modelName == "." {
-			modelName = "mlx-model"
-		}
-		model := filepath.Join(config.MLXModelsDir(), modelName)
-		port := cfg.AtlasMLXPort
-		if port == 0 {
-			port = 11990
-		}
-		return newAtlasMLXProviderConfig(cfg, model, fmt.Sprintf("http://127.0.0.1:%d", port)), nil
-
-	default: // openai
-		if bundle.OpenAIAPIKey == "" {
-			return agent.ProviderConfig{}, fmt.Errorf("OpenAI API key not configured")
-		}
-		model := cfg.SelectedOpenAIFastModel
-		if model == "" {
-			model = cfg.SelectedOpenAIPrimaryModel
-		}
-		if model == "" {
-			model = cfg.DefaultOpenAIModel
-		}
-		if model == "" {
-			model = "gpt-5.4-mini"
-		}
-		return agent.ProviderConfig{
-			Type:   agent.ProviderOpenAI,
-			APIKey: bundle.OpenAIAPIKey,
-			Model:  model,
-		}, nil
-	}
+	return ""
 }
 
-// resolveProvider builds an agent.ProviderConfig from the current runtime config
-// and the Keychain credential bundle. Returns an error when the active provider
-// has no API key configured (LM Studio is key-optional).
-func resolveProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, error) {
-	bundle, _ := readCredentialBundleFn()
+var openRouterHeaders = map[string]string{
+	"HTTP-Referer": "https://github.com/rodeelh/project-atlas",
+	"X-Title":      "Atlas",
+}
 
-	providerType := agent.ProviderType(cfg.ActiveAIProvider)
-	if providerType == "" {
-		providerType = agent.ProviderOpenAI
-	}
-
-	switch providerType {
-	case agent.ProviderAnthropic:
+var providerResolvers = map[agent.ProviderType]providerResolver{
+	agent.ProviderAnthropic: func(cfg config.RuntimeConfigSnapshot, bundle credentialBundle, fast bool) (agent.ProviderConfig, error) {
 		if bundle.AnthropicAPIKey == "" {
 			return agent.ProviderConfig{}, fmt.Errorf("Anthropic API key not configured. Add your key in Atlas Settings")
 		}
-		model := cfg.SelectedAnthropicModel
-		if model == "" {
-			model = "claude-haiku-4-5-20251001"
+		var model string
+		if fast {
+			model = firstNonEmpty(cfg.SelectedAnthropicFastModel, cfg.SelectedAnthropicModel, "claude-haiku-4-5-20251001")
+		} else {
+			model = firstNonEmpty(cfg.SelectedAnthropicModel, "claude-haiku-4-5-20251001")
 		}
-		return agent.ProviderConfig{
-			Type:   agent.ProviderAnthropic,
-			APIKey: bundle.AnthropicAPIKey,
-			Model:  model,
-		}, nil
+		return agent.ProviderConfig{Type: agent.ProviderAnthropic, APIKey: bundle.AnthropicAPIKey, Model: model}, nil
+	},
 
-	case agent.ProviderGemini:
+	agent.ProviderGemini: func(cfg config.RuntimeConfigSnapshot, bundle credentialBundle, fast bool) (agent.ProviderConfig, error) {
 		if bundle.GeminiAPIKey == "" {
 			return agent.ProviderConfig{}, fmt.Errorf("Gemini API key not configured. Add your key in Atlas Settings")
 		}
-		model := cfg.SelectedGeminiModel
-		if model == "" {
-			model = "gemini-2.5-flash"
+		var model string
+		if fast {
+			model = firstNonEmpty(cfg.SelectedGeminiFastModel, cfg.SelectedGeminiModel, "gemini-2.5-flash")
+		} else {
+			model = firstNonEmpty(cfg.SelectedGeminiModel, "gemini-2.5-flash")
+		}
+		return agent.ProviderConfig{Type: agent.ProviderGemini, APIKey: bundle.GeminiAPIKey, Model: model}, nil
+	},
+
+	agent.ProviderOpenRouter: func(cfg config.RuntimeConfigSnapshot, bundle credentialBundle, fast bool) (agent.ProviderConfig, error) {
+		if bundle.OpenRouterAPIKey == "" {
+			return agent.ProviderConfig{}, fmt.Errorf("OpenRouter API key not configured. Add your key in Atlas Settings")
+		}
+		var model string
+		if fast {
+			model = firstNonEmpty(cfg.SelectedOpenRouterFastModel, cfg.SelectedOpenRouterModel, "openrouter/auto:free")
+		} else {
+			model = firstNonEmpty(cfg.SelectedOpenRouterModel, "openrouter/auto:free")
 		}
 		return agent.ProviderConfig{
-			Type:   agent.ProviderGemini,
-			APIKey: bundle.GeminiAPIKey,
-			Model:  model,
+			Type: agent.ProviderOpenRouter, APIKey: bundle.OpenRouterAPIKey, Model: model,
+			ExtraHeaders: openRouterHeaders,
 		}, nil
+	},
 
-	case agent.ProviderLMStudio:
-		model := cfg.SelectedLMStudioModel
-		if model == "" {
-			model = "local-model"
+	agent.ProviderLMStudio: func(cfg config.RuntimeConfigSnapshot, bundle credentialBundle, fast bool) (agent.ProviderConfig, error) {
+		var model string
+		if fast {
+			model = firstNonEmpty(cfg.SelectedLMStudioModelFast, cfg.SelectedLMStudioModel, "local-model")
+		} else {
+			model = firstNonEmpty(cfg.SelectedLMStudioModel, "local-model")
 		}
-		baseURL := cfg.LMStudioBaseURL
-		if baseURL == "" {
-			baseURL = "http://localhost:1234"
-		}
+		baseURL := firstNonEmpty(cfg.LMStudioBaseURL, "http://localhost:1234")
 		return agent.ProviderConfig{
-			Type:    agent.ProviderLMStudio,
-			APIKey:  bundle.LMStudioAPIKey, // optional — set when LM Studio auth is enabled
-			Model:   model,
-			BaseURL: baseURL,
+			Type: agent.ProviderLMStudio, APIKey: bundle.LMStudioAPIKey, // optional
+			Model: model, BaseURL: baseURL,
 		}, nil
+	},
 
-	case agent.ProviderOllama:
-		model := cfg.SelectedOllamaModel
-		if model == "" {
-			model = "llama3.2"
+	agent.ProviderOllama: func(cfg config.RuntimeConfigSnapshot, bundle credentialBundle, fast bool) (agent.ProviderConfig, error) {
+		var model string
+		if fast {
+			model = firstNonEmpty(cfg.SelectedOllamaModelFast, cfg.SelectedOllamaModel, "llama3.2")
+		} else {
+			model = firstNonEmpty(cfg.SelectedOllamaModel, "llama3.2")
 		}
-		baseURL := cfg.OllamaBaseURL
-		if baseURL == "" {
-			baseURL = "http://localhost:11434"
-		}
+		baseURL := firstNonEmpty(cfg.OllamaBaseURL, "http://localhost:11434")
 		return agent.ProviderConfig{
-			Type:    agent.ProviderOllama,
-			APIKey:  bundle.OllamaAPIKey, // optional — set when Ollama auth is enabled
-			Model:   model,
-			BaseURL: baseURL,
+			Type: agent.ProviderOllama, APIKey: bundle.OllamaAPIKey, // optional
+			Model: model, BaseURL: baseURL,
 		}, nil
+	},
 
-	case agent.ProviderAtlasEngine:
-		// Normalize to basename — old config values may store full paths.
-		model := filepath.Base(cfg.SelectedAtlasEngineModel)
+	agent.ProviderAtlasEngine: func(cfg config.RuntimeConfigSnapshot, _ credentialBundle, fast bool) (agent.ProviderConfig, error) {
+		// One-port policy: llama-server runs the model loaded at startup.
+		// Fast/primary model names are advisory; only affect which model the
+		// user intends to load, not which one actually responds.
+		var raw string
+		if fast {
+			raw = firstNonEmpty(cfg.SelectedAtlasEngineModelFast, cfg.SelectedAtlasEngineModel)
+		} else {
+			raw = cfg.SelectedAtlasEngineModel
+		}
+		model := filepath.Base(raw)
 		if model == "" || model == "." {
 			return agent.ProviderConfig{}, fmt.Errorf("no model configured for Engine LM — select a model in Settings → Engine")
 		}
@@ -550,18 +409,15 @@ func resolveProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, er
 		if port == 0 {
 			port = 11985
 		}
-		baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 		return agent.ProviderConfig{
-			Type:    agent.ProviderAtlasEngine,
-			APIKey:  "", // Engine LM is local — no API key
-			Model:   model,
-			BaseURL: baseURL,
+			Type: agent.ProviderAtlasEngine, Model: model,
+			BaseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
 		}, nil
+	},
 
-	case agent.ProviderAtlasMLX:
-		// MLX-LM is local — no API key. mlx_lm.server 0.30+ matches the request
-		// model field against /v1/models IDs which use the full model path.
-		// Sending only the directory name causes a HuggingFace lookup and 401/404.
+	agent.ProviderAtlasMLX: func(cfg config.RuntimeConfigSnapshot, _ credentialBundle, _ bool) (agent.ProviderConfig, error) {
+		// MLX-LM: one port, one process. Fast and primary share the same BaseURL
+		// and model — mlx_lm.server serves whatever was loaded at startup.
 		modelName := filepath.Base(cfg.SelectedAtlasMLXModel)
 		if modelName == "" || modelName == "." {
 			modelName = "mlx-model"
@@ -572,40 +428,43 @@ func resolveProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, er
 			port = 11990
 		}
 		return newAtlasMLXProviderConfig(cfg, model, fmt.Sprintf("http://127.0.0.1:%d", port)), nil
+	},
 
-	case agent.ProviderOpenRouter:
-		if bundle.OpenRouterAPIKey == "" {
-			return agent.ProviderConfig{}, fmt.Errorf("OpenRouter API key not configured. Add your key in Atlas Settings")
-		}
-		model := cfg.SelectedOpenRouterModel
-		if model == "" {
-			model = "openrouter/auto:free"
-		}
-		return agent.ProviderConfig{
-			Type:   agent.ProviderOpenRouter,
-			APIKey: bundle.OpenRouterAPIKey,
-			Model:  model,
-			ExtraHeaders: map[string]string{
-				"HTTP-Referer": "https://github.com/rodeelh/project-atlas",
-				"X-Title":      "Atlas",
-			},
-		}, nil
-
-	default: // openai
+	agent.ProviderOpenAI: func(cfg config.RuntimeConfigSnapshot, bundle credentialBundle, fast bool) (agent.ProviderConfig, error) {
 		if bundle.OpenAIAPIKey == "" {
 			return agent.ProviderConfig{}, fmt.Errorf("OpenAI API key not configured. Add your key in Atlas Settings")
 		}
-		model := cfg.DefaultOpenAIModel
-		if cfg.SelectedOpenAIPrimaryModel != "" {
-			model = cfg.SelectedOpenAIPrimaryModel
+		var model string
+		if fast {
+			model = firstNonEmpty(cfg.SelectedOpenAIFastModel, cfg.SelectedOpenAIPrimaryModel, cfg.DefaultOpenAIModel, "gpt-5.4-mini")
+		} else {
+			model = firstNonEmpty(cfg.SelectedOpenAIPrimaryModel, cfg.DefaultOpenAIModel, "gpt-5.4")
 		}
-		if model == "" {
-			model = "gpt-5.4"
-		}
-		return agent.ProviderConfig{
-			Type:   agent.ProviderOpenAI,
-			APIKey: bundle.OpenAIAPIKey,
-			Model:  model,
-		}, nil
+		return agent.ProviderConfig{Type: agent.ProviderOpenAI, APIKey: bundle.OpenAIAPIKey, Model: model}, nil
+	},
+}
+
+// resolveProviderSlot is the single table-driven entry point. fast=true picks
+// the fast-model slot. Unknown providers fall through to OpenAI (legacy default).
+func resolveProviderSlot(cfg config.RuntimeConfigSnapshot, fast bool) (agent.ProviderConfig, error) {
+	bundle, _ := readCredentialBundleFn()
+	t := agent.ProviderType(cfg.ActiveAIProvider)
+	if t == "" {
+		t = agent.ProviderOpenAI
 	}
+	r, ok := providerResolvers[t]
+	if !ok {
+		r = providerResolvers[agent.ProviderOpenAI]
+	}
+	return r(cfg, bundle, fast)
+}
+
+// resolveProvider — primary slot.
+func resolveProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, error) {
+	return resolveProviderSlot(cfg, false)
+}
+
+// resolveFastProvider — fast slot with primary-model fallback per provider.
+func resolveFastProvider(cfg config.RuntimeConfigSnapshot) (agent.ProviderConfig, error) {
+	return resolveProviderSlot(cfg, true)
 }
