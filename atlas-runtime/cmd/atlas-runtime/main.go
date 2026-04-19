@@ -35,6 +35,7 @@ import (
 	"atlas-runtime-go/internal/memory"
 	"atlas-runtime-go/internal/mind"
 	mindtelemetry "atlas-runtime-go/internal/mind/telemetry"
+	agentsmodule "atlas-runtime-go/internal/modules/agents"
 	apivalidationmodule "atlas-runtime-go/internal/modules/apivalidation"
 	approvalsmodule "atlas-runtime-go/internal/modules/approvals"
 	automationsmodule "atlas-runtime-go/internal/modules/automations"
@@ -44,7 +45,6 @@ import (
 	forgemodule "atlas-runtime-go/internal/modules/forge"
 	mindmodule "atlas-runtime-go/internal/modules/mind"
 	skillsmodule "atlas-runtime-go/internal/modules/skills"
-	agentsmodule "atlas-runtime-go/internal/modules/agents"
 	usagemodule "atlas-runtime-go/internal/modules/usage"
 	voicemodule "atlas-runtime-go/internal/modules/voice"
 	workflowsmodule "atlas-runtime-go/internal/modules/workflows"
@@ -391,6 +391,10 @@ func main() {
 	}()
 
 	// Wire forge.orchestration.propose → forge service.
+	skillsRegistry.SetForgeResearchTracker(func(title, message string) func() {
+		_, done := forgeSvc.StartResearching(title, message)
+		return done
+	})
 	skillsRegistry.SetForgePersistFn(func(specJSON, plansJSON, summary, rationale, contractJSON string) (
 		id, name, skillID, riskLevel string,
 		actionNames, domains []string,

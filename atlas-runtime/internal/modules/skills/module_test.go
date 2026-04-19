@@ -241,6 +241,55 @@ func TestModule_ListSkillsIncludesCustomRoutingMetadata(t *testing.T) {
 	t.Fatal("expected custom skill with routing metadata in /skills catalog")
 }
 
+func TestModule_InstallCustomSkillAcceptsDeclarativeRunner(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	sourceDir := filepath.Join(t.TempDir(), "music-player")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll source: %v", err)
+	}
+	manifest := `{
+		"id":"music-player",
+		"name":"Music Player",
+		"actions":[
+			{
+				"id":"play-song",
+				"name":"Play Song",
+				"description":"Play a song.",
+				"input":{"type":"object","properties":{"query":{"type":"string"}}},
+				"runner":{"type":"command","command":"/bin/echo","args":["{query}"]}
+			}
+		]
+	}`
+	if err := os.WriteFile(filepath.Join(sourceDir, "skill.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("Write source skill.json: %v", err)
+	}
+
+	host := platform.NewHost(stubConfig{}, platform.NewSQLiteStorage(db), nil, platform.NoopContextAssembler{}, platform.NewInProcessBus(8))
+	module := New(dir)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	r := chi.NewRouter()
+	host.ApplyProtected(r)
+
+	body, _ := json.Marshal(map[string]string{"path": sourceDir})
+	req := httptest.NewRequest(http.MethodPost, "/skills/install", strings.NewReader(string(body)))
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "skills", "music-player", "skill.json")); err != nil {
+		t.Fatalf("expected installed skill.json: %v", err)
+	}
+}
+
 func TestModule_ListCapabilitiesReturnsUnifiedInventory(t *testing.T) {
 	dir := t.TempDir()
 	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))

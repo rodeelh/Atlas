@@ -136,7 +136,15 @@ func (r *Registry) registerMemory() {
 				return "", fmt.Errorf("memory.recall: query is required")
 			}
 
-			mems, err := r.db.RelevantMemories(p.Query, 8, nil)
+			var queryVec []float32
+			if embedder, ok := memoryEmbedderFromContext(ctx); ok {
+				vec, err := embedder(ctx, strings.TrimSpace(p.Query))
+				if err == nil && len(vec) > 0 {
+					queryVec = vec
+				}
+			}
+
+			mems, err := r.db.RelevantMemories(p.Query, 8, queryVec)
 			if err != nil {
 				return "", fmt.Errorf("memory.recall: db query: %w", err)
 			}

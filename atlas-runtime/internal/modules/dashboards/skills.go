@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"atlas-runtime-go/internal/skills"
@@ -398,6 +399,13 @@ func (m *Module) skillAddDataSource(ctx context.Context, raw json.RawMessage) (s
 		if action, _ := cfg["action"].(string); action != "" {
 			canonical := m.skillsRegistry.Normalise(action)
 			if !m.skillsRegistry.HasAction(canonical) {
+				// If the caller passed a bare skill ID (no dot), look up its actions
+				// and include them in the error so the agent can self-correct.
+				if suggestions := m.skillsRegistry.ActionsForSkill(canonical); len(suggestions) > 0 {
+					return skills.ErrResult("dashboard.add_data_source", "config validate", false,
+						fmt.Errorf("skill action %q is a skill ID, not an action ID; use one of its actions: %s",
+							action, strings.Join(suggestions, ", "))), nil
+				}
 				return skills.ErrResult("dashboard.add_data_source", "config validate", false,
 					fmt.Errorf("skill action %q is not registered; use the canonical dot form (e.g. weather.current) and check available skills via skills.list", action)), nil
 			}

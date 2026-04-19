@@ -355,15 +355,13 @@ Rules:
 				edge.Confidence = 1
 			}
 			db.SupersedeEdge(srcID, tgtID, edge.Relation, now) //nolint:errcheck
-			memID := convID
 			e := storage.EdgeRow{
-				EdgeID:         fmt.Sprintf("edg_%d", time.Now().UnixNano()),
-				SourceEntity:   srcID,
-				TargetEntity:   tgtID,
-				Relation:       edge.Relation,
-				ValidFrom:      now,
-				Confidence:     edge.Confidence,
-				SourceMemoryID: &memID,
+				EdgeID:       fmt.Sprintf("edg_%d", time.Now().UnixNano()),
+				SourceEntity: srcID,
+				TargetEntity: tgtID,
+				Relation:     edge.Relation,
+				ValidFrom:    now,
+				Confidence:   edge.Confidence,
 			}
 			db.SaveEdge(e) //nolint:errcheck
 		}

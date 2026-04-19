@@ -57,6 +57,7 @@ type ProposeRequest struct {
 type (
 	ForgeSkillSpec      = forgetypes.ForgeSkillSpec
 	ForgeActionSpec     = forgetypes.ForgeActionSpec
+	ForgeActionTestCase = forgetypes.ForgeActionTestCase
 	ForgeActionPlan     = forgetypes.ForgeActionPlan
 	WorkflowStepPlan    = forgetypes.WorkflowStepPlan
 	LocalPlan           = forgetypes.LocalPlan

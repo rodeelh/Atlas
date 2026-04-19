@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -173,6 +174,67 @@ func TestMemoryRecall(t *testing.T) {
 	// Result should mention the memory content.
 	if result.Summary == "No relevant memories found for: Atlas macOS project" {
 		t.Error("memory.recall: expected to find memory, got 'no relevant memories'")
+	}
+}
+
+func TestMemoryRecallUsesInjectedEmbedder(t *testing.T) {
+	db, cleanup := openTestDBForSkills(t)
+	defer cleanup()
+	r := newMemoryRegistry(t, db)
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	semantic := storage.MemoryRow{
+		ID:         "semantic-recall",
+		Category:   "preference",
+		Title:      "Favorite color",
+		Content:    "User likes blue.",
+		Source:     "test",
+		Confidence: 0.90,
+		Importance: 0.50,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		TagsJSON:   `[]`,
+	}
+	keyword := storage.MemoryRow{
+		ID:         "keyword-recall",
+		Category:   "preference",
+		Title:      "Favorite hue",
+		Content:    "User likes green.",
+		Source:     "test",
+		Confidence: 0.90,
+		Importance: 0.50,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		TagsJSON:   `[]`,
+	}
+	if err := db.SaveMemory(semantic); err != nil {
+		t.Fatalf("SaveMemory semantic: %v", err)
+	}
+	if err := db.SaveMemory(keyword); err != nil {
+		t.Fatalf("SaveMemory keyword: %v", err)
+	}
+	if err := db.UpdateMemoryEmbedding("semantic-recall", "test-model", []float32{1, 0}); err != nil {
+		t.Fatalf("UpdateMemoryEmbedding semantic: %v", err)
+	}
+	if err := db.UpdateMemoryEmbedding("keyword-recall", "test-model", []float32{0, 1}); err != nil {
+		t.Fatalf("UpdateMemoryEmbedding keyword: %v", err)
+	}
+
+	ctx := WithMemoryEmbedder(context.Background(), func(context.Context, string) ([]float32, error) {
+		return []float32{1, 0}, nil
+	})
+	result, err := r.Execute(ctx, "memory.recall", json.RawMessage(`{"query": "favorite hue"}`))
+	if err != nil {
+		t.Fatalf("Execute memory.recall: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("memory.recall failed: %s", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "Favorite color") {
+		t.Fatalf("expected semantic memory in recall result, got: %s", result.Summary)
+	}
+	if strings.Index(result.Summary, "Favorite color") > strings.Index(result.Summary, "Favorite hue") {
+		t.Fatalf("expected semantic vector match before keyword match, got: %s", result.Summary)
 	}
 }
 

@@ -14,13 +14,6 @@ import { toast } from '../toast'
 import type { RuntimeConfigUpdateResponse } from '../api/client'
 import { formatAtlasModelName } from '../modelName'
 
-const ACTION_SAFETY_OPTIONS = ['always_ask_before_actions', 'ask_only_for_risky_actions', 'more_autonomous']
-const SAFETY_LABELS: Record<string, string> = {
-  always_ask_before_actions: 'Ask every time',
-  ask_only_for_risky_actions: 'Ask for risky actions',
-  more_autonomous: 'Auto-approve actions',
-}
-
 const CLOUD_PROVIDERS = [
   { id: 'openai',     label: 'OpenAI',            recommended: true  },
   { id: 'anthropic',  label: 'Claude (Anthropic)', recommended: false },
@@ -522,6 +515,12 @@ export function AIProviders() {
       />
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
+      {restartRequired && (
+        <div class="banner banner-info" style={{ marginBottom: 16 }}>
+          <span class="banner-message">Restart Atlas to apply all provider changes.</span>
+          <button class="banner-dismiss" onClick={() => setRestartRequired(false)} title="Dismiss">x</button>
+        </div>
+      )}
 
       <div>
         <div class="section-label">Setup</div>
@@ -581,10 +580,20 @@ export function AIProviders() {
             autoLabel={cloudAutoLabel}
             options={cloudModels?.availableModels ?? []}
             optionFormatter={(model) => model.displayName}
+            status={cloudConnectionBadge}
             itemCountLabel={cloudProvider === 'openrouter' && cloudModels?.totalAvailable
               ? `${cloudModels.availableModels?.length ?? 0} of ${cloudModels.totalAvailable} shown`
               : undefined}
           />
+          <SettingsRow
+            label="Model availability"
+            sublabel="Check whether the selected cloud model can answer right now"
+            mobileSplit
+          >
+            <button class="btn btn-sm" onClick={testCloudConnection} disabled={checkingCloudModelHealth}>
+              {checkingCloudModelHealth ? 'Checking...' : 'Test'}
+            </button>
+          </SettingsRow>
           <details class="ai-provider-advanced-panel">
             <summary>Advanced cloud options</summary>
             <div class="ai-provider-advanced-panel-body">
@@ -658,10 +667,20 @@ export function AIProviders() {
             autoLabel={cloudAutoLabel}
             options={cloudModels?.availableModels ?? []}
             optionFormatter={(model) => model.displayName}
+            status={cloudConnectionBadge}
             itemCountLabel={cloudProvider === 'openrouter' && cloudModels?.totalAvailable
               ? `${cloudModels.availableModels?.length ?? 0} of ${cloudModels.totalAvailable} shown`
               : undefined}
           />
+          <SettingsRow
+            label="Model availability"
+            sublabel="Check whether the selected cloud model can answer right now"
+            mobileSplit
+          >
+            <button class="btn btn-sm" onClick={testCloudConnection} disabled={checkingCloudModelHealth}>
+              {checkingCloudModelHealth ? 'Checking...' : 'Test'}
+            </button>
+          </SettingsRow>
           <div class="ai-provider-mini-section-label">Background</div>
           <SettingsRow
             label="Backend"

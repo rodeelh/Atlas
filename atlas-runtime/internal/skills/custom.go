@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -67,7 +68,8 @@ func (r *Registry) ReloadCustomSkill(supportDir, skillID string) {
 
 // registerCustomAction registers a single action from a custom skill manifest.
 func (r *Registry) registerCustomAction(manifest customskills.CustomSkillManifest, action customskills.CustomSkillAction, skillDir, runPath string) {
-	actionID := manifest.ID + "." + action.Name
+	actionName := action.RuntimeName()
+	actionID := manifest.ID + "." + actionName
 	ac := parseActionClass(action.ActionClass, action.PermLevel)
 	if manifest.Routing != nil && strings.TrimSpace(manifest.Routing.CapabilityGroup) != "" {
 		r.groupByAction[actionID] = strings.ToLower(strings.TrimSpace(manifest.Routing.CapabilityGroup))
@@ -90,14 +92,17 @@ func (r *Registry) registerCustomAction(manifest customskills.CustomSkillManifes
 		permLevel = "execute"
 	}
 
-	// Capture loop variable for the closure.
-	actionName := action.Name
+	// Capture loop variables for the closure.
+	actionRunner := action.Runner
 
 	r.register(SkillEntry{
 		Def:         def,
 		PermLevel:   permLevel,
 		ActionClass: ac,
 		Fn: func(ctx context.Context, args json.RawMessage) (string, error) {
+			if actionRunner != nil {
+				return callCustomCommandRunner(ctx, skillDir, actionName, actionRunner, args)
+			}
 			return callCustomSkill(ctx, runPath, skillDir, actionName, args)
 		},
 	})
@@ -220,4 +225,52 @@ func callCustomSkill(ctx context.Context, runPath, workDir, actionName string, a
 		return "", fmt.Errorf("%s", errMsg)
 	}
 	return result.Output, nil
+}
+
+func callCustomCommandRunner(ctx context.Context, workDir, actionName string, runner *customskills.ActionRunner, args json.RawMessage) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if runner == nil || runner.Type != "command" || strings.TrimSpace(runner.Command) == "" {
+		return "", fmt.Errorf("custom skill %s: invalid command runner", actionName)
+	}
+	var argMap map[string]any
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &argMap); err != nil {
+			return "", fmt.Errorf("custom skill %s: invalid args: %w", actionName, err)
+		}
+	}
+	renderedArgs := make([]string, len(runner.Args))
+	for i, tmpl := range runner.Args {
+		renderedArgs[i] = fillRunnerTemplate(tmpl, argMap)
+	}
+
+	command := runner.Command
+	if !filepath.IsAbs(command) {
+		candidate := filepath.Join(workDir, command)
+		if _, err := os.Stat(candidate); err == nil {
+			command = candidate
+		}
+	}
+	cmd := exec.CommandContext(ctx, command, renderedArgs...) //nolint:gosec — user-installed executable; intentional
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("custom skill %s: timed out after 30s", actionName)
+		}
+		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
+			return "", fmt.Errorf("custom skill %s: %s", actionName, strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return "", fmt.Errorf("custom skill %s: exec failed: %w", actionName, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func fillRunnerTemplate(template string, args map[string]any) string {
+	out := template
+	for key, value := range args {
+		out = strings.ReplaceAll(out, "{"+key+"}", fmt.Sprint(value))
+	}
+	return out
 }

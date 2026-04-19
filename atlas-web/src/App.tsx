@@ -6,6 +6,7 @@ import { Approvals } from './screens/Approvals'
 import { Skills } from './screens/Skills'
 import { Forge } from './screens/Forge'
 import { Mind } from './screens/Mind'
+import { Memory } from './screens/Memory'
 import { Activity } from './screens/Activity'
 import { Settings } from './screens/Settings'
 import { AIProviders } from './screens/AIProviders'
@@ -34,6 +35,7 @@ type Screen =
   | 'skills'
   | 'forge'
   | 'mind'
+  | 'memory'
   | 'automations'
   | 'workflows'
   | 'dashboards'
@@ -49,7 +51,7 @@ type Screen =
   | 'docs'
 
 const VALID_SCREENS: Screen[] = [
-  'chat', 'onboarding', 'communications', 'approvals', 'skills', 'forge', 'mind',
+  'chat', 'onboarding', 'communications', 'approvals', 'skills', 'forge', 'mind', 'memory',
   'automations', 'workflows', 'dashboards', 'activity', 'settings', 'ai-providers', 'audio', 'api-keys', 'theme',
   'team',
   'local-lm', 'usage',
@@ -169,6 +171,13 @@ const Icon = {
     <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
       <path d="M8 2C5.2 2 3 4.2 3 7c0 1.5.6 2.9 1.6 3.9L4 13h8l-.6-2.1C12.4 9.9 13 8.5 13 7c0-2.8-2.2-5-5-5z" />
       <path d="M6 9.5c0 1.1.9 2 2 2s2-.9 2-2" />
+    </svg>
+  ),
+  memory: (
+    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">
+      <ellipse cx="8" cy="3.5" rx="5" ry="2" />
+      <path d="M3 3.5v4c0 1.1 2.2 2 5 2s5-.9 5-2v-4" />
+      <path d="M3 7.5v4c0 1.1 2.2 2 5 2s5-.9 5-2v-4" />
     </svg>
   ),
   activity: (
@@ -301,29 +310,6 @@ const Icon = {
   ),
 }
 
-const SCREEN_LABELS: Partial<Record<Screen, string>> = {
-  chat: 'Chat',
-  onboarding: 'Onboarding',
-  communications: 'Communications',
-  approvals: 'Approvals',
-  skills: 'Skills',
-  forge: 'Forge',
-  mind: 'Mind',
-  automations: 'Automations',
-  workflows: 'Workflows',
-  dashboards: 'Dashboards',
-  team: 'Team HQ',
-  activity: 'Activity',
-  settings: 'General',
-  'ai-providers': 'AI Providers',
-  'audio': 'Audio',
-  'api-keys': 'Credentials',
-  theme: 'Appearance',
-  'local-lm': 'Local LM',
-  usage: 'Usage',
-  docs: 'Docs',
-}
-
 /* ── Nav groups ────────────────────────────────────────── */
 
 type NavItem = { id: Screen; icon: preact.ComponentChild; label: string }
@@ -352,6 +338,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: 'skills',        icon: Icon.skills,        label: 'Skills' },
       { id: 'forge',         icon: Icon.forge,         label: 'Forge' },
       { id: 'mind',          icon: Icon.mind,          label: 'Mind' },
+      { id: 'memory',        icon: Icon.memory,        label: 'Memory' },
       { id: 'local-lm',      icon: Icon.atlasEngine,   label: 'Local LM' },
     ],
   },
@@ -861,6 +848,7 @@ export function App() {
         {screen === 'dashboards'  && <Dashboards />}
         {screen === 'team'        && <Team />}
         {screen === 'mind'        && <Mind />}
+        {screen === 'memory'      && <Memory />}
         {screen === 'activity'    && <Activity />}
         {screen === 'settings'    && <Settings />}
         {screen === 'ai-providers' && <AIProviders />}

@@ -15,12 +15,6 @@ const PlayIcon = () => (
   </svg>
 )
 
-const TrashIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M2 3h8M4.5 3V2h3v1M10 3l-.75 7.5H2.75L2 3" />
-  </svg>
-)
-
 const MoreIcon = () => (
   <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
     <circle cx="3" cy="7" r="1.1" />

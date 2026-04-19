@@ -6,11 +6,6 @@ import { ErrorBanner } from '../components/ErrorBanner'
 
 // ── Key name helpers ──────────────────────────────────────────────────────────
 
-// "Serper Search API" → "SERPER_SEARCH_API"
-function toKeychainKey(label: string): string {
-  return label.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')
-}
-
 // "SERPER_SEARCH_API" → "Serper Search Api"
 function fromKeychainKey(key: string): string {
   return key.split('_').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ')

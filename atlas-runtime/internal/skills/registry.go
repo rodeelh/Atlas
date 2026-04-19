@@ -133,6 +133,10 @@ type ForgePersistFn func(specJSON, plansJSON, summary, rationale, contractJSON s
 	err error,
 )
 
+// ForgeResearchTracker records that Forge is actively researching or preparing
+// a proposal. The returned function must be called when the operation finishes.
+type ForgeResearchTracker func(title, message string) func()
+
 // Registry maps action IDs to SkillEntry.
 type Registry struct {
 	entries        map[string]SkillEntry
@@ -148,6 +152,7 @@ type Registry struct {
 	voiceMgr       VoiceManager
 	visionFn       VisionFn
 	forgePersistFn ForgePersistFn
+	forgeTracker   ForgeResearchTracker
 
 	// policyCache avoids a per-tool-call disk read of action-policies.json.
 	// Refreshed when the cached value is older than policyCacheTTL.
@@ -1094,7 +1099,30 @@ func (r *Registry) normalise(actionID string) string {
 	if _, ok := r.entries[canonical]; ok {
 		return canonical
 	}
+	// If the ID has no dot separator it looks like a bare skill ID (e.g.
+	// "current-ram-usage" instead of "current-ram-usage.get-current-ram-usage").
+	// Auto-resolve to the single action when unambiguous so the agent doesn't
+	// need to know the exact action name for single-action skills.
+	if !strings.Contains(actionID, ".") {
+		if matches := r.actionsForSkill(actionID); len(matches) == 1 {
+			return matches[0]
+		}
+	}
 	return actionID
+}
+
+// actionsForSkill returns all registered action IDs whose namespace prefix
+// matches skillID. Internal form of ActionsForSkill without the sort overhead
+// in hot paths.
+func (r *Registry) actionsForSkill(skillID string) []string {
+	prefix := skillID + "."
+	var matches []string
+	for id := range r.entries {
+		if strings.HasPrefix(id, prefix) {
+			matches = append(matches, id)
+		}
+	}
+	return matches
 }
 
 // MatchesAnyPattern is the exported, canonical skill-pattern matcher used
@@ -1156,6 +1184,9 @@ func matchesAnyPattern(actionID string, patterns []string) bool {
 // Unknown actions default to requiring approval (safe fallback).
 func (r *Registry) NeedsApproval(actionID string) bool {
 	actionID = r.normalise(actionID)
+	if isNonInteractiveInternalAction(actionID) {
+		return false
+	}
 	e, ok := r.entries[actionID]
 	if !ok {
 		return true // unknown action — require approval
@@ -1176,6 +1207,18 @@ func (r *Registry) NeedsApproval(actionID string) bool {
 	return base
 }
 
+func isNonInteractiveInternalAction(actionID string) bool {
+	switch actionID {
+	case "forge.orchestration.propose":
+		// This only creates a pending Forge proposal after validation. The user
+		// still reviews/installs/enables the skill separately, and repair retries
+		// must not trigger repeated approval popups.
+		return true
+	default:
+		return false
+	}
+}
+
 // IsStateful returns true for tools that share process-level state and must
 // not run concurrently with other calls in the same batch. Currently covers
 // all browser.* tools, which share a single go-rod Chrome session.
@@ -1189,6 +1232,16 @@ func (r *Registry) IsStateful(actionID string) bool {
 func (r *Registry) HasAction(actionID string) bool {
 	_, ok := r.entries[r.normalise(actionID)]
 	return ok
+}
+
+// ActionsForSkill returns all registered action IDs whose namespace prefix
+// matches skillID (e.g. "current-ram-usage" → ["current-ram-usage.get-current-ram-usage"]).
+// Used to generate helpful suggestions when an agent passes a bare skill ID instead
+// of a full action ID.
+func (r *Registry) ActionsForSkill(skillID string) []string {
+	matches := r.actionsForSkill(skillID)
+	sort.Strings(matches)
+	return matches
 }
 
 // GetActionClass returns the ActionClass for actionID.
@@ -1264,6 +1317,12 @@ func (r *Registry) SetVisionFn(fn VisionFn) {
 // and forge service are constructed.
 func (r *Registry) SetForgePersistFn(fn ForgePersistFn) {
 	r.forgePersistFn = fn
+}
+
+// SetForgeResearchTracker wires forge.orchestration.propose into the same
+// /forge/researching state that powers the Forge UI.
+func (r *Registry) SetForgeResearchTracker(fn ForgeResearchTracker) {
+	r.forgeTracker = fn
 }
 
 // loadPolicy returns the approval policy for actionID from a short-lived in-memory

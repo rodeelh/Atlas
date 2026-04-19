@@ -64,6 +64,23 @@ func TestPromptInjectionGates(t *testing.T) {
 	}
 }
 
+func TestShouldComputeHyDEUsesMemoryInjectionGate(t *testing.T) {
+	cfg := storageTestDefaults()
+	cfg.MaxRetrievedMemoriesPerTurn = 4
+
+	if shouldComputeHyDE(cfg, "What time is it in Tokyo right now?") {
+		t.Fatal("should not compute HyDE for objective turns that do not inject memories")
+	}
+	if !shouldComputeHyDE(cfg, "What do you remember about my Telegram automation?") {
+		t.Fatal("should compute HyDE when recalled memories may be injected")
+	}
+
+	cfg.MaxRetrievedMemoriesPerTurn = 0
+	if shouldComputeHyDE(cfg, "What do you remember about my Telegram automation?") {
+		t.Fatal("should not compute HyDE when memory retrieval is disabled by limit")
+	}
+}
+
 func TestDetectTurnMode(t *testing.T) {
 	cases := []struct {
 		message string

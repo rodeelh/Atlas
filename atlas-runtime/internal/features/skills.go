@@ -621,7 +621,8 @@ func customManifestToRecord(manifest customskills.CustomSkillManifest, states sk
 	actions := make([]SkillAction, 0, len(manifest.Actions))
 	for _, a := range manifest.Actions {
 		permLevel := normalizePermLevel(a.PermLevel)
-		actionID := manifest.ID + "." + a.Name
+		actionName := a.RuntimeName()
+		actionID := manifest.ID + "." + actionName
 		approvalPolicy := "always_ask"
 		if policy, ok := policies[actionID]; ok {
 			approvalPolicy = policy
@@ -637,7 +638,7 @@ func customManifestToRecord(manifest customskills.CustomSkillManifest, states sk
 		actions = append(actions, SkillAction{
 			ID:              actionID,
 			PublicID:        publicActionID(actionID),
-			Name:            a.Name,
+			Name:            displayActionName(a.Name, actionName),
 			Description:     a.Description,
 			PermissionLevel: permLevel,
 			ApprovalPolicy:  approvalPolicy,
@@ -687,6 +688,13 @@ func customManifestToRecord(manifest customskills.CustomSkillManifest, states sk
 		},
 		Actions: actions,
 	}
+}
+
+func displayActionName(name, fallback string) string {
+	if name != "" {
+		return name
+	}
+	return fallback
 }
 
 // SkillValidation is the validation result embedded in a SkillRecord.

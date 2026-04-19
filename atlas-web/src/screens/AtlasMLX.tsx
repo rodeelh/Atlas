@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'preact/hooks'
 import { api, type MLXStatus, type MLXModelInfo, type RuntimeConfig } from '../api/client'
-import type { MLXInferenceStats, MLXSchedulerStats } from '../api/contracts'
+import type { MLXInferenceStats } from '../api/contracts'
 import { PageHeader } from '../components/PageHeader'
 import { PageSpinner } from '../components/PageSpinner'
 import { ErrorBanner } from '../components/ErrorBanner'
@@ -94,7 +94,6 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
   const [routerStatus, setRouterStatus]   = useState<MLXStatus | null>(null)
   const [routerModel, setRouterModel]     = useState('')
   const [routerModelSaving, setRouterModelSaving] = useState(false)
-  const [routerActing, setRouterActing]   = useState(false)
   const [mlxRequestSaving, setMlxRequestSaving] = useState(false)
   const [temperature, setTemperature] = useState(0)
   const [repetitionPenalty, setRepetitionPenalty] = useState(0)
@@ -404,11 +403,6 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
   const isAppleSilicon  = status?.isAppleSilicon ?? true // optimistic until first load
   const isDownloading   = !!download && !download.done && !download.error
   const isInstalling    = !!install && !install.done && !install.error
-  const scheduler: MLXSchedulerStats | null = status?.scheduler ?? null
-  const schedulerQueueDepth = scheduler?.queueDepth ?? 0
-  const schedulerActive = scheduler?.activeRequests ?? 0
-  const schedulerAvgWaitMs = ((scheduler?.avgQueueWaitSec ?? 0) * 1000)
-
   // Version comparison helpers
   const hasUpgrade = venvReady && pkgVersion && latestVersion && pkgVersion !== latestVersion
   const mlxInstallLabel = !venvReady ? 'Install' : hasUpgrade ? 'Upgrade' : 'Reinstall'
@@ -552,7 +546,6 @@ export function AtlasMLX({ hidePageHeader = false }: { hidePageHeader?: boolean 
               const yTicks  = [0, Math.round(niceMax * 0.33), Math.round(niceMax * 0.66), niceMax]
               const toY = (v: number) => topPad + chartH - (v / niceMax) * chartH
 
-              const nSlots = Math.max(tpsHistory.length, 1)
               const toSlotX = (i: number, total: number) => {
                 if (total <= 1) return yLabelW
                 const span = total >= MAX_TPS_SLOTS ? chartW : (total - 1) / (MAX_TPS_SLOTS - 1) * chartW

@@ -3,6 +3,8 @@ package skills
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -129,6 +131,18 @@ func TestNeedsApproval_OAINameEncoding(t *testing.T) {
 	}
 	if !r.NeedsApproval("test__send") {
 		t.Error("OAI-encoded send action should require approval")
+	}
+}
+
+func TestNeedsApproval_ForgeProposeIgnoresStaleAlwaysAskPolicy(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	r := NewRegistry(dir, nil, nil)
+	if err := os.WriteFile(filepath.Join(dir, "action-policies.json"), []byte(`{"forge.orchestration.propose":"always_ask"}`), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	if r.NeedsApproval("forge.orchestration.propose") {
+		t.Fatal("forge proposal drafting should not require approval; final install remains user-reviewed")
 	}
 }
 

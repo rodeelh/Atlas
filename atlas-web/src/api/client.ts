@@ -27,18 +27,15 @@ import type {
   ForgeResearchingItem,
   GremlinItem,
   GremlinRun,
-  ExecutableTarget,
   LinkPreview,
   LogEntry,
   MemoryItem,
   MemoryParams,
-  ChatStreamEvent,
   MessageAttachment,
   MessageResponse,
   ModelSelectorInfo,
   CloudModelHealth,
   OnboardingStatus,
-  ProviderStatusInfo,
   RuntimeConfig,
   RuntimeConfigUpdateResponse,
   RuntimeStatus,
@@ -254,6 +251,9 @@ async function requestWithHeaders<T>(
     'Content-Type': 'application/json',
     ...((options.headers ?? {}) as Record<string, string>),
     ...(options.extraHeaders ?? {}),
+  }
+  if (isRemoteHostRuntime() && requiresCSRF(method)) {
+    headers['X-CSRF-Token'] = await ensureCSRFToken()
   }
   const res = await fetch(url, { ...options, headers, credentials: 'include' })
   if (!res.ok) {
@@ -473,12 +473,6 @@ export const api = {
   engineDeleteModel: (name: string) => request<EngineModelInfo[]>(`/engine/models/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   engineDownloadStatus: () => get<EngineDownloadStatus>('/engine/models/download/status'),
   engineDismissDownload: () => request<void>('/engine/models/download', { method: 'DELETE' }),
-  engineDownloadModel: (url: string, filename: string): EventSource =>
-    // POST body can't be sent via EventSource — use a query-string shim via a GET
-    // that the server won't support. Instead we open an SSE POST via fetch in the
-    // component using a raw fetch+ReadableStream. This entry point is a factory
-    // helper for the base URL so components don't need to import BASE directly.
-    new EventSource(`${BASE()}/engine/models/download`),
   engineDownloadBaseURL: () => BASE(),
   engineUpdateBaseURL: () => BASE(),
 

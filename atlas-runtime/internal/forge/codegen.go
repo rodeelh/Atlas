@@ -1,12 +1,16 @@
 package forge
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"atlas-runtime-go/internal/customskills"
 	"atlas-runtime-go/internal/features"
@@ -22,15 +26,93 @@ import (
 // continues to appear with the Forge badge in the Skills UI instead of the
 // generic Custom badge.
 func GenerateAndInstallCustomSkill(supportDir string, proposal ForgeProposal) error {
-	// ── 1. Parse embedded JSON strings ───────────────────────────────────────
+	artifact, err := buildCustomSkillArtifact(proposal)
+	if err != nil {
+		return err
+	}
+
+	// Write to a temp directory, then smoke-test before promotion.
+	skillsDir := customskills.SkillsDir(supportDir)
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		return fmt.Errorf("forge/codegen: mkdir %s: %w", skillsDir, err)
+	}
+	tmpDir, err := os.MkdirTemp(skillsDir, ".forge-"+proposal.SkillID+"-*")
+	if err != nil {
+		return fmt.Errorf("forge/codegen: create temp skill dir: %w", err)
+	}
+	cleanupTmp := true
+	defer func() {
+		if cleanupTmp {
+			_ = os.RemoveAll(tmpDir)
+		}
+	}()
+	if err := writeCustomSkillFiles(tmpDir, artifact); err != nil {
+		return err
+	}
+	if err := verifyGeneratedCustomSkill(tmpDir, artifact.Spec, artifact.Plans, artifact.Manifest); err != nil {
+		return err
+	}
+
+	skillDir := filepath.Join(skillsDir, proposal.SkillID)
+	if err := os.RemoveAll(skillDir); err != nil {
+		return fmt.Errorf("forge/codegen: replace existing %s: %w", skillDir, err)
+	}
+	if err := os.Rename(tmpDir, skillDir); err != nil {
+		return fmt.Errorf("forge/codegen: promote verified skill: %w", err)
+	}
+	cleanupTmp = false
+
+	// Auto-approve all actions. The user explicitly approved this skill through
+	// the forge pipeline, so its actions default to auto-approve rather than
+	// "always ask".
+	if err := writeForgeActionPolicies(supportDir, proposal.SkillID, artifact.Manifest.Actions); err != nil {
+		// Non-fatal: skill still works, user just gets prompted on each call.
+		logstore.Write("warn", fmt.Sprintf("forge/codegen: set action policies: %s", err), nil)
+	}
+
+	logstore.Write("info", fmt.Sprintf("forge/codegen: installed %q → %s", proposal.SkillID, skillDir), nil)
+	return nil
+}
+
+func ValidateCustomSkillProposal(supportDir string, proposal ForgeProposal) error {
+	artifact, err := buildCustomSkillArtifact(proposal)
+	if err != nil {
+		return err
+	}
+	if !usesLocalRuntime(artifact.Plans) {
+		return nil
+	}
+	tmpDir, err := os.MkdirTemp(supportDir, ".forge-validate-"+proposal.SkillID+"-*")
+	if err != nil {
+		return fmt.Errorf("forge/codegen: create validation temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+	if err := writeCustomSkillFiles(tmpDir, artifact); err != nil {
+		return err
+	}
+	if err := verifyGeneratedCustomSkill(tmpDir, artifact.Spec, artifact.Plans, artifact.Manifest); err != nil {
+		return err
+	}
+	return nil
+}
+
+type customSkillArtifact struct {
+	Spec         ForgeSkillSpec
+	Plans        []ForgeActionPlan
+	Manifest     customskills.CustomSkillManifest
+	ManifestData []byte
+	RunScript    string
+}
+
+func buildCustomSkillArtifact(proposal ForgeProposal) (customSkillArtifact, error) {
 	var spec ForgeSkillSpec
 	if err := json.Unmarshal([]byte(proposal.SpecJSON), &spec); err != nil {
-		return fmt.Errorf("forge/codegen: bad specJSON: %w", err)
+		return customSkillArtifact{}, fmt.Errorf("forge/codegen: bad specJSON: %w", err)
 	}
 
 	var plans []ForgeActionPlan
 	if err := json.Unmarshal([]byte(proposal.PlansJSON), &plans); err != nil {
-		return fmt.Errorf("forge/codegen: bad plansJSON: %w", err)
+		return customSkillArtifact{}, fmt.Errorf("forge/codegen: bad plansJSON: %w", err)
 	}
 
 	var contract *APIResearchContract
@@ -43,9 +125,7 @@ func GenerateAndInstallCustomSkill(supportDir string, proposal ForgeProposal) er
 		}
 	}
 
-	// ── 2. Build actions for skill.json ──────────────────────────────────────
 	actions := buildManifestActions(spec, plans, contract)
-
 	manifest := customskills.CustomSkillManifest{
 		ID:          proposal.SkillID,
 		Name:        proposal.Name,
@@ -59,37 +139,28 @@ func GenerateAndInstallCustomSkill(supportDir string, proposal ForgeProposal) er
 	}
 	manifestData, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
-		return fmt.Errorf("forge/codegen: marshal skill.json: %w", err)
+		return customSkillArtifact{}, fmt.Errorf("forge/codegen: marshal skill.json: %w", err)
 	}
-
-	// ── 3. Generate Python run script ─────────────────────────────────────────
 	plansData, err := json.Marshal(plans)
 	if err != nil {
-		return fmt.Errorf("forge/codegen: marshal plans: %w", err)
+		return customSkillArtifact{}, fmt.Errorf("forge/codegen: marshal plans: %w", err)
 	}
-	runScript := buildRunScript(string(plansData))
+	return customSkillArtifact{
+		Spec:         spec,
+		Plans:        plans,
+		Manifest:     manifest,
+		ManifestData: manifestData,
+		RunScript:    buildRunScript(string(plansData)),
+	}, nil
+}
 
-	// ── 4. Write files to skills directory ───────────────────────────────────
-	skillDir := filepath.Join(customskills.SkillsDir(supportDir), proposal.SkillID)
-	if err := os.MkdirAll(skillDir, 0o755); err != nil {
-		return fmt.Errorf("forge/codegen: mkdir %s: %w", skillDir, err)
+func writeCustomSkillFiles(skillDir string, artifact customSkillArtifact) error {
+	if err := os.WriteFile(filepath.Join(skillDir, "skill.json"), artifact.ManifestData, 0o644); err != nil {
+		return fmt.Errorf("forge/codegen: write temp skill.json: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(skillDir, "skill.json"), manifestData, 0o644); err != nil {
-		return fmt.Errorf("forge/codegen: write skill.json: %w", err)
+	if err := os.WriteFile(filepath.Join(skillDir, "run"), []byte(artifact.RunScript), 0o755); err != nil {
+		return fmt.Errorf("forge/codegen: write temp run: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(skillDir, "run"), []byte(runScript), 0o755); err != nil {
-		return fmt.Errorf("forge/codegen: write run: %w", err)
-	}
-
-	// ── 5. Auto-approve all actions ───────────────────────────────────────────
-	// The user explicitly approved this skill through the forge pipeline, so
-	// all of its actions should default to auto-approve rather than "always ask".
-	if err := writeForgeActionPolicies(supportDir, proposal.SkillID, actions); err != nil {
-		// Non-fatal: skill still works, user just gets prompted on each call.
-		logstore.Write("warn", fmt.Sprintf("forge/codegen: set action policies: %s", err), nil)
-	}
-
-	logstore.Write("info", fmt.Sprintf("forge/codegen: installed %q → %s", proposal.SkillID, skillDir), nil)
 	return nil
 }
 
@@ -183,6 +254,165 @@ func usesWorkflowRuntime(plans []ForgeActionPlan) bool {
 		}
 	}
 	return false
+}
+
+func verifyGeneratedCustomSkill(skillDir string, spec ForgeSkillSpec, plans []ForgeActionPlan, manifest customskills.CustomSkillManifest) error {
+	if !usesLocalRuntime(plans) {
+		return nil
+	}
+	runPath := filepath.Join(skillDir, "run")
+	specActionByID := make(map[string]ForgeActionSpec, len(spec.Actions))
+	for _, action := range spec.Actions {
+		specActionByID[action.ID] = action
+	}
+	manifestActionByName := make(map[string]customskills.CustomSkillAction, len(manifest.Actions))
+	for _, action := range manifest.Actions {
+		manifestActionByName[action.Name] = action
+	}
+	for _, plan := range plans {
+		if plan.Type != "local" {
+			continue
+		}
+		actionSpec := specActionByID[plan.ActionID]
+		actionName := slugify(plan.ActionID)
+		manifestAction := manifestActionByName[actionName]
+		testCases, err := smokeTestCasesForAction(actionSpec, manifestAction)
+		if err != nil {
+			return fmt.Errorf("forge/codegen: smoke test %s: %w", plan.ActionID, err)
+		}
+		for i, tc := range testCases {
+			if err := runGeneratedSkillSmokeTest(runPath, skillDir, actionName, tc, manifest); err != nil {
+				return fmt.Errorf("forge/codegen: smoke test %s[%d]: %w", plan.ActionID, i, err)
+			}
+		}
+	}
+	return nil
+}
+
+func usesLocalRuntime(plans []ForgeActionPlan) bool {
+	for _, plan := range plans {
+		if plan.Type == "local" {
+			return true
+		}
+	}
+	return false
+}
+
+func smokeTestCasesForAction(spec ForgeActionSpec, action customskills.CustomSkillAction) ([]ForgeActionTestCase, error) {
+	if len(spec.TestCases) > 0 {
+		return spec.TestCases, nil
+	}
+	required := requiredParamsFromSchema(action.Parameters)
+	if len(required) > 0 {
+		return nil, fmt.Errorf("missing testCases for required parameter(s): %s", strings.Join(required, ", "))
+	}
+	expectSuccess := true
+	return []ForgeActionTestCase{{Args: map[string]any{}, ExpectSuccess: &expectSuccess}}, nil
+}
+
+func requiredParamsFromSchema(schema map[string]any) []string {
+	if schema == nil {
+		return nil
+	}
+	raw, ok := schema["required"]
+	if !ok {
+		return nil
+	}
+	var out []string
+	switch vals := raw.(type) {
+	case []string:
+		out = append(out, vals...)
+	case []any:
+		for _, val := range vals {
+			if s, ok := val.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+func runGeneratedSkillSmokeTest(runPath, workDir, actionName string, tc ForgeActionTestCase, manifest customskills.CustomSkillManifest) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	defer cancel()
+
+	payload := map[string]any{"action": actionName, "args": tc.Args}
+	input, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal test input: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, runPath) //nolint:gosec -- generated local skill under test.
+	cmd.Dir = workDir
+	cmd.Stdin = bytes.NewReader(append(input, '\n'))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("timed out after 35s")
+	}
+	if err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			detail = err.Error()
+		}
+		return fmt.Errorf("runner process failed: %s", detail)
+	}
+
+	var envelope struct {
+		Success bool   `json:"success"`
+		Output  string `json:"output"`
+		Error   string `json:"error"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &envelope); err != nil {
+		return fmt.Errorf("runner returned invalid JSON envelope: %w; output=%q", err, strings.TrimSpace(string(out)))
+	}
+	expectSuccess := true
+	if tc.ExpectSuccess != nil {
+		expectSuccess = *tc.ExpectSuccess
+	}
+	if envelope.Success != expectSuccess {
+		if envelope.Error != "" {
+			return fmt.Errorf("runner success=%v, want %v: %s", envelope.Success, expectSuccess, envelope.Error)
+		}
+		return fmt.Errorf("runner success=%v, want %v", envelope.Success, expectSuccess)
+	}
+	if !envelope.Success {
+		return nil
+	}
+	if strings.TrimSpace(envelope.Output) == "" {
+		return fmt.Errorf("runner succeeded with empty output")
+	}
+	if expectsJSONOutput(manifest, tc) {
+		var decoded any
+		if err := json.Unmarshal([]byte(envelope.Output), &decoded); err != nil {
+			return fmt.Errorf("runner output is not valid JSON: %w; output=%q", err, envelope.Output)
+		}
+		if len(tc.ExpectedJSONFields) > 0 {
+			obj, ok := decoded.(map[string]any)
+			if !ok {
+				return fmt.Errorf("runner output is JSON but not an object")
+			}
+			for _, field := range tc.ExpectedJSONFields {
+				if _, ok := obj[field]; !ok {
+					return fmt.Errorf("runner output missing expected JSON field %q", field)
+				}
+			}
+		}
+	}
+	for _, needle := range tc.ExpectedTextContains {
+		if !strings.Contains(envelope.Output, needle) {
+			return fmt.Errorf("runner output missing expected text %q", needle)
+		}
+	}
+	return nil
+}
+
+func expectsJSONOutput(manifest customskills.CustomSkillManifest, tc ForgeActionTestCase) bool {
+	if len(tc.ExpectedJSONFields) > 0 {
+		return true
+	}
+	haystack := strings.ToLower(strings.Join(append([]string{manifest.Name, manifest.Description, manifest.Category}, manifest.Tags...), " "))
+	return strings.Contains(haystack, "json")
 }
 
 func workflowStepFromPlan(plan ForgeActionPlan, fallbackTitle string) (map[string]any, error) {
@@ -282,8 +512,11 @@ func writeForgeActionPolicies(supportDir, skillID string, actions []customskills
 
 // ── Parameter schema helpers ─────────────────────────────────────────────────
 
-// urlParamRe matches {param} placeholders in URL and body-field templates.
-var urlParamRe = regexp.MustCompile(`\{([^}]+)\}`)
+// urlParamRe matches intentional {param} placeholders in URL, body-field, and
+// script templates. It deliberately ignores arbitrary braces used by Python,
+// shell, JSON, or AppleScript snippets, so local scripts like
+// {"osVersion": value} do not become fake required arguments.
+var urlParamRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_.-]*)\}`)
 
 // normalizeForgePermLevel converts any AI-generated permission_level value to
 // one of the three canonical values accepted by Atlas: "read", "draft", or "execute".
@@ -372,9 +605,14 @@ func buildManifestActions(
 		actionClass := normalizeActionClass(sa.ActionClass)
 		if actionClass == "" {
 			if localPlan != nil {
-				// Local scripts interact with macOS apps or the filesystem; default to
-				// external_side_effect since we cannot statically determine intent.
-				actionClass = "external_side_effect"
+				// If the proposal explicitly classifies the action as read-only, honor
+				// that for local telemetry/status scripts. Mutating local actions still
+				// require approval through their permission level.
+				if permLevel == "read" {
+					actionClass = "read"
+				} else {
+					actionClass = "external_side_effect"
+				}
 			} else if httpPlan != nil {
 				switch strings.ToUpper(httpPlan.Method) {
 				case "POST", "PUT", "PATCH", "DELETE":
@@ -611,7 +849,7 @@ def _secret(key):
 
 def _fill(template, args):
     """Replace {param} placeholders with raw values from args (headers, body fields)."""
-    return re.sub(r"\{([^}]+)\}", lambda m: str(args.get(m.group(1), m.group(0))), template)
+    return re.sub(r"\{([A-Za-z_][A-Za-z0-9_.-]*)\}", lambda m: str(args.get(m.group(1), m.group(0))), template)
 
 def _fill_path(template, args):
     """Replace {param} placeholders in a URL path with percent-encoded values.
@@ -626,7 +864,7 @@ def _fill_path(template, args):
         if val is None:
             return m.group(0)   # keep placeholder; leftover guard will reject it
         return urllib.parse.quote(str(val), safe="")
-    return re.sub(r"\{([^}]+)\}", encode, template)
+    return re.sub(r"\{([A-Za-z_][A-Za-z0-9_.-]*)\}", encode, template)
 
 _SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -678,7 +916,7 @@ def _run_http(plan, args):
 
     # Fail fast: URL path placeholders are required params.
     # If any are absent from args, reject before making any HTTP request.
-    required_path_params = re.findall(r"\{([^}]+)\}", url_template)
+    required_path_params = re.findall(r"\{([A-Za-z_][A-Za-z0-9_.-]*)\}", url_template)
     missing = [p for p in required_path_params if p not in args]
     if missing:
         return None, "Missing required parameter(s): " + ", ".join(missing)
@@ -687,7 +925,7 @@ def _run_http(plan, args):
 
     # Guard: if any {placeholder} survived substitution, something went wrong.
     # Reject rather than dispatch a malformed URL to the external service.
-    leftover = re.findall(r"\{([^}]+)\}", url)
+    leftover = re.findall(r"\{([A-Za-z_][A-Za-z0-9_.-]*)\}", url)
     if leftover:
         return None, "Unresolved URL placeholder(s) after substitution: " + ", ".join(leftover)
 
@@ -745,18 +983,18 @@ def _run_http(plan, args):
 
     # Guard: reject if any unresolved {placeholder} survived in body field values.
     body_leftover = [f"{field}={val}" for field, val in body.items()
-                     if isinstance(val, str) and re.search(r"\{[^}]+\}", val)]
+                     if isinstance(val, str) and re.search(r"\{[A-Za-z_][A-Za-z0-9_.-]*\}", val)]
     if body_leftover:
         return None, "Unresolved body placeholder(s) after substitution: " + ", ".join(body_leftover)
 
     # Route remaining args: into body for mutation methods, query for reads.
     # Track all params already placed so auto-routing doesn't double-inject them.
-    placed = set(re.findall(r"\{([^}]+)\}", plan.get("url", "")))
+    placed = set(re.findall(r"\{([A-Za-z_][A-Za-z0-9_.-]*)\}", plan.get("url", "")))
     for tmpl in body_fields.values():
-        placed.update(re.findall(r"\{([^}]+)\}", tmpl))
+        placed.update(re.findall(r"\{([A-Za-z_][A-Za-z0-9_.-]*)\}", tmpl))
     # Header value templates — params used here must not be auto-routed to query/body.
     for tmpl in (plan.get("headers") or {}).values():
-        placed.update(re.findall(r"\{([^}]+)\}", tmpl))
+        placed.update(re.findall(r"\{([A-Za-z_][A-Za-z0-9_.-]*)\}", tmpl))
     for k, v in args.items():
         if k not in placed and k not in query and k not in body:
             if method in ("POST", "PUT", "PATCH"):
@@ -804,7 +1042,7 @@ def _run_local(plan, args):
     script = _fill(script_template, args)
 
     # Guard: reject if any {placeholder} survived (missing required arg).
-    leftover = re.findall(r"\{([^}]+)\}", script)
+    leftover = re.findall(r"\{([A-Za-z_][A-Za-z0-9_.-]*)\}", script)
     if leftover:
         return None, "Missing required parameter(s): " + ", ".join(leftover)
 

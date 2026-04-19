@@ -42,7 +42,17 @@ type ForgeActionSpec struct {
 	// ActionClass overrides the class inferred from the HTTP method.
 	// Valid values: read, local_write, destructive_local, external_side_effect, send_publish_delete.
 	// Codegen falls back to method-based inference when this is empty.
-	ActionClass string `json:"actionClass,omitempty"`
+	ActionClass string                `json:"actionClass,omitempty"`
+	TestCases   []ForgeActionTestCase `json:"testCases,omitempty"`
+}
+
+// ForgeActionTestCase is a smoke-test example supplied by the model for
+// generated actions. Local skills are executed with these args before install.
+type ForgeActionTestCase struct {
+	Args                 map[string]any `json:"args,omitempty"`
+	ExpectSuccess        *bool          `json:"expectSuccess,omitempty"`
+	ExpectedJSONFields   []string       `json:"expectedJSONFields,omitempty"`
+	ExpectedTextContains []string       `json:"expectedTextContains,omitempty"`
 }
 
 // ForgeActionPlan is the execution plan for one action in a Forge skill.

@@ -81,9 +81,8 @@ function modelFamily(filename: string): string {
 // Fixed-slot ring buffer: MAX_TPS_SLOTS at 1s polling = 30 seconds of graph data.
 const MAX_TPS_SLOTS = 30
 
-let _tpsHistory: number[]       = []
-let _promptTpsHistory: number[] = []
-let _wasRunning                 = false
+let _tpsHistory: number[] = []
+let _wasRunning           = false
 
 type DownloadState = {
   filename: string
@@ -140,7 +139,6 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
   const [routerStatus, setRouterStatus]     = useState<EngineStatus | null>(null)
   const [routerModel, setRouterModel]       = useState('')
   const [routerModelSaving, setRouterModelSaving] = useState(false)
-  const [routerActing, setRouterActing]     = useState(false)
 
   // Embedding Sidecar
   const [embedStatus, setEmbedStatus]       = useState<any | null>(null)
@@ -148,7 +146,6 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
   const [embedEnabledSaving, setEmbedEnabledSaving] = useState(false)
 
   const [tpsHistory, setTpsHistory]             = useState<number[]>(_tpsHistory)
-  const [promptTpsHistory, setPromptTpsHistory] = useState<number[]>(_promptTpsHistory)
   const wasRunningRef = useRef(_wasRunning)
 
   const [dlURL, setDlURL]           = useState('')
@@ -174,8 +171,8 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
       if (rs) setRouterStatus(rs)
       if (s.running) {
         if (!wasRunningRef.current) {
-          _tpsHistory = []; _promptTpsHistory = []
-          setTpsHistory([]); setPromptTpsHistory([])
+          _tpsHistory = []
+          setTpsHistory([])
         }
         wasRunningRef.current = true; _wasRunning = true
       } else {
@@ -192,11 +189,9 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
     // Reset module-level TPS history on every mount so stale data from a
     // previous render cycle doesn't bleed through after SPA navigation.
     _tpsHistory.splice(0)
-    _promptTpsHistory.splice(0)
     _wasRunning = false
     wasRunningRef.current = false
     setTpsHistory([])
-    setPromptTpsHistory([])
 
     void load()
     const interval = setInterval(load, 4000)
@@ -221,9 +216,6 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
         if (!s.running || (s.activeRequests ?? 0) === 0) return
         if ((s.lastTPS ?? 0) > 0) {
           setTpsHistory(h => { const n = [...h.slice(-(MAX_TPS_SLOTS - 1)), s.lastTPS!]; _tpsHistory = n; return n })
-        }
-        if ((s.promptTPS ?? 0) > 0) {
-          setPromptTpsHistory(h => { const n = [...h.slice(-(MAX_TPS_SLOTS - 1)), s.promptTPS!]; _promptTpsHistory = n; return n })
         }
       } catch {
         consecutiveFailures++
@@ -654,7 +646,6 @@ export function AtlasEngine({ hidePageHeader = false }: { hidePageHeader?: boole
               // X axis — fixed-slot strip chart.
               // Data grows left-to-right. Once the buffer is full (MAX_TPS_SLOTS),
               // oldest falls off the left, newest is always at the right edge.
-              const nSlots = Math.max(tpsHistory.length, 1)
               const toSlotX = (i: number, total: number) => {
                 if (total <= 1) return yLabelW
                 // If buffer is not full, spread across the proportional width

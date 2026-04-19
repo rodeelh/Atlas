@@ -54,7 +54,8 @@ func (r *Registry) registerForge() {
 				"(7) actionClass (optional) must be one of: read, local_write, destructive_local, external_side_effect, send_publish_delete. " +
 				"(8) Every plan URL must be a valid absolute HTTPS URL (placeholders like {param} are allowed). " +
 				"(9) For api skills, contract_json is required and must pass quality gates (docsQuality>=medium, mappingConfidence=high). " +
-				"(10) All referenced Keychain credential keys must already exist in Settings → Credentials.",
+				"(10) All referenced Keychain credential keys must already exist in Settings → Credentials. " +
+				"IMPORTANT REPAIR CONTRACT: if this tool returns success=false/status=needs_revision, do not ask the user to try again. Use the validation error as feedback, revise spec_json/plans_json, and call this tool again. Only tell the user when a proposal is created or when two materially different repairs hit the same blocker.",
 			Properties: map[string]ToolParam{
 				"kind": {
 					Description: "Skill kind: 'api' (calls external HTTP API), 'composed' (chains Atlas skills), " +
@@ -91,7 +92,8 @@ func (r *Registry) registerForge() {
 						"description (one sentence), " +
 						"permissionLevel (exactly: read | draft | execute — use read for GET-only, draft for local writes, execute for external side effects), " +
 						"actionClass (optional — exactly: read | local_write | destructive_local | external_side_effect | send_publish_delete; " +
-						"omit to auto-infer from HTTP method: GET→read, POST/PUT/PATCH/DELETE→external_side_effect)). " +
+						"omit to auto-infer from HTTP method: GET→read, POST/PUT/PATCH/DELETE→external_side_effect), " +
+						"testCases (required for local skills; array of smoke tests with args, expectSuccess, optional expectedJSONFields/expectedTextContains)). " +
 						`Example: {"id":"cat-facts","name":"Cat Facts","description":"Fetches random cat facts.","category":"utility","riskLevel":"low","tags":["cats"],"actions":[{"id":"get-fact","name":"Get Fact","description":"Returns a random cat fact.","permissionLevel":"read"}]}`,
 					Type: "string",
 				},
@@ -129,10 +131,38 @@ func (r *Registry) registerForge() {
 			Required: []string{"spec_json", "plans_json", "summary"},
 		},
 		PermLevel: "draft",
-		Fn: func(ctx context.Context, args json.RawMessage) (string, error) {
-			return r.forgeOrchestrationPropose(ctx, args)
+		FnResult: func(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+			summary, err := r.forgeOrchestrationPropose(ctx, args)
+			if err != nil {
+				return ToolResult{}, err
+			}
+			return forgeProposalToolResult(summary), nil
 		},
 	})
+}
+
+func forgeProposalToolResult(summary string) ToolResult {
+	if strings.HasPrefix(summary, "Forge proposal created.") {
+		return OKResult(summary, map[string]any{
+			"status":        "proposal_created",
+			"next_step":     "user_review",
+			"user_visible":  true,
+			"repair_needed": false,
+		})
+	}
+	return ToolResult{
+		Success: false,
+		Summary: strings.TrimSpace(summary) + "\n\n" +
+			"Internal repair instruction: do not ask the user to try again. Revise the spec_json/plans_json using this validation output, then call forge.orchestration.propose again. " +
+			"If the same validation failure repeats after two materially different revisions, stop creating proposals and explain the specific blocker.",
+		Artifacts: map[string]any{
+			"status":        "needs_revision",
+			"repair_needed": true,
+			"retryable":     true,
+			"user_visible":  false,
+			"next_step":     "revise_and_recall_forge_orchestration_propose",
+		},
+	}
 }
 
 // ── Execution ─────────────────────────────────────────────────────────────────
@@ -168,6 +198,16 @@ func (r *Registry) forgeOrchestrationPropose(ctx context.Context, args json.RawM
 	if err := json.Unmarshal([]byte(p.SpecJSON), &spec); err != nil {
 		return fmt.Sprintf("Could not decode spec_json as ForgeSkillSpec: %v. Ensure spec_json is well-formed JSON.", err), nil
 	}
+	doneTracking := func() {}
+	if r.forgeTracker != nil {
+		title := strings.TrimSpace(spec.Name)
+		if title == "" {
+			title = strings.TrimSpace(spec.ID)
+		}
+		doneTracking = r.forgeTracker(title, fmt.Sprintf("Preparing \"%s\" for review…", title))
+	}
+	defer doneTracking()
+
 	var plans []forgetypes.ForgeActionPlan
 	if err := json.Unmarshal([]byte(p.PlansJSON), &plans); err != nil {
 		return fmt.Sprintf("Could not decode plans_json as []ForgeActionPlan: %v. Ensure plans_json is a well-formed JSON array.", err), nil
@@ -196,7 +236,8 @@ func (r *Registry) forgeOrchestrationPropose(ctx context.Context, args json.RawM
 		if strings.TrimSpace(p.ContractJSON) == "" {
 			return "forge.orchestration.propose requires 'contract_json' for API skills. " +
 				"Research the target API first, then provide a populated APIResearchContract. " +
-				"Set kind to 'composed', 'transform', 'workflow', or 'local' if this is not an HTTP API skill.", nil
+				"Set kind to 'composed', 'transform', 'workflow', or 'local' if this is not an HTTP API skill. " +
+				"Do not ask the user to retry; revise this tool call internally.", nil
 		}
 
 		var contract forgetypes.APIResearchContract
@@ -256,7 +297,7 @@ func (r *Registry) forgeOrchestrationPropose(ctx context.Context, args json.RawM
 
 	// Guard: persistence callback must be injected.
 	if r.forgePersistFn == nil {
-		return "Forge is not yet ready — the runtime is still initialising. Please try again in a moment.", nil
+		return "Forge is not yet ready — the runtime is still initialising. Wait briefly, then call forge.orchestration.propose again internally.", nil
 	}
 
 	// Persist the proposal.
@@ -264,7 +305,7 @@ func (r *Registry) forgeOrchestrationPropose(ctx context.Context, args json.RawM
 		p.SpecJSON, p.PlansJSON, p.Summary, p.Rationale, persistedContractJSON,
 	)
 	if err != nil {
-		return fmt.Sprintf("Forge proposal creation failed: %v", err), nil
+		return fmt.Sprintf("Forge proposal creation failed: %v\n\nUse the concrete validation/smoke-test error above to repair the generated skill. Do not ask the user to try again; revise the proposal and call forge.orchestration.propose again.", err), nil
 	}
 
 	domainsNote := "no external domains"
@@ -478,9 +519,9 @@ func (r *Registry) forgeValidateAPI(ctx context.Context, contract forgetypes.API
 
 	switch result.Recommendation {
 	case validate.RecommendationReject:
-		return fmt.Sprintf("API validation rejected this proposal.\n\n%s\n\nCheck the endpoint URL and authentication configuration, then try again.", result.Summary)
+		return fmt.Sprintf("API validation rejected this proposal.\n\n%s\n\nRevise the endpoint URL and authentication configuration internally, then call forge.orchestration.propose again. Do not ask the user to try again.", result.Summary)
 	case validate.RecommendationNeedsRevision:
-		return fmt.Sprintf("API validation completed but the response needs attention.\n\n%s\n\nConfidence: %.0f%%\n\nReview the API configuration and try again.", result.Summary, result.Confidence*100)
+		return fmt.Sprintf("API validation completed but the response needs attention.\n\n%s\n\nConfidence: %.0f%%\n\nRevise the API configuration internally, then call forge.orchestration.propose again. Do not ask the user to try again.", result.Summary, result.Confidence*100)
 	}
 	// RecommendationUsable or RecommendationSkipped — proceed.
 	// Skipped with write actions is noted in the proposal summary but is not a hard block:
@@ -536,8 +577,10 @@ func forgeValidateSpec(spec forgetypes.ForgeSkillSpec, plans []forgetypes.ForgeA
 
 	// Build a set of plan actionIDs for cross-check.
 	planIDs := make(map[string]bool, len(plans))
+	planByID := make(map[string]forgetypes.ForgeActionPlan, len(plans))
 	for _, p := range plans {
 		planIDs[p.ActionID] = true
+		planByID[p.ActionID] = p
 	}
 
 	seenActionIDs := make(map[string]bool, len(spec.Actions))
@@ -584,6 +627,11 @@ func forgeValidateSpec(spec forgetypes.ForgeSkillSpec, plans []forgetypes.ForgeA
 				"action %q has invalid actionClass %q — must be one of: read, local_write, destructive_local, external_side_effect, send_publish_delete",
 				a.ID, a.ActionClass))
 		}
+		if plan, ok := planByID[a.ID]; ok && plan.Type == "local" && len(a.TestCases) == 0 {
+			issues = append(issues, fmt.Sprintf(
+				"local action %q must include at least one testCases entry so Forge can smoke-test the generated skill before install",
+				a.ID))
+		}
 	}
 
 	if len(issues) == 0 {
@@ -593,7 +641,8 @@ func forgeValidateSpec(spec forgetypes.ForgeSkillSpec, plans []forgetypes.ForgeA
 	for i, iss := range issues {
 		bullets[i] = "• " + iss
 	}
-	return "Forge spec validation failed:\n" + strings.Join(bullets, "\n") + "\nFix these issues and call forge.orchestration.propose again."
+	return "Forge spec validation failed:\n" + strings.Join(bullets, "\n") +
+		"\nRevise these fields internally and call forge.orchestration.propose again. Do not ask the user to try again."
 }
 
 // forgeValidatePlanURLs checks that every HTTP plan URL is well-formed and

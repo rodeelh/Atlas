@@ -45,6 +45,26 @@ func (s *Service) GetResearching() []ResearchingItem {
 	return out
 }
 
+// StartResearching records an in-flight Forge research/proposal operation and
+// returns a cleanup function that removes the item. It is shared by the HTTP
+// research flow and the chat-driven forge.orchestration.propose skill so the
+// UI can observe both paths through /forge/researching.
+func (s *Service) StartResearching(title, message string) (ResearchingItem, func()) {
+	id := newID()
+	now := time.Now().UTC().Format(time.RFC3339)
+	if strings.TrimSpace(message) == "" {
+		message = fmt.Sprintf("Researching \"%s\"…", title)
+	}
+	item := ResearchingItem{
+		ID:        id,
+		Title:     title,
+		Message:   message,
+		StartedAt: now,
+	}
+	s.addResearching(item)
+	return item, func() { s.removeResearching(id) }
+}
+
 // validateProposalAPIURL returns a non-empty error string if rawURL uses a
 // placeholder/example domain or is otherwise unsuitable as a real API base URL.
 func validateProposalAPIURL(rawURL string) string {
@@ -78,26 +98,17 @@ func (s *Service) Propose(ctx context.Context, req ProposeRequest, provider AIPr
 		return ForgeProposal{}, fmt.Errorf("forge: %s", msg)
 	}
 
-	id := newID()
-	now := time.Now().UTC().Format(time.RFC3339)
+	item, done := s.StartResearching(req.Name, "")
+	defer done()
 
-	item := ResearchingItem{
-		ID:        id,
-		Title:     req.Name,
-		Message:   fmt.Sprintf("Researching \"%s\"…", req.Name),
-		StartedAt: now,
-	}
-	s.addResearching(item)
-	defer s.removeResearching(id)
-
-	logstore.Write("info", "Forge research started: "+req.Name, map[string]string{"id": id})
+	logstore.Write("info", "Forge research started: "+req.Name, map[string]string{"id": item.ID})
 	researchStart := time.Now()
 
-	proposal, err := s.research(ctx, id, req, provider)
+	proposal, err := s.research(ctx, item.ID, req, provider)
 	elapsed := fmt.Sprintf("%.1fs", time.Since(researchStart).Seconds())
 	if err != nil {
 		logstore.Write("error", "Forge research failed: "+req.Name,
-			map[string]string{"id": id, "elapsed": elapsed, "error": err.Error()})
+			map[string]string{"id": item.ID, "elapsed": elapsed, "error": err.Error()})
 		return ForgeProposal{}, err
 	}
 
@@ -111,12 +122,12 @@ func (s *Service) Propose(ctx context.Context, req ProposeRequest, provider AIPr
 
 	if err := SaveProposal(s.supportDir, proposal); err != nil {
 		logstore.Write("error", "Forge save failed: "+req.Name,
-			map[string]string{"id": id, "error": err.Error()})
+			map[string]string{"id": item.ID, "error": err.Error()})
 		return ForgeProposal{}, fmt.Errorf("forge: save proposal: %w", err)
 	}
 
 	logstore.Write("info", "Forge research complete: "+proposal.Name,
-		map[string]string{"id": id, "skill": proposal.SkillID, "elapsed": elapsed})
+		map[string]string{"id": item.ID, "skill": proposal.SkillID, "elapsed": elapsed})
 	return proposal, nil
 }
 
@@ -320,12 +331,15 @@ func buildLocalDraftPrompt(req ProposeRequest) string {
 Return a JSON object describing the macOS commands to run:
 {
   "purpose": "what this skill does and why it is useful",
-  "actions": [
+ "actions": [
     {
       "actionName": "human-readable action name",
       "interpreter": "osascript | bash | sh | python3",
       "script": "the actual command or AppleScript to run — use {param} for arguments",
-      "description": "what this action does"
+      "description": "what this action does",
+      "testCases": [
+        {"args": {}, "expectSuccess": true, "expectedJSONFields": ["fieldName"]}
+      ]
     }
   ],
   "riskLevel": "low | medium | high",
@@ -472,6 +486,7 @@ CRITICAL RULES for local macOS skills — violations will cause installation fai
 4. domains[] MUST be [] — local skills make no HTTP requests.
 5. requiredSecrets[] MUST be [] — local skills use no API keys.
 6. Every plans[].actionID MUST exactly match one of the id values in spec.actions[].
+7. Every local action MUST include at least one spec.actions[].testCases entry with realistic args. For no-arg actions use {"args":{},"expectSuccess":true}. If the output is JSON, include expectedJSONFields.
 
 Return a JSON object with these EXACT fields:
 {
@@ -495,7 +510,11 @@ Return a JSON object with these EXACT fields:
         "id": "lowercase-hyphenated-action-id",
         "name": "human-readable action name",
         "description": "one sentence description",
-        "permissionLevel": "read"
+        "permissionLevel": "read",
+        "actionClass": "read",
+        "testCases": [
+          {"args": {}, "expectSuccess": true, "expectedJSONFields": ["fieldName"]}
+        ]
       }
     ]
   },
@@ -663,6 +682,10 @@ func (s *Service) PersistProposal(spec ForgeSkillSpec, plans []ForgeActionPlan, 
 		ContractJSON:    contractJSON,
 		CreatedAt:       now,
 		UpdatedAt:       now,
+	}
+
+	if err := ValidateCustomSkillProposal(s.supportDir, proposal); err != nil {
+		return ForgeProposal{}, fmt.Errorf("validate generated skill: %w", err)
 	}
 
 	if err := SaveProposal(s.supportDir, proposal); err != nil {

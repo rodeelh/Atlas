@@ -184,6 +184,54 @@ func TestSelectiveToolDefsIncludesCustomSkillViaDeclaredRoutingContract(t *testi
 	}
 }
 
+func TestCustomSkillDeclarativeCommandRunnerLoadsAndExecutes(t *testing.T) {
+	supportDir := t.TempDir()
+	skillDir := filepath.Join(supportDir, "skills", "music-player")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manifest := `{
+		"id":"music-player",
+		"name":"Music Player",
+		"description":"Play catalog music.",
+		"actions":[
+			{
+				"id":"play-song",
+				"name":"Play Song",
+				"description":"Play a song.",
+				"permission_level":"execute",
+				"input":{
+					"type":"object",
+					"properties":{"query":{"type":"string"}},
+					"required":["query"]
+				},
+				"runner":{
+					"type":"command",
+					"command":"/bin/echo",
+					"args":["playing {query}"]
+				}
+			}
+		]
+	}`
+	if err := os.WriteFile(filepath.Join(skillDir, "skill.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("Write skill.json: %v", err)
+	}
+
+	registry := NewRegistry(supportDir, nil, nil)
+	registry.LoadCustomSkills(supportDir)
+
+	if !hasToolName(registry.ToolDefinitions(), "music-player__play-song") {
+		t.Fatalf("expected declarative runner skill to be registered, got %v", toolNames(registry.ToolDefinitions()))
+	}
+	result, err := registry.Execute(context.Background(), "music-player.play-song", json.RawMessage(`{"query":"Diamonds"}`))
+	if err != nil {
+		t.Fatalf("Execute declarative runner: %v", err)
+	}
+	if !result.Success || result.Summary != "playing Diamonds" {
+		t.Fatalf("unexpected runner result: success=%v summary=%q", result.Success, result.Summary)
+	}
+}
+
 // ─── Phase B1: team work-routing heuristic ───────────────────────────────────
 
 // TestSelectiveToolDefs_TeamWorkRoutingPhrases verifies that work-routing

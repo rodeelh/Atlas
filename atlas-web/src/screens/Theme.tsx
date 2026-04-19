@@ -133,11 +133,10 @@ const FONT_FAMILIES: Record<ChatFont, string> = {
   geist:   "'Geist', -apple-system, sans-serif",
 }
 
-// Font size is now driven by density — no separate FONT_SIZE_PX needed.
-const DENSITY_FONT_SIZE: Record<DensityMode, string> = {
-  compact:     '13px',
-  comfortable: '15px',
-  spacious:    '17px',
+const FONT_SIZE_PX: Record<ChatFontSize, string> = {
+  small:   '13px',
+  default: '15px',
+  large:   '17px',
 }
 
 const RADIUS_PX: Record<ChatRadius, string> = {
@@ -250,7 +249,7 @@ export function Theme({
     ...presetColorTokensWithoutAccent,
     '--appearance-accent': effectivePreviewAccent,
     '--appearance-preview-font': FONT_FAMILIES[activeChatFont],
-    '--appearance-preview-font-size': DENSITY_FONT_SIZE[activeDensity],
+    '--appearance-preview-font-size': FONT_SIZE_PX[activeChatFontSize],
     '--appearance-preview-radius': RADIUS_PX[activeChatRadius],
     '--appearance-preview-gap': DENSITY_GAP[activeDensity],
     '--appearance-preview-pad-y': PREVIEW_BUBBLE_PADDING[activeDensity][0],
@@ -388,6 +387,12 @@ export function Theme({
               }))}
               activeID={activeChatFont}
               onChange={(id) => onChatFontChange(id as ChatFont)}
+            />
+            <OptionRow
+              label="Size"
+              options={fontSizes}
+              activeID={activeChatFontSize}
+              onChange={(id) => onChatFontSizeChange(id as ChatFontSize)}
             />
             <OptionRow
               label="Corners"

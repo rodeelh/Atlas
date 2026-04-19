@@ -235,11 +235,6 @@ func (m *Module) installCustomSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "source path does not contain skill.json")
 		return
 	}
-	if _, err := os.Stat(filepath.Join(body.Path, "run")); err != nil {
-		writeError(w, http.StatusBadRequest, "source path does not contain a run executable")
-		return
-	}
-
 	data, err := os.ReadFile(filepath.Join(body.Path, "skill.json"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to read skill.json: "+err.Error())
@@ -254,6 +249,10 @@ func (m *Module) installCustomSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	if manifest.ID == "" {
 		writeError(w, http.StatusBadRequest, "skill.json must contain an id field")
+		return
+	}
+	if _, err := customskills.ReadManifestForInstall(body.Path); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid custom skill: "+err.Error())
 		return
 	}
 

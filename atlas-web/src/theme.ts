@@ -457,7 +457,12 @@ export function applyTheme(config: ThemeConfig): void {
     '--theme-chat-gap': densityTokens['--chat-msg-gap'],
     '--theme-chat-pad-y': densityTokens['--bubble-pad-v'],
     '--theme-chat-pad-x': densityTokens['--bubble-pad-h'],
-    '--theme-chat-font-size': densityTokens['--bubble-font-size'],
+  })
+
+  const fontSizeTokens = FONT_SIZE_TOKENS[config.chatFontSize]
+  writeTokens({
+    ...fontSizeTokens,
+    '--theme-chat-font-size': fontSizeTokens['--bubble-font-size'],
   })
 
   const radiusTokens = RADIUS_TOKENS[config.chatRadius]

@@ -22,11 +22,29 @@ import (
 
 // CustomSkillAction is one action declared in skill.json.
 type CustomSkillAction struct {
+	ID          string         `json:"id,omitempty"`
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	PermLevel   string         `json:"permission_level"` // "read" | "draft" | "execute"
 	ActionClass string         `json:"action_class"`     // "read" | "local_write" | "external_side_effect" | ...
 	Parameters  map[string]any `json:"parameters"`       // raw JSON Schema object (optional)
+	Input       map[string]any `json:"input,omitempty"`  // legacy alias for parameters
+	Runner      *ActionRunner  `json:"runner,omitempty"` // legacy per-action runner
+}
+
+// ActionRunner is the declarative runner format used by older/generated skills.
+type ActionRunner struct {
+	Type    string   `json:"type"`
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+}
+
+// RuntimeName returns the stable action key used by the agent/tool registry.
+func (a CustomSkillAction) RuntimeName() string {
+	if a.ID != "" {
+		return a.ID
+	}
+	return a.Name
 }
 
 // CustomSkillRouting declares how Atlas should route natural-language requests
@@ -98,6 +116,12 @@ func ListManifests(supportDir string) []CustomSkillManifest {
 	return manifests
 }
 
+// ReadManifestForInstall validates a user-selected skill directory before it is
+// copied into the Atlas support directory.
+func ReadManifestForInstall(skillDir string) (CustomSkillManifest, error) {
+	return readManifest(skillDir, filepath.Base(skillDir))
+}
+
 // readManifest reads and validates the skill.json in skillDir.
 func readManifest(skillDir, dirName string) (CustomSkillManifest, error) {
 	data, err := os.ReadFile(filepath.Join(skillDir, "skill.json"))
@@ -119,9 +143,26 @@ func readManifest(skillDir, dirName string) (CustomSkillManifest, error) {
 	}
 	manifest.SkillDir = skillDir
 
-	// Require a run executable.
-	if _, err := os.Stat(filepath.Join(skillDir, "run")); err != nil {
-		return CustomSkillManifest{}, fmt.Errorf("no run executable")
+	for i := range manifest.Actions {
+		if manifest.Actions[i].Parameters == nil && manifest.Actions[i].Input != nil {
+			manifest.Actions[i].Parameters = manifest.Actions[i].Input
+		}
+		if manifest.Actions[i].Name == "" {
+			manifest.Actions[i].Name = manifest.Actions[i].RuntimeName()
+		}
+	}
+
+	// Require either a top-level protocol runner or per-action command runners.
+	if _, err := os.Stat(filepath.Join(skillDir, "run")); err == nil {
+		return manifest, nil
+	}
+	if len(manifest.Actions) == 0 {
+		return CustomSkillManifest{}, fmt.Errorf("no actions")
+	}
+	for _, action := range manifest.Actions {
+		if action.Runner == nil || action.Runner.Type != "command" || action.Runner.Command == "" {
+			return CustomSkillManifest{}, fmt.Errorf("no run executable and action %q has no command runner", action.RuntimeName())
+		}
 	}
 	return manifest, nil
 }

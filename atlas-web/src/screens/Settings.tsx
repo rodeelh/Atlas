@@ -38,7 +38,6 @@ export function Settings() {
   const [error, setError] = useState<string | null>(null)
   const [restartRequired, setRestartRequired] = useState(false)
 
-  const [location, setLocation] = useState<{ city: string; country: string; timezone: string; source: string } | null>(null)
   const [locationEdit, setLocationEdit] = useState('')
   const [locationSaving, setLocationSaving] = useState(false)
   const [locationError, setLocationError] = useState<string | null>(null)
@@ -105,7 +104,6 @@ export function Settings() {
         setDraft(c)
         api.location()
           .then((loc) => {
-            setLocation(loc)
             setLocationEdit(loc.city ? loc.city + (loc.country ? ', ' + loc.country : '') : '')
           })
           .catch(() => {})
@@ -251,14 +249,12 @@ export function Settings() {
                   try {
                     if (!val) {
                       const loc = await api.detectLocation()
-                      setLocation(loc)
                       setLocationEdit(loc.city ? loc.city + (loc.country ? ', ' + loc.country : '') : '')
                     } else {
                       const parts = val.split(',').map((s: string) => s.trim())
                       const city = parts[0] ?? ''
                       const country = parts.slice(1).join(', ').trim()
-                      const loc = await api.setLocation(city, country)
-                      setLocation(loc)
+                      await api.setLocation(city, country)
                     }
                   } catch (err) {
                     setLocationError(err instanceof Error ? err.message : 'Failed')
@@ -276,7 +272,6 @@ export function Settings() {
                   setLocationError(null)
                   setLocationSaving(true)
                   const finish = async (loc: { city: string; country: string; timezone: string; source: string; updatedAt: string }) => {
-                    setLocation(loc)
                     setLocationEdit(loc.city ? loc.city + (loc.country ? ', ' + loc.country : '') : '')
                   }
                   if (navigator.geolocation) {

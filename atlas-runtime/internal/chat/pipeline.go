@@ -443,10 +443,17 @@ func (p *Pipeline) tryVisionDegradation(s *TurnState) bool {
 func (p *Pipeline) buildInput(ctx context.Context, s *TurnState) {
 	capPlan, capPolicy := capabilityPolicy(s.Req.Message, config.SupportDir(), p.svc.db, p.svc.db)
 	s.CapPlan = capPlan
-	queryVec := memory.HyDEVector(ctx, s.Provider, s.Req.Message)
+	var queryVec []float32
+	if shouldComputeHyDE(s.Cfg, s.Req.Message) {
+		queryVec = memory.HyDEVector(ctx, s.Provider, s.Req.Message)
+	}
 	s.OAIMessages, s.HistoryChars, s.SystemPrompt = p.svc.buildTurnMessages(
 		s.Cfg, s.Req, s.History, s.ConvID, s.UserMsgID, capPolicy.PromptBlock, queryVec,
 	)
+}
+
+func shouldComputeHyDE(cfg config.RuntimeConfigSnapshot, userMessage string) bool {
+	return cfg.MaxRetrievedMemoriesPerTurn > 0 && shouldInjectMemories(userMessage)
 }
 
 func (p *Pipeline) selectTools(ctx context.Context, s *TurnState) {
@@ -503,6 +510,9 @@ func (p *Pipeline) execute(ctx context.Context, s *TurnState) {
 
 	agentCtx = skills.WithProactiveSender(agentCtx, func(text string) {
 		svc.SendProactive(s.ConvID, text)
+	})
+	agentCtx = skills.WithMemoryEmbedder(agentCtx, func(ctx context.Context, query string) ([]float32, error) {
+		return agent.Embed(ctx, s.Provider, agent.NomicPrefixQuery+query)
 	})
 	agentCtx = WithOriginConvID(agentCtx, s.ConvID) // L2 seam
 
@@ -659,4 +669,3 @@ func (p *Pipeline) emitProviderError(s *TurnState, err error) {
 	s.Status = "error"
 	s.ErrorMsg = errMsg
 }
-

@@ -558,6 +558,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	sb.WriteString("- Never instruct the user to open a terminal or run a command manually when terminal skills are available.\n")
 	sb.WriteString("- Use terminal.run_as_admin for commands that need root/sudo (e.g. writing to /usr/local, system config changes). It triggers a macOS password dialog.\n")
 	sb.WriteString("- For long-running operations (builds, downloads, installs that take minutes), use terminal.run_background. The task runs asynchronously and you will automatically send a follow-up message when it finishes — you do not need to poll or wait. Tell the user you've started it in the background.\n")
+	sb.WriteString("- When creating Forge skills, a forge.orchestration.propose result with success=false/status=needs_revision is internal validation feedback. Revise the generated spec/plans and call the tool again; do not ask the user to try again. If two materially different revisions hit the same blocker, stop and explain the blocker clearly.\n")
 	sb.WriteString("</tool_rules>")
 
 	// ── Volatile suffix (changes per-turn, busts cache from here) ──────────

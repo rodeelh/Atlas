@@ -1060,15 +1060,6 @@ const ThinkingIcon = () => (
   </svg>
 )
 
-const ProviderIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-    <line x1="2.5" y1="4.5" x2="13.5" y2="4.5" />
-    <line x1="2.5" y1="11.5" x2="13.5" y2="11.5" />
-    <circle cx="5.6" cy="4.5" r="1.6" />
-    <circle cx="10.4" cy="11.5" r="1.6" />
-  </svg>
-)
-
 const AvatarGlyph = () => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
     <circle cx="8" cy="5.5" r="3" />
@@ -1148,8 +1139,7 @@ function InlineApprovalCard({ toolName, args, loading, onApprove, onDeny }: {
 
 // ── Chat component ─────────────────────────────────────────────────────────────
 
-export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
-  onNavigateHistory?: () => void
+export function Chat({ isActive = true, onUnreadReply }: {
   isActive?: boolean
   onUnreadReply?: () => void
 } = {}) {
@@ -2449,18 +2439,28 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
           // ── Conversation complete ──────────────────────────────────────────────
           case 'done':
             turnCompleted = true
-            activeMsgId.current = null
-            activeTurnIdRef.current = null
-            foregroundActiveRef.current = false
             if (data.status === 'waitingForApproval') {
               setMessages(prev => prev.map(m => m.id === assistantMsg.id ? { ...m, content: accumulatedContent || m.content, isTyping: false } : m))
               awaitingResume = true
               hasReceivedText = false   // reset for the resumed turn
+              activeMsgId.current = null
+              activeTurnIdRef.current = null
+              // Keep the foreground stream as the owner of the paused turn.
+              // Resume emits a fresh assistant_started after the approval POST;
+              // if we mark this inactive, the background SSE stream can render
+              // the same resumed turn too, creating duplicate thinking bubbles.
+              foregroundActiveRef.current = true
             } else if (data.status === 'denied') {
+              activeMsgId.current = null
+              activeTurnIdRef.current = null
+              foregroundActiveRef.current = false
               const targetID = resumedMsgID ?? assistantMsg.id
               setMessages(prev => prev.map(m => m.id === targetID ? { ...m, content: resumedContent || 'The action was denied.', isTyping: false } : m))
               setPendingApproval(null); setSending(false); es.close()
             } else {
+              activeMsgId.current = null
+              activeTurnIdRef.current = null
+              foregroundActiveRef.current = false
               // Last-resort frontend safety net: if the backend somehow produced no text
               // (backend fixes should have covered this), show a minimal fallback so the
               // bubble is never empty on a failed turn.
@@ -2952,9 +2952,9 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                 setApprovingAction(true)
                 try {
                   await api.approve(pendingApproval.toolCallID)
+                  setPendingApproval(null)
                   setApprovingAction(false)
                 } catch {
-                  setPendingApproval(null)
                   setApprovingAction(false)
                 }
               }}
@@ -2962,8 +2962,9 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
                 setApprovingAction(true)
                 try {
                   await api.deny(pendingApproval.toolCallID)
-                } catch {
                   setPendingApproval(null)
+                  setApprovingAction(false)
+                } catch {
                   setApprovingAction(false)
                 }
               }}
@@ -3070,7 +3071,7 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
               <button
                 class={`chat-tool-btn${attachments.length > 0 ? ' active' : ''}`}
                 onClick={() => fileInputRef.current?.click()}
-                disabled={sending}
+                disabled={sending && !speakingMsgId}
                 title="Attach image or PDF"
                 aria-label="Attach file"
               >
@@ -3078,14 +3079,14 @@ export function Chat({ onNavigateHistory, isActive = true, onUnreadReply }: {
               </button>
               <button
                 class={`chat-tool-btn${ttsEnabled ? ' active' : ''}`}
-                onClick={toggleTTS}
+                onClick={speakingMsgId ? stopSpeaking : toggleTTS}
                 disabled={sending}
                 type="button"
-                title={ttsEnabled ? 'Disable auto-read' : 'Enable auto-read'}
-                aria-label={ttsEnabled ? 'Disable auto-read' : 'Enable auto-read'}
+                title={speakingMsgId ? 'Stop reading' : ttsEnabled ? 'Disable auto-read' : 'Enable auto-read'}
+                aria-label={speakingMsgId ? 'Stop reading' : ttsEnabled ? 'Disable auto-read' : 'Enable auto-read'}
                 aria-pressed={ttsEnabled ? 'true' : 'false'}
               >
-                {ttsEnabled ? <SpeakerIcon /> : <SpeakerMutedIcon />}
+                {speakingMsgId ? <SpeakerStopIcon /> : ttsEnabled ? <SpeakerIcon /> : <SpeakerMutedIcon />}
               </button>
               {mlxHasThinking && (
                 <button

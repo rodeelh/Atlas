@@ -4,6 +4,7 @@ import { PageHeader } from '../components/PageHeader'
 import { Portal } from '../components/Portal'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { EmptyState } from '../components/EmptyState'
+import { PageSpinner } from '../components/PageSpinner'
 
 type PlatformID = CommunicationPlatformStatus['platform']
 type SetupField = {
@@ -354,8 +355,10 @@ export function Communications() {
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
 
+      {loading && <PageSpinner />}
+
       {/* Empty state — shown above Channels card when nothing is connected */}
-      {readyPlatforms.length === 0 && (
+      {!loading && readyPlatforms.length === 0 && (
         <EmptyState
           icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="0.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5h5.5A1.5 1.5 0 0 1 13 4v3.5A1.5 1.5 0 0 1 11.5 9H9l-2 2V9H6A1.5 1.5 0 0 1 4.5 7.5V4A1.5 1.5 0 0 1 6 2.5z" /><path d="M4.5 6H3A1.5 1.5 0 0 0 1.5 7.5V11l2-1.5h1" /></svg>}
           title="No channels connected"
@@ -364,7 +367,7 @@ export function Communications() {
       )}
 
       {/* Channels card */}
-      <div>
+      {!loading && <div>
         <div class="card settings-group">
           <div class="card-header"><span class="card-title">Channels</span></div>
           {readyPlatforms.map((platform, index) => (
@@ -437,10 +440,10 @@ export function Communications() {
             )
           )}
         </div>
-      </div>
+      </div>}
 
       {/* Recent Sessions */}
-      <div>
+      {!loading && <div>
         <div class="card settings-group">
           <div class="card-header"><span class="card-title">Recent Sessions</span></div>
           {recentChannels.length === 0 && (
@@ -452,7 +455,7 @@ export function Communications() {
             <CommunicationChannelRow key={channel.id} channel={channel} last={index === recentChannels.length - 1} />
           ))}
         </div>
-      </div>
+      </div>}
 
       {selectedPlatform && (
         <QuickSetupModal

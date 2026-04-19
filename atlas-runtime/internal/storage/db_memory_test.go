@@ -877,9 +877,9 @@ func TestRelevantMemoriesHybridScoring(t *testing.T) {
 	}
 }
 
-// TestUpdateMemoryClearsEmbeddingAt — UpdateMemory must null embedding_at so stale
-// vectors are re-generated on the next extraction cycle.
-func TestUpdateMemoryClearsEmbeddingAt(t *testing.T) {
+// TestUpdateMemoryClearsEmbedding — UpdateMemory must clear stale vectors when
+// the semantic memory text changes.
+func TestUpdateMemoryClearsEmbedding(t *testing.T) {
 	db, cleanup := openMemTestDB(t)
 	defer cleanup()
 
@@ -899,13 +899,55 @@ func TestUpdateMemoryClearsEmbeddingAt(t *testing.T) {
 		t.Fatalf("UpdateMemory: %v", err)
 	}
 
-	var embeddingAt *string
-	err := db.Conn().QueryRow(`SELECT embedding_at FROM memories WHERE memory_id='clr-1'`).Scan(&embeddingAt)
+	var embedding, embeddingModel, embeddingAt any
+	err := db.Conn().QueryRow(`SELECT embedding, embedding_model, embedding_at FROM memories WHERE memory_id='clr-1'`).
+		Scan(&embedding, &embeddingModel, &embeddingAt)
 	if err != nil {
-		t.Fatalf("scan embedding_at: %v", err)
+		t.Fatalf("scan embedding fields: %v", err)
+	}
+	if embedding != nil {
+		t.Errorf("embedding should be NULL after semantic UpdateMemory, got %v", embedding)
+	}
+	if embeddingModel != nil {
+		t.Errorf("embedding_model should be NULL after semantic UpdateMemory, got %v", embeddingModel)
 	}
 	if embeddingAt != nil {
-		t.Errorf("embedding_at should be NULL after UpdateMemory, got %q", *embeddingAt)
+		t.Errorf("embedding_at should be NULL after semantic UpdateMemory, got %v", embeddingAt)
+	}
+}
+
+// TestUpdateMemoryKeepsEmbeddingForMetadataOnlyChange — confidence/importance
+// updates should not discard a still-valid semantic vector.
+func TestUpdateMemoryKeepsEmbeddingForMetadataOnlyChange(t *testing.T) {
+	db, cleanup := openMemTestDB(t)
+	defer cleanup()
+
+	row := testMemoryRow("keep-emb-1", "preference", "Stable title", "Stable content.", 0.7, 0.8)
+	if err := db.SaveMemory(row); err != nil {
+		t.Fatalf("SaveMemory: %v", err)
+	}
+	if err := db.UpdateMemoryEmbedding("keep-emb-1", "test-model", []float32{0.5, 0.5}); err != nil {
+		t.Fatalf("UpdateMemoryEmbedding: %v", err)
+	}
+
+	row.Confidence = 0.9
+	row.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := db.UpdateMemory(row); err != nil {
+		t.Fatalf("UpdateMemory: %v", err)
+	}
+
+	var embedding []byte
+	var embeddingAt *string
+	err := db.Conn().QueryRow(`SELECT embedding, embedding_at FROM memories WHERE memory_id='keep-emb-1'`).
+		Scan(&embedding, &embeddingAt)
+	if err != nil {
+		t.Fatalf("scan embedding fields: %v", err)
+	}
+	if len(embedding) == 0 {
+		t.Fatal("embedding should remain for metadata-only UpdateMemory")
+	}
+	if embeddingAt == nil {
+		t.Fatal("embedding_at should remain for metadata-only UpdateMemory")
 	}
 }
 
@@ -946,6 +988,45 @@ func TestUpsertEntity(t *testing.T) {
 	}
 	if ents[0].LastSeen != later {
 		t.Errorf("last_seen should be updated: want %s, got %s", later, ents[0].LastSeen)
+	}
+}
+
+func TestFindNearestEntitiesConsidersOlderEmbeddedEntities(t *testing.T) {
+	db, cleanup := openMemTestDB(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	queryVec := []float32{1, 0}
+
+	// Twenty recent entities would fill the old limit*4 pre-filter.
+	for i := 0; i < 20; i++ {
+		seen := now.Add(time.Duration(i) * time.Minute).Format(time.RFC3339Nano)
+		id, err := db.UpsertEntity(fmt.Sprintf("Recent %02d", i), "concept", seen)
+		if err != nil {
+			t.Fatalf("UpsertEntity recent: %v", err)
+		}
+		if err := db.UpdateEntityEmbedding(id, []float32{0, 1}); err != nil {
+			t.Fatalf("UpdateEntityEmbedding recent: %v", err)
+		}
+	}
+
+	oldID, err := db.UpsertEntity("Old exact match", "concept", now.Add(-24*time.Hour).Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("UpsertEntity old: %v", err)
+	}
+	if err := db.UpdateEntityEmbedding(oldID, queryVec); err != nil {
+		t.Fatalf("UpdateEntityEmbedding old: %v", err)
+	}
+
+	ents, err := db.FindNearestEntities(queryVec, 5)
+	if err != nil {
+		t.Fatalf("FindNearestEntities: %v", err)
+	}
+	if len(ents) == 0 {
+		t.Fatal("expected nearest entities")
+	}
+	if ents[0].EntityID != oldID {
+		t.Fatalf("expected older exact semantic match first, got %s (%s)", ents[0].EntityID, ents[0].Name)
 	}
 }
 
@@ -1001,7 +1082,7 @@ func TestSupersedeEdge(t *testing.T) {
 
 	later := time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano)
 	db.SupersedeEdge(srcID, tgtID, "works_at", later) //nolint:errcheck
-	db.SaveEdge(EdgeRow{                               //nolint:errcheck
+	db.SaveEdge(EdgeRow{                              //nolint:errcheck
 		EdgeID: "new-edge", SourceEntity: srcID, TargetEntity: tgtID,
 		Relation: "works_at", ValidFrom: later, Confidence: 1.0,
 	})
@@ -1104,7 +1185,7 @@ func TestDeduplicateEntitiesRepointsEdges(t *testing.T) {
 
 	// Two duplicate entity nodes.
 	db.Conn().Exec(`INSERT INTO memory_entities (entity_id,name,entity_type,first_seen,last_seen,metadata_json) VALUES ('e-old','Eve','person',?,?,'{}')`, earlier, earlier) //nolint:errcheck
-	db.Conn().Exec(`INSERT INTO memory_entities (entity_id,name,entity_type,first_seen,last_seen,metadata_json) VALUES ('e-new','Eve','person',?,?,'{}')`, now, now)           //nolint:errcheck
+	db.Conn().Exec(`INSERT INTO memory_entities (entity_id,name,entity_type,first_seen,last_seen,metadata_json) VALUES ('e-new','Eve','person',?,?,'{}')`, now, now)         //nolint:errcheck
 
 	// A third entity connected to the duplicate (e-old).
 	otherID, _ := db.UpsertEntity("SomeOrg", "organization", now)

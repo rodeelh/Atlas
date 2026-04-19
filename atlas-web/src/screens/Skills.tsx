@@ -496,6 +496,19 @@ export function Skills() {
             if (searchQuery && groupSkills.length === 0 && !isCustom) return null
             if (!groupSkills.length && !isCustom) return null
 
+            const customInstallButton = isCustom ? (
+              <button
+                class="btn btn-primary btn-sm"
+                disabled={customInstalling}
+                onClick={e => {
+                  e.stopPropagation()
+                  installCustomSkill()
+                }}
+              >
+                {customInstalling ? <span class="spinner" style={{ width: '11px', height: '11px' }} /> : 'Install Skill'}
+              </button>
+            ) : null
+
             return (
               <div key={group.key} class="card settings-group">
                 <div class="card-header" style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleGroup(group.key)}>
@@ -504,7 +517,8 @@ export function Skills() {
                     {group.sub && <div class="card-subtitle" style={{ fontSize: '12px', color: 'var(--text-3)', marginTop: '2px' }}>{group.sub}</div>}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <svg
+                    {customInstallButton}
+                    <svg
                       width="12" height="12" viewBox="0 0 12 12" fill="none"
                       stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
                       style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', color: 'var(--text-3)', flexShrink: 0 }}
@@ -521,9 +535,6 @@ export function Skills() {
                         Install a folder that contains a <code>skill.json</code> manifest and executable <code>run</code> entrypoint.
                         Generated extensions also appear here once installed.
                       </div>
-                      <button class="btn btn-primary btn-sm" disabled={customInstalling} onClick={installCustomSkill}>
-                        {customInstalling ? <span class="spinner" style={{ width: '11px', height: '11px' }} /> : 'Install from Folder'}
-                      </button>
                     </div>
                   ) : (
                     groupSkills.map((skill, i) => renderSkillRow(skill, i, groupSkills.length))

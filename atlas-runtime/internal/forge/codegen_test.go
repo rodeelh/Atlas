@@ -223,6 +223,110 @@ func TestGenerateAndInstallCustomSkill_ParametersFromContract(t *testing.T) {
 	}
 }
 
+func TestBuildLocalParamSchemaIgnoresLanguageBraces(t *testing.T) {
+	schema := buildLocalParamSchema(&LocalPlan{
+		Interpreter: "python3",
+		Script:      `import json; print(json.dumps({'osVersion': '14.0'}))`,
+	}, nil, nil)
+	if schema != nil {
+		t.Fatalf("expected no params from Python dict braces, got %#v", schema)
+	}
+}
+
+func TestGenerateAndInstallCustomSkill_SmokeTestsLocalSkillBeforeInstall(t *testing.T) {
+	supportDir := t.TempDir()
+	spec := ForgeSkillSpec{
+		ID:          "local-ok",
+		Name:        "Local OK",
+		Description: "Returns JSON from a local script.",
+		Category:    "utility",
+		Tags:        []string{"json"},
+		Actions: []ForgeActionSpec{{
+			ID:              "get-status",
+			Name:            "Get Status",
+			Description:     "Returns status JSON.",
+			PermissionLevel: "read",
+			ActionClass:     "read",
+			TestCases: []ForgeActionTestCase{{
+				Args:               map[string]any{},
+				ExpectedJSONFields: []string{"status"},
+			}},
+		}},
+	}
+	specJSON, _ := json.Marshal(spec)
+	plansJSON, _ := json.Marshal([]ForgeActionPlan{{
+		ActionID: "get-status",
+		Type:     "local",
+		LocalPlan: &LocalPlan{
+			Interpreter: "python3",
+			Script:      `import json; print(json.dumps({"status": "ok"}))`,
+		},
+	}})
+	proposal := ForgeProposal{
+		SkillID:     "local-ok",
+		Name:        "Local OK",
+		Description: "Returns JSON from a local script.",
+		SpecJSON:    string(specJSON),
+		PlansJSON:   string(plansJSON),
+	}
+
+	if err := GenerateAndInstallCustomSkill(supportDir, proposal); err != nil {
+		t.Fatalf("GenerateAndInstallCustomSkill: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(supportDir, "skills", "local-ok", "run")); err != nil {
+		t.Fatalf("expected verified skill to be installed: %v", err)
+	}
+}
+
+func TestGenerateAndInstallCustomSkill_RejectsBrokenLocalSkill(t *testing.T) {
+	supportDir := t.TempDir()
+	spec := ForgeSkillSpec{
+		ID:          "broken-local",
+		Name:        "Broken Local",
+		Description: "Broken generated local script.",
+		Category:    "utility",
+		Actions: []ForgeActionSpec{{
+			ID:              "explode",
+			Name:            "Explode",
+			Description:     "Raises an exception.",
+			PermissionLevel: "read",
+			TestCases: []ForgeActionTestCase{{
+				Args:          map[string]any{},
+				ExpectSuccess: boolPtr(true),
+			}},
+		}},
+	}
+	specJSON, _ := json.Marshal(spec)
+	plansJSON, _ := json.Marshal([]ForgeActionPlan{{
+		ActionID: "explode",
+		Type:     "local",
+		LocalPlan: &LocalPlan{
+			Interpreter: "python3",
+			Script:      `raise ValueError("boom")`,
+		},
+	}})
+	proposal := ForgeProposal{
+		SkillID:     "broken-local",
+		Name:        "Broken Local",
+		Description: "Broken generated local script.",
+		SpecJSON:    string(specJSON),
+		PlansJSON:   string(plansJSON),
+	}
+
+	err := GenerateAndInstallCustomSkill(supportDir, proposal)
+	if err == nil {
+		t.Fatal("expected broken local skill to be rejected")
+	}
+	if !strings.Contains(err.Error(), "smoke test explode") || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("expected smoke-test failure with script error, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(supportDir, "skills", "broken-local")); !os.IsNotExist(statErr) {
+		t.Fatalf("broken skill should not be promoted, stat err=%v", statErr)
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }
+
 // TestGenerateAndInstallCustomSkill_RunScriptContainsPlans verifies the
 // generated Python script embeds the HTTP plans JSON literal.
 func TestGenerateAndInstallCustomSkill_RunScriptContainsPlans(t *testing.T) {
