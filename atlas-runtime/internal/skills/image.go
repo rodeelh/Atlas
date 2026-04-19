@@ -134,7 +134,7 @@ func imageGenerate(_ context.Context, args json.RawMessage) (ToolResult, error) 
 			return ToolResult{}, err
 		}
 		if ImageUsageHook != nil {
-			ImageUsageHook("gemini", model, "auto", p.N)
+			ImageUsageHook("gemini", model, "auto", len(absPaths))
 		}
 	default:
 		return ToolResult{}, fmt.Errorf(

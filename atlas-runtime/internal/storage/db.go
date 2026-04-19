@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	_ "modernc.org/sqlite" // register "sqlite" driver
 )
 
@@ -2754,17 +2755,23 @@ func (db *DB) SaveMemory(r MemoryRow) error {
 
 // UpdateMemory updates the mutable fields of an existing memory row.
 func (db *DB) UpdateMemory(r MemoryRow) error {
-	// Null out embedding_at so any path that changes title/content triggers a
-	// fresh async embed on the next recall cycle. The asyncEmbed goroutines called
-	// by extractors will repopulate it; direct UI edits that don't call asyncEmbed
-	// will also correctly clear the stale vector marker.
+	// Clear the stored vector when title/content change so hybrid recall never
+	// ranks an edited memory by stale semantic content. Metadata-only updates keep
+	// their vector.
 	_, err := db.conn.Exec(
 		`UPDATE memories SET title=?, content=?, confidence=?, importance=?, updated_at=?,
-		 is_user_confirmed=?, is_sensitive=?, tags_json=?, valid_until=?, embedding_at=NULL
+		 is_user_confirmed=?, is_sensitive=?, tags_json=?, valid_until=?,
+		 embedding=CASE WHEN title<>? OR content<>? THEN NULL ELSE embedding END,
+		 embedding_model=CASE WHEN title<>? OR content<>? THEN NULL ELSE embedding_model END,
+		 embedding_at=CASE WHEN title<>? OR content<>? THEN NULL ELSE embedding_at END
 		 WHERE memory_id=?`,
 		r.Title, r.Content, r.Confidence, r.Importance, r.UpdatedAt,
 		boolToInt(r.IsUserConfirmed), boolToInt(r.IsSensitive),
-		r.TagsJSON, r.ValidUntil, r.ID,
+		r.TagsJSON, r.ValidUntil,
+		r.Title, r.Content,
+		r.Title, r.Content,
+		r.Title, r.Content,
+		r.ID,
 	)
 	return err
 }
@@ -3242,7 +3249,7 @@ type EdgeRow struct {
 	EdgeID         string
 	SourceEntity   string
 	TargetEntity   string
-	Relation       string  // e.g. "works_at", "uses", "located_in"
+	Relation       string // e.g. "works_at", "uses", "located_in"
 	ValidFrom      string
 	ValidUntil     *string // nil = currently true
 	Confidence     float64
@@ -3317,9 +3324,22 @@ func (db *DB) SupersedeEdge(sourceEntity, targetEntity, relation, now string) er
 // to queryVec. Falls back to returning the most-recently-seen entities when
 // no embeddings are stored yet.
 func (db *DB) FindNearestEntities(queryVec []float32, limit int) ([]EntityRow, error) {
-	rows, err := db.conn.Query(
-		`SELECT entity_id, name, entity_type, first_seen, last_seen, embedding, metadata_json
-		 FROM memory_entities ORDER BY last_seen DESC LIMIT ?`, limit*4)
+	if limit <= 0 {
+		limit = 5
+	}
+	query := `SELECT entity_id, name, entity_type, first_seen, last_seen, embedding, metadata_json
+		 FROM memory_entities ORDER BY last_seen DESC LIMIT ?`
+	args := []any{limit * 4}
+	if len(queryVec) > 0 {
+		// Vector ranking needs to consider all embedded entities; otherwise an older
+		// but exact semantic match can never seed graph traversal.
+		// Cap at 2000 to bound memory usage — cosine ranking over all rows is still
+		// accurate within this window since the entities are pre-filtered by recency.
+		query = `SELECT entity_id, name, entity_type, first_seen, last_seen, embedding, metadata_json
+		 FROM memory_entities ORDER BY last_seen DESC LIMIT 2000`
+		args = nil
+	}
+	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -3473,7 +3493,7 @@ func (db *DB) DeduplicateEntities() int {
 	for _, d := range dups {
 		// Fetch all duplicates oldest-first, including whether they have an embedding.
 		type dupRow struct {
-			id          string
+			id           string
 			hasEmbedding bool
 		}
 		var candidates []dupRow
@@ -4013,15 +4033,15 @@ type ImageUsageSummary struct {
 
 // ImageModelBreakdown is per-model image stats.
 type ImageModelBreakdown struct {
-	Provider    string
-	Model       string
-	ImageCount  int64
+	Provider     string
+	Model        string
+	ImageCount   int64
 	TotalCostUSD float64
 }
 
 // RecordImageUsage persists one image generation event.
 func (db *DB) RecordImageUsage(provider, model, quality string, count int, costUSD float64) error {
-	id := fmt.Sprintf("img-%d", time.Now().UnixNano())
+	id := "img-" + uuid.New().String()
 	recordedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := db.conn.Exec(
 		`INSERT INTO image_usage (id, provider, model, quality, image_count, cost_usd, recorded_at)
