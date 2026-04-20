@@ -23,7 +23,7 @@ import (
 	"atlas-runtime-go/internal/skills"
 )
 
-// RegisterSkills registers the 12 dashboard skills onto the shared registry.
+// RegisterSkills registers the dashboard skills onto the shared registry.
 func (m *Module) RegisterSkills(reg *skills.Registry) {
 	if reg == nil {
 		return
@@ -121,12 +121,12 @@ func (m *Module) RegisterSkills(reg *skills.Registry) {
 				"skill: {\"action\":\"weather.current\",\"args\":{\"location\":\"Orlando\"}} (action must be a read-only skill; use canonical dot form e.g. weather.current, not weather__current); " +
 				"runtime: {\"endpoint\":\"/status\"} (must be on the runtime allowlist); " +
 				"sql: {\"sql\":\"SELECT ...\"}; " +
-					"chat_analytics: {\"query\":\"conversations_per_day\"} (Atlas conversation stats only — valid queries: conversations_per_day, messages_per_day, top_conversations, recent_conversations, message_counts_by_role, token_usage_per_day, token_usage_by_provider, memory_counts_by_category, most_important_memories, recent_memories); " +
-					"gremlin: {\"gremlinID\":\"<id>\"}; " +
-					"live_compute standalone (static synthesis only): {\"prompt\":\"Summarise this fixed glossary into a short markdown note\",\"outputSchema\":{\"text\":\"string\"}}; " +
-					"live_compute with inputs (transform other sources): {\"prompt\":\"Summarise the fetched feed into a short briefing\",\"inputs\":[\"source1\"],\"outputSchema\":{}}. " +
-					"IMPORTANT: Do not use zero-input live_compute for freshness-sensitive prompts like latest/current/today/news/weather. First add a real source (runtime/skill/sql/etc.), then summarise it via live_compute inputs. " +
-					"On success the result includes resolvedSample (the live data) and shape (suggestedPreset + paths with types + sample values) — use that to pick preset and options.path for dashboard.add_widget instead of guessing.",
+				"chat_analytics: {\"query\":\"conversations_per_day\"} (Atlas conversation stats only — valid queries: conversations_per_day, messages_per_day, top_conversations, recent_conversations, message_counts_by_role, token_usage_per_day, token_usage_by_provider, memory_counts_by_category, most_important_memories, recent_memories); " +
+				"gremlin: {\"gremlinID\":\"<id>\"}; " +
+				"live_compute standalone (static synthesis only): {\"prompt\":\"Summarise this fixed glossary into a short markdown note\",\"outputSchema\":{\"text\":\"string\"}}; " +
+				"live_compute with inputs (transform other sources): {\"prompt\":\"Summarise the fetched feed into a short briefing\",\"inputs\":[\"source1\"],\"outputSchema\":{}}. " +
+				"IMPORTANT: Do not use zero-input live_compute for freshness-sensitive prompts like latest/current/today/news/weather. First add a real source (runtime/skill/sql/etc.), then summarise it via live_compute inputs. " +
+				"On success the result includes resolvedSample (the live data) and shape (suggestedPreset + paths with types + sample values) — use that to pick preset and options.path for dashboard.add_widget instead of guessing.",
 			Properties: map[string]skills.ToolParam{
 				"id":              {Description: "Draft dashboard ID.", Type: "string"},
 				"name":            {Description: "Source name (unique within the dashboard).", Type: "string"},
@@ -169,22 +169,36 @@ func (m *Module) RegisterSkills(reg *skills.Registry) {
 				"  • Wide: 1×full — use only for tables needing many columns or wide charts. " +
 				"PRESET/SIZE pairing: " +
 				"  metric → quarter or third (single KPI number; avoid half/full — too much empty space); " +
-				"  line_chart / bar_chart → half or full (charts need width to be readable); " +
+				"  line_chart / area_chart / bar_chart → half or full (charts need width to be readable); " +
+				"  pie_chart / donut_chart → third or half (best for composition with a handful of segments); " +
+				"  scatter_chart / stacked_chart → half or full (comparison charts need width to stay readable); " +
 				"  list → half or third (scrollable, compact); " +
 				"  table → half or full (multiple columns need width); " +
-				"  markdown → half or full (prose/summary content). " +
+				"  markdown → half or full (prose/summary content); " +
+				"  timeline → half or full (event streams need vertical room); " +
+				"  heatmap → half or full (dense date/value grids need consistent width); " +
+				"  progress / gauge → quarter or third (single bounded numeric signal); " +
+				"  status_grid / kpi_group → half or full (compact multi-signal summaries). " +
 				"OPTIONS per preset: " +
 				"  metric: {path:\"fieldName\", label:\"Display label\", format:\"integer|currency|percent|compact\"}; " +
 				"  table: {path:\"arrayField\", columns:[\"col1\",\"col2\"]}; " +
-					"  line_chart/bar_chart: {seriesPath:\"arrayField\", x:\"dateField\", y:\"valueField\"} (path is accepted as an alias for seriesPath); " +
+				"  line_chart/area_chart/bar_chart/scatter_chart: {seriesPath:\"arrayField\", x:\"dateField\", y:\"valueField\"} (path is accepted as an alias for seriesPath); " +
+				"  stacked_chart: {seriesPath:\"arrayField\", x:\"dateField\", seriesKeys:[\"open\",\"closed\"]}; " +
+				"  pie_chart/donut_chart: {seriesPath:\"arrayField\", labelKey:\"label\", valueKey:\"value\"}; " +
 				"  list: {itemsPath:\"arrayField\", labelKey:\"title\", subKey:\"subtitle\"}; " +
-				"  markdown: {path:\"textField\"} or omit path to render full source as JSON. " +
+				"  markdown: {path:\"textField\"} or omit path to render full source as JSON; " +
+				"  timeline: {itemsPath:\"arrayField\", timeKey:\"date\", labelKey:\"title\", bodyKey:\"summary\", statusKey:\"state\"}; " +
+				"  heatmap: {seriesPath:\"arrayField\", dateKey:\"date\", valueKey:\"value\"}; " +
+				"  progress/gauge: {path:\"fieldName\", max:100, label:\"Display label\", format:\"integer|currency|percent|compact\"}; " +
+				"  status_grid: {itemsPath:\"arrayField\", labelKey:\"title\", statusKey:\"state\"}; " +
+				"  kpi_group: {itemsPath:\"arrayField\", labelKey:\"label\", valueKey:\"value\", deltaKey:\"delta\"}. " +
+				"SHARED STYLE OPTIONS on most presets: {unitLabel:\"ms\", emptyText:\"No data\", errorText:\"Source offline\", palette:\"ocean\", valueMap:{ok:\"Healthy\"}, thresholds:[{value:80,tone:\"warn\"},{value:95,tone:\"err\"}]}. " +
 				"BINDINGS: JSON array [{source:\"sourceName\"}] — one binding per widget, referencing a source added via dashboard.add_data_source.",
 			Properties: map[string]skills.ToolParam{
 				"id":       {Description: "Draft dashboard ID.", Type: "string"},
 				"title":    {Description: "Widget title.", Type: "string"},
 				"size":     {Description: "quarter | third | half | tall | full", Type: "string"},
-				"preset":   {Description: "metric | table | line_chart | bar_chart | list | markdown", Type: "string"},
+				"preset":   {Description: "metric | table | line_chart | area_chart | bar_chart | pie_chart | donut_chart | scatter_chart | stacked_chart | list | markdown | timeline | heatmap | progress | gauge | status_grid | kpi_group", Type: "string"},
 				"group":    {Description: "Optional group name to co-locate related widgets in the same visual section.", Type: "string"},
 				"bindings": {Description: "JSON array [{source:\"sourceName\"}].", Type: "string"},
 				"options":  {Description: "JSON object of preset-specific display options (path, columns, label, format, x, y, etc.).", Type: "string"},
@@ -198,6 +212,27 @@ func (m *Module) RegisterSkills(reg *skills.Registry) {
 
 	reg.RegisterExternal(skills.SkillEntry{
 		Def: skills.ToolDef{
+			Name: "dashboard.add_code_widget",
+			Description: "Add an agent-authored code widget to a draft dashboard. " +
+				"TSX is compiled immediately so syntax errors are returned before commit. " +
+				"Use the same bindings and size guidance as dashboard.add_widget, but provide tsx instead of preset/options.",
+			Properties: map[string]skills.ToolParam{
+				"id":       {Description: "Draft dashboard ID.", Type: "string"},
+				"title":    {Description: "Widget title.", Type: "string"},
+				"size":     {Description: "quarter | third | half | tall | full", Type: "string"},
+				"group":    {Description: "Optional group name.", Type: "string"},
+				"bindings": {Description: "JSON array [{source:\"sourceName\"}].", Type: "string"},
+				"tsx":      {Description: "Widget TSX source. Only @atlas/ui, preact, and preact/hooks imports are allowed.", Type: "string"},
+			},
+			Required: []string{"id", "size", "tsx"},
+		},
+		PermLevel:   "execute",
+		ActionClass: skills.ActionClassLocalWrite,
+		FnResult:    m.skillAddCodeWidget,
+	})
+
+	reg.RegisterExternal(skills.SkillEntry{
+		Def: skills.ToolDef{
 			Name:        "dashboard.update_widget",
 			Description: "Replace a widget in a draft by widgetId. Same fields as dashboard.add_widget.",
 			Properties: map[string]skills.ToolParam{
@@ -205,7 +240,7 @@ func (m *Module) RegisterSkills(reg *skills.Registry) {
 				"widgetId": {Description: "Widget ID to replace.", Type: "string"},
 				"title":    {Description: "Widget title.", Type: "string"},
 				"size":     {Description: "quarter | third | half | tall | full", Type: "string"},
-				"preset":   {Description: "metric | table | line_chart | bar_chart | list | markdown", Type: "string"},
+				"preset":   {Description: "metric | table | line_chart | area_chart | bar_chart | pie_chart | donut_chart | scatter_chart | stacked_chart | list | markdown | timeline | heatmap | progress | gauge | status_grid | kpi_group", Type: "string"},
 				"group":    {Description: "Optional group name.", Type: "string"},
 				"bindings": {Description: "JSON array of bindings.", Type: "string"},
 				"options":  {Description: "JSON options object.", Type: "string"},
@@ -250,7 +285,7 @@ func (m *Module) RegisterSkills(reg *skills.Registry) {
 	reg.RegisterExternal(skills.SkillEntry{
 		Def: skills.ToolDef{
 			Name:        "dashboard.commit",
-				Description: "Pack the layout and flip a draft dashboard to live. Fails if widgets have invalid code/bindings, if sources fail validation, or if sampled source shape does not match widget schema.",
+			Description: "Pack the layout and flip a draft dashboard to live. Fails if widgets have invalid code/bindings, if sources fail validation, or if sampled source shape does not match widget schema.",
 			Properties: map[string]skills.ToolParam{
 				"id": {Description: "Draft dashboard ID.", Type: "string"},
 			},
@@ -293,7 +328,9 @@ func (m *Module) skillList(ctx context.Context, raw json.RawMessage) (skills.Too
 }
 
 func (m *Module) skillGet(ctx context.Context, raw json.RawMessage) (skills.ToolResult, error) {
-	var args struct{ ID string `json:"id"` }
+	var args struct {
+		ID string `json:"id"`
+	}
 	_ = json.Unmarshal(raw, &args)
 	if args.ID == "" {
 		return skills.ErrResult("dashboard.get", "arg validation", false, errors.New("id is required")), nil
@@ -502,6 +539,27 @@ func (m *Module) skillAddWidget(ctx context.Context, raw json.RawMessage) (skill
 	return skills.OKResult(fmt.Sprintf("added widget %s", w.ID), map[string]any{"widget": w, "dashboard": saved}), nil
 }
 
+func (m *Module) skillAddCodeWidget(ctx context.Context, raw json.RawMessage) (skills.ToolResult, error) {
+	w, dID, err := m.parseCodeWidgetArgs(raw)
+	if err != nil {
+		return skills.ErrResult("dashboard.add_code_widget", "arg parse", false, err), nil
+	}
+	d, err := m.loadDraft(dID)
+	if err != nil {
+		return skills.ErrResult("dashboard.add_code_widget", "loadDraft", false, err), nil
+	}
+	if err := validateBindings(d, w.Bindings); err != nil {
+		return skills.ErrResult("dashboard.add_code_widget", "bindings", false, err), nil
+	}
+	w.ID = NewWidgetID()
+	d.Widgets = append(d.Widgets, w)
+	saved, err := m.store.Save(d)
+	if err != nil {
+		return skills.ErrResult("dashboard.add_code_widget", "store.Save", false, err), nil
+	}
+	return skills.OKResult(fmt.Sprintf("added code widget %s", w.ID), map[string]any{"widget": w, "dashboard": saved}), nil
+}
+
 func (m *Module) skillUpdateWidget(ctx context.Context, raw json.RawMessage) (skills.ToolResult, error) {
 	w, dID, err := m.parseWidgetArgs(raw, true)
 	if err != nil {
@@ -590,37 +648,9 @@ func (m *Module) skillPreview(ctx context.Context, raw json.RawMessage) (skills.
 func (m *Module) skillCommit(ctx context.Context, raw json.RawMessage) (skills.ToolResult, error) {
 	var args struct{ ID string }
 	_ = json.Unmarshal(raw, &args)
-	d, err := m.loadDraft(args.ID)
+	saved, err := m.commitDraftDashboard(ctx, args.ID)
 	if err != nil {
-		return skills.ErrResult("dashboard.commit", "loadDraft", false, err), nil
-	}
-	// Compile every widget's code (presets validate; code mode fails).
-	for i := range d.Widgets {
-		if err := compileWidget(&d.Widgets[i].Code); err != nil {
-			return skills.ErrResult("dashboard.commit", fmt.Sprintf("widget %s compile", d.Widgets[i].ID), false, err), nil
-		}
-	}
-	// Verify every binding points at a known source.
-		for _, w := range d.Widgets {
-			if err := validateBindings(d, w.Bindings); err != nil {
-				return skills.ErrResult("dashboard.commit", fmt.Sprintf("widget %s bindings", w.ID), false, err), nil
-			}
-		}
-		if err := m.validateCommitReadiness(ctx, d); err != nil {
-			return skills.ErrResult("dashboard.commit", "validation", false, err), nil
-		}
-		columns := d.Layout.Columns
-	if columns <= 0 {
-		columns = 12
-		d.Layout.Columns = columns
-	}
-	d.Widgets = packGrid(d.Widgets, columns)
-	d.Status = StatusLive
-	now := nowUTC()
-	d.CommittedAt = &now
-	saved, err := m.store.Save(d)
-	if err != nil {
-		return skills.ErrResult("dashboard.commit", "store.Save", false, err), nil
+		return skills.ErrResult("dashboard.commit", "commit", false, err), nil
 	}
 	return skills.OKResult(fmt.Sprintf("committed dashboard %s", saved.ID), map[string]any{"dashboard": saved}), nil
 }
@@ -692,6 +722,49 @@ func (m *Module) parseWidgetArgs(raw json.RawMessage, requireID bool) (Widget, s
 			return Widget{}, "", fmt.Errorf("options: %w", err)
 		}
 		w.Code.Options = opts
+	}
+	if args.Bindings != nil {
+		bindings, err := coerceBindings(args.Bindings)
+		if err != nil {
+			return Widget{}, "", fmt.Errorf("bindings: %w", err)
+		}
+		w.Bindings = bindings
+	}
+	return w, args.ID, nil
+}
+
+func (m *Module) parseCodeWidgetArgs(raw json.RawMessage) (Widget, string, error) {
+	var args struct {
+		ID       string `json:"id"`
+		Title    string `json:"title"`
+		Size     string `json:"size"`
+		Group    string `json:"group"`
+		Bindings any    `json:"bindings"`
+		TSX      string `json:"tsx"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return Widget{}, "", fmt.Errorf("invalid args: %w", err)
+	}
+	if args.ID == "" {
+		return Widget{}, "", errors.New("id is required")
+	}
+	if args.Size == "" {
+		return Widget{}, "", errors.New("size is required")
+	}
+	if strings.TrimSpace(args.TSX) == "" {
+		return Widget{}, "", errors.New("tsx is required")
+	}
+	w := Widget{
+		Title: args.Title,
+		Size:  args.Size,
+		Group: args.Group,
+		Code: WidgetCode{
+			Mode: ModeCode,
+			TSX:  args.TSX,
+		},
+	}
+	if err := compileWidget(&w.Code); err != nil {
+		return Widget{}, "", err
 	}
 	if args.Bindings != nil {
 		bindings, err := coerceBindings(args.Bindings)

@@ -41,6 +41,36 @@ func (f *fiveWidgetFetcher) Get(_ context.Context, path string, _ map[string]str
 		return []byte(`{
 			"isRunning": true,
 			"activeConversationCount": 3,
+			"latencyMs": 182,
+			"metrics": [
+				{"label":"Open tasks","value":18,"delta":2.4,"tone":"ok"},
+				{"label":"Alerts","value":3,"delta":-1.2,"tone":"warn"},
+				{"label":"Blocked","value":1,"delta":0,"tone":"neutral"}
+			],
+			"series": [
+				{"date":"Mon","value":1200},
+				{"date":"Tue","value":1800},
+				{"date":"Wed","value":2400}
+			],
+			"stacked": [
+				{"date":"Mon","open":7,"closed":4},
+				{"date":"Tue","open":5,"closed":6},
+				{"date":"Wed","open":8,"closed":3}
+			],
+			"segments": [
+				{"label":"Chat","value":4200},
+				{"label":"Workflows","value":900},
+				{"label":"Research","value":300}
+			],
+			"events": [
+				{"date":"2026-04-10T09:00:00Z","title":"Atlas started","summary":"Runtime boot completed","state":"ok"},
+				{"date":"2026-04-10T11:30:00Z","title":"Refresh lag","summary":"One source retried","state":"warn"}
+			],
+			"daily": [
+				{"date":"2026-04-08","value":2},
+				{"date":"2026-04-09","value":4},
+				{"date":"2026-04-10","value":6}
+			],
 			"items": [
 				{"title":"agent-alpha","state":"idle"},
 				{"title":"agent-beta","state":"thinking"},
@@ -96,9 +126,9 @@ func TestFiveWidgetPlanAndExecute(t *testing.T) {
 
 	// 3. add_data_source × 3
 	sources := []map[string]any{
-		{"id": dID, "name": "status",   "kind": SourceKindRuntime, "config": map[string]any{"endpoint": "/status"}},
+		{"id": dID, "name": "status", "kind": SourceKindRuntime, "config": map[string]any{"endpoint": "/status"}},
 		{"id": dID, "name": "memories", "kind": SourceKindRuntime, "config": map[string]any{"endpoint": "/memories"}},
-		{"id": dID, "name": "usage",    "kind": SourceKindRuntime, "config": map[string]any{"endpoint": "/usage/summary"}},
+		{"id": dID, "name": "usage", "kind": SourceKindRuntime, "config": map[string]any{"endpoint": "/usage/summary"}},
 	}
 	for _, src := range sources {
 		r, err := m.skillAddDataSource(ctx, mustJSON(src))
@@ -110,42 +140,42 @@ func TestFiveWidgetPlanAndExecute(t *testing.T) {
 	// 4. add_widget × 5 — one of every preset kind the viewer ships.
 	widgetSpecs := []map[string]any{
 		{
-			"id":    dID,
-			"size":  SizeQuarter,
-			"preset": PresetMetric,
-			"title": "Active conversations",
+			"id":       dID,
+			"size":     SizeQuarter,
+			"preset":   PresetMetric,
+			"title":    "Active conversations",
 			"bindings": []any{map[string]any{"source": "status"}},
 			"options":  map[string]any{"path": "activeConversationCount", "format": "integer"},
 		},
 		{
-			"id":    dID,
-			"size":  SizeHalf,
-			"preset": PresetLineChart,
-			"title": "Memories recorded",
+			"id":       dID,
+			"size":     SizeHalf,
+			"preset":   PresetLineChart,
+			"title":    "Memories recorded",
 			"bindings": []any{map[string]any{"source": "memories"}},
 			"options":  map[string]any{"seriesPath": "rows", "x": "date", "y": "value"},
 		},
 		{
-			"id":    dID,
-			"size":  SizeHalf,
-			"preset": PresetBarChart,
-			"title": "Token usage per day",
+			"id":       dID,
+			"size":     SizeHalf,
+			"preset":   PresetBarChart,
+			"title":    "Token usage per day",
 			"bindings": []any{map[string]any{"source": "usage"}},
 			"options":  map[string]any{"seriesPath": "series", "x": "date", "y": "value", "color": "#6366f1"},
 		},
 		{
-			"id":    dID,
-			"size":  SizeHalf,
-			"preset": PresetTable,
-			"title": "Memory rows",
+			"id":       dID,
+			"size":     SizeHalf,
+			"preset":   PresetTable,
+			"title":    "Memory rows",
 			"bindings": []any{map[string]any{"source": "memories"}},
 			"options":  map[string]any{"path": "rows", "columns": []any{"date", "title", "value"}, "limit": 10},
 		},
 		{
-			"id":    dID,
-			"size":  SizeThird,
-			"preset": PresetList,
-			"title": "Agents",
+			"id":       dID,
+			"size":     SizeThird,
+			"preset":   PresetList,
+			"title":    "Agents",
 			"bindings": []any{map[string]any{"source": "status"}},
 			"options":  map[string]any{"itemsPath": "items", "labelKey": "title", "subKey": "state"},
 		},
@@ -249,11 +279,8 @@ func TestFiveWidgetPlanAndExecute(t *testing.T) {
 	}
 }
 
-// TestCommitCompilesCodeWidget proves the commit step runs esbuild over any
-// code-mode widget, populating Compiled + Hash. This is the path the v2
-// iframe runtime depends on. Skill args don't expose TSX yet, so we build
-// the Widget directly and save it before committing — the planning layer
-// can grow a code-mode hook later; the compile path is already wired.
+// TestCommitCompilesCodeWidget proves the commit step preserves compiled code
+// widgets added through the runtime authoring path.
 func TestCommitCompilesCodeWidget(t *testing.T) {
 	m := newTestModule(t)
 	m.SetRuntimeFetcher(&fiveWidgetFetcher{})
@@ -272,28 +299,19 @@ func TestCommitCompilesCodeWidget(t *testing.T) {
 		t.Fatalf("add_data_source: %s", r.Summary)
 	}
 
-	// Stitch a code-mode widget into the draft directly.
 	const tsx = `import { Card, Metric } from '@atlas/ui'
 export default function Widget({ data }) {
   const value = (data && data.activeConversationCount) || 0
   return <Card title="Active"><Metric value={value} label="chats" /></Card>
 }`
-	d, err := m.store.Get(dID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.Widgets = append(d.Widgets, Widget{
-		ID:       NewWidgetID(),
-		Title:    "Active chats",
-		Size:     SizeQuarter,
-		Bindings: []DataSourceBinding{{Source: "status"}},
-		Code: WidgetCode{
-			Mode: ModeCode,
-			TSX:  tsx,
-		},
-	})
-	if _, err := m.store.Save(d); err != nil {
-		t.Fatal(err)
+	if r, _ := m.skillAddCodeWidget(ctx, mustJSON(map[string]any{
+		"id":       dID,
+		"title":    "Active chats",
+		"size":     SizeQuarter,
+		"bindings": []any{map[string]any{"source": "status"}},
+		"tsx":      tsx,
+	})); !r.Success {
+		t.Fatalf("add_code_widget: %s", r.Summary)
 	}
 
 	// Commit should run compile over the code widget.

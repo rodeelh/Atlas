@@ -3,6 +3,7 @@ package dashboards
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -68,26 +69,76 @@ func validateWidgetSample(w Widget, samples map[string]any) error {
 	if _, soft := sample.(softFailSentinel); soft {
 		return nil
 	}
+	if projected, ok := applyBindingProjection(sample, w.Bindings[0]); ok {
+		sample = projected
+	} else if w.Bindings[0].Path != "" {
+		return fmt.Errorf("binding path %q was not found in source %q", w.Bindings[0].Path, w.Bindings[0].Source)
+	}
 	opts := w.Code.Options
 	switch w.Code.Preset {
-	case PresetMetric:
+	case PresetMetric, PresetProgress, PresetGauge:
 		if path := stringOption(opts, "path"); path != "" {
 			if _, ok := valueAtPath(sample, path); !ok {
-				return fmt.Errorf("metric path %q was not found in the sampled source output", path)
+				return fmt.Errorf("%s path %q was not found in the sampled source output", w.Code.Preset, path)
+			}
+		}
+		if maxPath := stringOption(opts, "maxPath"); maxPath != "" {
+			if _, ok := valueAtPath(sample, maxPath); !ok {
+				return fmt.Errorf("%s maxPath %q was not found in the sampled source output", w.Code.Preset, maxPath)
 			}
 		}
 	case PresetTable:
 		return validateTableSample(sample, opts)
-	case PresetLineChart, PresetBarChart:
+	case PresetLineChart, PresetAreaChart, PresetBarChart, PresetScatter:
 		return validateChartSample(w.Code.Preset, sample, opts)
+	case PresetPieChart, PresetDonutChart:
+		return validatePieChartSample(sample, opts)
+	case PresetStacked:
+		return validateStackedChartSample(sample, opts)
 	case PresetList:
 		return validateListSample(sample, opts)
+	case PresetStatusGrid:
+		return validateStatusGridSample(sample, opts)
+	case PresetKPIGroup:
+		return validateKPIGroupSample(sample, opts)
+	case PresetTimeline:
+		return validateTimelineSample(sample, opts)
+	case PresetHeatmap:
+		return validateHeatmapSample(sample, opts)
 	case PresetMarkdown:
 		if path := stringOption(opts, "path"); path != "" {
 			if _, ok := valueAtPath(sample, path); !ok {
 				return fmt.Errorf("markdown path %q was not found in the sampled source output", path)
 			}
 		}
+	}
+	return nil
+}
+
+func validateStatusGridSample(sample any, opts map[string]any) error {
+	itemsPath := stringOption(opts, "itemsPath")
+	target, ok := resolveTarget(sample, itemsPath)
+	if !ok {
+		return fmt.Errorf("status_grid itemsPath %q was not found in the sampled source output", itemsPath)
+	}
+	items, ok := target.([]any)
+	if !ok {
+		return fmt.Errorf("status_grid expects an array at %q, got %T", itemsPath, target)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	obj, ok := items[0].(map[string]any)
+	if !ok {
+		return fmt.Errorf("status_grid expects array items to be objects, got %T", items[0])
+	}
+	labelKey := stringOptionWithDefault(opts, "labelKey", "title")
+	statusKey := stringOptionWithDefault(opts, "statusKey", "status")
+	if _, ok := obj[labelKey]; !ok {
+		return fmt.Errorf("status_grid labelKey %q was not present in the sampled item", labelKey)
+	}
+	if _, ok := obj[statusKey]; !ok {
+		return fmt.Errorf("status_grid statusKey %q was not present in the sampled item", statusKey)
 	}
 	return nil
 }
@@ -155,6 +206,176 @@ func validateChartSample(preset string, sample any, opts map[string]any) error {
 	return nil
 }
 
+func validatePieChartSample(sample any, opts map[string]any) error {
+	seriesPath := stringOption(opts, "seriesPath")
+	if seriesPath == "" {
+		seriesPath = stringOption(opts, "path")
+	}
+	target, ok := resolveTarget(sample, seriesPath)
+	if !ok {
+		return fmt.Errorf("pie_chart path %q was not found in the sampled source output", seriesPath)
+	}
+	rows, ok := target.([]any)
+	if !ok {
+		return fmt.Errorf("pie_chart expects an array of objects, got %T", target)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	obj, ok := rows[0].(map[string]any)
+	if !ok {
+		return fmt.Errorf("pie_chart expects array items to be objects, got %T", rows[0])
+	}
+	labelKey := stringOptionWithDefault(opts, "labelKey", "label")
+	valueKey := stringOptionWithDefault(opts, "valueKey", "value")
+	if _, ok := obj[labelKey]; !ok {
+		return fmt.Errorf("pie_chart labelKey %q was not present in the sampled row", labelKey)
+	}
+	val, ok := obj[valueKey]
+	if !ok {
+		return fmt.Errorf("pie_chart valueKey %q was not present in the sampled row", valueKey)
+	}
+	if !isNumericValue(val) {
+		return fmt.Errorf("pie_chart valueKey %q must resolve to a number, got %T", valueKey, val)
+	}
+	return nil
+}
+
+func validateStackedChartSample(sample any, opts map[string]any) error {
+	seriesPath := stringOption(opts, "seriesPath")
+	if seriesPath == "" {
+		seriesPath = stringOption(opts, "path")
+	}
+	target, ok := resolveTarget(sample, seriesPath)
+	if !ok {
+		return fmt.Errorf("stacked_chart path %q was not found in the sampled source output", seriesPath)
+	}
+	rows, ok := target.([]any)
+	if !ok {
+		return fmt.Errorf("stacked_chart expects an array of objects, got %T", target)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	obj, ok := rows[0].(map[string]any)
+	if !ok {
+		return fmt.Errorf("stacked_chart expects array items to be objects, got %T", rows[0])
+	}
+	xKey := stringOptionWithDefault(opts, "x", "date")
+	if _, ok := obj[xKey]; !ok {
+		return fmt.Errorf("stacked_chart x key %q was not present in the sampled row", xKey)
+	}
+	seriesKeys := stringSliceOption(opts, "seriesKeys")
+	if len(seriesKeys) == 0 {
+		return fmt.Errorf("stacked_chart requires seriesKeys")
+	}
+	for _, key := range seriesKeys {
+		val, ok := obj[key]
+		if !ok {
+			return fmt.Errorf("stacked_chart series key %q was not present in the sampled row", key)
+		}
+		if !isNumericValue(val) {
+			return fmt.Errorf("stacked_chart series key %q must resolve to a number, got %T", key, val)
+		}
+	}
+	return nil
+}
+
+func validateTimelineSample(sample any, opts map[string]any) error {
+	itemsPath := stringOption(opts, "itemsPath")
+	target, ok := resolveTarget(sample, itemsPath)
+	if !ok {
+		return fmt.Errorf("timeline itemsPath %q was not found in the sampled source output", itemsPath)
+	}
+	items, ok := target.([]any)
+	if !ok {
+		return fmt.Errorf("timeline expects an array of objects, got %T", target)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	obj, ok := items[0].(map[string]any)
+	if !ok {
+		return fmt.Errorf("timeline expects array items to be objects, got %T", items[0])
+	}
+	timeKey := stringOptionWithDefault(opts, "timeKey", "date")
+	labelKey := stringOptionWithDefault(opts, "labelKey", "title")
+	if _, ok := obj[timeKey]; !ok {
+		return fmt.Errorf("timeline timeKey %q was not present in the sampled item", timeKey)
+	}
+	if _, ok := obj[labelKey]; !ok {
+		return fmt.Errorf("timeline labelKey %q was not present in the sampled item", labelKey)
+	}
+	return nil
+}
+
+func validateHeatmapSample(sample any, opts map[string]any) error {
+	seriesPath := stringOption(opts, "seriesPath")
+	if seriesPath == "" {
+		seriesPath = stringOption(opts, "path")
+	}
+	target, ok := resolveTarget(sample, seriesPath)
+	if !ok {
+		return fmt.Errorf("heatmap path %q was not found in the sampled source output", seriesPath)
+	}
+	rows, ok := target.([]any)
+	if !ok {
+		return fmt.Errorf("heatmap expects an array of objects, got %T", target)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	obj, ok := rows[0].(map[string]any)
+	if !ok {
+		return fmt.Errorf("heatmap expects array items to be objects, got %T", rows[0])
+	}
+	dateKey := stringOptionWithDefault(opts, "dateKey", "date")
+	valueKey := stringOptionWithDefault(opts, "valueKey", "value")
+	if _, ok := obj[dateKey]; !ok {
+		return fmt.Errorf("heatmap dateKey %q was not present in the sampled row", dateKey)
+	}
+	val, ok := obj[valueKey]
+	if !ok {
+		return fmt.Errorf("heatmap valueKey %q was not present in the sampled row", valueKey)
+	}
+	if !isNumericValue(val) {
+		return fmt.Errorf("heatmap valueKey %q must resolve to a number, got %T", valueKey, val)
+	}
+	return nil
+}
+
+func validateKPIGroupSample(sample any, opts map[string]any) error {
+	itemsPath := stringOption(opts, "itemsPath")
+	target, ok := resolveTarget(sample, itemsPath)
+	if !ok {
+		return fmt.Errorf("kpi_group itemsPath %q was not found in the sampled source output", itemsPath)
+	}
+	items, ok := target.([]any)
+	if !ok {
+		return fmt.Errorf("kpi_group expects an array at %q, got %T", itemsPath, target)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	obj, ok := items[0].(map[string]any)
+	if !ok {
+		return fmt.Errorf("kpi_group expects array items to be objects, got %T", items[0])
+	}
+	labelKey := stringOptionWithDefault(opts, "labelKey", "label")
+	valueKey := stringOptionWithDefault(opts, "valueKey", "value")
+	if _, ok := obj[labelKey]; !ok {
+		return fmt.Errorf("kpi_group labelKey %q was not present in the sampled item", labelKey)
+	}
+	val, ok := obj[valueKey]
+	if !ok {
+		return fmt.Errorf("kpi_group valueKey %q was not present in the sampled item", valueKey)
+	}
+	if !isNumericValue(val) {
+		return fmt.Errorf("kpi_group valueKey %q must resolve to a number, got %T", valueKey, val)
+	}
+	return nil
+}
+
 func validateListSample(sample any, opts map[string]any) error {
 	itemsPath := stringOption(opts, "itemsPath")
 	target, ok := resolveTarget(sample, itemsPath)
@@ -199,19 +420,114 @@ func valueAtPath(data any, path string) (any, bool) {
 	if path == "" {
 		return data, true
 	}
-	current := data
-	for _, part := range strings.Split(path, ".") {
-		obj, ok := current.(map[string]any)
-		if !ok {
-			return nil, false
+	return evalPathTokens(data, parsePathTokens(path))
+}
+
+type pathTokenKind int
+
+const (
+	pathTokenKey pathTokenKind = iota
+	pathTokenIndex
+	pathTokenEach
+)
+
+type pathToken struct {
+	kind  pathTokenKind
+	key   string
+	index int
+}
+
+func parsePathTokens(path string) []pathToken {
+	parts := strings.Split(path, ".")
+	tokens := make([]pathToken, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			continue
 		}
-		next, ok := obj[part]
+		for part != "" {
+			bracket := strings.IndexByte(part, '[')
+			if bracket == -1 {
+				if idx, err := strconv.Atoi(part); err == nil {
+					tokens = append(tokens, pathToken{kind: pathTokenIndex, index: idx})
+				} else {
+					tokens = append(tokens, pathToken{kind: pathTokenKey, key: part})
+				}
+				break
+			}
+			if bracket > 0 {
+				tokens = append(tokens, pathToken{kind: pathTokenKey, key: part[:bracket]})
+			}
+			close := strings.IndexByte(part[bracket:], ']')
+			if close == -1 {
+				tokens = append(tokens, pathToken{kind: pathTokenKey, key: part[bracket:]})
+				break
+			}
+			content := part[bracket+1 : bracket+close]
+			if content == "" {
+				tokens = append(tokens, pathToken{kind: pathTokenEach})
+			} else if idx, err := strconv.Atoi(content); err == nil {
+				tokens = append(tokens, pathToken{kind: pathTokenIndex, index: idx})
+			} else {
+				tokens = append(tokens, pathToken{kind: pathTokenKey, key: content})
+			}
+			part = part[bracket+close+1:]
+		}
+	}
+	return tokens
+}
+
+func evalPathTokens(data any, tokens []pathToken) (any, bool) {
+	current := data
+	for i, token := range tokens {
+		if token.kind == pathTokenEach {
+			arr, ok := current.([]any)
+			if !ok {
+				return nil, false
+			}
+			projected := make([]any, 0, len(arr))
+			rest := tokens[i+1:]
+			for _, item := range arr {
+				val, ok := evalPathTokens(item, rest)
+				if ok {
+					projected = append(projected, val)
+				}
+			}
+			return projected, true
+		}
+		next, ok := evalPathToken(current, token)
 		if !ok {
 			return nil, false
 		}
 		current = next
 	}
 	return current, true
+}
+
+func evalPathToken(data any, token pathToken) (any, bool) {
+	switch token.kind {
+	case pathTokenKey:
+		obj, ok := data.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		val, ok := obj[token.key]
+		return val, ok
+	case pathTokenIndex:
+		arr, ok := data.([]any)
+		if !ok || token.index < 0 || token.index >= len(arr) {
+			return nil, false
+		}
+		return arr[token.index], true
+	default:
+		return nil, false
+	}
+}
+
+func applyBindingProjection(data any, binding DataSourceBinding) (any, bool) {
+	if binding.Path == "" {
+		return data, true
+	}
+	return valueAtPath(data, binding.Path)
 }
 
 func stringOption(opts map[string]any, key string) string {

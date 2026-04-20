@@ -34,7 +34,7 @@ func compileWidget(code *WidgetCode) error {
 			return errors.New("widget code preset is required in preset mode")
 		}
 		switch code.Preset {
-		case PresetMetric, PresetTable, PresetLineChart, PresetBarChart, PresetList, PresetMarkdown:
+		case PresetMetric, PresetTable, PresetLineChart, PresetAreaChart, PresetBarChart, PresetPieChart, PresetDonutChart, PresetScatter, PresetStacked, PresetList, PresetMarkdown, PresetTimeline, PresetHeatmap, PresetProgress, PresetGauge, PresetStatusGrid, PresetKPIGroup:
 			// ok
 		default:
 			return errors.New("unknown widget preset: " + code.Preset)
@@ -90,7 +90,7 @@ func compileTSX(src string) (string, error) {
 		LogLevel:        esbuild.LogLevelSilent,
 	})
 	if len(result.Errors) > 0 {
-		return "", fmt.Errorf("esbuild: %s", result.Errors[0].Text)
+		return "", errors.New(formatEsbuildMessage(result.Errors[0]))
 	}
 	if len(result.OutputFiles) == 0 {
 		return "", errors.New("esbuild: no output produced")
@@ -103,6 +103,24 @@ func compileTSX(src string) (string, error) {
 		return "", fmt.Errorf("compiled widget is too large (%d bytes, max %d)", len(out), maxCompiled)
 	}
 	return out, nil
+}
+
+func formatEsbuildMessage(msg esbuild.Message) string {
+	base := "esbuild: " + msg.Text
+	if msg.Location == nil {
+		return base
+	}
+	loc := msg.Location
+	header := fmt.Sprintf("%s (%s:%d:%d)", base, loc.File, loc.Line, loc.Column+1)
+	lineText := strings.TrimRight(loc.LineText, "\n")
+	if strings.TrimSpace(lineText) == "" {
+		return header
+	}
+	caretOffset := loc.Column
+	if caretOffset < 0 {
+		caretOffset = 0
+	}
+	return fmt.Sprintf("%s\n%d | %s\n%s^", header, loc.Line, lineText, strings.Repeat(" ", len(fmt.Sprintf("%d | ", loc.Line))+caretOffset))
 }
 
 // importAllowlistPlugin intercepts every import in a widget's TSX. Allowed

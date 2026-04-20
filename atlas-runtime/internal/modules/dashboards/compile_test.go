@@ -14,6 +14,32 @@ func TestCompilePresetValidates(t *testing.T) {
 	}
 }
 
+func TestCompileAllPresetKindsValidate(t *testing.T) {
+	for _, preset := range []string{
+		PresetMetric,
+		PresetTable,
+		PresetLineChart,
+		PresetAreaChart,
+		PresetBarChart,
+		PresetPieChart,
+		PresetDonutChart,
+		PresetScatter,
+		PresetStacked,
+		PresetList,
+		PresetMarkdown,
+		PresetTimeline,
+		PresetHeatmap,
+		PresetProgress,
+		PresetGauge,
+		PresetStatusGrid,
+		PresetKPIGroup,
+	} {
+		if err := compileWidget(&WidgetCode{Mode: ModePreset, Preset: preset}); err != nil {
+			t.Fatalf("preset %q should compile: %v", preset, err)
+		}
+	}
+}
+
 func TestCompilePresetRejectsUnknown(t *testing.T) {
 	code := &WidgetCode{Mode: ModePreset, Preset: "not-real"}
 	if err := compileWidget(code); err == nil {

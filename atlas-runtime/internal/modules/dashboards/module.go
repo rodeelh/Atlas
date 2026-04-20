@@ -200,17 +200,29 @@ func (m *Module) resolveWidgetData(ctx context.Context, d Dashboard, w Widget) (
 	if len(w.Bindings) == 1 {
 		// Single binding — return its payload directly so preset renderers
 		// can consume it without a keyed envelope.
-		return m.resolveSourceByName(ctx, d.ID, w.Bindings[0].Source)
+		return m.resolveProjectedBinding(ctx, d.ID, w.Bindings[0])
 	}
 	out := map[string]any{}
 	for _, b := range w.Bindings {
-		val, err := m.resolveSourceByName(ctx, d.ID, b.Source)
+		val, err := m.resolveProjectedBinding(ctx, d.ID, b)
 		if err != nil {
 			return nil, fmt.Errorf("binding %q: %w", b.Source, err)
 		}
 		out[b.Source] = val
 	}
 	return out, nil
+}
+
+func (m *Module) resolveProjectedBinding(ctx context.Context, dashboardID string, binding DataSourceBinding) (any, error) {
+	val, err := m.resolveSourceByName(ctx, dashboardID, binding.Source)
+	if err != nil {
+		return nil, err
+	}
+	projected, ok := applyBindingProjection(val, binding)
+	if !ok {
+		return nil, fmt.Errorf("binding path %q was not found in source %q", binding.Path, binding.Source)
+	}
+	return projected, nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

@@ -919,9 +919,20 @@ export type DashboardPreset =
   | "metric"
   | "table"
   | "line_chart"
+  | "area_chart"
   | "bar_chart"
+  | "pie_chart"
+  | "donut_chart"
+  | "scatter_chart"
+  | "stacked_chart"
   | "list"
-  | "markdown";
+  | "markdown"
+  | "timeline"
+  | "heatmap"
+  | "progress"
+  | "gauge"
+  | "status_grid"
+  | "kpi_group";
 
 export interface DashboardRefreshPolicy {
   mode: DashboardRefreshMode;
@@ -965,6 +976,33 @@ export interface DashboardWidget {
   gridH: number;
 }
 
+export interface DashboardWidgetUpdate {
+  title?: string;
+  description?: string;
+  size?: DashboardSize;
+  group?: string;
+  preset?: DashboardPreset;
+  tsx?: string;
+  bindings?: DashboardDataSourceBinding[];
+  options?: Record<string, unknown>;
+  gridX?: number;
+  gridY?: number;
+  gridW?: number;
+  gridH?: number;
+}
+
+export interface DashboardLayoutWidgetUpdate {
+  id: string;
+  gridX: number;
+  gridY: number;
+  gridW: number;
+  gridH: number;
+}
+
+export interface DashboardLayoutUpdate {
+  widgets: DashboardLayoutWidgetUpdate[];
+}
+
 export interface DashboardLayoutHints {
   columns: number;
 }
@@ -972,6 +1010,7 @@ export interface DashboardLayoutHints {
 export interface DashboardDefinition {
   schemaVersion: number;
   id: string;
+  baseDashboardId?: string;
   name: string;
   description?: string;
   status: DashboardStatus;
@@ -985,6 +1024,7 @@ export interface DashboardDefinition {
 
 export interface DashboardSummary {
   id: string;
+  baseDashboardId?: string;
   name: string;
   description?: string;
   status: DashboardStatus;
@@ -1009,9 +1049,16 @@ export interface DashboardWidgetData {
 export interface DashboardRefreshEvent {
   dashboardId: string;
   source: string;
+  sourceKind?: string;
+  success?: boolean;
   data?: unknown;
   error?: string;
   at: string;
+  resolvedAt?: string;
+  durationMs?: number;
+  lastSuccessfulAt?: string;
+  stale?: boolean;
+  cacheAgeMs?: number;
 }
 
 export interface StorageStats {

@@ -38,22 +38,33 @@ const (
 
 // Built-in preset identifiers. Presets are rendered by the frontend stdlib.
 const (
-	PresetMetric    = "metric"
-	PresetTable     = "table"
-	PresetLineChart = "line_chart"
-	PresetBarChart  = "bar_chart"
-	PresetList      = "list"
-	PresetMarkdown  = "markdown"
+	PresetMetric     = "metric"
+	PresetTable      = "table"
+	PresetLineChart  = "line_chart"
+	PresetAreaChart  = "area_chart"
+	PresetBarChart   = "bar_chart"
+	PresetPieChart   = "pie_chart"
+	PresetDonutChart = "donut_chart"
+	PresetScatter    = "scatter_chart"
+	PresetStacked    = "stacked_chart"
+	PresetList       = "list"
+	PresetMarkdown   = "markdown"
+	PresetTimeline   = "timeline"
+	PresetHeatmap    = "heatmap"
+	PresetProgress   = "progress"
+	PresetGauge      = "gauge"
+	PresetStatusGrid = "status_grid"
+	PresetKPIGroup   = "kpi_group"
 )
 
 // Data source kinds.
 const (
-	SourceKindRuntime        = "runtime"
-	SourceKindSkill          = "skill"
-	SourceKindSQL            = "sql"
-	SourceKindChatAnalytics  = "chat_analytics"
-	SourceKindGremlin        = "gremlin"
-	SourceKindLiveCompute    = "live_compute"
+	SourceKindRuntime       = "runtime"
+	SourceKindSkill         = "skill"
+	SourceKindSQL           = "sql"
+	SourceKindChatAnalytics = "chat_analytics"
+	SourceKindGremlin       = "gremlin"
+	SourceKindLiveCompute   = "live_compute"
 )
 
 // Refresh modes for a data source.
@@ -71,9 +82,9 @@ const (
 
 // DataSource is a named, reusable data feed. Widgets bind to one by name.
 type DataSource struct {
-	Name    string         `json:"name"`    // unique within dashboard
-	Kind    string         `json:"kind"`    // one of SourceKind*
-	Config  map[string]any `json:"config"`  // kind-specific config
+	Name    string         `json:"name"`   // unique within dashboard
+	Kind    string         `json:"kind"`   // one of SourceKind*
+	Config  map[string]any `json:"config"` // kind-specific config
 	Refresh RefreshPolicy  `json:"refresh"`
 }
 
@@ -89,9 +100,9 @@ type RefreshPolicy struct {
 // DataSourceBinding connects a widget to a data source by name and optionally
 // projects/filters the feed for that widget.
 type DataSourceBinding struct {
-	Source   string         `json:"source"`             // matches DataSource.Name
-	Path     string         `json:"path,omitempty"`     // dot-path into source data
-	Options  map[string]any `json:"options,omitempty"`  // per-binding renderer hints
+	Source  string         `json:"source"`            // matches DataSource.Name
+	Path    string         `json:"path,omitempty"`    // dot-path into source data
+	Options map[string]any `json:"options,omitempty"` // per-binding renderer hints
 }
 
 // WidgetCode describes how a widget is rendered.
@@ -117,8 +128,8 @@ type Widget struct {
 	ID          string              `json:"id"`
 	Title       string              `json:"title,omitempty"`
 	Description string              `json:"description,omitempty"`
-	Size        string              `json:"size"`              // one of Size*
-	Group       string              `json:"group,omitempty"`   // optional grouping hint
+	Size        string              `json:"size"`            // one of Size*
+	Group       string              `json:"group,omitempty"` // optional grouping hint
 	Bindings    []DataSourceBinding `json:"bindings,omitempty"`
 	Code        WidgetCode          `json:"code"`
 	// Layout outputs — populated by the packer at commit time.
@@ -135,44 +146,47 @@ type LayoutHints struct {
 
 // Dashboard is the persisted shape of a v2 dashboard.
 type Dashboard struct {
-	SchemaVersion int          `json:"schemaVersion"`
-	ID            string       `json:"id"`
-	Name          string       `json:"name"`
-	Description   string       `json:"description,omitempty"`
-	Status        string       `json:"status"` // draft | live
-	Sources       []DataSource `json:"sources"`
-	Widgets       []Widget     `json:"widgets"`
-	Layout        LayoutHints  `json:"layout"`
-	CreatedAt     time.Time    `json:"createdAt"`
-	UpdatedAt     time.Time    `json:"updatedAt"`
-	CommittedAt   *time.Time   `json:"committedAt,omitempty"`
+	SchemaVersion   int          `json:"schemaVersion"`
+	ID              string       `json:"id"`
+	BaseDashboardID string       `json:"baseDashboardId,omitempty"`
+	Name            string       `json:"name"`
+	Description     string       `json:"description,omitempty"`
+	Status          string       `json:"status"` // draft | live
+	Sources         []DataSource `json:"sources"`
+	Widgets         []Widget     `json:"widgets"`
+	Layout          LayoutHints  `json:"layout"`
+	CreatedAt       time.Time    `json:"createdAt"`
+	UpdatedAt       time.Time    `json:"updatedAt"`
+	CommittedAt     *time.Time   `json:"committedAt,omitempty"`
 }
 
 // Summary is the lightweight shape returned by GET /dashboards.
 type Summary struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
-	Description string     `json:"description,omitempty"`
-	Status      string     `json:"status"`
-	WidgetCount int        `json:"widgetCount"`
-	SourceCount int        `json:"sourceCount"`
-	CreatedAt   time.Time  `json:"createdAt"`
-	UpdatedAt   time.Time  `json:"updatedAt"`
-	CommittedAt *time.Time `json:"committedAt,omitempty"`
+	ID              string     `json:"id"`
+	BaseDashboardID string     `json:"baseDashboardId,omitempty"`
+	Name            string     `json:"name"`
+	Description     string     `json:"description,omitempty"`
+	Status          string     `json:"status"`
+	WidgetCount     int        `json:"widgetCount"`
+	SourceCount     int        `json:"sourceCount"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
+	CommittedAt     *time.Time `json:"committedAt,omitempty"`
 }
 
 // SummaryFor projects a dashboard into its list shape.
 func SummaryFor(d Dashboard) Summary {
 	return Summary{
-		ID:          d.ID,
-		Name:        d.Name,
-		Description: d.Description,
-		Status:      d.Status,
-		WidgetCount: len(d.Widgets),
-		SourceCount: len(d.Sources),
-		CreatedAt:   d.CreatedAt,
-		UpdatedAt:   d.UpdatedAt,
-		CommittedAt: d.CommittedAt,
+		ID:              d.ID,
+		BaseDashboardID: d.BaseDashboardID,
+		Name:            d.Name,
+		Description:     d.Description,
+		Status:          d.Status,
+		WidgetCount:     len(d.Widgets),
+		SourceCount:     len(d.Sources),
+		CreatedAt:       d.CreatedAt,
+		UpdatedAt:       d.UpdatedAt,
+		CommittedAt:     d.CommittedAt,
 	}
 }
 

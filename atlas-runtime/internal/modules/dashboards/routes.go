@@ -7,6 +7,11 @@ package dashboards
 //   GET    /dashboards                       list
 //   GET    /dashboards/{id}                  fetch one
 //   DELETE /dashboards/{id}                  delete
+//   POST   /dashboards/{id}/draft            create/resume editable draft
+//   POST   /dashboards/{id}/commit           publish a draft dashboard
+//   PATCH  /dashboards/{id}/layout           update draft widget grid positions
+//   PATCH  /dashboards/{id}/widgets/{widgetId} update a draft widget
+//   POST   /dashboards/{id}/sources/{source}/refresh refresh one source
 //   POST   /dashboards/{id}/resolve          resolve a widget's data (one-shot)
 //   POST   /dashboards/{id}/refresh          force all sources to refresh
 //   GET    /dashboards/{id}/events           SSE stream of RefreshEvents
@@ -21,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -30,6 +36,11 @@ func (m *Module) registerRoutes(r chi.Router) {
 	r.Get("/dashboards", m.listDashboards)
 	r.Get("/dashboards/{id}", m.getDashboard)
 	r.Delete("/dashboards/{id}", m.deleteDashboard)
+	r.Post("/dashboards/{id}/draft", m.editDashboardDraft)
+	r.Post("/dashboards/{id}/commit", m.commitDashboardDraft)
+	r.Patch("/dashboards/{id}/layout", m.updateDashboardLayout)
+	r.Patch("/dashboards/{id}/widgets/{widgetId}", m.updateDashboardWidget)
+	r.Post("/dashboards/{id}/sources/{source}/refresh", m.refreshDashboardSource)
 	r.Post("/dashboards/{id}/resolve", m.resolveWidget)
 	r.Post("/dashboards/{id}/refresh", m.refreshDashboard)
 	r.Get("/dashboards/{id}/events", m.streamDashboardEvents)
@@ -71,6 +82,110 @@ func (m *Module) deleteDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *Module) editDashboardDraft(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	draft, err := m.editDraftForDashboard(id)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "dashboard not found: "+id)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, draft)
+}
+
+func (m *Module) commitDashboardDraft(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	published, err := m.commitDraftDashboard(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "is not a draft") {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, published)
+}
+
+func (m *Module) updateDashboardLayout(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req LayoutUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	updated, err := m.updateDraftLayout(id, req)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "is not a draft") {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+// updateDashboardWidget updates one widget on a draft dashboard.
+// Body accepts the same editable fields as dashboard.update_widget and returns
+// the full dashboard definition so the viewer can refresh from server state.
+func (m *Module) updateDashboardWidget(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	widgetID := chi.URLParam(r, "widgetId")
+	var req WidgetUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	updated, err := m.updateDraftWidget(id, widgetID, req)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "is not a draft") {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (m *Module) refreshDashboardSource(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	source := chi.URLParam(r, "source")
+	if _, err := m.store.Get(id); errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "dashboard not found: "+id)
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	event := m.coordinator.ForceRefreshSource(ctx, id, source)
+	if event == nil {
+		writeError(w, http.StatusNotFound, "source not found: "+source)
+		return
+	}
+	writeJSON(w, http.StatusOK, event)
 }
 
 // resolveWidget loads a single widget's data from its bindings.

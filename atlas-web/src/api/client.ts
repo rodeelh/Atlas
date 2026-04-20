@@ -4,10 +4,12 @@ import type {
   Approval,
   CapabilityRecord,
   DashboardDefinition,
+  DashboardLayoutUpdate,
   DashboardRefreshEvent,
   DashboardStatus,
   DashboardSummary,
   DashboardWidgetData,
+  DashboardWidgetUpdate,
   EngineDownloadStatus,
   EngineModelInfo,
   EngineStatus,
@@ -62,6 +64,8 @@ export type {
   AIModelRecord,
   APIKeyStatus,
   DashboardDefinition,
+  DashboardLayoutUpdate,
+  DashboardDataSourceBinding,
   DashboardPreset,
   DashboardRefreshEvent,
   DashboardSize,
@@ -71,6 +75,7 @@ export type {
   DashboardWidgetCode,
   DashboardWidgetData,
   DashboardWidgetMode,
+  DashboardWidgetUpdate,
   EngineModelInfo,
   EngineStatus,
   MLXStatus,
@@ -421,10 +426,26 @@ export const api = {
     get<DashboardDefinition>(`/dashboards/${encodeURIComponent(id)}`),
   deleteDashboard: (id: string) =>
     request<void>(`/dashboards/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  editDashboardDraft: (id: string) =>
+    post<DashboardDefinition>(`/dashboards/${encodeURIComponent(id)}/draft`, {}),
+  commitDashboardDraft: (id: string) =>
+    post<DashboardDefinition>(`/dashboards/${encodeURIComponent(id)}/commit`, {}),
+  updateDashboardLayout: (dashboardID: string, update: DashboardLayoutUpdate) =>
+    request<DashboardDefinition>(
+      `/dashboards/${encodeURIComponent(dashboardID)}/layout`,
+      { method: 'PATCH', body: JSON.stringify(update) },
+    ),
+  updateDashboardWidget: (dashboardID: string, widgetID: string, update: DashboardWidgetUpdate) =>
+    request<DashboardDefinition>(
+      `/dashboards/${encodeURIComponent(dashboardID)}/widgets/${encodeURIComponent(widgetID)}`,
+      { method: 'PATCH', body: JSON.stringify(update) },
+    ),
   resolveDashboardWidget: (dashboardID: string, widgetID: string) =>
     post<DashboardWidgetData>(`/dashboards/${encodeURIComponent(dashboardID)}/resolve`, { widgetId: widgetID }),
   refreshDashboard: (id: string) =>
     post<DashboardRefreshEvent[]>(`/dashboards/${encodeURIComponent(id)}/refresh`, {}),
+  refreshDashboardSource: (dashboardID: string, source: string) =>
+    post<DashboardRefreshEvent>(`/dashboards/${encodeURIComponent(dashboardID)}/sources/${encodeURIComponent(source)}/refresh`, {}),
   streamDashboardEvents: (id: string) =>
     new EventSource(`${BASE()}/dashboards/${encodeURIComponent(id)}/events`),
 

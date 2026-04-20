@@ -25,11 +25,18 @@ import (
 
 // RefreshEvent is the payload pushed to SSE subscribers.
 type RefreshEvent struct {
-	DashboardID string `json:"dashboardId"`
-	Source      string `json:"source"`
-	Data        any    `json:"data,omitempty"`
-	Error       string `json:"error,omitempty"`
-	At          string `json:"at"`
+	DashboardID      string `json:"dashboardId"`
+	Source           string `json:"source"`
+	SourceKind       string `json:"sourceKind,omitempty"`
+	Success          bool   `json:"success"`
+	Data             any    `json:"data,omitempty"`
+	Error            string `json:"error,omitempty"`
+	At               string `json:"at"`
+	ResolvedAt       string `json:"resolvedAt,omitempty"`
+	DurationMs       int64  `json:"durationMs,omitempty"`
+	LastSuccessfulAt string `json:"lastSuccessfulAt,omitempty"`
+	Stale            bool   `json:"stale,omitempty"`
+	CacheAgeMs       int64  `json:"cacheAgeMs,omitempty"`
 }
 
 // coordinator manages live state for a single dashboard.
@@ -91,6 +98,7 @@ func (c *Coordinator) Subscribe(dashboardID string) (<-chan RefreshEvent, func()
 	// and push to co.subs (which now includes this channel) once each source
 	// resolves.
 	for _, ev := range co.cache {
+		ev = withCacheAge(ev)
 		select {
 		case ch <- ev:
 		default:
@@ -118,23 +126,55 @@ func (c *Coordinator) Subscribe(dashboardID string) (<-chan RefreshEvent, func()
 // live subscribers. Coordinator does not need to be running — if nobody is
 // subscribed the call is a no-op (the cache is bound to live coordinators).
 func (c *Coordinator) Push(dashboardID, source string, data any, fetchErr error) {
-	c.mu.Lock()
-	co := c.per[dashboardID]
-	c.mu.Unlock()
-	if co == nil {
-		return
-	}
 	ev := RefreshEvent{
 		DashboardID: dashboardID,
 		Source:      source,
+		Success:     fetchErr == nil,
 		Data:        data,
 		At:          time.Now().UTC().Format(time.RFC3339),
+		ResolvedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 	if fetchErr != nil {
 		ev.Error = fetchErr.Error()
 	}
+	c.pushEvent(ev)
+}
+
+func (c *Coordinator) pushEvent(ev RefreshEvent) RefreshEvent {
+	c.mu.Lock()
+	co := c.per[ev.DashboardID]
+	c.mu.Unlock()
+	if co == nil {
+		return ev
+	}
 	co.mu.Lock()
-	co.cache[source] = ev
+	if ev.At == "" {
+		ev.At = time.Now().UTC().Format(time.RFC3339)
+	}
+	if ev.ResolvedAt == "" {
+		ev.ResolvedAt = ev.At
+	}
+	if ev.Error == "" && ev.Success {
+		ev.LastSuccessfulAt = ev.ResolvedAt
+	} else if cached, ok := co.cache[ev.Source]; ok {
+		if ev.Data == nil && cached.Data != nil {
+			ev.Data = cached.Data
+			ev.Stale = true
+		}
+		if ev.LastSuccessfulAt == "" {
+			ev.LastSuccessfulAt = cached.LastSuccessfulAt
+			if ev.LastSuccessfulAt == "" && cached.Error == "" {
+				ev.LastSuccessfulAt = cached.ResolvedAt
+				if ev.LastSuccessfulAt == "" {
+					ev.LastSuccessfulAt = cached.At
+				}
+			}
+		}
+		if ev.SourceKind == "" {
+			ev.SourceKind = cached.SourceKind
+		}
+	}
+	co.cache[ev.Source] = ev
 	subs := make([]chan RefreshEvent, 0, len(co.subs))
 	for ch := range co.subs {
 		subs = append(subs, ch)
@@ -142,11 +182,12 @@ func (c *Coordinator) Push(dashboardID, source string, data any, fetchErr error)
 	co.mu.Unlock()
 	for _, ch := range subs {
 		select {
-		case ch <- ev:
+		case ch <- withCacheAge(ev):
 		default:
 			// Slow consumer — drop.
 		}
 	}
+	return ev
 }
 
 // ForceRefresh resolves every source for dashboardID and pushes. Returns the
@@ -163,22 +204,64 @@ func (c *Coordinator) ForceRefresh(ctx context.Context, dashboardID string) []Re
 		wg.Add(1)
 		go func(idx int, source DataSource) {
 			defer wg.Done()
+			start := time.Now()
 			data, rerr := c.resolve(ctx, dashboardID, source.Name)
-			c.Push(dashboardID, source.Name, data, rerr)
+			resolvedAt := time.Now().UTC()
 			ev := RefreshEvent{
 				DashboardID: dashboardID,
 				Source:      source.Name,
+				SourceKind:  source.Kind,
+				Success:     rerr == nil,
 				Data:        data,
-				At:          time.Now().UTC().Format(time.RFC3339),
+				At:          resolvedAt.Format(time.RFC3339),
+				ResolvedAt:  resolvedAt.Format(time.RFC3339),
+				DurationMs:  time.Since(start).Milliseconds(),
 			}
 			if rerr != nil {
 				ev.Error = rerr.Error()
 			}
-			out[idx] = ev
+			out[idx] = c.pushEvent(ev)
 		}(i, src)
 	}
 	wg.Wait()
 	return out
+}
+
+// ForceRefreshSource resolves one source for dashboardID and pushes the new
+// event to subscribers. Returns nil if the dashboard/source cannot be loaded.
+func (c *Coordinator) ForceRefreshSource(ctx context.Context, dashboardID, sourceName string) *RefreshEvent {
+	d, err := c.load(dashboardID)
+	if err != nil {
+		return nil
+	}
+	var source *DataSource
+	for i := range d.Sources {
+		if d.Sources[i].Name == sourceName {
+			source = &d.Sources[i]
+			break
+		}
+	}
+	if source == nil {
+		return nil
+	}
+	start := time.Now()
+	data, rerr := c.resolve(ctx, dashboardID, source.Name)
+	resolvedAt := time.Now().UTC()
+	ev := RefreshEvent{
+		DashboardID: dashboardID,
+		Source:      source.Name,
+		SourceKind:  source.Kind,
+		Success:     rerr == nil,
+		Data:        data,
+		At:          resolvedAt.Format(time.RFC3339),
+		ResolvedAt:  resolvedAt.Format(time.RFC3339),
+		DurationMs:  time.Since(start).Milliseconds(),
+	}
+	if rerr != nil {
+		ev.Error = rerr.Error()
+	}
+	pushed := c.pushEvent(ev)
+	return &pushed
 }
 
 // startCoordinator sets up interval tickers for push/interval sources. Must
@@ -208,18 +291,53 @@ func (c *Coordinator) startCoordinator(co *coordinator) {
 		ticker := time.NewTicker(time.Duration(interval) * time.Second)
 		co.tickers = append(co.tickers, ticker)
 		sourceName := src.Name
+		sourceKind := src.Kind
 		go func() {
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
+					start := time.Now()
 					data, rerr := c.resolve(ctx, co.dashboardID, sourceName)
-					c.Push(co.dashboardID, sourceName, data, rerr)
+					resolvedAt := time.Now().UTC()
+					c.pushEvent(RefreshEvent{
+						DashboardID: co.dashboardID,
+						Source:      sourceName,
+						SourceKind:  sourceKind,
+						Success:     rerr == nil,
+						Data:        data,
+						Error:       errorString(rerr),
+						At:          resolvedAt.Format(time.RFC3339),
+						ResolvedAt:  resolvedAt.Format(time.RFC3339),
+						DurationMs:  time.Since(start).Milliseconds(),
+					})
 				}
 			}
 		}()
 	}
+}
+
+func withCacheAge(ev RefreshEvent) RefreshEvent {
+	if ev.ResolvedAt == "" {
+		return ev
+	}
+	t, err := time.Parse(time.RFC3339, ev.ResolvedAt)
+	if err != nil {
+		return ev
+	}
+	ev.CacheAgeMs = time.Since(t).Milliseconds()
+	if ev.CacheAgeMs < 0 {
+		ev.CacheAgeMs = 0
+	}
+	return ev
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func (c *Coordinator) stopCoordinator(co *coordinator) {

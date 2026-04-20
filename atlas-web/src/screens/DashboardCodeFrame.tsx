@@ -21,11 +21,25 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 
+export interface DashboardWidgetAction {
+  action: 'refresh-source' | 'open-drilldown' | 'set-filter' | 'navigate-dashboard'
+  source?: string
+  dashboardId?: string
+  filterKey?: string
+  value?: unknown
+  title?: string
+  data?: unknown
+}
+
 // ── @atlas/ui stdlib ──────────────────────────────────────────────────────────
 // Kept inline so the iframe has no network dependency on us; served to the
 // widget module through the importmap below. Components are intentionally
 // minimal — enough primitives for an agent to compose a widget in TSX.
 const AU_STDLIB = `import { h } from 'preact'
+
+function _post(action) {
+  try { window.parent.postMessage({ type: 'atlas:action', action }, '*') } catch (_) {}
+}
 
 function _fmt(v, format) {
   if (v === null || v === undefined) return '—'
@@ -128,6 +142,67 @@ export const Spark = ({ values, color, height = 28, filled }) => {
 export const Empty = ({ children }) => h('div', { class: 'au-empty' }, children || 'No data')
 
 export const Error = ({ children }) => h('div', { class: 'au-error' }, children || 'Something went wrong')
+
+export const Button = ({ children, action, onClick, tone, disabled }) =>
+  h('button', {
+    class: 'au-button au-button-' + (tone || 'neutral'),
+    disabled: !!disabled,
+    onClick: (e) => {
+      onClick && onClick(e)
+      if (action) _post(action)
+    }
+  }, children)
+
+export const Tabs = ({ options, value, filterKey = 'tab' }) =>
+  h('div', { class: 'au-tabs' }, (Array.isArray(options) ? options : []).map((option, i) => {
+    const item = typeof option === 'object' ? option : { label: String(option), value: option }
+    const active = item.value === value
+    return h('button', {
+      key: i,
+      class: 'au-tab' + (active ? ' is-active' : ''),
+      onClick: () => _post({ action: 'set-filter', filterKey, value: item.value, title: item.label }),
+    }, item.label)
+  }))
+
+export const Select = ({ options, value, filterKey = 'select', placeholder = 'Select…' }) =>
+  h('select', {
+    class: 'au-select',
+    value: value ?? '',
+    onChange: (e) => _post({ action: 'set-filter', filterKey, value: e.currentTarget.value }),
+  }, [
+    h('option', { value: '', key: '__placeholder' }, placeholder),
+    ...(Array.isArray(options) ? options : []).map((option, i) => {
+      const item = typeof option === 'object' ? option : { label: String(option), value: option }
+      return h('option', { key: i, value: item.value }, item.label)
+    }),
+  ])
+
+export const Details = ({ summary, children, title, data, source }) =>
+  h('details', {
+    class: 'au-details',
+    onToggle: (e) => {
+      if (e.currentTarget.open) _post({ action: 'open-drilldown', title: title || summary, data, source })
+    }
+  }, [
+    h('summary', { key: 's' }, summary || 'Details'),
+    h('div', { class: 'au-details-body', key: 'b' }, children),
+  ])
+
+export const TimeRangePicker = ({ value = '7d', options = ['24h', '7d', '30d', '90d'], filterKey = 'timeRange' }) =>
+  h('div', { class: 'au-tabs au-time-range' }, (Array.isArray(options) ? options : []).map((option, i) =>
+    h('button', {
+      key: i,
+      class: 'au-tab' + (option === value ? ' is-active' : ''),
+      onClick: () => _post({ action: 'set-filter', filterKey, value: option, title: String(option) }),
+    }, String(option))
+  ))
+
+export const actions = {
+  refreshSource: (source) => _post({ action: 'refresh-source', source }),
+  openDrilldown: (payload) => _post({ action: 'open-drilldown', ...payload }),
+  setFilter: (filterKey, value, title) => _post({ action: 'set-filter', filterKey, value, title }),
+  navigateDashboard: (dashboardId) => _post({ action: 'navigate-dashboard', dashboardId }),
+}
 `
 
 // Pinned Preact version. Bumping this string is the only place to change
@@ -178,6 +253,17 @@ const IFRAME_CSS = `
   .au-spark-empty{height:28px;}
   .au-empty{color:#6b7280;font-size:12px;padding:8px 0;}
   .au-error{color:#fca5a5;font-size:12px;padding:8px 0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,monospace;white-space:pre-wrap;}
+  .au-button{appearance:none;border:1px solid rgba(148,163,184,0.18);background:rgba(148,163,184,0.08);color:#f9fafb;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:600;cursor:pointer;}
+  .au-button-accent{background:rgba(99,102,241,0.18);border-color:rgba(99,102,241,0.3);color:#c7d2fe;}
+  .au-button-ok{background:rgba(34,197,94,0.16);border-color:rgba(34,197,94,0.28);color:#86efac;}
+  .au-button:disabled{opacity:.45;cursor:default;}
+  .au-tabs{display:flex;flex-wrap:wrap;gap:6px;}
+  .au-tab{appearance:none;border:1px solid rgba(148,163,184,0.16);background:rgba(148,163,184,0.08);color:#cbd5e1;border-radius:999px;padding:5px 9px;font-size:11px;cursor:pointer;}
+  .au-tab.is-active{background:rgba(99,102,241,0.18);border-color:rgba(99,102,241,0.3);color:#c7d2fe;}
+  .au-select{width:100%;padding:7px 9px;border-radius:8px;border:1px solid rgba(148,163,184,0.16);background:rgba(17,24,39,0.9);color:#f9fafb;}
+  .au-details{border:1px solid rgba(148,163,184,0.12);border-radius:10px;padding:8px 10px;background:rgba(148,163,184,0.05);}
+  .au-details summary{cursor:pointer;font-weight:600;}
+  .au-details-body{padding-top:8px;}
 `
 
 function toDataURL(js: string): string {
@@ -275,9 +361,10 @@ export interface DashboardCodeFrameProps {
   compiled: string
   /** Most recent data payload to pass as the Widget's `data` prop. */
   data: unknown
+  onAction?: (action: DashboardWidgetAction) => void
 }
 
-export function DashboardCodeFrame({ hash, compiled, data }: DashboardCodeFrameProps): JSX.Element {
+export function DashboardCodeFrame({ hash, compiled, data, onAction }: DashboardCodeFrameProps): JSX.Element {
   const iframeRef    = useRef<HTMLIFrameElement>(null)
   const dataRef      = useRef<unknown>(data)
   dataRef.current    = data
@@ -305,10 +392,11 @@ export function DashboardCodeFrame({ hash, compiled, data }: DashboardCodeFrameP
     }
     function onMessage(e: MessageEvent) {
       if (e.source !== iframe!.contentWindow) return
-      const payload = e.data as { type?: string; message?: string } | undefined
+      const payload = e.data as { type?: string; message?: string; action?: DashboardWidgetAction } | undefined
       if (payload?.type === 'atlas:ready') send()
       if (payload?.type === 'atlas:paint') setWidgetReady(true)
       if (payload?.type === 'atlas:error') setWidgetError(payload.message ?? 'Widget error')
+      if (payload?.type === 'atlas:action' && payload.action && onAction) onAction(payload.action)
     }
     window.addEventListener('message', onMessage)
     iframe.addEventListener('load', send)
@@ -317,7 +405,7 @@ export function DashboardCodeFrame({ hash, compiled, data }: DashboardCodeFrameP
       window.removeEventListener('message', onMessage)
       iframe.removeEventListener('load', send)
     }
-  }, [srcdoc])
+  }, [onAction, srcdoc])
 
   useEffect(() => {
     try { iframeRef.current?.contentWindow?.postMessage({ type: 'atlas:data', data }, '*') }

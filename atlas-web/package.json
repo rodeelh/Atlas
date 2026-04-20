@@ -1,7 +1,7 @@
 {
   "name": "atlas-web",
   "private": true,
-  "version": "0.9.9",
+  "version": "0.9.10",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,6 +14,7 @@
     "@types/dompurify": "^3.0.5",
     "chart.js": "^4.5.1",
     "dompurify": "^3.3.3",
+    "gridstack": "^12.6.0",
     "highlight.js": "^11.11.1",
     "marked": "^17.0.5",
     "preact": "^10.23.1",
