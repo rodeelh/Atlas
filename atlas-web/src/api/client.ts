@@ -2,6 +2,7 @@
 import type {
   APIKeyStatus,
   Approval,
+  AudioProviderModelSet,
   CapabilityRecord,
   DashboardDefinition,
   DashboardLayoutUpdate,
@@ -82,6 +83,7 @@ export type {
   MLXModelInfo,
   MLXDownloadStatus,
   Approval,
+  AudioProviderModelSet,
   CapabilityRecord,
   FsRoot,
   AutomationSummary,
@@ -561,6 +563,8 @@ export const api = {
   voiceKokoroUpdateBaseURL: () => BASE(),
   voiceVoices: (provider?: string) =>
     get<VoiceOption[]>('/voice/voices' + (provider ? `?provider=${encodeURIComponent(provider)}` : '')),
+  voiceProviderModels: (provider?: string) =>
+    get<AudioProviderModelSet>('/voice/provider-models' + (provider ? `?provider=${encodeURIComponent(provider)}` : '')),
   voiceTranscribe: async (blob: Blob, language?: string): Promise<VoiceTranscribeResult> => {
     const form = new FormData()
     const ext = blob.type.includes('wav') ? 'wav' : 'webm'

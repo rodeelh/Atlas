@@ -22,7 +22,7 @@ type geminiSTT struct{ cfg ProviderConfig }
 func (a *geminiSTT) Transcribe(ctx context.Context, audio []byte, mimeType, language string) (TranscribeResult, error) {
 	model := a.cfg.STTModel
 	if model == "" {
-		model = "gemini-2.0-flash"
+		model = defaultGeminiSTTModel
 	}
 
 	prompt := "Transcribe the speech in this audio accurately. Return only the transcript text, nothing else."
@@ -102,7 +102,7 @@ type geminiTTS struct{ cfg ProviderConfig }
 func (a *geminiTTS) Synthesize(ctx context.Context, text, voice string, _ float64, emit func(SynthesizeChunk) error) error {
 	model := a.cfg.TTSModel
 	if model == "" {
-		model = "gemini-2.5-flash-preview-tts"
+		model = defaultGeminiTTSModel
 	}
 	if voice == "" {
 		voice = a.cfg.TTSVoice

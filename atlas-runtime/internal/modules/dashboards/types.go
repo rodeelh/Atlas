@@ -89,12 +89,10 @@ type DataSource struct {
 }
 
 // RefreshPolicy controls when a source re-fetches. IntervalSeconds applies
-// only to RefreshInterval. IdleSeconds optionally pauses interval refresh
-// after no SSE subscribers for that duration (0 = never pause).
+// only to RefreshInterval.
 type RefreshPolicy struct {
 	Mode            string `json:"mode"`
 	IntervalSeconds int    `json:"intervalSeconds,omitempty"`
-	IdleSeconds     int    `json:"idleSeconds,omitempty"`
 }
 
 // DataSourceBinding connects a widget to a data source by name and optionally

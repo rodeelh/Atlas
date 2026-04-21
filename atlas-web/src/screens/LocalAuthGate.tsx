@@ -161,12 +161,14 @@ export function LocalAuthGate({ onAuthenticated }: Props) {
         {mode === 'setup-choose' && (
           <>
             <p class="local-auth-subtitle">Protect local access to Atlas</p>
-            <button class="local-auth-btn primary" onClick={startWebAuthnSetup} disabled={busy}>
-              {busy ? 'Setting up…' : `Use ${webAuthnLabel}`}
-            </button>
-            <button class="local-auth-btn secondary" onClick={() => setMode('setup-pin')} disabled={busy}>
-              Use a PIN
-            </button>
+            <div class="local-auth-actions">
+              <button class="local-auth-btn primary" onClick={startWebAuthnSetup} disabled={busy}>
+                {busy ? 'Setting up…' : `Use ${webAuthnLabel}`}
+              </button>
+              <button class="local-auth-btn secondary" onClick={() => setMode('setup-pin')} disabled={busy}>
+                Use a PIN
+              </button>
+            </div>
           </>
         )}
 
@@ -191,12 +193,14 @@ export function LocalAuthGate({ onAuthenticated }: Props) {
               onInput={(e) => setPINConfirm((e.target as HTMLInputElement).value)}
               onKeyDown={(e) => e.key === 'Enter' && setupPIN()}
             />
-            <button class="local-auth-btn primary" onClick={setupPIN} disabled={busy}>
-              {busy ? 'Setting up…' : 'Set PIN'}
-            </button>
-            <button class="local-auth-btn text" onClick={() => setMode('setup-choose')} disabled={busy}>
-              Back
-            </button>
+            <div class="local-auth-actions">
+              <button class="local-auth-btn primary" onClick={setupPIN} disabled={busy}>
+                {busy ? 'Setting up…' : 'Set PIN'}
+              </button>
+              <button class="local-auth-btn text" onClick={() => setMode('setup-choose')} disabled={busy}>
+                Back
+              </button>
+            </div>
           </>
         )}
 
@@ -205,12 +209,14 @@ export function LocalAuthGate({ onAuthenticated }: Props) {
           <>
             <p class="local-auth-subtitle">Complete the authenticator prompt to continue</p>
             <div class="local-auth-spinner" />
-            <button
-              class="local-auth-btn text"
-              onClick={() => { setBusy(false); setMode('setup-choose') }}
-            >
-              Cancel
-            </button>
+            <div class="local-auth-actions">
+              <button
+                class="local-auth-btn text"
+                onClick={() => { setBusy(false); setMode('setup-choose') }}
+              >
+                Cancel
+              </button>
+            </div>
           </>
         )}
 
@@ -218,12 +224,14 @@ export function LocalAuthGate({ onAuthenticated }: Props) {
         {mode === 'auth-webauthn' && (
           <>
             <p class="local-auth-subtitle">Verify your identity to continue</p>
-            <button class="local-auth-btn primary" onClick={authenticateWebAuthn} disabled={busy}>
-              {busy ? 'Verifying…' : `Use ${webAuthnLabel}`}
-            </button>
-            <button class="local-auth-btn text" onClick={() => setMode('auth-pin')}>
-              Use PIN instead
-            </button>
+            <div class="local-auth-actions">
+              <button class="local-auth-btn primary" onClick={authenticateWebAuthn} disabled={busy}>
+                {busy ? 'Verifying…' : `Use ${webAuthnLabel}`}
+              </button>
+              <button class="local-auth-btn text" onClick={() => setMode('auth-pin')}>
+                Use PIN instead
+              </button>
+            </div>
           </>
         )}
 
@@ -240,14 +248,16 @@ export function LocalAuthGate({ onAuthenticated }: Props) {
               onKeyDown={(e) => e.key === 'Enter' && verifyPIN()}
               autoFocus
             />
-            <button class="local-auth-btn primary" onClick={verifyPIN} disabled={busy}>
-              {busy ? 'Verifying…' : 'Continue'}
-            </button>
-            {hasWebAuthn && (
-              <button class="local-auth-btn text" onClick={() => { setError(null); setMode('auth-webauthn') }}>
-                {`Use ${webAuthnLabel} instead`}
+            <div class="local-auth-actions">
+              <button class="local-auth-btn primary" onClick={verifyPIN} disabled={busy}>
+                {busy ? 'Verifying…' : 'Continue'}
               </button>
-            )}
+              {hasWebAuthn && (
+                <button class="local-auth-btn text" onClick={() => { setError(null); setMode('auth-webauthn') }}>
+                  {`Use ${webAuthnLabel} instead`}
+                </button>
+              )}
+            </div>
           </>
         )}
 

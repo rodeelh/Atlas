@@ -875,6 +875,16 @@ export interface VoiceOption {
   modelGate?: string; // only shown when this TTS model is selected
 }
 
+export interface AudioProviderModelOption {
+  id: string;
+  label: string;
+}
+
+export interface AudioProviderModelSet {
+  stt: AudioProviderModelOption[];
+  tts: AudioProviderModelOption[];
+}
+
 export interface VoiceModelInfo {
   name: string;
   component: "whisper" | "kokoro";
@@ -937,7 +947,6 @@ export type DashboardPreset =
 export interface DashboardRefreshPolicy {
   mode: DashboardRefreshMode;
   intervalSeconds?: number;
-  idleSeconds?: number;
 }
 
 export interface DashboardDataSource {

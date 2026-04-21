@@ -173,8 +173,6 @@ func (m *Module) updateDraftWidget(dashboardID, widgetID string, req WidgetUpdat
 		if err := validateGridLayout(d.Widgets, columns); err != nil {
 			return Dashboard{}, err
 		}
-	} else {
-		d.Widgets = packGrid(d.Widgets, columns)
 	}
 	return m.store.Save(d)
 }

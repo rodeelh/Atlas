@@ -115,7 +115,7 @@ func TestAddWidgetRejectsUnknownBinding(t *testing.T) {
 	}
 }
 
-func TestUpdateDraftWidgetUpdatesPresetAndRepacks(t *testing.T) {
+func TestUpdateDraftWidgetUpdatesPresetWithoutRepackingExistingLayout(t *testing.T) {
 	m := newTestModule(t)
 	ctx := context.Background()
 	res, _ := m.skillCreateDraft(ctx, json.RawMessage(`{"name":"Editable"}`))
@@ -141,16 +141,23 @@ func TestUpdateDraftWidgetUpdatesPresetAndRepacks(t *testing.T) {
 		t.Fatalf("add_widget: %s", added.Summary)
 	}
 	widget := added.Artifacts["widget"].(Widget)
+	layouted, err := m.updateDraftLayout(dID, LayoutUpdateRequest{Widgets: []LayoutWidgetUpdate{
+		{ID: widget.ID, GridX: 7, GridY: 2, GridW: 3, GridH: 5},
+	}})
+	if err != nil {
+		t.Fatalf("updateDraftLayout: %v", err)
+	}
+	if got := layouted.Widgets[0]; got.GridX != 7 || got.GridY != 2 || got.GridW != 3 || got.GridH != 5 {
+		t.Fatalf("expected manual layout before edit, got %+v", got)
+	}
 
 	title := "After"
 	description := "Edited in the draft inspector"
-	size := SizeHalf
 	preset := PresetMarkdown
 	options := map[string]any{"path": "text"}
 	updated, err := m.updateDraftWidget(dID, widget.ID, WidgetUpdateRequest{
 		Title:       &title,
 		Description: &description,
-		Size:        &size,
 		Preset:      &preset,
 		Options:     options,
 	})
@@ -164,11 +171,11 @@ func TestUpdateDraftWidgetUpdatesPresetAndRepacks(t *testing.T) {
 		t.Fatalf("expected one widget, got %d", len(updated.Widgets))
 	}
 	got := updated.Widgets[0]
-	if got.Title != title || got.Description != description || got.Size != size || got.Code.Preset != preset {
+	if got.Title != title || got.Description != description || got.Size != SizeQuarter || got.Code.Preset != preset {
 		t.Fatalf("widget was not updated: %+v", got)
 	}
-	if got.GridW != 6 || got.GridH == 0 {
-		t.Fatalf("expected updated widget to be repacked as half, got %+v", got)
+	if got.GridX != 7 || got.GridY != 2 || got.GridW != 3 || got.GridH != 5 {
+		t.Fatalf("expected widget edit to preserve manual layout, got %+v", got)
 	}
 }
 

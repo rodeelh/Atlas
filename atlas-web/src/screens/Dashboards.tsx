@@ -648,109 +648,150 @@ function WidgetInspector({ dashboard, widget, saving, error, onSave, onClose }: 
 
   return (
     <aside class="dashboard-widget-inspector">
-      <div class="dashboard-inspector-header">
-        <div>
-          <h3>Widget</h3>
-          <span>{isCode ? 'Code widget metadata' : 'Preset widget settings'}</span>
-        </div>
-        <span class={`dashboard-inspector-status ${inspectorStatus.tone}`}>{inspectorStatus.label}</span>
-        <button class="btn btn-sm" type="button" onClick={onClose}>Close</button>
-      </div>
       <form class="dashboard-inspector-form" onSubmit={submit}>
-        <label>
-          <span>Title</span>
-          <input aria-label="Title" value={title} onInput={e => setTitle((e.currentTarget as HTMLInputElement).value)} />
-        </label>
-        <label>
-          <span>Description</span>
-          <input aria-label="Description" value={description} onInput={e => setDescription((e.currentTarget as HTMLInputElement).value)} />
-        </label>
-        <label>
-          <span>Size</span>
-          <select aria-label="Size" value={size} onChange={e => setSize((e.currentTarget as HTMLSelectElement).value as DashboardSize)}>
-            {DASHBOARD_SIZES.map(value => <option key={value} value={value}>{value}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>Source</span>
-          <select aria-label="Source" value={source} onChange={e => setSource((e.currentTarget as HTMLSelectElement).value)}>
-            <option value="">No source</option>
-            {dashboard.sources.map(src => <option key={src.name} value={src.name}>{src.name}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>Binding path</span>
-          <input
-            aria-label="Binding path"
-            value={bindingPath}
-            placeholder="rows, rows[0], rows[].value"
-            onInput={e => setBindingPath((e.currentTarget as HTMLInputElement).value)}
-          />
-        </label>
-        <label>
-          <span>Preset</span>
-          <select
-            aria-label="Preset"
-            value={preset}
-            disabled={isCode}
-            onChange={e => setPreset((e.currentTarget as HTMLSelectElement).value as DashboardPreset)}
-          >
-            {DASHBOARD_PRESETS.map(value => <option key={value} value={value}>{value}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>Options JSON</span>
-          <textarea
-            aria-label="Options JSON"
-            value={isCode ? 'Code widget options are edited in TSX.' : optionsText}
-            disabled={isCode}
-            rows={10}
-            spellcheck={false}
-            onInput={e => setOptionsText((e.currentTarget as HTMLTextAreaElement).value)}
-          />
-        </label>
-        {isCode && (
-          <div class="dashboard-code-editor">
-            <label>
-              <span>Widget TSX</span>
-              <textarea
-                aria-label="Widget TSX"
-                value={tsx}
-                rows={16}
-                spellcheck={false}
-                onInput={e => setTSX((e.currentTarget as HTMLTextAreaElement).value)}
-              />
-            </label>
-            <div class="dashboard-code-toolbar" aria-label="Code widget examples">
-              <button class="btn btn-sm" type="button" onClick={() => setTSX(CODE_WIDGET_TEMPLATE)}>Use template</button>
-              {CODE_WIDGET_SNIPPETS.map(snippet => (
-                <button
-                  key={snippet.key}
-                  class="btn btn-sm"
-                  type="button"
-                  onClick={() => setTSX(snippet.tsx)}
-                >
-                  {snippet.label}
-                </button>
-              ))}
-            </div>
-            <div class="dashboard-code-meta-grid">
-              <p class="dashboard-code-meta">
-                Saved compile: {widget.code?.hash ? <code>{widget.code.hash.slice(0, 12)}</code> : 'Not compiled yet'}
-              </p>
-              <p class="dashboard-code-meta">
-                Draft state: {codeDirty ? 'Unsaved changes' : 'In sync'}
-              </p>
+        <div class="modal-header dashboard-inspector-header">
+          <div class="dashboard-inspector-title-wrap">
+            <div>
+              <h3>Widget</h3>
+              <span>{isCode ? 'Code widget metadata and runtime' : 'Preset widget settings and bindings'}</span>
             </div>
           </div>
-        )}
-        {(localError || error) && (
-          <div class="dashboard-inspector-diagnostics" role="alert">
-            <p class="dashboard-inspector-error-label">{localError ? 'Validation' : 'Compile diagnostics'}</p>
-            <pre class="dashboard-inspector-error">{localError || error}</pre>
+          <div class="dashboard-inspector-header-actions">
+            <span class={`dashboard-inspector-status ${inspectorStatus.tone}`}>{inspectorStatus.label}</span>
+            <button class="btn btn-sm" type="button" onClick={onClose}>Close</button>
           </div>
-        )}
-        <div class="dashboard-inspector-actions">
+        </div>
+
+        <div class="modal-body dashboard-inspector-body">
+          <section class="dashboard-inspector-section">
+            <div class="dashboard-inspector-section-header">
+              <h4>Basics</h4>
+              <span>Name and shape of the widget card.</span>
+            </div>
+            <div class="dashboard-inspector-grid dashboard-inspector-grid-two">
+              <label class="dashboard-inspector-field dashboard-inspector-field-span-2">
+                <span>Title</span>
+                <input aria-label="Title" value={title} onInput={e => setTitle((e.currentTarget as HTMLInputElement).value)} />
+              </label>
+              <label class="dashboard-inspector-field dashboard-inspector-field-span-2">
+                <span>Description</span>
+                <input aria-label="Description" value={description} onInput={e => setDescription((e.currentTarget as HTMLInputElement).value)} />
+              </label>
+              <label class="dashboard-inspector-field">
+                <span>Size</span>
+                <select aria-label="Size" value={size} onChange={e => setSize((e.currentTarget as HTMLSelectElement).value as DashboardSize)}>
+                  {DASHBOARD_SIZES.map(value => <option key={value} value={value}>{value}</option>)}
+                </select>
+              </label>
+              {!isCode && (
+                <label class="dashboard-inspector-field">
+                  <span>Preset</span>
+                  <select
+                    aria-label="Preset"
+                    value={preset}
+                    onChange={e => setPreset((e.currentTarget as HTMLSelectElement).value as DashboardPreset)}
+                  >
+                    {DASHBOARD_PRESETS.map(value => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </label>
+              )}
+            </div>
+          </section>
+
+          <section class="dashboard-inspector-section">
+            <div class="dashboard-inspector-section-header">
+              <h4>Binding</h4>
+              <span>Connect this widget to a source and optionally project a nested value.</span>
+            </div>
+            <div class="dashboard-inspector-grid dashboard-inspector-grid-two">
+              <label class="dashboard-inspector-field">
+                <span>Source</span>
+                <select aria-label="Source" value={source} onChange={e => setSource((e.currentTarget as HTMLSelectElement).value)}>
+                  <option value="">No source</option>
+                  {dashboard.sources.map(src => <option key={src.name} value={src.name}>{src.name}</option>)}
+                </select>
+              </label>
+              <label class="dashboard-inspector-field">
+                <span>Binding path</span>
+                <input
+                  aria-label="Binding path"
+                  value={bindingPath}
+                  placeholder="rows, rows[0], rows[].value"
+                  onInput={e => setBindingPath((e.currentTarget as HTMLInputElement).value)}
+                />
+              </label>
+            </div>
+          </section>
+
+          {!isCode && (
+            <section class="dashboard-inspector-section">
+              <div class="dashboard-inspector-section-header">
+                <h4>Preset options</h4>
+                <span>Renderer-specific configuration in JSON form.</span>
+              </div>
+              <label class="dashboard-inspector-field">
+                <span>Options JSON</span>
+                <textarea
+                  aria-label="Options JSON"
+                  value={optionsText}
+                  rows={10}
+                  spellcheck={false}
+                  onInput={e => setOptionsText((e.currentTarget as HTMLTextAreaElement).value)}
+                />
+              </label>
+            </section>
+          )}
+
+          {isCode && (
+            <section class="dashboard-inspector-section">
+              <div class="dashboard-inspector-section-header">
+                <h4>Code widget</h4>
+                <span>Edit TSX directly and start from a template when it helps.</span>
+              </div>
+              <div class="dashboard-code-toolbar" aria-label="Code widget examples">
+                <button class="btn btn-sm" type="button" onClick={() => setTSX(CODE_WIDGET_TEMPLATE)}>Use template</button>
+                {CODE_WIDGET_SNIPPETS.map(snippet => (
+                  <button
+                    key={snippet.key}
+                    class="btn btn-sm"
+                    type="button"
+                    onClick={() => setTSX(snippet.tsx)}
+                  >
+                    {snippet.label}
+                  </button>
+                ))}
+              </div>
+              <label class="dashboard-inspector-field">
+                <span>Widget TSX</span>
+                <textarea
+                  aria-label="Widget TSX"
+                  value={tsx}
+                  rows={16}
+                  spellcheck={false}
+                  onInput={e => setTSX((e.currentTarget as HTMLTextAreaElement).value)}
+                />
+              </label>
+              <div class="dashboard-code-meta-grid">
+                <p class="dashboard-code-meta">
+                  Saved compile: {widget.code?.hash ? <code>{widget.code.hash.slice(0, 12)}</code> : 'Not compiled yet'}
+                </p>
+                <p class="dashboard-code-meta">
+                  Draft state: {codeDirty ? 'Unsaved changes' : 'In sync'}
+                </p>
+              </div>
+            </section>
+          )}
+
+          {(localError || error) && (
+            <div class="dashboard-inspector-diagnostics" role="alert">
+              <p class="dashboard-inspector-error-label">{localError ? 'Validation' : 'Compile diagnostics'}</p>
+              <pre class="dashboard-inspector-error">{localError || error}</pre>
+            </div>
+          )}
+        </div>
+
+        <div class="modal-footer dashboard-inspector-footer">
+          <button class="btn btn-sm" type="button" onClick={onClose}>Cancel</button>
           <button class="btn btn-sm btn-primary" type="submit" disabled={!canSave}>{saving ? 'Saving…' : 'Save widget'}</button>
         </div>
       </form>
@@ -1231,7 +1272,7 @@ export function DashboardDetail(
       )}
       {isDraft && def && editingWidget && (
         <div class="dashboard-widget-inspector-backdrop" onClick={() => setEditingWidgetID(null)}>
-          <div class="dashboard-widget-inspector-modal" onClick={e => e.stopPropagation()}>
+          <div class="modal dashboard-widget-inspector-modal" onClick={e => e.stopPropagation()}>
             <WidgetInspector
               dashboard={def}
               widget={editingWidget}

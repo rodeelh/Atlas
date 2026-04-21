@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks'
-import { api, type RuntimeConfig, type VoiceOption } from '../api/client'
+import { api, type AudioProviderModelSet, type RuntimeConfig, type VoiceOption } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { PageSpinner } from '../components/PageSpinner'
 import { ErrorBanner } from '../components/ErrorBanner'
@@ -14,7 +14,7 @@ const AUDIO_PROVIDERS: { id: AudioProviderID; label: string; sublabel: string }[
   { id: 'elevenlabs',  label: 'ElevenLabs',  sublabel: 'Scribe STT + Turbo TTS' },
 ]
 
-const STT_MODELS: Record<AudioProviderID, { id: string; label: string }[]> = {
+const FALLBACK_STT_MODELS: Record<AudioProviderID, { id: string; label: string }[]> = {
   local: [],
   openai: [
     { id: 'gpt-4o-transcribe',      label: 'GPT-4o Transcribe' },
@@ -22,15 +22,15 @@ const STT_MODELS: Record<AudioProviderID, { id: string; label: string }[]> = {
     { id: 'whisper-1',              label: 'Whisper-1' },
   ],
   gemini: [
-    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash (default)' },
-    { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (default)' },
+    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
   ],
   elevenlabs: [
     { id: 'scribe_v1', label: 'Scribe v1 (default)' },
   ],
 }
 
-const TTS_MODELS: Record<AudioProviderID, { id: string; label: string }[]> = {
+const FALLBACK_TTS_MODELS: Record<AudioProviderID, { id: string; label: string }[]> = {
   local: [],
   openai: [
     { id: 'tts-1',           label: 'TTS-1 (default)' },
@@ -56,6 +56,7 @@ export function AudioProviders() {
   const [error, setError] = useState<string | null>(null)
 
   const [voices, setVoices] = useState<VoiceOption[]>([])
+  const [modelOptions, setModelOptions] = useState<AudioProviderModelSet>({ stt: [], tts: [] })
   const [voicesLoading, setVoicesLoading] = useState(false)
   const [showAllVoices, setShowAllVoices] = useState(false)
 
@@ -73,6 +74,25 @@ export function AudioProviders() {
     }
   }
 
+  const fetchModelOptions = async (p: AudioProviderID) => {
+    if (p === 'local') {
+      setModelOptions({ stt: [], tts: [] })
+      return
+    }
+    try {
+      const discovered = await api.voiceProviderModels(p)
+      setModelOptions({
+        stt: discovered.stt?.length ? discovered.stt : FALLBACK_STT_MODELS[p],
+        tts: discovered.tts?.length ? discovered.tts : FALLBACK_TTS_MODELS[p],
+      })
+    } catch {
+      setModelOptions({
+        stt: FALLBACK_STT_MODELS[p],
+        tts: FALLBACK_TTS_MODELS[p],
+      })
+    }
+  }
+
   useEffect(() => {
     const init = async () => {
       try {
@@ -82,6 +102,7 @@ export function AudioProviders() {
         const active = ((cfg.activeAudioProvider || 'local') as AudioProviderID)
         setProvider(active)
         void fetchVoices(active)
+        void fetchModelOptions(active)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load config.')
       } finally {
@@ -102,6 +123,7 @@ export function AudioProviders() {
     update('audioTTSModel', '')
     update('audioTTSVoice', '')
     void fetchVoices(p)
+    void fetchModelOptions(p)
   }
 
   const save = async () => {
@@ -159,6 +181,8 @@ export function AudioProviders() {
   }
 
   const ttsModelValue = draft.audioTTSModel ?? ''
+  const sttModels = modelOptions.stt.length ? modelOptions.stt : FALLBACK_STT_MODELS[provider]
+  const ttsModels = modelOptions.tts.length ? modelOptions.tts : FALLBACK_TTS_MODELS[provider]
   const showStylePrompt = provider === 'openai' && ttsModelValue === 'gpt-4o-mini-tts'
 
   return (
@@ -280,7 +304,7 @@ export function AudioProviders() {
                 onChange={(e) => update('audioSTTModel', (e.target as HTMLSelectElement).value)}
               >
                 <option value="">Auto (default)</option>
-                {STT_MODELS[provider].map((m) => (
+                {sttModels.map((m) => (
                   <option key={m.id} value={m.id}>{m.label}</option>
                 ))}
               </select>
@@ -317,7 +341,7 @@ export function AudioProviders() {
                 onChange={(e) => update('audioTTSModel', (e.target as HTMLSelectElement).value)}
               >
                 <option value="">Auto (default)</option>
-                {TTS_MODELS[provider].map((m) => (
+                {ttsModels.map((m) => (
                   <option key={m.id} value={m.id}>{m.label}</option>
                 ))}
               </select>

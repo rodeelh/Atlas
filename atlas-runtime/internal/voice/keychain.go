@@ -15,43 +15,43 @@ func resolveAudioProvider(cfg config.RuntimeConfigSnapshot) ProviderConfig {
 		if bundle.OpenAIAPIKey == "" {
 			return ProviderConfig{Type: ProviderLocal}
 		}
-		return ProviderConfig{
+		return sanitizeProviderConfig(ProviderConfig{
 			Type:        ProviderOpenAI,
 			APIKey:      bundle.OpenAIAPIKey,
-			STTModel:    strOr(cfg.AudioSTTModel, "gpt-4o-mini-transcribe"),
-			TTSModel:    strOr(cfg.AudioTTSModel, "tts-1"),
+			STTModel:    strOr(cfg.AudioSTTModel, defaultOpenAISTTModel),
+			TTSModel:    strOr(cfg.AudioTTSModel, defaultOpenAITTSModel),
 			TTSVoice:    strOr(cfg.AudioTTSVoice, "alloy"),
 			Language:    cfg.AudioSTTLanguage,
 			Speed:       floatOr(cfg.AudioTTSSpeed, 1.0),
 			StylePrompt: cfg.AudioTTSStylePrompt,
-		}
+		})
 
 	case ProviderGemini:
 		if bundle.GeminiAPIKey == "" {
 			return ProviderConfig{Type: ProviderLocal}
 		}
-		return ProviderConfig{
+		return sanitizeProviderConfig(ProviderConfig{
 			Type:        ProviderGemini,
 			APIKey:      bundle.GeminiAPIKey,
-			STTModel:    strOr(cfg.AudioSTTModel, "gemini-2.0-flash"),
-			TTSModel:    strOr(cfg.AudioTTSModel, "gemini-2.5-flash-preview-tts"),
+			STTModel:    strOr(cfg.AudioSTTModel, defaultGeminiSTTModel),
+			TTSModel:    strOr(cfg.AudioTTSModel, defaultGeminiTTSModel),
 			TTSVoice:    strOr(cfg.AudioTTSVoice, "Aoede"),
 			Language:    cfg.AudioSTTLanguage,
 			StylePrompt: cfg.AudioTTSStylePrompt,
-		}
+		})
 
 	case ProviderElevenLabs:
 		if bundle.ElevenLabsAPIKey == "" {
 			return ProviderConfig{Type: ProviderLocal}
 		}
-		return ProviderConfig{
+		return sanitizeProviderConfig(ProviderConfig{
 			Type:     ProviderElevenLabs,
 			APIKey:   bundle.ElevenLabsAPIKey,
-			STTModel: strOr(cfg.AudioSTTModel, "scribe_v1"),
-			TTSModel: strOr(cfg.AudioTTSModel, "eleven_turbo_v2_5"),
+			STTModel: strOr(cfg.AudioSTTModel, defaultElevenLabsSTTModel),
+			TTSModel: strOr(cfg.AudioTTSModel, defaultElevenLabsTTSModel),
 			TTSVoice: strOr(cfg.AudioTTSVoice, "21m00Tcm4TlvDq8ikWAM"),
 			Language: cfg.AudioSTTLanguage,
-		}
+		})
 
 	default:
 		return ProviderConfig{Type: ProviderLocal}

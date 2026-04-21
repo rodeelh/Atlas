@@ -4,10 +4,10 @@ package voice
 type ProviderType string
 
 const (
-	ProviderLocal       ProviderType = "local"
-	ProviderOpenAI      ProviderType = "openai"
-	ProviderGemini      ProviderType = "gemini"
-	ProviderElevenLabs  ProviderType = "elevenlabs"
+	ProviderLocal      ProviderType = "local"
+	ProviderOpenAI     ProviderType = "openai"
+	ProviderGemini     ProviderType = "gemini"
+	ProviderElevenLabs ProviderType = "elevenlabs"
 )
 
 // ProviderConfig holds resolved settings for the active audio provider.
@@ -30,4 +30,14 @@ type VoiceOption struct {
 	Description string `json:"description"`
 	Featured    bool   `json:"featured"`
 	ModelGate   string `json:"modelGate,omitempty"` // non-empty = only show when this TTS model is selected
+}
+
+type ProviderModelOption struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+type ProviderModelSet struct {
+	STT []ProviderModelOption `json:"stt"`
+	TTS []ProviderModelOption `json:"tts"`
 }

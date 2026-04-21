@@ -355,25 +355,27 @@ export function Activity() {
 
       {/* ── Logs ── */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <div class="section-label activity-log-header">
-          <span>Event Log</span>
-          <div class="log-filter-tabs">
-            {(['all', 'info', 'warn', 'error'] as LogFilter[]).map(f => (
-              <button
-                key={f}
-                class={`log-filter-tab${logFilter === f ? ' active' : ''}`}
-                onClick={() => setLogFilter(f)}
-              >
-                {f === 'all' ? 'All' : f === 'warn' ? 'Warnings' : f.charAt(0).toUpperCase() + f.slice(1)}
-              </button>
-            ))}
-          </div>
-          <span class="activity-live">
-            <span class="activity-live-dot" />
-            Live
-          </span>
-        </div>
         <div class="card" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div class="card-header activity-log-header">
+            <div class="activity-log-heading">
+              <span class="card-title">Event Log</span>
+              <div class="log-filter-tabs">
+                {(['all', 'info', 'warn', 'error'] as LogFilter[]).map(f => (
+                  <button
+                    key={f}
+                    class={`log-filter-tab${logFilter === f ? ' active' : ''}`}
+                    onClick={() => setLogFilter(f)}
+                  >
+                    {f === 'all' ? 'All' : f === 'warn' ? 'Warnings' : f.charAt(0).toUpperCase() + f.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <span class="activity-live">
+              <span class="activity-live-dot" />
+              Live
+            </span>
+          </div>
           {filteredLogs.length === 0 ? (
             <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-3)', fontSize: '13px' }}>
               {logFilter === 'all' ? 'Send a message to start seeing activity here.' : `No ${logFilter === 'warn' ? 'warning' : logFilter} entries yet.`}

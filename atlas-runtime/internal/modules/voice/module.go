@@ -49,6 +49,7 @@ func (m *Module) Stop(context.Context) error {
 func (m *Module) registerRoutes(r chi.Router) {
 	r.Get("/voice/status", m.getStatus)
 	r.Get("/voice/voices", m.getVoices)
+	r.Get("/voice/provider-models", m.getProviderModels)
 	r.Post("/voice/session/start", m.postSessionStart)
 	r.Post("/voice/session/end", m.postSessionEnd)
 	r.Post("/voice/transcribe", m.postTranscribe)
@@ -61,6 +62,25 @@ func (m *Module) registerRoutes(r chi.Router) {
 	r.Delete("/voice/models/{component}/{name}", m.deleteModel)
 	r.Get("/voice/models/download/status", m.getDownloadStatus)
 	r.Delete("/voice/models/download", m.deleteDownloadStatus)
+}
+
+func (m *Module) getProviderModels(w http.ResponseWriter, r *http.Request) {
+	cfg := m.cfgStore.Load()
+	provider := runtimevoice.ProviderType(r.URL.Query().Get("provider"))
+	if provider == "" {
+		provider = runtimevoice.ProviderType(cfg.ActiveAudioProvider)
+	}
+	if provider == "" {
+		provider = runtimevoice.ProviderLocal
+	}
+	models := runtimevoice.ProviderModelSet{}
+	switch provider {
+	case runtimevoice.ProviderOpenAI, runtimevoice.ProviderGemini, runtimevoice.ProviderElevenLabs:
+		models = runtimevoice.DiscoverProviderModels(provider, cfg)
+	default:
+		models = runtimevoice.ProviderModelSet{}
+	}
+	writeJSON(w, http.StatusOK, models)
 }
 
 func (m *Module) getStatus(w http.ResponseWriter, _ *http.Request) {
@@ -337,57 +357,57 @@ func (m *Module) getVoices(w http.ResponseWriter, r *http.Request) {
 // featured top-5 for OpenAI; remaining 6 shown under "Show more".
 func openAIVoices() []runtimevoice.VoiceOption {
 	return []runtimevoice.VoiceOption{
-		{ID: "alloy",   Label: "Alloy",   Description: "Neutral · Balanced",      Featured: true},
-		{ID: "nova",    Label: "Nova",    Description: "Bright · Natural",        Featured: true},
-		{ID: "onyx",    Label: "Onyx",    Description: "Deep · Authoritative",    Featured: true},
-		{ID: "shimmer", Label: "Shimmer", Description: "Gentle · Warm",           Featured: true},
-		{ID: "ash",     Label: "Ash",     Description: "Conversational · Warm",   Featured: true},
+		{ID: "alloy", Label: "Alloy", Description: "Neutral · Balanced", Featured: true},
+		{ID: "nova", Label: "Nova", Description: "Bright · Natural", Featured: true},
+		{ID: "onyx", Label: "Onyx", Description: "Deep · Authoritative", Featured: true},
+		{ID: "shimmer", Label: "Shimmer", Description: "Gentle · Warm", Featured: true},
+		{ID: "ash", Label: "Ash", Description: "Conversational · Warm", Featured: true},
 		// show-more tier
-		{ID: "echo",  Label: "Echo",  Description: "Steady · Calm"},
+		{ID: "echo", Label: "Echo", Description: "Steady · Calm"},
 		{ID: "fable", Label: "Fable", Description: "Narrative · Expressive"},
 		{ID: "coral", Label: "Coral", Description: "Clear · Expressive"},
-		{ID: "sage",  Label: "Sage",  Description: "Measured · Thoughtful"},
+		{ID: "sage", Label: "Sage", Description: "Measured · Thoughtful"},
 		// model-gated: only available with gpt-4o-mini-tts
-		{ID: "marin", Label: "Marin", Description: "Modern · Clear",  ModelGate: "gpt-4o-mini-tts"},
-		{ID: "cedar", Label: "Cedar", Description: "Natural · Warm",  ModelGate: "gpt-4o-mini-tts"},
+		{ID: "marin", Label: "Marin", Description: "Modern · Clear", ModelGate: "gpt-4o-mini-tts"},
+		{ID: "cedar", Label: "Cedar", Description: "Natural · Warm", ModelGate: "gpt-4o-mini-tts"},
 	}
 }
 
 // featured top-5 for Gemini; remaining 25 shown under "Show more".
 func geminiVoices() []runtimevoice.VoiceOption {
 	featured := []runtimevoice.VoiceOption{
-		{ID: "Aoede",  Label: "Aoede",  Description: "Breezy",      Featured: true},
-		{ID: "Puck",   Label: "Puck",   Description: "Upbeat",      Featured: true},
-		{ID: "Kore",   Label: "Kore",   Description: "Firm",        Featured: true},
+		{ID: "Aoede", Label: "Aoede", Description: "Breezy", Featured: true},
+		{ID: "Puck", Label: "Puck", Description: "Upbeat", Featured: true},
+		{ID: "Kore", Label: "Kore", Description: "Firm", Featured: true},
 		{ID: "Charon", Label: "Charon", Description: "Informative", Featured: true},
-		{ID: "Fenrir", Label: "Fenrir", Description: "Excitable",   Featured: true},
+		{ID: "Fenrir", Label: "Fenrir", Description: "Excitable", Featured: true},
 	}
 	rest := []runtimevoice.VoiceOption{
-		{ID: "Zephyr",        Label: "Zephyr",        Description: "Bright"},
-		{ID: "Leda",          Label: "Leda",          Description: "Youthful"},
-		{ID: "Orus",          Label: "Orus",          Description: "Firm"},
-		{ID: "Callirrhoe",    Label: "Callirrhoe",    Description: "Easy-going"},
-		{ID: "Autonoe",       Label: "Autonoe",       Description: "Bright"},
-		{ID: "Enceladus",     Label: "Enceladus",     Description: "Breathy"},
-		{ID: "Iapetus",       Label: "Iapetus",       Description: "Clear"},
-		{ID: "Umbriel",       Label: "Umbriel",       Description: "Easy-going"},
-		{ID: "Algieba",       Label: "Algieba",       Description: "Smooth"},
-		{ID: "Despina",       Label: "Despina",       Description: "Smooth"},
-		{ID: "Erinome",       Label: "Erinome",       Description: "Clear"},
-		{ID: "Algenib",       Label: "Algenib",       Description: "Gravelly"},
-		{ID: "Rasalgethi",    Label: "Rasalgethi",    Description: "Informative"},
-		{ID: "Laomedeia",     Label: "Laomedeia",     Description: "Upbeat"},
-		{ID: "Achernar",      Label: "Achernar",      Description: "Soft"},
-		{ID: "Alnilam",       Label: "Alnilam",       Description: "Firm"},
-		{ID: "Schedar",       Label: "Schedar",       Description: "Even"},
-		{ID: "Gacrux",        Label: "Gacrux",        Description: "Mature"},
-		{ID: "Pulcherrima",   Label: "Pulcherrima",   Description: "Forward"},
-		{ID: "Achird",        Label: "Achird",        Description: "Friendly"},
+		{ID: "Zephyr", Label: "Zephyr", Description: "Bright"},
+		{ID: "Leda", Label: "Leda", Description: "Youthful"},
+		{ID: "Orus", Label: "Orus", Description: "Firm"},
+		{ID: "Callirrhoe", Label: "Callirrhoe", Description: "Easy-going"},
+		{ID: "Autonoe", Label: "Autonoe", Description: "Bright"},
+		{ID: "Enceladus", Label: "Enceladus", Description: "Breathy"},
+		{ID: "Iapetus", Label: "Iapetus", Description: "Clear"},
+		{ID: "Umbriel", Label: "Umbriel", Description: "Easy-going"},
+		{ID: "Algieba", Label: "Algieba", Description: "Smooth"},
+		{ID: "Despina", Label: "Despina", Description: "Smooth"},
+		{ID: "Erinome", Label: "Erinome", Description: "Clear"},
+		{ID: "Algenib", Label: "Algenib", Description: "Gravelly"},
+		{ID: "Rasalgethi", Label: "Rasalgethi", Description: "Informative"},
+		{ID: "Laomedeia", Label: "Laomedeia", Description: "Upbeat"},
+		{ID: "Achernar", Label: "Achernar", Description: "Soft"},
+		{ID: "Alnilam", Label: "Alnilam", Description: "Firm"},
+		{ID: "Schedar", Label: "Schedar", Description: "Even"},
+		{ID: "Gacrux", Label: "Gacrux", Description: "Mature"},
+		{ID: "Pulcherrima", Label: "Pulcherrima", Description: "Forward"},
+		{ID: "Achird", Label: "Achird", Description: "Friendly"},
 		{ID: "Zubenelgenubi", Label: "Zubenelgenubi", Description: "Casual"},
-		{ID: "Vindemiatrix",  Label: "Vindemiatrix",  Description: "Gentle"},
-		{ID: "Sadachbia",     Label: "Sadachbia",     Description: "Lively"},
-		{ID: "Sadaltager",    Label: "Sadaltager",    Description: "Knowledgeable"},
-		{ID: "Sulafat",       Label: "Sulafat",       Description: "Warm"},
+		{ID: "Vindemiatrix", Label: "Vindemiatrix", Description: "Gentle"},
+		{ID: "Sadachbia", Label: "Sadachbia", Description: "Lively"},
+		{ID: "Sadaltager", Label: "Sadaltager", Description: "Knowledgeable"},
+		{ID: "Sulafat", Label: "Sulafat", Description: "Warm"},
 	}
 	return append(featured, rest...)
 }
@@ -395,18 +415,18 @@ func geminiVoices() []runtimevoice.VoiceOption {
 // featured top-5 for ElevenLabs; remaining voices shown under "Show more".
 func elevenLabsVoices() []runtimevoice.VoiceOption {
 	return []runtimevoice.VoiceOption{
-		{ID: "21m00Tcm4TlvDq8ikWAM", Label: "Rachel",  Description: "Calm · American",      Featured: true},
-		{ID: "AZnzlk1XvdvUeBnXmlld", Label: "Domi",    Description: "Strong · American",     Featured: true},
-		{ID: "EXAVITQu4vr4xnSDxMaL", Label: "Bella",   Description: "Soft · American",       Featured: true},
-		{ID: "ErXwobaYiN019PkySvjV", Label: "Antoni",  Description: "Well-rounded · American", Featured: true},
-		{ID: "MF3mGyEYCl7XYWbV9V6O", Label: "Elli",    Description: "Emotional · American",  Featured: true},
+		{ID: "21m00Tcm4TlvDq8ikWAM", Label: "Rachel", Description: "Calm · American", Featured: true},
+		{ID: "AZnzlk1XvdvUeBnXmlld", Label: "Domi", Description: "Strong · American", Featured: true},
+		{ID: "EXAVITQu4vr4xnSDxMaL", Label: "Bella", Description: "Soft · American", Featured: true},
+		{ID: "ErXwobaYiN019PkySvjV", Label: "Antoni", Description: "Well-rounded · American", Featured: true},
+		{ID: "MF3mGyEYCl7XYWbV9V6O", Label: "Elli", Description: "Emotional · American", Featured: true},
 		// show-more tier
-		{ID: "TxGEqnHWrfWFTfGW9XjX", Label: "Josh",    Description: "Deep · American"},
-		{ID: "VR6AewLTigWG4xSOukaG", Label: "Arnold",  Description: "Crisp · American"},
-		{ID: "pNInz6obpgDQGcFmaJgB", Label: "Adam",    Description: "Deep · American"},
-		{ID: "yoZ06aMxZJJ28mfd3POQ", Label: "Sam",     Description: "Raspy · American"},
-		{ID: "onwK4e9ZLuTAKqWW03F9", Label: "Daniel",  Description: "Deep · British"},
-		{ID: "g5CIjZEefAph4nQFvHAz", Label: "Ethan",   Description: "Soft · American"},
+		{ID: "TxGEqnHWrfWFTfGW9XjX", Label: "Josh", Description: "Deep · American"},
+		{ID: "VR6AewLTigWG4xSOukaG", Label: "Arnold", Description: "Crisp · American"},
+		{ID: "pNInz6obpgDQGcFmaJgB", Label: "Adam", Description: "Deep · American"},
+		{ID: "yoZ06aMxZJJ28mfd3POQ", Label: "Sam", Description: "Raspy · American"},
+		{ID: "onwK4e9ZLuTAKqWW03F9", Label: "Daniel", Description: "Deep · British"},
+		{ID: "g5CIjZEefAph4nQFvHAz", Label: "Ethan", Description: "Soft · American"},
 	}
 }
 
@@ -416,8 +436,8 @@ func elevenLabsVoices() []runtimevoice.VoiceOption {
 func buildLocalVoices(all []string) []runtimevoice.VoiceOption {
 	curated := []runtimevoice.VoiceOption{
 		{ID: "af_heart", Label: "Heart", Description: "American · Female", Featured: true},
-		{ID: "am_onyx",  Label: "Onyx",  Description: "American · Male",   Featured: true},
-		{ID: "bf_emma",  Label: "Emma",  Description: "British · Female",  Featured: true},
+		{ID: "am_onyx", Label: "Onyx", Description: "American · Male", Featured: true},
+		{ID: "bf_emma", Label: "Emma", Description: "British · Female", Featured: true},
 	}
 	curatedIDs := map[string]bool{"af_heart": true, "am_onyx": true, "bf_emma": true}
 
@@ -438,8 +458,8 @@ func buildLocalVoices(all []string) []runtimevoice.VoiceOption {
 func localVoicesFallback() []runtimevoice.VoiceOption {
 	return []runtimevoice.VoiceOption{
 		{ID: "af_heart", Label: "Heart", Description: "American · Female", Featured: true},
-		{ID: "am_onyx",  Label: "Onyx",  Description: "American · Male",   Featured: true},
-		{ID: "bf_emma",  Label: "Emma",  Description: "British · Female",  Featured: true},
+		{ID: "am_onyx", Label: "Onyx", Description: "American · Male", Featured: true},
+		{ID: "bf_emma", Label: "Emma", Description: "British · Female", Featured: true},
 	}
 }
 

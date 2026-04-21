@@ -53,10 +53,11 @@ type Manager struct {
 	dlProgress DownloadProgress
 
 	// Active provider adapters — rebuilt when ActiveAudioProvider changes.
-	adapterMu       sync.Mutex
-	activeProvider  ProviderType
-	sttAdapter      STTAdapter
-	ttsAdapter      TTSAdapter
+	adapterMu         sync.Mutex
+	activeProvider    ProviderType
+	activeProviderCfg ProviderConfig
+	sttAdapter        STTAdapter
+	ttsAdapter        TTSAdapter
 }
 
 // NewManager creates a Manager.
@@ -80,10 +81,11 @@ func (m *Manager) resolveAdapters() (STTAdapter, TTSAdapter) {
 	m.adapterMu.Lock()
 	defer m.adapterMu.Unlock()
 
-	if m.sttAdapter == nil || m.ttsAdapter == nil || m.activeProvider != providerCfg.Type {
+	if m.sttAdapter == nil || m.ttsAdapter == nil || m.activeProvider != providerCfg.Type || m.activeProviderCfg != providerCfg {
 		m.sttAdapter = newSTTAdapter(providerCfg, m)
 		m.ttsAdapter = newTTSAdapter(providerCfg, m)
 		m.activeProvider = providerCfg.Type
+		m.activeProviderCfg = providerCfg
 		logstore.Write("info", "voice: adapters resolved for provider "+string(providerCfg.Type), nil)
 	}
 	return m.sttAdapter, m.ttsAdapter
@@ -172,7 +174,7 @@ func (m *Manager) Status() VoiceStatus {
 		KokoroReady:     m.kokoroReadyLocked(),
 		KokoroPort:      m.kokoroPort,
 		KokoroVersion:   m.KokoroVersion(),
-		LastError:        m.lastError,
+		LastError:       m.lastError,
 	}
 	if !m.sessionStarted.IsZero() {
 		s.SessionStarted = m.sessionStarted.Unix()

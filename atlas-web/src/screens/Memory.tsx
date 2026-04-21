@@ -27,6 +27,40 @@ const SearchIcon = () => (
   </svg>
 )
 
+const MEMORY_PAGE_SIZE = 10
+
+function memorySortTime(memory: MemoryItem): number {
+  const primary = Date.parse(memory.updatedAt || memory.createdAt || '')
+  if (Number.isFinite(primary)) return primary
+  const fallback = Date.parse(memory.createdAt || '')
+  return Number.isFinite(fallback) ? fallback : 0
+}
+
+function sortMemoriesChronologically(items: MemoryItem[]): MemoryItem[] {
+  return [...items].sort((a, b) => memorySortTime(b) - memorySortTime(a))
+}
+
+function formatMemoryTimestamp(updatedAt?: string, createdAt?: string): { label: string; absolute: string } | null {
+  const iso = updatedAt || createdAt
+  if (!iso) return null
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return null
+
+  const absolute = date.toLocaleString()
+  const diffSeconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000))
+  let relative = ''
+  if (diffSeconds < 45) relative = 'just now'
+  else if (diffSeconds < 3600) relative = `${Math.floor(diffSeconds / 60)}m ago`
+  else if (diffSeconds < 86400) relative = `${Math.floor(diffSeconds / 3600)}h ago`
+  else if (diffSeconds < 604800) relative = `${Math.floor(diffSeconds / 86400)}d ago`
+  else relative = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+
+  return {
+    label: updatedAt ? `Updated ${relative}` : `Saved ${relative}`,
+    absolute,
+  }
+}
+
 export function Memory() {
   const [memories, setMemories] = useState<MemoryItem[]>([])
   const [filtered, setFiltered] = useState<MemoryItem[]>([])
@@ -37,12 +71,13 @@ export function Memory() {
   const [searching, setSearching] = useState(false)
   const [deleting, setDeleting] = useState<Set<string>>(new Set())
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [visibleCount, setVisibleCount] = useState(MEMORY_PAGE_SIZE)
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const load = async () => {
     try {
       const data = await api.memories()
-      setMemories(data)
+      setMemories(sortMemoriesChronologically(data))
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load memories.')
@@ -56,7 +91,8 @@ export function Memory() {
   useEffect(() => {
     if (query.trim()) return
     const cat = category === 'all' ? null : category
-    setFiltered(cat ? memories.filter(m => m.category.toLowerCase() === cat) : memories)
+    const items = cat ? memories.filter(m => m.category.toLowerCase() === cat) : memories
+    setFiltered(sortMemoriesChronologically(items))
   }, [memories, category, query])
 
   useEffect(() => {
@@ -70,7 +106,8 @@ export function Memory() {
         // filtering is applied client-side below as a safety net.
         const results = await api.searchMemories(query.trim())
         const cat = category === 'all' ? null : category
-        setFiltered(cat ? results.filter(m => m.category.toLowerCase() === cat) : results)
+        const items = cat ? results.filter(m => m.category.toLowerCase() === cat) : results
+        setFiltered(sortMemoriesChronologically(items))
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Search failed.')
       } finally {
@@ -78,6 +115,13 @@ export function Memory() {
       }
     }, 350)
   }, [query, category])
+
+  useEffect(() => {
+    setVisibleCount(MEMORY_PAGE_SIZE)
+  }, [query, category, memories.length])
+
+  const visibleMemories = filtered.slice(0, visibleCount)
+  const hasMoreMemories = filtered.length > visibleCount
 
   const deleteMemory = async (id: string) => {
     setDeleting(prev => new Set(prev).add(id))
@@ -109,7 +153,7 @@ export function Memory() {
         subtitle="Facts Atlas has learned from your conversations"
         actions={
           <span class="surface-chip">
-            {filtered.length} {filtered.length === 1 ? 'item' : 'items'}
+            {visibleMemories.length}/{filtered.length} {filtered.length === 1 ? 'item' : 'items'}
             {category !== 'all' && ` · ${category}`}
           </span>
         }
@@ -163,12 +207,21 @@ export function Memory() {
 
       {!searching && filtered.length > 0 && (
         <div class="card memory-list-card">
-          {filtered.map((m, i) => (
-            <div key={m.id} style={{ borderBottom: i < filtered.length - 1 ? '1px solid var(--border)' : 'none' }}>
+          {visibleMemories.map((m, i) => (
+            <div key={m.id} style={{ borderBottom: i < visibleMemories.length - 1 ? '1px solid var(--border)' : 'none' }}>
               <div class="row memory-row" style={{ borderBottom: 'none', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div class="memory-title">{m.title}</div>
                   <div class="memory-content">{m.content}</div>
+                  {(() => {
+                    const stamp = formatMemoryTimestamp(m.updatedAt, m.createdAt)
+                    if (!stamp) return null
+                    return (
+                      <div class="memory-meta" title={stamp.absolute}>
+                        {stamp.label}
+                      </div>
+                    )
+                  })()}
                   <div class="memory-footer">
                     {categoryBadge(m.category)}
                     {m.isUserConfirmed
@@ -208,6 +261,29 @@ export function Memory() {
               </div>
             </div>
           ))}
+          {(hasMoreMemories || visibleCount > MEMORY_PAGE_SIZE) && (
+            <div class="memory-pagination">
+              <div class="memory-pagination-side">
+                {hasMoreMemories && (
+                  <button class="btn btn-sm" onClick={() => setVisibleCount(count => count + MEMORY_PAGE_SIZE)}>
+                    Show next 10
+                  </button>
+                )}
+              </div>
+              <div class="memory-pagination-side memory-pagination-side-right">
+                {hasMoreMemories && (
+                  <button class="btn btn-sm" onClick={() => setVisibleCount(filtered.length)}>
+                    Show all
+                  </button>
+                )}
+                {visibleCount > MEMORY_PAGE_SIZE && (
+                  <button class="btn btn-sm" onClick={() => setVisibleCount(MEMORY_PAGE_SIZE)}>
+                    Show less
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

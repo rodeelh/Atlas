@@ -133,7 +133,7 @@ type VoiceAudioConfig struct {
 
 	// AudioSTTModel is the provider-specific STT model ID.
 	// OpenAI: "gpt-4o-mini-transcribe" | "gpt-4o-transcribe" | "whisper-1"
-	// Gemini: "gemini-2.0-flash" | "gemini-2.5-flash"
+	// Gemini: "gemini-2.5-flash" | "gemini-2.5-pro"
 	// Empty means use the provider default.
 	AudioSTTModel    string `json:"audioSTTModel"`
 	AudioSTTLanguage string `json:"audioSTTLanguage"` // BCP-47 hint; "" = auto-detect
