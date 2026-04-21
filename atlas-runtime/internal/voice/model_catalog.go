@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
-	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/creds"
 )
 
@@ -26,6 +26,7 @@ func curatedProviderModels(provider ProviderType) ProviderModelSet {
 			STT: []ProviderModelOption{
 				{ID: "gpt-4o-transcribe", Label: "GPT-4o Transcribe"},
 				{ID: defaultOpenAISTTModel, Label: "GPT-4o Mini Transcribe"},
+				{ID: "whisper-1", Label: "Whisper (legacy)"},
 			},
 			TTS: []ProviderModelOption{
 				{ID: "gpt-4o-mini-tts", Label: "GPT-4o Mini TTS"},
@@ -106,8 +107,26 @@ func sanitizeAllowedModel(current, fallback string, allowed []ProviderModelOptio
 	return fallback
 }
 
-func DiscoverProviderModels(provider ProviderType, cfg config.RuntimeConfigSnapshot) ProviderModelSet {
-	_ = cfg
+const modelCacheTTL = 60 * time.Second
+
+var (
+	modelCacheMu sync.Mutex
+	modelCache   = map[ProviderType]cachedModelSet{}
+)
+
+type cachedModelSet struct {
+	set       ProviderModelSet
+	fetchedAt time.Time
+}
+
+func DiscoverProviderModels(provider ProviderType) ProviderModelSet {
+	modelCacheMu.Lock()
+	if cached, ok := modelCache[provider]; ok && time.Since(cached.fetchedAt) < modelCacheTTL {
+		modelCacheMu.Unlock()
+		return cached.set
+	}
+	modelCacheMu.Unlock()
+
 	bundle, _ := creds.Read()
 	apiKey := ""
 	switch provider {
@@ -118,16 +137,22 @@ func DiscoverProviderModels(provider ProviderType, cfg config.RuntimeConfigSnaps
 	case ProviderElevenLabs:
 		apiKey = bundle.ElevenLabsAPIKey
 	}
+	var result ProviderModelSet
 	switch provider {
 	case ProviderOpenAI:
-		return fetchOpenAIAudioModels(apiKey)
+		result = fetchOpenAIAudioModels(apiKey)
 	case ProviderGemini:
-		return fetchGeminiAudioModels(apiKey)
+		result = fetchGeminiAudioModels(apiKey)
 	case ProviderElevenLabs:
-		return curatedProviderModels(provider)
+		result = curatedProviderModels(provider)
 	default:
 		return ProviderModelSet{}
 	}
+
+	modelCacheMu.Lock()
+	modelCache[provider] = cachedModelSet{set: result, fetchedAt: time.Now()}
+	modelCacheMu.Unlock()
+	return result
 }
 
 func fetchOpenAIAudioModels(apiKey string) ProviderModelSet {
@@ -306,11 +331,11 @@ func openAIAudioLabel(id string) string {
 		return "GPT-4o Mini Transcribe"
 	case "whisper-1":
 		return "Whisper-1"
-	case defaultOpenAITTSModel:
+	case "tts-1":
 		return "TTS-1"
 	case "tts-1-hd":
 		return "TTS-1 HD"
-	case "gpt-4o-mini-tts":
+	case defaultOpenAITTSModel:
 		return "GPT-4o Mini TTS"
 	default:
 		return id

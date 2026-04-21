@@ -605,6 +605,7 @@ export interface ModelSelectorInfo {
   fastModel?: string;
   lastRefreshedAt?: string;
   availableModels?: AIModelRecord[];
+  imageModels?: AIModelRecord[];
   totalAvailable?: number;
   hasMore?: boolean;
   providerStatus?: ProviderStatusInfo;

@@ -3013,7 +3013,14 @@ export function Chat({ isActive = true, onUnreadReply }: {
               {attachments.map((att, i) => (
                 <div key={i} class="chat-attachment-chip">
                   <span class="chat-attachment-name">{att.filename}</span>
-                  <button class="chat-attachment-remove" onClick={() => removeAttachment(i)} title="Remove">×</button>
+                  <button
+                    class="chat-attachment-remove"
+                    onClick={() => removeAttachment(i)}
+                    title="Remove"
+                    aria-label={`Remove attachment ${att.filename}`}
+                  >
+                    ×
+                  </button>
                 </div>
               ))}
             </div>
@@ -3025,6 +3032,7 @@ export function Chat({ isActive = true, onUnreadReply }: {
               ref={textareaRef}
               class="chat-input"
               placeholder={`Message ${agentName}…`}
+              aria-label={`Message ${agentName}`}
               value={input}
               onInput={(e) => { setInput((e.target as HTMLTextAreaElement).value); resizeTextarea() }}
               onKeyDown={handleKeyDown}

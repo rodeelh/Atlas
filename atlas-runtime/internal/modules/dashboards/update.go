@@ -117,7 +117,6 @@ func (m *Module) updateDraftWidget(dashboardID, widgetID string, req WidgetUpdat
 	if req.Group != nil {
 		w.Group = *req.Group
 	}
-	layoutUpdate := req.GridX != nil || req.GridY != nil || req.GridW != nil || req.GridH != nil
 	if req.GridX != nil {
 		w.GridX = *req.GridX
 	}
@@ -169,12 +168,25 @@ func (m *Module) updateDraftWidget(dashboardID, widgetID string, req WidgetUpdat
 		columns = 12
 		d.Layout.Columns = columns
 	}
-	if layoutUpdate {
+	// Only validate grid layout when widgets have been explicitly placed (GridW>0).
+	// Unplaced widgets (GridW=0) will be positioned by packGrid at commit time.
+	if widgetsArePlaced(d.Widgets) {
 		if err := validateGridLayout(d.Widgets, columns); err != nil {
 			return Dashboard{}, err
 		}
 	}
 	return m.store.Save(d)
+}
+
+// widgetsArePlaced reports whether all widgets have been explicitly placed in
+// the grid (GridW > 0). Unplaced widgets get positions from packGrid at commit.
+func widgetsArePlaced(widgets []Widget) bool {
+	for _, w := range widgets {
+		if w.GridW <= 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func validateGridLayout(widgets []Widget, columns int) error {

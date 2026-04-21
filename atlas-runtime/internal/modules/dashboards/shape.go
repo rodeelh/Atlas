@@ -25,7 +25,7 @@ type pathInfo struct {
 // uses suggestedPreset + paths to configure widget bindings without guessing.
 type shapeReport struct {
 	Kind             string         `json:"kind"`             // scalar | array | object | text_blob | empty
-	SuggestedPreset  string         `json:"suggestedPreset"`  // metric | list | table | line_chart | markdown
+	SuggestedPreset  string         `json:"suggestedPreset"`  // metric | list | table | line_chart | area_chart | pie_chart | status_grid | kpi_group | markdown
 	SuggestedOptions map[string]any `json:"suggestedOptions"` // frontend option names for the suggested preset
 	Hint             string         `json:"hint"`             // one-line guidance on how to bind a widget
 	Paths            []pathInfo     `json:"paths"`            // flat list of fields with types and samples
@@ -126,26 +126,45 @@ func arrayPreset(arr []any) string {
 	if len(arr) == 0 {
 		return "list"
 	}
-	// Objects with numeric "x"/"y" or "date"/"value" → chart-friendly
-	if m, ok := arr[0].(map[string]any); ok {
-		if hasKey(m, "date") || hasKey(m, "time") || hasKey(m, "timestamp") {
-			if hasNumericField(m) {
-				return "line_chart"
-			}
-		}
-		return "table"
+	m, ok := arr[0].(map[string]any)
+	if !ok {
+		return "list"
 	}
-	return "list"
+	// Time-series → line_chart
+	if hasKey(m, "date") || hasKey(m, "time") || hasKey(m, "timestamp") {
+		if hasNumericField(m) {
+			return "line_chart"
+		}
+	}
+	// Status list → status_grid
+	if (hasKey(m, "status") || hasKey(m, "state")) && (hasKey(m, "title") || hasKey(m, "name") || hasKey(m, "label")) {
+		return "status_grid"
+	}
+	// Label + numeric value (no date) → pie_chart
+	if (hasKey(m, "label") || hasKey(m, "name")) && hasNumericField(m) {
+		return "pie_chart"
+	}
+	return "table"
 }
 
 func arrayHint(arr []any) string {
 	if len(arr) == 0 {
 		return "Source returned an empty array. Bind with preset=list or table; no path needed."
 	}
-	if _, ok := arr[0].(map[string]any); ok {
-		return "Source is an array of objects. Use preset=table with options.columns, or preset=list with options.labelKey/subKey."
+	m, ok := arr[0].(map[string]any)
+	if !ok {
+		return "Source is an array of scalars. Use preset=list; no path needed."
 	}
-	return "Source is an array of scalars. Use preset=list; no path needed."
+	if hasKey(m, "date") || hasKey(m, "time") || hasKey(m, "timestamp") {
+		return "Source is a time series. Use preset=line_chart with options.x=<date|time> and options.y=<numeric field>."
+	}
+	if (hasKey(m, "status") || hasKey(m, "state")) && (hasKey(m, "title") || hasKey(m, "name") || hasKey(m, "label")) {
+		return "Source is a status list. Use preset=status_grid with options.labelKey and options.statusKey."
+	}
+	if (hasKey(m, "label") || hasKey(m, "name")) && hasNumericField(m) {
+		return "Source is a labeled value series. Use preset=pie_chart with options.labelKey and options.valueKey."
+	}
+	return "Source is an array of objects. Use preset=table with options.columns, or preset=list with options.labelKey/subKey."
 }
 
 func arraySuggestedOptions(arr []any) map[string]any {
@@ -160,6 +179,18 @@ func arraySuggestedOptions(arr []any) map[string]any {
 		x := firstExistingKey(first, []string{"date", "time", "timestamp"})
 		y := firstNumericKey(first)
 		return map[string]any{"x": x, "y": y}
+	}
+	if (hasKey(first, "status") || hasKey(first, "state")) && (hasKey(first, "title") || hasKey(first, "name") || hasKey(first, "label")) {
+		labelKey := firstExistingKey(first, []string{"title", "name", "label"})
+		statusKey := firstExistingKey(first, []string{"status", "state"})
+		return map[string]any{"labelKey": labelKey, "statusKey": statusKey}
+	}
+	if hasKey(first, "label") || hasKey(first, "name") {
+		labelKey := firstExistingKey(first, []string{"label", "name"})
+		valueKey := firstNumericKey(first)
+		if valueKey != "" {
+			return map[string]any{"labelKey": labelKey, "valueKey": valueKey}
+		}
 	}
 	return map[string]any{"columns": firstKeys(first, 6)}
 }

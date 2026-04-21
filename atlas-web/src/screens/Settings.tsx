@@ -486,7 +486,7 @@ export function Settings() {
 
       <SettingsGroup title="About">
         <div class="settings-row" style={{ borderBottom: 'none' }}>
-          <div class="settings-label-col" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div class="settings-label-col" style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: '10px' }}>
             <AtlasIcon size={36} />
             <div>
               <div class="settings-label" style={{ fontFamily: "'Geist Mono', ui-monospace, monospace", fontWeight: 500 }}>

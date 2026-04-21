@@ -30,8 +30,8 @@ function permissionBadge(level: string) {
 
 function sourceBadge(source?: string) {
   switch ((source ?? '').toLowerCase()) {
-    case 'custom': return <span class="badge badge-blue">Custom</span>
-    case 'forge':  return <span class="badge badge-blue">Generated</span>
+    case 'custom': return <span class="badge badge-blue">custom</span>
+    case 'forge':  return <span class="badge badge-blue">generated</span>
     default:       return null
   }
 }
@@ -329,6 +329,8 @@ export function Skills() {
     const isEnabled = skill.manifest.lifecycleState === 'enabled'
     const isExpanded = expanded.has(id)
     const capability = capabilities[id]
+    const hasUtilityActions = !!skill.validation || skill.manifest.source === 'custom'
+    const hasDetails = skill.actions.length > 0 || hasUtilityActions
     const artifactTypes = capability?.artifactTypes ?? []
     const requiredRoots = capability?.requiredRoots ?? []
     const requiredCapabilities = capability?.requiredCapabilities ?? []
@@ -346,25 +348,21 @@ export function Skills() {
             <div class="skill-meta">
               <span>v{skill.manifest.version}</span>
               <span>{skill.actions.length} action{skill.actions.length !== 1 ? 's' : ''}</span>
-              {skill.manifest.description && <span>{skill.manifest.description}</span>}
             </div>
+            {skill.manifest.description && (
+              <div class={`skill-description${isExpanded ? ' skill-description-expanded' : ''}`}>
+                {skill.manifest.description}
+              </div>
+            )}
           </div>
           <div class="skill-row-controls">
-            <button class="btn btn-sm btn-icon" disabled={acting.has(`v:${id}`)} onClick={() => validate(id)} title="Re-validate">
-              {acting.has(`v:${id}`) ? <span class="spinner" style={{ width: '11px', height: '11px' }} /> : <RefreshIcon />}
-            </button>
-            {skill.manifest.source === 'custom' && (
+            {hasDetails && (
               <button
-                class="btn btn-sm btn-ghost skill-remove-btn"
-                disabled={customRemoving.has(id)}
-                onClick={() => removeCustomSkill(id)}
-                title="Remove this custom skill"
+                class="btn btn-sm btn-icon skill-row-expand-btn"
+                onClick={() => toggleExpand(id)}
+                title={isExpanded ? 'Hide details' : 'Show details'}
+                aria-label={isExpanded ? `Hide details for ${skill.manifest.name}` : `Show details for ${skill.manifest.name}`}
               >
-                {customRemoving.has(id) ? <span class="spinner" style={{ width: '11px', height: '11px' }} /> : 'Remove'}
-              </button>
-            )}
-            {skill.actions.length > 0 && (
-              <button class="btn btn-sm btn-icon" onClick={() => toggleExpand(id)} title="Show actions">
                 {isExpanded ? <ChevronUp /> : <ChevronDown />}
               </button>
             )}
@@ -374,33 +372,55 @@ export function Skills() {
             </label>
           </div>
         </div>
-        {isExpanded && skill.actions.length > 0 && (
+        {isExpanded && hasDetails && (
           <div class="skill-actions-list">
             <div class="skill-actions-toolbar">
-              <span>Actions</span>
-              <div class="skill-bulk-controls">
-                <span class="skill-bulk-label">{skill.actions.length} available</span>
-                <div class="skill-bulk-picker">
-                  <span class="skill-bulk-set-label">Set all:</span>
-                  <select
-                    class="policy-select"
-                    disabled={bulkActing.has(id)}
-                    value=""
-                    onChange={e => {
-                      const val = (e.target as HTMLSelectElement).value
-                      if (!val) return
-                      ;(e.target as HTMLSelectElement).value = ''
-                      bulkChangePolicy(id, skill.actions.map(a => a.id), val)
-                    }}
-                  >
-                    <option value="" disabled>Choose…</option>
-                    {Object.entries(POLICY_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
-                  </select>
-                  {bulkActing.has(id) && <span class="spinner" style={{ width: '11px', height: '11px' }} />}
-                </div>
+              <span>{skill.actions.length > 0 ? 'Actions' : 'Skill Controls'}</span>
+              <div class="skill-actions-toolbar-right">
+                {skill.actions.length > 0 && (
+                  <div class="skill-bulk-controls">
+                    <span class="skill-bulk-label">{skill.actions.length} available</span>
+                    <div class="skill-bulk-picker">
+                      <span class="skill-bulk-set-label">Set all:</span>
+                      <select
+                        class="policy-select"
+                        disabled={bulkActing.has(id)}
+                        value=""
+                        onChange={e => {
+                          const val = (e.target as HTMLSelectElement).value
+                          if (!val) return
+                          ;(e.target as HTMLSelectElement).value = ''
+                          bulkChangePolicy(id, skill.actions.map(a => a.id), val)
+                        }}
+                      >
+                        <option value="" disabled>Choose…</option>
+                        {Object.entries(POLICY_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
+                      </select>
+                      {bulkActing.has(id) && <span class="spinner" style={{ width: '11px', height: '11px' }} />}
+                    </div>
+                  </div>
+                )}
+                {hasUtilityActions && (
+                  <div class="skill-utility-actions">
+                    <button class="btn btn-sm btn-ghost skill-utility-btn" disabled={acting.has(`v:${id}`)} onClick={() => validate(id)} title="Re-validate">
+                      {acting.has(`v:${id}`) ? <span class="spinner" style={{ width: '11px', height: '11px' }} /> : <RefreshIcon />}
+                      <span>Re-validate</span>
+                    </button>
+                    {skill.manifest.source === 'custom' && (
+                      <button
+                        class="btn btn-sm btn-ghost skill-remove-btn skill-utility-btn"
+                        disabled={customRemoving.has(id)}
+                        onClick={() => removeCustomSkill(id)}
+                        title="Remove this custom skill"
+                      >
+                        {customRemoving.has(id) ? <span class="spinner" style={{ width: '11px', height: '11px' }} /> : 'Remove'}
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
-            {skill.actions.map(action => (
+            {skill.actions.length > 0 && skill.actions.map(action => (
               <div class="skill-action-row" key={action.id}>
                 <div class="skill-action-copy">
                   <div class="skill-action-heading">
@@ -418,7 +438,7 @@ export function Skills() {
                 </div>
               </div>
             ))}
-            {(targetLabel || artifactTypes.length > 0 || requiredRoots.length > 0 || requiredCapabilities.length > 0) && (
+            {skill.actions.length > 0 && (targetLabel || artifactTypes.length > 0 || requiredRoots.length > 0 || requiredCapabilities.length > 0) && (
               <div class="skill-action-row">
                 <div class="skill-action-copy">
                   <div class="skill-action-heading">
@@ -470,7 +490,7 @@ export function Skills() {
   const searchQuery = search.trim().toLowerCase()
 
   return (
-    <div class="screen">
+    <div class="screen skills-screen">
       <PageHeader
         title="Skills"
         subtitle="Capabilities available to Atlas"
@@ -510,36 +530,46 @@ export function Skills() {
             ) : null
 
             return (
-              <div key={group.key} class="card settings-group">
-                <div class="card-header" style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleGroup(group.key)}>
-                  <div>
+              <div key={group.key} class={`card settings-group skill-group-card${isCollapsed ? ' card-collapsed skill-group-card-collapsed' : ''}`}>
+                <div class="card-header skill-group-header" onClick={() => toggleGroup(group.key)}>
+                  <div class="skill-group-header-copy">
                     <span class="card-title">{group.label}</span>
-                    {group.sub && <div class="card-subtitle" style={{ fontSize: '12px', color: 'var(--text-3)', marginTop: '2px' }}>{group.sub}</div>}
+                    {group.sub && <div class="card-subtitle skill-group-subtitle">{group.sub}</div>}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    {customInstallButton}
+                  <div class="skill-group-header-actions">
                     <svg
+                      class="skill-group-chevron"
                       width="12" height="12" viewBox="0 0 12 12" fill="none"
                       stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
-                      style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', color: 'var(--text-3)', flexShrink: 0 }}
+                      style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
                     >
                       <polyline points="2,4 6,8 10,4" />
                     </svg>
                   </div>
                 </div>
 
-                {!isCollapsed && (
-                  isCustom && groupSkills.length === 0 ? (
-                    <div style={{ padding: '32px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', textAlign: 'center' }}>
-                      <div class="skill-empty-copy">
-                        Install a folder that contains a <code>skill.json</code> manifest and executable <code>run</code> entrypoint.
-                        Generated extensions also appear here once installed.
+                <div class={`collapsible-card-content skill-group-content${isCollapsed ? ' is-collapsed' : ''}`} aria-hidden={isCollapsed}>
+                  <div class="collapsible-card-content-inner skill-group-content-inner">
+                    {isCustom && groupSkills.length === 0 ? (
+                      <div style={{ padding: '32px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', textAlign: 'center' }}>
+                        <div class="skill-empty-copy">
+                          Install a folder that contains a <code>skill.json</code> manifest and executable <code>run</code> entrypoint.
+                          Generated extensions also appear here once installed.
+                        </div>
+                        {customInstallButton}
                       </div>
-                    </div>
-                  ) : (
-                    groupSkills.map((skill, i) => renderSkillRow(skill, i, groupSkills.length))
-                  )
-                )}
+                    ) : (
+                      <>
+                      {groupSkills.map((skill, i) => renderSkillRow(skill, i, groupSkills.length))}
+                      {isCustom && (
+                        <div class="skill-group-footer">
+                          {customInstallButton}
+                        </div>
+                      )}
+                      </>
+                    )}
+                  </div>
+                </div>
               </div>
             )
           })}

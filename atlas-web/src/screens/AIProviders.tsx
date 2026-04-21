@@ -21,17 +21,6 @@ const CLOUD_PROVIDERS = [
   { id: 'openrouter', label: 'OpenRouter',         recommended: false },
 ] as const
 
-const OPENAI_IMAGE_MODELS = [
-  { id: 'gpt-image-1.5',    label: 'GPT Image 1.5 (recommended)' },
-  { id: 'gpt-image-1',      label: 'GPT Image 1' },
-  { id: 'gpt-image-1-mini', label: 'GPT Image 1 Mini' },
-] as const
-
-const GEMINI_IMAGE_MODELS = [
-  { id: 'gemini-2.5-flash-image',          label: 'Gemini 2.5 Flash Image (default)' },
-  { id: 'gemini-3.1-flash-image-preview',  label: 'Gemini 3.1 Flash Image (preview)' },
-] as const
-
 const LOCAL_BACKENDS = [
   { id: 'atlas_engine', label: 'Llama' },
   { id: 'atlas_mlx', label: 'MLX' },
@@ -53,6 +42,7 @@ function emptyModelSelector(message: string): ModelSelectorInfo {
     primaryModel: '',
     fastModel: '',
     availableModels: [],
+    imageModels: [],
     lastRefreshedAt: new Date().toISOString(),
     providerStatus: {
       state: 'unreachable',
@@ -128,6 +118,7 @@ export function AIProviders() {
   const [openRouterLimit, setOpenRouterLimit] = useState(25)
   const [cloudProvider, setCloudProvider] = useState<CloudProviderID>('openai')
   const [localBackend, setLocalBackend] = useState<LocalBackendID>('atlas_engine')
+  const [advancedOpen, setAdvancedOpen] = useState(true)
 
   // Finding 40: request sequence counter to discard stale out-of-order fetch results
   const cloudFetchSeq = useRef(0)
@@ -326,6 +317,11 @@ export function AIProviders() {
     ? `Auto — ${cloudModels.fastModel}`
     : 'Auto (recommended fast model)'
 
+  const cloudHealthModel = (() => {
+    const resolved = (cloudPrimaryValue || cloudModels?.primaryModel || (cloudProvider === 'openrouter' ? 'openrouter/auto:free' : '')).trim()
+    return resolved
+  })()
+
   const localModelValue = (() => {
     switch (localBackend) {
       case 'ollama': return draft.selectedOllamaModel ?? ''
@@ -383,7 +379,7 @@ export function AIProviders() {
     }
   }
 
-  const cloudImageModels = cloudProvider === 'gemini' ? GEMINI_IMAGE_MODELS : OPENAI_IMAGE_MODELS
+  const cloudImageModels = cloudModels?.imageModels ?? []
   const supportsImageGen = cloudProvider === 'openai' || cloudProvider === 'gemini'
 
   const setLocalPrimaryValue = (value: string) => {
@@ -422,36 +418,52 @@ export function AIProviders() {
     await fetchLocalModels(localBackend, true)
   }
 
-  const testCloudConnection = async () => {
-    const modelToCheck = (cloudPrimaryValue || cloudModels?.primaryModel || (cloudProvider === 'openrouter' ? 'openrouter/auto:free' : '')).trim()
-    if (!modelToCheck) {
-      setCloudModelHealth({
-        status: 'unknown',
-        message: 'Choose a model before testing this provider.',
-        checkedAt: new Date().toISOString(),
-      })
-      return
-    }
+  useEffect(() => {
+    if (mode !== 'cloud' && mode !== 'hybrid') return
+    if (!cloudProvider) return
+    const modelToCheck = cloudHealthModel
+    let cancelled = false
     setCheckingCloudModelHealth(true)
-    try {
-      const health = await api.cloudModelHealth(cloudProvider, modelToCheck)
-      setCloudModelHealth(health)
-    } catch (err) {
-      setCloudModelHealth({
-        status: 'unavailable',
-        message: err instanceof Error ? err.message : 'Could not check model availability.',
-        checkedAt: new Date().toISOString(),
-      })
-    } finally {
-      setCheckingCloudModelHealth(false)
-    }
-  }
+    void (async () => {
+      try {
+        if (!modelToCheck) {
+          if (!cancelled) {
+            setCloudModelHealth({
+              status: 'unknown',
+              message: 'Choose a model to check availability.',
+              checkedAt: new Date().toISOString(),
+            })
+          }
+          return
+        }
+        const health = await api.cloudModelHealth(cloudProvider, modelToCheck)
+        if (!cancelled) setCloudModelHealth(health)
+      } catch (err) {
+        if (!cancelled) {
+          setCloudModelHealth({
+            status: 'unavailable',
+            message: err instanceof Error ? err.message : 'Could not check model availability.',
+            checkedAt: new Date().toISOString(),
+          })
+        }
+      } finally {
+        if (!cancelled) setCheckingCloudModelHealth(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [mode, cloudProvider, cloudHealthModel])
 
   const goToCredentials = () => {
     window.location.hash = 'api-keys'
   }
 
-  const cloudConnectionBadge = cloudModelHealth
+  const cloudConnectionBadge = checkingCloudModelHealth
+    ? (
+      <span class="badge" style={BADGE_STYLE} title="Checking model availability...">
+        Checking...
+      </span>
+    )
+    : cloudModelHealth
     ? (
       <span class={`badge ${providerToneClass(cloudHealthTone(cloudModelHealth.status))}`} style={BADGE_STYLE} title={cloudModelHealth.message}>
         {cloudHealthLabel(cloudModelHealth.status)}
@@ -585,15 +597,6 @@ export function AIProviders() {
               ? `${cloudModels.availableModels?.length ?? 0} of ${cloudModels.totalAvailable} shown`
               : undefined}
           />
-          <SettingsRow
-            label="Model availability"
-            sublabel="Check whether the selected cloud model can answer right now"
-            mobileSplit
-          >
-            <button class="btn btn-sm" onClick={testCloudConnection} disabled={checkingCloudModelHealth}>
-              {checkingCloudModelHealth ? 'Checking...' : 'Test'}
-            </button>
-          </SettingsRow>
           <details class="ai-provider-advanced-panel">
             <summary>Advanced cloud options</summary>
             <div class="ai-provider-advanced-panel-body">
@@ -610,17 +613,23 @@ export function AIProviders() {
               {supportsImageGen && (
                 <SettingsRow
                   label="Image generation model"
-                  sublabel="Model used by the image.generate skill"
+                  sublabel={cloudImageModels.length
+                    ? "Model used by the image.generate skill"
+                    : "No available image models were discovered for this provider"}
                   fieldId="ai-provider-cloud-image-model"
                 >
                   <select
                     id="ai-provider-cloud-image-model"
                     class="input"
                     value={cloudImageValue}
+                    disabled={cloudImageModels.length === 0}
                     onChange={(e) => setCloudImageValue((e.target as HTMLSelectElement).value)}
                   >
+                    {cloudImageModels.length === 0 && (
+                      <option value="">No available image models</option>
+                    )}
                     {cloudImageModels.map((m) => (
-                      <option key={m.id} value={m.id}>{m.label}</option>
+                      <option key={m.id} value={m.id}>{m.displayName}</option>
                     ))}
                   </select>
                 </SettingsRow>
@@ -672,15 +681,6 @@ export function AIProviders() {
               ? `${cloudModels.availableModels?.length ?? 0} of ${cloudModels.totalAvailable} shown`
               : undefined}
           />
-          <SettingsRow
-            label="Model availability"
-            sublabel="Check whether the selected cloud model can answer right now"
-            mobileSplit
-          >
-            <button class="btn btn-sm" onClick={testCloudConnection} disabled={checkingCloudModelHealth}>
-              {checkingCloudModelHealth ? 'Checking...' : 'Test'}
-            </button>
-          </SettingsRow>
           <div class="ai-provider-mini-section-label">Background</div>
           <SettingsRow
             label="Backend"
@@ -721,17 +721,23 @@ export function AIProviders() {
               {supportsImageGen && (
                 <SettingsRow
                   label="Image generation model"
-                  sublabel="Model used by the image.generate skill"
+                  sublabel={cloudImageModels.length
+                    ? "Model used by the image.generate skill"
+                    : "No available image models were discovered for this provider"}
                   fieldId="ai-provider-hybrid-image-model"
                 >
                   <select
                     id="ai-provider-hybrid-image-model"
                     class="input"
                     value={cloudImageValue}
+                    disabled={cloudImageModels.length === 0}
                     onChange={(e) => setCloudImageValue((e.target as HTMLSelectElement).value)}
                   >
+                    {cloudImageModels.length === 0 && (
+                      <option value="">No available image models</option>
+                    )}
                     {cloudImageModels.map((m) => (
-                      <option key={m.id} value={m.id}>{m.label}</option>
+                      <option key={m.id} value={m.id}>{m.displayName}</option>
                     ))}
                   </select>
                 </SettingsRow>
@@ -843,11 +849,8 @@ export function AIProviders() {
         </SettingsGroup>
       )}
 
-      <SettingsGroup title="Advanced">
-        <details class="ai-provider-advanced-panel">
-          <summary>Inference & tools</summary>
-          <div class="ai-provider-advanced-panel-body">
-            <div class="ai-provider-mini-section-label">Inference & Tools</div>
+      <SettingsGroup title="Advanced" collapsible open={advancedOpen} onToggle={() => setAdvancedOpen((prev) => !prev)}>
+        <div class="ai-provider-advanced-panel-body">
             <SettingsRow
               label="Tool selection"
               sublabel="Controls how much tool context Atlas loads before each turn"
@@ -922,19 +925,64 @@ export function AIProviders() {
                 </SettingsRow>
               </>
             )}
-
-          </div>
-        </details>
+        </div>
       </SettingsGroup>
     </div>
   )
 }
 
-function SettingsGroup({ title, children }: { title: string; children: preact.ComponentChild }) {
+function SettingsGroup({
+  title,
+  children,
+  collapsible = false,
+  open = true,
+  onToggle,
+}: {
+  title: string
+  children: preact.ComponentChild
+  collapsible?: boolean
+  open?: boolean
+  onToggle?: () => void
+}) {
   return (
-    <div class="card settings-group" style={{ overflow: 'visible' }}>
-      <div class="card-header"><span class="card-title">{title}</span></div>
-      {children}
+    <div
+      class={`card settings-group${collapsible && !open ? ' card-collapsed' : ''}`}
+      style={{ overflow: collapsible && !open ? 'hidden' : 'visible' }}
+    >
+      {collapsible ? (
+        <button
+          type="button"
+          class="card-header card-header-button"
+          onClick={onToggle}
+          aria-expanded={open}
+        >
+          <span class="card-title">{title}</span>
+          <svg
+            class="card-header-toggle"
+            aria-hidden="true"
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            style={{ transform: open ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+          >
+            <polyline points="2,4 6,8 10,4" />
+          </svg>
+        </button>
+      ) : (
+        <div class="card-header"><span class="card-title">{title}</span></div>
+      )}
+      {collapsible ? (
+        <div class={`collapsible-card-content${open ? '' : ' is-collapsed'}`} aria-hidden={!open}>
+          <div class="collapsible-card-content-inner">
+            {children}
+          </div>
+        </div>
+      ) : children}
     </div>
   )
 }

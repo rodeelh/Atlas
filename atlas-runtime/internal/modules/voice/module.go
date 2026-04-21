@@ -76,7 +76,7 @@ func (m *Module) getProviderModels(w http.ResponseWriter, r *http.Request) {
 	models := runtimevoice.ProviderModelSet{}
 	switch provider {
 	case runtimevoice.ProviderOpenAI, runtimevoice.ProviderGemini, runtimevoice.ProviderElevenLabs:
-		models = runtimevoice.DiscoverProviderModels(provider, cfg)
+		models = runtimevoice.DiscoverProviderModels(provider)
 	default:
 		models = runtimevoice.ProviderModelSet{}
 	}

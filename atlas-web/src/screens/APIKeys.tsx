@@ -198,7 +198,7 @@ export function APIKeys() {
         const isCollapsed  = collapsedGroups.has(group.id)
         const toggle = () => toggleGroup(group.id)
         return (
-          <div key={group.id} class="card settings-group">
+          <div key={group.id} class={`card settings-group${isCollapsed ? ' card-collapsed' : ''}`}>
             <div class="card-header" style={{ cursor: 'pointer', userSelect: 'none' }} onClick={toggle}>
               <span class="card-title">{group.title}</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -211,8 +211,8 @@ export function APIKeys() {
                 </svg>
               </div>
             </div>
-            {!isCollapsed && (
-              <>
+            <div class={`collapsible-card-content${isCollapsed ? ' is-collapsed' : ''}`} aria-hidden={isCollapsed}>
+              <div class="collapsible-card-content-inner">
                 {configured.map((p, i) => (
                   <KeyRow
                     key={p.id}
@@ -242,14 +242,14 @@ export function APIKeys() {
                     </div>
                   </details>
                 )}
-              </>
-            )}
+              </div>
+            </div>
           </div>
         )
       })}
 
       {/* Custom keys */}
-      <div class="card settings-group">
+      <div class={`card settings-group${collapsedGroups.has('custom') ? ' card-collapsed' : ''}`}>
         <div
           class="card-header"
           style={{ cursor: 'pointer', userSelect: 'none' }}
@@ -266,8 +266,8 @@ export function APIKeys() {
             </svg>
           </div>
         </div>
-        {!collapsedGroups.has('custom') && (
-          <>
+        <div class={`collapsible-card-content${collapsedGroups.has('custom') ? ' is-collapsed' : ''}`} aria-hidden={collapsedGroups.has('custom')}>
+          <div class="collapsible-card-content-inner">
             {customKeys.map((name, i) => (
               <CustomKeyRow
                 key={name}
@@ -297,8 +297,8 @@ export function APIKeys() {
                 </div>
               </div>
             )}
-          </>
-        )}
+          </div>
+        </div>
       </div>
     </div>
   )

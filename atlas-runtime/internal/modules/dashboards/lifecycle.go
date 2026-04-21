@@ -80,9 +80,7 @@ func (m *Module) commitDraftDashboard(ctx context.Context, id string) (Dashboard
 		return Dashboard{}, err
 	}
 	if d.BaseDashboardID != "" {
-		if err := m.store.Delete(d.ID); err != nil {
-			return Dashboard{}, err
-		}
+		_ = m.store.Delete(d.ID) // best-effort; published copy is authoritative
 	}
 	return saved, nil
 }

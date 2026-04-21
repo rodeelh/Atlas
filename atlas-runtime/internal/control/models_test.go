@@ -51,6 +51,15 @@ func TestModelsService_AvailableReturnsCuratedOpenAIWithoutKey(t *testing.T) {
 	if models[0].ID == "" {
 		t.Fatalf("unexpected first model: %+v", models[0])
 	}
+	imageModels, ok := result["imageModels"].([]ModelRecord)
+	if !ok {
+		t.Fatalf("expected []ModelRecord imageModels, got %T", result["imageModels"])
+	}
+	for _, model := range imageModels {
+		if model.ID == "" || model.DisplayName == "" {
+			t.Fatalf("expected populated discovered image models, got %+v", imageModels)
+		}
+	}
 }
 
 func TestModelsService_AvailableUnknownProviderReturnsEmptyArray(t *testing.T) {
@@ -71,6 +80,13 @@ func TestModelsService_AvailableUnknownProviderReturnsEmptyArray(t *testing.T) {
 	}
 	if len(models) != 0 {
 		t.Fatalf("expected empty models, got %+v", models)
+	}
+	imageModels, ok := result["imageModels"].([]ModelRecord)
+	if !ok {
+		t.Fatalf("expected []ModelRecord imageModels, got %T", result["imageModels"])
+	}
+	if len(imageModels) != 0 {
+		t.Fatalf("expected empty image models, got %+v", imageModels)
 	}
 }
 
@@ -160,5 +176,47 @@ func TestModelsService_OpenRouterModelCacheTTLAndRefresh(t *testing.T) {
 	}
 	if total != 1 {
 		t.Fatalf("expected total=1 on refresh, got %d", total)
+	}
+}
+
+func TestSelectOpenAIImageModels_FiltersAndFormats(t *testing.T) {
+	items := []struct {
+		ID string `json:"id"`
+	}{
+		{ID: "gpt-image-1.5"},
+		{ID: "gpt-image-1-mini"},
+		{ID: "gpt-4o-mini-tts"},
+		{ID: "text-embedding-3-large"},
+	}
+	models := selectOpenAIImageModels(items)
+	if len(models) != 2 {
+		t.Fatalf("expected 2 image models, got %+v", models)
+	}
+	if models[0].DisplayName != "GPT Image 1.5" {
+		t.Fatalf("expected normalized label, got %+v", models[0])
+	}
+	if models[1].DisplayName != "GPT Image 1 Mini" {
+		t.Fatalf("expected normalized mini label, got %+v", models[1])
+	}
+}
+
+func TestSelectGeminiImageModels_FiltersAndFormats(t *testing.T) {
+	items := []struct {
+		ID string `json:"id"`
+	}{
+		{ID: "models/gemini-3.1-flash-image-preview"},
+		{ID: "models/gemini-2.5-flash-image"},
+		{ID: "models/gemini-2.5-flash-preview-tts"},
+		{ID: "models/gemini-embedding-001"},
+	}
+	models := selectGeminiImageModels(items)
+	if len(models) != 2 {
+		t.Fatalf("expected 2 image models, got %+v", models)
+	}
+	if models[0].DisplayName != "Gemini 3.1 Flash Image Preview" {
+		t.Fatalf("expected normalized preview label, got %+v", models[0])
+	}
+	if models[1].DisplayName != "Gemini 2.5 Flash Image" {
+		t.Fatalf("expected normalized flash label, got %+v", models[1])
 	}
 }

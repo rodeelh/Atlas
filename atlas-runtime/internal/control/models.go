@@ -107,6 +107,7 @@ func (s *ModelsService) Available(provider string) map[string]any {
 			"fastModel":       fast,
 			"lastRefreshedAt": now,
 			"availableModels": fetchOpenAIModels(apiKey),
+			"imageModels":     fetchOpenAIImageModels(apiKey),
 			"providerStatus":  cloudProviderStatus(strings.TrimSpace(apiKey) != "", "OpenAI", now),
 		}
 	case "anthropic":
@@ -124,6 +125,7 @@ func (s *ModelsService) Available(provider string) map[string]any {
 			"fastModel":       fast,
 			"lastRefreshedAt": now,
 			"availableModels": fetchAnthropicModels(apiKey),
+			"imageModels":     []ModelRecord{},
 			"providerStatus":  cloudProviderStatus(strings.TrimSpace(apiKey) != "", "Anthropic", now),
 		}
 	case "gemini":
@@ -141,6 +143,7 @@ func (s *ModelsService) Available(provider string) map[string]any {
 			"fastModel":       fast,
 			"lastRefreshedAt": now,
 			"availableModels": fetchGeminiModels(apiKey),
+			"imageModels":     fetchGeminiImageModels(apiKey),
 			"providerStatus":  cloudProviderStatus(strings.TrimSpace(apiKey) != "", "Gemini", now),
 		}
 	case "openrouter":
@@ -160,6 +163,7 @@ func (s *ModelsService) Available(provider string) map[string]any {
 			"fastModel":       fast,
 			"lastRefreshedAt": now,
 			"availableModels": models,
+			"imageModels":     []ModelRecord{},
 			"totalAvailable":  total,
 			"hasMore":         total > len(models),
 			"providerStatus":  cloudProviderStatus(strings.TrimSpace(apiKey) != "", "OpenRouter", now),
@@ -184,6 +188,7 @@ func (s *ModelsService) Available(provider string) map[string]any {
 			"fastModel":       fast,
 			"lastRefreshedAt": now,
 			"availableModels": result.models,
+			"imageModels":     []ModelRecord{},
 			"providerStatus":  localHTTPProviderStatus("LM Studio", result, now),
 		}
 	case "ollama":
@@ -206,6 +211,7 @@ func (s *ModelsService) Available(provider string) map[string]any {
 			"fastModel":       fast,
 			"lastRefreshedAt": now,
 			"availableModels": result.models,
+			"imageModels":     []ModelRecord{},
 			"providerStatus":  localHTTPProviderStatus("Ollama", result, now),
 		}
 	case "atlas_engine":
@@ -233,6 +239,7 @@ func (s *ModelsService) Available(provider string) map[string]any {
 			"fastModel":       fast,
 			"lastRefreshedAt": now,
 			"availableModels": models,
+			"imageModels":     []ModelRecord{},
 			"providerStatus":  atlasEngineStatus(s.engineMgr, len(models), now),
 		}
 
@@ -257,12 +264,14 @@ func (s *ModelsService) Available(provider string) map[string]any {
 			"fastModel":       primary,
 			"lastRefreshedAt": now,
 			"availableModels": models,
+			"imageModels":     []ModelRecord{},
 			"providerStatus":  atlasMLXStatus(s.mlxMgr, len(models), now),
 		}
 
 	default:
 		return map[string]any{
 			"availableModels": []ModelRecord{},
+			"imageModels":     []ModelRecord{},
 			"providerStatus": providerStatus{
 				State:     "unknown",
 				Label:     "Unknown",
@@ -852,6 +861,65 @@ func fetchOpenAIModels(apiKey string) []ModelRecord {
 	return top
 }
 
+func fetchOpenAIImageModels(apiKey string) []ModelRecord {
+	if strings.TrimSpace(apiKey) == "" {
+		return []ModelRecord{}
+	}
+	req, err := http.NewRequest("GET", "https://api.openai.com/v1/models", nil)
+	if err != nil {
+		return []ModelRecord{}
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return []ModelRecord{}
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return []ModelRecord{}
+	}
+	return selectOpenAIImageModels(result.Data)
+}
+
+func selectOpenAIImageModels(items []struct {
+	ID string `json:"id"`
+}) []ModelRecord {
+	seen := map[string]bool{}
+	models := make([]ModelRecord, 0, len(items))
+	for _, row := range items {
+		id := strings.TrimSpace(row.ID)
+		lower := strings.ToLower(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		if !strings.HasPrefix(lower, "gpt-image-") && !strings.Contains(lower, "image") {
+			continue
+		}
+		if strings.Contains(lower, "embed") || strings.Contains(lower, "audio") || strings.Contains(lower, "tts") || strings.Contains(lower, "transcrib") {
+			continue
+		}
+		seen[id] = true
+		models = append(models, ModelRecord{
+			ID:          id,
+			DisplayName: openAIImageDisplayName(id),
+			IsFast:      strings.Contains(lower, "mini") || strings.Contains(lower, "flash"),
+		})
+	}
+	sort.Slice(models, func(i, j int) bool {
+		si, sj := openAIImageScore(models[i].ID), openAIImageScore(models[j].ID)
+		if si != sj {
+			return si > sj
+		}
+		return models[i].ID < models[j].ID
+	})
+	return models
+}
+
 func curatedOpenAIModels() []ModelRecord {
 	return []ModelRecord{
 		{ID: "gpt-5.4", DisplayName: "GPT-5.4", IsFast: false},
@@ -890,6 +958,39 @@ func openAIDisplayName(id string) string {
 		}
 	}
 	return id
+}
+
+func openAIImageDisplayName(id string) string {
+	if strings.HasPrefix(id, "gpt-image-") {
+		name := strings.TrimPrefix(id, "gpt-image-")
+		if name == "" {
+			return "GPT Image"
+		}
+		parts := strings.Split(name, "-")
+		for i, part := range parts {
+			if part == "" {
+				continue
+			}
+			parts[i] = strings.ToUpper(part[:1]) + part[1:]
+		}
+		return "GPT Image " + strings.Join(parts, " ")
+	}
+	return id
+}
+
+func openAIImageScore(id string) int {
+	lower := strings.ToLower(id)
+	score := 0
+	if strings.Contains(lower, "1.5") {
+		score += 40
+	}
+	if strings.Contains(lower, "mini") {
+		score -= 5
+	}
+	if strings.Contains(lower, "preview") {
+		score -= 10
+	}
+	return score
 }
 
 func fetchAnthropicModels(apiKey string) []ModelRecord {
@@ -1030,6 +1131,65 @@ func fetchGeminiModels(apiKey string) []ModelRecord {
 		return curatedGeminiModels()
 	}
 	return top
+}
+
+func fetchGeminiImageModels(apiKey string) []ModelRecord {
+	if strings.TrimSpace(apiKey) == "" {
+		return []ModelRecord{}
+	}
+	req, err := http.NewRequest("GET", "https://generativelanguage.googleapis.com/v1beta/openai/models", nil)
+	if err != nil {
+		return []ModelRecord{}
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return []ModelRecord{}
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Data) == 0 {
+		return []ModelRecord{}
+	}
+	return selectGeminiImageModels(result.Data)
+}
+
+func selectGeminiImageModels(items []struct {
+	ID string `json:"id"`
+}) []ModelRecord {
+	seen := map[string]bool{}
+	models := make([]ModelRecord, 0, len(items))
+	for _, row := range items {
+		id := strings.TrimPrefix(strings.TrimSpace(row.ID), "models/")
+		lower := strings.ToLower(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		if !strings.HasPrefix(lower, "gemini-") || !strings.Contains(lower, "image") {
+			continue
+		}
+		if strings.Contains(lower, "tts") || strings.Contains(lower, "embed") || strings.Contains(lower, "audio") || strings.Contains(lower, "live") || strings.Contains(lower, "realtime") {
+			continue
+		}
+		seen[id] = true
+		models = append(models, ModelRecord{
+			ID:          id,
+			DisplayName: geminiImageDisplayName(id),
+			IsFast:      strings.Contains(lower, "flash"),
+		})
+	}
+	sort.Slice(models, func(i, j int) bool {
+		si, sj := geminiImageScore(models[i].ID), geminiImageScore(models[j].ID)
+		if si != sj {
+			return si > sj
+		}
+		return models[i].ID < models[j].ID
+	})
+	return models
 }
 
 func curatedOpenRouterModels() []ModelRecord {
@@ -1227,6 +1387,52 @@ func preferredOpenRouterDefault(models []ModelRecord) string {
 		}
 	}
 	return ""
+}
+
+func geminiImageDisplayName(id string) string {
+	switch {
+	case strings.HasPrefix(id, "gemini-"):
+		label := strings.TrimPrefix(id, "gemini-")
+		label = strings.ReplaceAll(label, "-image-preview", " Image Preview")
+		label = strings.ReplaceAll(label, "-image", " Image")
+		label = strings.ReplaceAll(label, "-flash", " Flash")
+		label = strings.ReplaceAll(label, "-pro", " Pro")
+		label = strings.ReplaceAll(label, "-", " ")
+		label = strings.TrimSpace(label)
+		if label == "" {
+			return "Gemini Image"
+		}
+		parts := strings.Fields(label)
+		for i, part := range parts {
+			if len(part) == 0 {
+				continue
+			}
+			if part[0] >= '0' && part[0] <= '9' {
+				continue
+			}
+			parts[i] = strings.ToUpper(part[:1]) + part[1:]
+		}
+		return "Gemini " + strings.Join(parts, " ")
+	default:
+		return id
+	}
+}
+
+func geminiImageScore(id string) int {
+	lower := strings.ToLower(id)
+	score := 0
+	if strings.Contains(lower, "3.") {
+		score += 60
+	} else if strings.Contains(lower, "2.5") {
+		score += 40
+	}
+	if strings.Contains(lower, "flash") {
+		score += 15
+	}
+	if strings.Contains(lower, "preview") {
+		score -= 5
+	}
+	return score
 }
 
 func openAIModelScore(id string) int {
