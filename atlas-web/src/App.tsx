@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks'
-import { type ThemeMode, type ThemePreset, type ThemeConfig, type DensityMode, type ChatFontSize, type ChatRadius, type ChatFont, type ChatAvatarStyle, type ChatBubbleStyle, type ChatWidth, type UIRadius, type UIBlur, type UIFont, loadTheme, saveTheme, applyTheme, watchSystemTheme, THEME_PRESETS } from './theme'
+import { type ThemeMode, type ThemePreset, type ThemeConfig, type DensityMode, type ChatFontSize, type ChatRadius, type ChatFont, type ChatAvatarStyle, type ChatBubbleStyle, type ChatWidth, type UIRadius, type UIBlur, type UIFont, type AutonomyMode, loadTheme, saveTheme, applyTheme, watchSystemTheme, THEME_PRESETS, loadAutonomyMode, saveAutonomyMode, themeConfigForAutonomyMode } from './theme'
 import { Chat } from './screens/Chat'
 import { Communications } from './screens/Communications'
 import { Approvals } from './screens/Approvals'
@@ -312,7 +312,7 @@ const Icon = {
 
 /* ── Nav groups ────────────────────────────────────────── */
 
-type NavItem = { id: Screen; icon: preact.ComponentChild; label: string }
+type NavItem = { id: Screen; icon: preact.ComponentChild; label: string; tag?: string }
 type NavGroupID = 'operator' | 'capabilities' | 'settings'
 type NavGroup = { id: NavGroupID; label: string; items: NavItem[]; defaultExpanded: boolean }
 
@@ -326,7 +326,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: 'workflows',   icon: Icon.workflows,   label: 'Workflows' },
       { id: 'team',        icon: Icon.team,        label: 'Team HQ' },
       { id: 'approvals',   icon: Icon.approvals,   label: 'Approvals' },
-      { id: 'dashboards',  icon: Icon.dashboards,  label: 'Dashboards' },
+      { id: 'dashboards',  icon: Icon.dashboards,  label: 'Dashboards', tag: 'Beta' },
       { id: 'usage',       icon: Icon.usage,       label: 'Usage' },
     ],
   },
@@ -399,6 +399,7 @@ export function App() {
     return defaults
   })
   const [themeConfig, setThemeConfig] = useState<ThemeConfig>(loadTheme)
+  const [autonomyMode, setAutonomyMode] = useState<AutonomyMode>(loadAutonomyMode)
 
   const setActiveTheme = (mode: ThemeMode) =>
     setThemeConfig(prev => ({ ...prev, mode }))
@@ -450,6 +451,7 @@ export function App() {
     setThemeConfig(prev => ({ ...prev, uiFont }))
 
   const activeTheme = themeConfig.mode
+  const displayThemeConfig: ThemeConfig = themeConfigForAutonomyMode(themeConfig, autonomyMode)
 
   // Chime when a chat notification first arrives (0 → >0 transition).
   // A 1-second grace period prevents chiming on initial page load.
@@ -498,8 +500,8 @@ export function App() {
     if (!localAuthPassed) return
     const poll = async () => {
       try {
-        const [approvals, status, proposals, greetings] = await Promise.allSettled([
-          api.approvals(), api.status(), api.forgeProposals(), api.pendingGreetings(),
+        const [approvals, status, proposals, greetings, config] = await Promise.allSettled([
+          api.approvals(), api.status(), api.forgeProposals(), api.pendingGreetings(), api.config(),
         ])
         if (approvals.status === 'fulfilled') {
           setPendingApprovals(approvals.value.filter(a => a.status === 'pending').length)
@@ -513,6 +515,9 @@ export function App() {
         if (greetings.status === 'fulfilled') {
           setPendingGreetings(greetings.value.count)
         }
+        if (config.status === 'fulfilled') {
+          setAutonomyMode((config.value.autonomyMode as AutonomyMode) === 'unleashed' ? 'unleashed' : 'sandboxed')
+        }
       } catch {
         // daemon may not be running
       }
@@ -522,12 +527,27 @@ export function App() {
     return () => clearInterval(interval)
   }, [localAuthPassed])
 
+  useEffect(() => {
+    const handleAutonomyModeChanged = (event: Event) => {
+      const nextMode = (event as CustomEvent<{ autonomyMode?: string }>).detail?.autonomyMode
+      setAutonomyMode(nextMode === 'unleashed' ? 'unleashed' : 'sandboxed')
+    }
+
+    window.addEventListener('atlas:autonomy-mode-changed', handleAutonomyModeChanged as EventListener)
+    return () => window.removeEventListener('atlas:autonomy-mode-changed', handleAutonomyModeChanged as EventListener)
+  }, [])
+
   // Apply + persist theme; re-run whenever config changes or OS flips
   useEffect(() => {
+    saveAutonomyMode(autonomyMode)
+  }, [autonomyMode])
+
+  useEffect(() => {
     saveTheme(themeConfig)
-    applyTheme(themeConfig)
-    return watchSystemTheme(themeConfig, () => applyTheme(themeConfig))
-  }, [themeConfig])
+    applyTheme(displayThemeConfig)
+    document.documentElement.setAttribute('data-atlas-autonomy', autonomyMode)
+    return watchSystemTheme(displayThemeConfig, () => applyTheme(displayThemeConfig))
+  }, [themeConfig, displayThemeConfig, autonomyMode])
 
   const navigate = (s: Screen) => {
     if (s === 'chat') {
@@ -720,7 +740,8 @@ export function App() {
                     aria-label={item.label}
                   >
                     <span class="nav-icon">{item.icon}</span>
-                    {!collapsed && item.label}
+                    {!collapsed && <span>{item.label}</span>}
+                    {!collapsed && item.tag && <span class="nav-item-tag">{item.tag}</span>}
                   </a>
                 </div>
                 )

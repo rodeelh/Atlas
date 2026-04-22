@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api, type APIKeyStatus, type CommunicationPlatformStatus, type CommunicationsSnapshot, type RuntimeConfig } from '../api/client'
 import { ErrorBanner } from '../components/ErrorBanner'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 type StepID = 'mind' | 'provider' | 'audio' | 'channel' | 'finish'
 type ProviderID = 'openai' | 'anthropic' | 'gemini' | 'lm_studio' | 'ollama' | 'atlas_engine' | 'atlas_mlx'
@@ -159,6 +160,8 @@ export function Onboarding({ onCompleted }: { onCompleted: () => void }) {
   const [ollamaBaseURL, setOllamaBaseURL] = useState('http://localhost:11434')
 
   const [selectedAudioProvider, setSelectedAudioProvider] = useState<AudioProviderOnboardingID>('local')
+  const [launchAutonomyMode, setLaunchAutonomyMode] = useState<'sandboxed' | 'unleashed'>('sandboxed')
+  const [showUnleashConfirm, setShowUnleashConfirm] = useState(false)
 
   const [selectedPlatformID, setSelectedPlatformID] = useState<PlatformID | 'skip'>('skip')
   const [channelValues, setChannelValues] = useState<Record<string, string>>(EMPTY_CHANNEL_VALUES)
@@ -181,6 +184,7 @@ export function Onboarding({ onCompleted }: { onCompleted: () => void }) {
       setKeyStatus(currentKeys)
       setCommunications(currentCommunications)
       setAssistantName(runtimeConfig.personaName || 'Atlas')
+      setLaunchAutonomyMode((runtimeConfig.autonomyMode as 'sandboxed' | 'unleashed') || 'sandboxed')
       setMindContent(currentMind.content || defaultMindTemplate(runtimeConfig.personaName || 'Atlas', ''))
       setSelectedProvider((runtimeConfig.activeAIProvider as ProviderID) || 'openai')
       setLMStudioBaseURL(runtimeConfig.lmStudioBaseURL || 'http://localhost:1234')
@@ -344,6 +348,10 @@ export function Onboarding({ onCompleted }: { onCompleted: () => void }) {
     setSaving(true)
     setError(null)
     try {
+      if (config && launchAutonomyMode !== ((config.autonomyMode as 'sandboxed' | 'unleashed') || 'sandboxed')) {
+        const { config: updatedConfig } = await api.updateConfig({ autonomyMode: launchAutonomyMode })
+        setConfig(updatedConfig)
+      }
       await api.updateOnboardingStatus(true)
       onCompleted()
     } catch (err) {
@@ -369,6 +377,20 @@ export function Onboarding({ onCompleted }: { onCompleted: () => void }) {
   return (
     <div class="onboarding-shell">
       <div class="onboarding-card">
+        {showUnleashConfirm && (
+          <ConfirmDialog
+            title="Finish onboarding in unleashed mode?"
+            body="Atlas will start outside the default sandbox with self-improvement surfaces enabled. When you explicitly ask it to go beyond the current toolset, it can update its editable prompt layer, research capability gaps online, and draft Forge extensions. The built-in safety layer still stays in place, but Atlas will begin with much higher agency."
+            confirmLabel="Start unleashed"
+            cancelLabel="Stay sandboxed"
+            danger
+            onConfirm={() => {
+              setShowUnleashConfirm(false)
+              void finishOnboarding()
+            }}
+            onCancel={() => setShowUnleashConfirm(false)}
+          />
+        )}
         <aside class="onboarding-rail">
           <div class="onboarding-brand">
             <div class="onboarding-brand-mark">A</div>
@@ -618,10 +640,41 @@ export function Onboarding({ onCompleted }: { onCompleted: () => void }) {
                   <strong>{readyPlatforms.length > 0 ? `${readyPlatforms.length} ready` : 'Optional'}</strong>
                   <p>{readyPlatforms.length > 0 ? 'At least one communication route is already connected.' : 'No problem. Atlas can start in the web UI and connect channels later.'}</p>
                 </div>
+                <div class="onboarding-summary-card">
+                  <div class="surface-eyebrow">Autonomy</div>
+                  <strong>{launchAutonomyMode === 'unleashed' ? 'Unleashed' : 'Sandboxed'}</strong>
+                  <p>{launchAutonomyMode === 'unleashed'
+                    ? 'Atlas can self-improve when the user explicitly asks it to push past the current toolset.'
+                    : 'Atlas starts constrained by default and asks before crossing capability boundaries.'}</p>
+                </div>
+              </div>
+
+              <div class="onboarding-choice-grid onboarding-choice-grid-finish">
+                <button
+                  class={`onboarding-choice-card onboarding-autonomy-card${launchAutonomyMode === 'sandboxed' ? ' selected' : ''}`}
+                  onClick={() => setLaunchAutonomyMode('sandboxed')}
+                >
+                  <div class="onboarding-choice-header">
+                    <strong>Start sandboxed</strong>
+                    {launchAutonomyMode === 'sandboxed' && <span class="badge badge-green">Recommended</span>}
+                  </div>
+                  <p>Atlas begins inside the default production-safe envelope: approvals stay in front of non-read actions, and self-improvement surfaces stay off until you deliberately open them later.</p>
+                </button>
+
+                <button
+                  class={`onboarding-choice-card onboarding-autonomy-card onboarding-autonomy-card-danger${launchAutonomyMode === 'unleashed' ? ' selected' : ''}`}
+                  onClick={() => setLaunchAutonomyMode('unleashed')}
+                >
+                  <div class="onboarding-choice-header">
+                    <strong>Unleash now</strong>
+                    {launchAutonomyMode === 'unleashed' && <span class="badge badge-red">High agency</span>}
+                  </div>
+                  <p>Atlas starts with higher agency: when you explicitly ask it to become more capable, it can update its editable prompt layer, research missing capabilities online, and draft reusable extensions.</p>
+                </button>
               </div>
 
               <div class="onboarding-note">
-                File access, notifications, and system-level permissions now happen later, when a real feature needs them.
+                File access, notifications, and system-level permissions still happen later, when a real feature needs them. This choice only changes how much self-directed capability work Atlas is allowed to do from the start.
               </div>
             </div>
           )}
@@ -662,8 +715,18 @@ export function Onboarding({ onCompleted }: { onCompleted: () => void }) {
             )}
 
             {step === 'finish' && (
-              <button class="btn btn-primary btn-sm" onClick={() => void finishOnboarding()} disabled={saving}>
-                {saving ? 'Finishing…' : 'Start chatting'}
+              <button
+                class={`btn btn-primary btn-sm${launchAutonomyMode === 'unleashed' ? ' btn-danger-soft' : ''}`}
+                onClick={() => {
+                  if (launchAutonomyMode === 'unleashed') {
+                    setShowUnleashConfirm(true)
+                    return
+                  }
+                  void finishOnboarding()
+                }}
+                disabled={saving}
+              >
+                {saving ? 'Finishing…' : launchAutonomyMode === 'unleashed' ? 'Unleash and start chatting' : 'Start in sandbox'}
               </button>
             )}
           </div>

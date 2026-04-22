@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/storage"
 )
@@ -133,6 +134,12 @@ type ForgePersistFn func(specJSON, plansJSON, summary, rationale, contractJSON s
 	err error,
 )
 
+type ForgeInstallFn func(proposalID string, enable bool) (
+	name, skillID string,
+	actionNames []string,
+	err error,
+)
+
 // ForgeResearchTracker records that Forge is actively researching or preparing
 // a proposal. The returned function must be called when the operation finishes.
 type ForgeResearchTracker func(title, message string) func()
@@ -152,6 +159,7 @@ type Registry struct {
 	voiceMgr       VoiceManager
 	visionFn       VisionFn
 	forgePersistFn ForgePersistFn
+	forgeInstallFn ForgeInstallFn
 	forgeTracker   ForgeResearchTracker
 
 	// policyCache avoids a per-tool-call disk read of action-policies.json.
@@ -213,6 +221,7 @@ func NewRegistry(supportDir string, db *storage.DB, browserMgr BrowserManager) *
 	r.registerGremlin()
 	r.registerWebSearch()
 	r.registerForge()
+	r.registerPromptManagement()
 	r.registerVault()
 	r.registerBrowser()
 	r.registerMemory()
@@ -327,6 +336,7 @@ func (r *Registry) FilteredByPatterns(patterns []string) *Registry {
 		voiceMgr:       r.voiceMgr,
 		visionFn:       r.visionFn,
 		forgePersistFn: r.forgePersistFn,
+		forgeInstallFn: r.forgeInstallFn,
 	}
 	for actionID, entry := range r.entries {
 		if !matchesAnyPattern(actionID, patterns) {
@@ -381,6 +391,7 @@ func (r *Registry) FilteredByActionClasses(classes []string) *Registry {
 		voiceMgr:       r.voiceMgr,
 		visionFn:       r.visionFn,
 		forgePersistFn: r.forgePersistFn,
+		forgeInstallFn: r.forgeInstallFn,
 	}
 	for actionID, entry := range r.entries {
 		if allowed[entry.ActionClass] {
@@ -619,6 +630,8 @@ func (r *Registry) toolCapabilityGroup(name string) string {
 		strings.HasPrefix(name, "applescript.contacts_"),
 		strings.HasPrefix(name, "applescript.notes_"):
 		return "office"
+	case strings.HasPrefix(name, "applescript.messages_"):
+		return "communication"
 	case strings.HasPrefix(name, "applescript.music_"),
 		strings.HasPrefix(name, "applescript.safari_"),
 		name == "applescript.system_info":
@@ -841,7 +854,7 @@ func (r *Registry) registerBuiltInRoutingContracts() {
 			contract: RoutingContract{Group: "mac", Description: "Open apps, Finder, clipboard, and local Mac actions.", Threshold: 1},
 		},
 		{
-			prefixes: []string{"terminal.", "applescript.run_custom"},
+			prefixes: []string{"terminal."},
 			contract: RoutingContract{Group: "shell", Description: "Terminal commands and explicit script execution.", Threshold: 3},
 		},
 		{
@@ -1191,9 +1204,15 @@ func (r *Registry) NeedsApproval(actionID string) bool {
 	if !ok {
 		return true // unknown action — require approval
 	}
+	mode := config.NormalizeAutonomyMode(loadAutonomyMode(r.supportDir))
 
 	// Layer 1: ActionClass-driven default.
 	base := DefaultNeedsConfirmation(e.ActionClass)
+	if mode == config.AutonomyModeSandboxed && e.ActionClass != ActionClassRead {
+		base = true
+	} else if mode == config.AutonomyModeUnleashed && !requiresExplicitApprovalInUnleashed(actionID, e.ActionClass) {
+		base = false
+	}
 
 	// Layer 2: per-action policy override.
 	policy := r.loadPolicy(actionID)
@@ -1205,6 +1224,19 @@ func (r *Registry) NeedsApproval(actionID string) bool {
 	}
 
 	return base
+}
+
+func requiresExplicitApprovalInUnleashed(actionID string, class ActionClass) bool {
+	switch class {
+	case ActionClassSendPublishDelete:
+		return true
+	}
+	switch actionID {
+	case "terminal.run_as_admin":
+		return true
+	default:
+		return false
+	}
 }
 
 func isNonInteractiveInternalAction(actionID string) bool {
@@ -1319,6 +1351,10 @@ func (r *Registry) SetForgePersistFn(fn ForgePersistFn) {
 	r.forgePersistFn = fn
 }
 
+func (r *Registry) SetForgeInstallFn(fn ForgeInstallFn) {
+	r.forgeInstallFn = fn
+}
+
 // SetForgeResearchTracker wires forge.orchestration.propose into the same
 // /forge/researching state that powers the Forge UI.
 func (r *Registry) SetForgeResearchTracker(fn ForgeResearchTracker) {
@@ -1358,8 +1394,42 @@ func (r *Registry) loadPolicy(actionID string) string {
 			return policy
 		}
 		if publicID := r.publicByAction[canonical]; publicID != "" {
-			return r.policyCache[publicID]
+			if policy := r.policyCache[publicID]; policy != "" {
+				return policy
+			}
 		}
 	}
+	if policy := builtInPolicyOverride(actionID); policy != "" {
+		return policy
+	}
 	return ""
+}
+
+func builtInPolicyOverride(actionID string) string {
+	switch {
+	case strings.HasPrefix(actionID, "automation."):
+		return "auto_approve"
+	case strings.HasPrefix(actionID, "workflow."):
+		return "auto_approve"
+	case strings.HasPrefix(actionID, "team."):
+		return "auto_approve"
+	case actionID == "communication.send_message":
+		return "auto_approve"
+	default:
+		return ""
+	}
+}
+
+func loadAutonomyMode(supportDir string) string {
+	data, err := os.ReadFile(filepath.Join(supportDir, "config.json"))
+	if err != nil {
+		return config.AutonomyModeSandboxed
+	}
+	var snap struct {
+		AutonomyMode string `json:"autonomyMode"`
+	}
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return config.AutonomyModeSandboxed
+	}
+	return snap.AutonomyMode
 }

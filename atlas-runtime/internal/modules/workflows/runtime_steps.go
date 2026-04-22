@@ -10,6 +10,7 @@ import (
 
 	"atlas-runtime-go/internal/agent"
 	"atlas-runtime-go/internal/chat"
+	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/storage"
 	"atlas-runtime-go/internal/workflowexec"
 )
@@ -61,7 +62,7 @@ func (m *Module) executePreparedWorkflow(ctx context.Context, prepared workflowe
 		req := chat.MessageRequest{
 			Message:        prepared.Prompt,
 			ConversationID: prepared.ConversationID,
-			ToolPolicy:     toolPolicyForDefinition(prepared.Definition),
+			ToolPolicy:     toolPolicyForDefinition(prepared.Definition, m.runtimeConfig()),
 		}
 		resp, execErr := m.agent.HandleMessage(ctx, req)
 		if execErr != nil {
@@ -75,8 +76,8 @@ func (m *Module) executePreparedWorkflow(ctx context.Context, prepared workflowe
 
 	stepRuns = workflowexec.InitialStepRuns(prepared.Definition)
 	summaries := make([]string, 0, len(steps))
-	policy := toolPolicyForDefinition(prepared.Definition)
-	objective := strings.TrimSpace(workflowexec.ComposePrompt(prepared.Definition, prepared.InputValues, ""))
+	policy := toolPolicyForDefinition(prepared.Definition, m.runtimeConfig())
+	objective := strings.TrimSpace(workflowexec.ComposePromptWithConfig(m.runtimeConfig(), prepared.Definition, prepared.InputValues, ""))
 	stepResults := map[string]workflowStepResult{}
 	for idx, step := range steps {
 		stepIndex := stepRunIndex(stepRuns, step.ID)
@@ -176,7 +177,7 @@ func (m *Module) resumeWorkflowAfterApproval(ctx context.Context, runID string) 
 		return nil, err
 	}
 
-	objective := strings.TrimSpace(workflowexec.ComposePrompt(def, parseWorkflowInputValues(row.InputValuesJSON), ""))
+	objective := strings.TrimSpace(workflowexec.ComposePromptWithConfig(m.runtimeConfig(), def, parseWorkflowInputValues(row.InputValuesJSON), ""))
 	stepResults := existingStepResults(stepRuns)
 	result, _, execErr := m.executeWorkflowStep(ctx, workflowexec.PreparedRun{
 		RunID:          row.RunID,
@@ -184,7 +185,7 @@ func (m *Module) resumeWorkflowAfterApproval(ctx context.Context, runID string) 
 		ConversationID: stringPtrValue(row.ConversationID),
 		InputValues:    parseWorkflowInputValues(row.InputValuesJSON),
 		Definition:     def,
-	}, objective, steps[stepIndex], stepIndex, len(steps), toolPolicyForDefinition(def), stepResults)
+	}, objective, steps[stepIndex], stepIndex, len(steps), toolPolicyForDefinition(def, m.runtimeConfig()), stepResults)
 	if execErr != nil {
 		return m.failWorkflowRun(row, stepRuns, runIndex, execErr.Error())
 	}
@@ -654,7 +655,7 @@ func (m *Module) persistStepRuns(runID string, stepRuns []map[string]any) error 
 	return m.store.UpdateWorkflowRunStepRuns(runID, string(data))
 }
 
-func toolPolicyForDefinition(def map[string]any) *agent.ToolPolicy {
+func toolPolicyForDefinition(def map[string]any, cfg config.RuntimeConfigSnapshot) *agent.ToolPolicy {
 	scope, _ := def["trustScope"].(map[string]any)
 	policy := &agent.ToolPolicy{
 		Enabled:             true,
@@ -662,6 +663,12 @@ func toolPolicyForDefinition(def map[string]any) *agent.ToolPolicy {
 		AllowsLiveWrite:     boolValue(scope, "allowsLiveWrite", false),
 		ApprovedRootPaths:   stringListValue(scope, "approvedRootPaths"),
 		AllowedToolPrefixes: allowedToolPrefixes(stringListValue(scope, "allowedApps")),
+	}
+	if cfg.IsUnleashed() {
+		policy.AllowsLiveWrite = true
+		policy.AllowsSensitiveRead = true
+		policy.ApprovedRootPaths = nil
+		policy.AllowedToolPrefixes = nil
 	}
 	return policy
 }

@@ -103,7 +103,9 @@ func Analyze(message string, inventory []Record) Analysis {
 		case "delivery.channel":
 			req = evaluateActionRequirement(req, index, "communication.send_message", "authorized destination required")
 		case "delivery.email":
-			req = evaluateCustomRequirement(req, nil, "no email delivery capability is currently installed")
+			req = evaluateActionRequirement(req, index, "applescript.mail_write", "")
+		case "delivery.imessage":
+			req = evaluateActionRequirement(req, index, "applescript.messages_send", "")
 		}
 
 		for _, provider := range req.SatisfiedBy {
@@ -124,6 +126,7 @@ func Analyze(message string, inventory []Record) Analysis {
 		suggestedGroups["forge"] = true
 	}
 	analysis.SuggestedGroups = sortedKeys(suggestedGroups)
+	forgeRequested := hasRequirementType(analysis.Requirements, "forge.build")
 
 	switch {
 	case len(analysis.MissingPrerequisites) > 0:
@@ -134,6 +137,8 @@ func Analyze(message string, inventory []Record) Analysis {
 		} else {
 			analysis.Decision = DecisionAskPrerequisite
 		}
+	case forgeRequested:
+		analysis.Decision = DecisionForgeNew
 	case hasMultiStepIntent || len(uniqueProviders) > 1:
 		analysis.Decision = DecisionComposeExisting
 	default:
@@ -224,7 +229,15 @@ func inferRequirements(message string) []string {
 	if explicitTeamRequest || explicitWorkflowRequest || explicitAutomationRequest {
 		return reqs
 	}
-	if containsAny(message, "email", "mail ") {
+	hasIMessageIntent := containsAny(message, "imessage", "i message", "apple messages", "messages app") &&
+		containsAny(message, "send", "message", "text", "reply")
+	if hasIMessageIntent {
+		add("delivery.imessage")
+	}
+	if hasIMessageIntent {
+		// Explicit iMessage routes should not also fall back to the generic
+		// communication channel requirement.
+	} else if containsAny(message, "email", "mail ") {
 		add("delivery.email")
 	} else if containsAny(message, "telegram", "slack", "discord", "channel") {
 		add("delivery.channel")
@@ -247,7 +260,32 @@ func wantsForge(message string) bool {
 		"make atlas able",
 		"add capability",
 		"new capability",
+		"figure out a way",
+		"figure it out",
+		"figure this out",
+		"find a way to",
+		"find another way",
+		"learn how to",
+		"make yourself capable",
+		"make atlas capable",
+		"add support for",
+		"make it work",
+		"other ways to do it",
+		"there are other ways",
+		"try another way",
+		"try whatever way",
+		"connect to ",
+		"integrate with",
 	)
+}
+
+func hasRequirementType(reqs []Requirement, want string) bool {
+	for _, req := range reqs {
+		if req.Type == want {
+			return true
+		}
+	}
+	return false
 }
 
 func isExplicitWorkflowRequest(message string) bool {
@@ -290,6 +328,8 @@ func groupsForRequirement(reqType string) []string {
 	case "team.manage":
 		return []string{"team"}
 	case "delivery.chat", "delivery.channel", "delivery.email":
+		return []string{"communication"}
+	case "delivery.imessage":
 		return []string{"communication"}
 	case "forge.build":
 		return []string{"forge"}

@@ -7,7 +7,10 @@ import (
 	"atlas-runtime-go/internal/capabilities"
 	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/skills"
+	"atlas-runtime-go/internal/storage"
 )
+
+const capabilityPlannerHistoryWindow = 4
 
 func analyzeCapabilityPlan(message, supportDir string, workflows capabilities.WorkflowLister, automations capabilities.AutomationLister) capabilities.Analysis {
 	inventory, err := capabilities.List(supportDir, workflows, automations)
@@ -36,6 +39,40 @@ func capabilityPolicy(message, supportDir string, workflows capabilities.Workflo
 		fmt.Sprintf("Capability policy: decision=%s next=%s", policy.Decision, policy.NextAction),
 		map[string]string{"decision": string(policy.Decision), "next_action": policy.NextAction})
 	return analysis, policy
+}
+
+func taskContextFromHistory(history []storage.MessageRow, current string) string {
+	current = strings.TrimSpace(current)
+	if len(history) == 0 {
+		return current
+	}
+
+	userTurns := make([]string, 0, capabilityPlannerHistoryWindow+1)
+	seen := map[string]bool{}
+	appendTurn := func(text string) {
+		text = strings.TrimSpace(text)
+		if text == "" || seen[text] {
+			return
+		}
+		seen[text] = true
+		userTurns = append(userTurns, text)
+	}
+
+	start := len(history) - capabilityPlannerHistoryWindow*2
+	if start < 0 {
+		start = 0
+	}
+	for _, msg := range history[start:] {
+		if msg.Role != "user" {
+			continue
+		}
+		appendTurn(msg.Content)
+	}
+	appendTurn(current)
+	if len(userTurns) == 0 {
+		return current
+	}
+	return strings.Join(userTurns, "\n")
 }
 
 func mergeToolDefs(existing []map[string]any, additions []map[string]any) []map[string]any {

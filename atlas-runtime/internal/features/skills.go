@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/customskills"
 	"atlas-runtime-go/internal/logstore"
 )
@@ -124,6 +125,36 @@ func loadActionPolicies(supportDir string) map[string]string {
 	return p
 }
 
+func loadRuntimeConfigForSkills(supportDir string) config.RuntimeConfigSnapshot {
+	store := config.NewStoreAt(
+		filepath.Join(supportDir, "config.json"),
+		filepath.Join(supportDir, "atlas-config.json"),
+	)
+	return store.Load()
+}
+
+func requiresExplicitSkillApproval(actionID, actionClass string) bool {
+	if strings.TrimSpace(actionClass) == "send_publish_delete" {
+		return true
+	}
+	switch strings.TrimSpace(actionID) {
+	case "terminal.run_as_admin", "applescript.run_custom", "applescript.mail_write":
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultApprovalPolicy(cfg config.RuntimeConfigSnapshot, actionID, permLevel, actionClass string) string {
+	if permLevel == "read" {
+		return "auto_approve"
+	}
+	if cfg.IsUnleashed() && !requiresExplicitSkillApproval(actionID, actionClass) {
+		return "auto_approve"
+	}
+	return "always_ask"
+}
+
 func publicActionID(actionID string) string {
 	if strings.HasPrefix(actionID, "team.") {
 		return "agent." + strings.TrimPrefix(actionID, "team.")
@@ -199,6 +230,7 @@ func builtInSkills() []SkillRecord {
 			Actions: []SkillAction{
 				{ID: "fs.list_directory", Name: "List Directory", Description: "List files in a directory.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "fs.read_file", Name: "Read File", Description: "Read contents of a file.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "fs.workspace_roots", Name: "Workspace Roots", Description: "List approved filesystem roots and the default generated-files directory.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "fs.search", Name: "Search Files", Description: "Search for files by name or pattern.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "fs.get_metadata", Name: "File Metadata", Description: "Get metadata for a file or directory.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "fs.content_search", Name: "Content Search", Description: "Search file contents.", PermissionLevel: "read", IsEnabled: true},
@@ -221,6 +253,8 @@ func builtInSkills() []SkillRecord {
 			},
 			Actions: []SkillAction{
 				{ID: "atlas.info", Name: "Atlas Info", Description: "Get runtime status and configuration info.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "atlas.session_capabilities", Name: "Session Capabilities", Description: "Inspect Atlas's current autonomy, approval posture, and installed capability surface.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "atlas.diagnose_blocker", Name: "Diagnose Blocker", Description: "Diagnose why a specific Atlas action is blocked, approval-gated, or unavailable.", PermissionLevel: "read", IsEnabled: true},
 			},
 		},
 		{
@@ -261,6 +295,7 @@ func builtInSkills() []SkillRecord {
 			},
 			Actions: []SkillAction{
 				{ID: "system.open_app", Name: "Open App", Description: "Open a macOS application.", PermissionLevel: "execute", IsEnabled: true},
+				{ID: "system.app_capabilities", Name: "App Capabilities", Description: "Inspect app installation, running state, bundle IDs, and related command availability.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "system.open_file", Name: "Open File", Description: "Open a file with its default app.", PermissionLevel: "execute", IsEnabled: true},
 				{ID: "system.open_folder", Name: "Open Folder", Description: "Open a folder in Finder.", PermissionLevel: "execute", IsEnabled: true},
 				{ID: "system.reveal_in_finder", Name: "Reveal in Finder", Description: "Reveal a file in Finder.", PermissionLevel: "execute", IsEnabled: true},
@@ -292,6 +327,7 @@ func builtInSkills() []SkillRecord {
 				{ID: "terminal.kill_process", Name: "Kill Process", Description: "Send a signal to a process by PID.", PermissionLevel: "execute", IsEnabled: true},
 				{ID: "terminal.get_working_directory", Name: "Get Working Directory", Description: "Return the runtime's current working directory.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "terminal.which", Name: "Which", Description: "Locate a command on PATH.", PermissionLevel: "read", IsEnabled: true},
+				{ID: "terminal.check_command", Name: "Check Command", Description: "Check whether a command exists, where it resolves, and what version it reports.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "terminal.run_as_admin", Name: "Run as Admin", Description: "Run a command with administrator privileges via macOS auth dialog.", PermissionLevel: "execute", IsEnabled: true},
 				{ID: "terminal.run_background", Name: "Run in Background", Description: "Start a long-running command asynchronously. Atlas sends a follow-up message when it completes.", PermissionLevel: "execute", IsEnabled: true},
 			},
@@ -314,12 +350,14 @@ func builtInSkills() []SkillRecord {
 				{ID: "applescript.mail_read", Name: "Mail Read", Description: "Read Mail messages.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "applescript.mail_wait_for_message", Name: "Mail Wait For Message", Description: "Wait for a new email matching a filter.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "applescript.mail_write", Name: "Mail Write", Description: "Compose and send Mail.", PermissionLevel: "execute", IsEnabled: true},
+				{ID: "applescript.messages_send", Name: "Messages Send", Description: "Send an iMessage through Messages.app.", PermissionLevel: "execute", IsEnabled: true},
 				{ID: "applescript.safari_read", Name: "Safari Read", Description: "Read Safari tabs and content.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "applescript.safari_navigate", Name: "Safari Navigate", Description: "Navigate Safari to a URL.", PermissionLevel: "execute", IsEnabled: true},
 				{ID: "applescript.notes_read", Name: "Notes Read", Description: "Read Notes.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "applescript.notes_write", Name: "Notes Write", Description: "Create or update Notes.", PermissionLevel: "execute", IsEnabled: true},
 				{ID: "applescript.music_read", Name: "Music Read", Description: "Read Music library and playback state.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "applescript.music_control", Name: "Music Control", Description: "Control Music playback.", PermissionLevel: "execute", IsEnabled: true},
+				{ID: "applescript.music_play_track", Name: "Play Music Track", Description: "Find and play a specific track in Music.", PermissionLevel: "execute", IsEnabled: true},
 				{ID: "applescript.system_info", Name: "System Info", Description: "Get macOS system information.", PermissionLevel: "read", IsEnabled: true},
 				{ID: "applescript.run_custom", Name: "Run Custom Script", Description: "Execute a custom AppleScript.", PermissionLevel: "execute", IsEnabled: true},
 			},
@@ -561,6 +599,7 @@ func ListSkills(supportDir string) []SkillRecord {
 	records := builtInSkills()
 	states := loadSkillStates(supportDir)
 	policies := loadActionPolicies(supportDir)
+	cfg := loadRuntimeConfigForSkills(supportDir)
 
 	for i := range records {
 		// Apply state override if present.
@@ -580,31 +619,21 @@ func ListSkills(supportDir string) []SkillRecord {
 					// as automation.* and workflow.*.
 					continue
 				} else {
-					// Default: read → auto_approve, others → always_ask
-					if action.PermissionLevel == "read" {
-						action.ApprovalPolicy = "auto_approve"
-					} else {
-						action.ApprovalPolicy = "always_ask"
-					}
+					action.ApprovalPolicy = defaultApprovalPolicy(cfg, action.ID, action.PermissionLevel, "")
 				}
 			} else if action.ApprovalPolicy != "" {
 				// Preserve explicit defaults for module-owned control surfaces such
 				// as automation.* and workflow.*.
 				continue
 			} else {
-				// Default: read → auto_approve, others → always_ask
-				if action.PermissionLevel == "read" {
-					action.ApprovalPolicy = "auto_approve"
-				} else {
-					action.ApprovalPolicy = "always_ask"
-				}
+				action.ApprovalPolicy = defaultApprovalPolicy(cfg, action.ID, action.PermissionLevel, "")
 			}
 		}
 	}
 
 	// Append user-installed custom skills.
 	for _, manifest := range customskills.ListManifests(supportDir) {
-		records = append(records, customManifestToRecord(manifest, states, policies))
+		records = append(records, customManifestToRecord(manifest, states, policies, cfg))
 	}
 
 	return records
@@ -612,7 +641,7 @@ func ListSkills(supportDir string) []SkillRecord {
 
 // customManifestToRecord converts a CustomSkillManifest to a SkillRecord, applying
 // any state and policy overrides that may already be stored.
-func customManifestToRecord(manifest customskills.CustomSkillManifest, states skillStates, policies map[string]string) SkillRecord {
+func customManifestToRecord(manifest customskills.CustomSkillManifest, states skillStates, policies map[string]string, cfg config.RuntimeConfigSnapshot) SkillRecord {
 	lifecycleState := "enabled"
 	if state, ok := states[manifest.ID]; ok {
 		lifecycleState = state
@@ -623,17 +652,13 @@ func customManifestToRecord(manifest customskills.CustomSkillManifest, states sk
 		permLevel := normalizePermLevel(a.PermLevel)
 		actionName := a.RuntimeName()
 		actionID := manifest.ID + "." + actionName
-		approvalPolicy := "always_ask"
+		approvalPolicy := defaultApprovalPolicy(cfg, actionID, permLevel, a.ActionClass)
 		if policy, ok := policies[actionID]; ok {
 			approvalPolicy = policy
 		} else if publicID := publicActionID(actionID); publicID != actionID {
 			if policy, ok := policies[publicID]; ok {
 				approvalPolicy = policy
-			} else if permLevel == "read" {
-				approvalPolicy = "auto_approve"
 			}
-		} else if permLevel == "read" {
-			approvalPolicy = "auto_approve"
 		}
 		actions = append(actions, SkillAction{
 			ID:              actionID,
@@ -779,7 +804,7 @@ func SetSkillState(supportDir, skillID, newState string) *SkillRecord {
 				states := loadSkillStates(supportDir)
 				states[skillID] = newState
 				saveSkillStates(supportDir, states)
-				rec := customManifestToRecord(manifest, states, loadActionPolicies(supportDir))
+				rec := customManifestToRecord(manifest, states, loadActionPolicies(supportDir), loadRuntimeConfigForSkills(supportDir))
 				return &rec
 			}
 		}

@@ -52,6 +52,7 @@ export interface RuntimeConfig {
   telegramAllowedChatIDs: number[];
   defaultOpenAIModel: string;
   baseSystemPrompt: string;
+  autonomyMode: string;
   maxAgentIterations: number;
   conversationWindowLimit: number;
   memoryEnabled: boolean;
@@ -957,6 +958,14 @@ export interface DashboardDataSource {
   refresh: DashboardRefreshPolicy;
 }
 
+export interface DashboardSourceCreateRequest {
+  name: string;
+  kind: DashboardSourceKind;
+  config: Record<string, unknown>;
+  refreshMode?: DashboardRefreshMode;
+  intervalSeconds?: number;
+}
+
 export interface DashboardDataSourceBinding {
   source: string;
   path?: string;
@@ -999,6 +1008,37 @@ export interface DashboardWidgetUpdate {
   gridY?: number;
   gridW?: number;
   gridH?: number;
+}
+
+export interface DashboardCreateRequest {
+  name: string;
+  description?: string;
+}
+
+export interface DashboardWidgetCreateRequest {
+  title?: string;
+  description?: string;
+  size: DashboardSize;
+  group?: string;
+  preset: DashboardPreset;
+  bindings?: DashboardDataSourceBinding[];
+  options?: Record<string, unknown>;
+}
+
+export interface DashboardCodeWidgetCreateRequest {
+  title?: string;
+  description?: string;
+  size: DashboardSize;
+  group?: string;
+  bindings?: DashboardDataSourceBinding[];
+  tsx: string;
+}
+
+export interface DashboardAIWidgetCreateRequest {
+  prompt: string;
+  source?: string;
+  title?: string;
+  size?: DashboardSize;
 }
 
 export interface DashboardLayoutWidgetUpdate {

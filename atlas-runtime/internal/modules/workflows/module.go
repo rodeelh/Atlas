@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/platform"
 	"atlas-runtime-go/internal/skills"
 	"atlas-runtime-go/internal/workflowexec"
@@ -25,6 +26,7 @@ type Module struct {
 	store      platform.WorkflowStore
 	agent      platform.AgentRuntime
 	bus        platform.EventBus
+	cfg        platform.ConfigReader
 	skills     *skills.Registry
 }
 
@@ -45,6 +47,7 @@ func (m *Module) Register(host platform.Host) error {
 	m.store = host.Storage().Workflows()
 	m.agent = host.AgentRuntime()
 	m.bus = host.Bus()
+	m.cfg = host.Config()
 	if err := m.importLegacyDefinitions(); err != nil {
 		return fmt.Errorf("import legacy workflows: %w", err)
 	}
@@ -56,6 +59,13 @@ func (m *Module) Register(host platform.Host) error {
 func (m *Module) Start(context.Context) error { return nil }
 
 func (m *Module) Stop(context.Context) error { return nil }
+
+func (m *Module) runtimeConfig() config.RuntimeConfigSnapshot {
+	if m == nil || m.cfg == nil {
+		return config.Defaults()
+	}
+	return m.cfg.Load()
+}
 
 func (m *Module) SetSkillRegistry(registry *skills.Registry) {
 	m.skills = registry
@@ -247,7 +257,7 @@ func (m *Module) startWorkflowRun(id string, inputValues map[string]string, trig
 	}
 	runID := newID()
 	convID := newID()
-	prepared, err := workflowexec.PrepareRun(m.store, id, runID, convID, triggerSource, inputValues, "")
+	prepared, err := workflowexec.PrepareRunWithConfig(m.store, m.runtimeConfig(), id, runID, convID, triggerSource, inputValues, "")
 	if err != nil {
 		return workflowexec.PreparedRun{}, err
 	}

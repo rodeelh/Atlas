@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -213,6 +215,28 @@ func (r *Registry) registerSystem() {
 		},
 		PermLevel: "read",
 		Fn:        systemIsAppRunning,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "system.app_capabilities",
+			Description: "Inspect whether macOS apps are installed or running, plus optional command availability, so Atlas can evaluate local routes with real facts.",
+			Properties: map[string]ToolParam{
+				"appNames": {
+					Description: "Optional app names to inspect, for example ['Messages', 'Music', 'Safari']",
+					Type:        "array",
+					Items:       &ToolParam{Type: "string"},
+				},
+				"commands": {
+					Description: "Optional command names to inspect, for example ['osascript', 'python3', 'ffmpeg']",
+					Type:        "array",
+					Items:       &ToolParam{Type: "string"},
+				},
+			},
+			Required: []string{},
+		},
+		PermLevel: "read",
+		FnResult:  systemAppCapabilities,
 	})
 }
 
@@ -466,4 +490,138 @@ func systemIsAppRunning(ctx context.Context, args json.RawMessage) (string, erro
 		return p.AppName + " is running.", nil
 	}
 	return p.AppName + " is not running.", nil
+}
+
+func systemAppCapabilities(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+	var p struct {
+		AppNames []string `json:"appNames"`
+		Commands []string `json:"commands"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return ToolResult{}, fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	appNames := make([]string, 0, len(p.AppNames))
+	for _, appName := range p.AppNames {
+		if appName = strings.TrimSpace(appName); appName != "" {
+			appNames = append(appNames, appName)
+		}
+	}
+	commands := make([]string, 0, len(p.Commands))
+	for _, command := range p.Commands {
+		if command = strings.TrimSpace(command); command != "" {
+			commands = append(commands, command)
+		}
+	}
+	if len(appNames) == 0 && len(commands) == 0 {
+		return ToolResult{}, fmt.Errorf("provide appNames, commands, or both")
+	}
+
+	appRecords := make([]map[string]any, 0, len(appNames))
+	for _, appName := range appNames {
+		record := map[string]any{
+			"name":      appName,
+			"installed": false,
+			"running":   false,
+		}
+		if appPath, ok := lookupAppPath(ctx, appName); ok {
+			record["installed"] = true
+			record["path"] = appPath
+		}
+		if bundleID, ok := lookupBundleID(ctx, appName); ok {
+			record["installed"] = true
+			record["bundleID"] = bundleID
+		}
+		if running, ok := appIsRunning(ctx, appName); ok {
+			record["running"] = running
+		}
+		appRecords = append(appRecords, record)
+	}
+
+	commandRecords := make([]map[string]any, 0, len(commands))
+	for _, command := range commands {
+		record := map[string]any{
+			"name":      command,
+			"installed": false,
+		}
+		if path, err := exec.LookPath(command); err == nil {
+			record["installed"] = true
+			record["path"] = path
+		}
+		commandRecords = append(commandRecords, record)
+	}
+
+	summaryParts := []string{}
+	if len(appRecords) > 0 {
+		installedCount := 0
+		runningCount := 0
+		for _, record := range appRecords {
+			if record["installed"] == true {
+				installedCount++
+			}
+			if record["running"] == true {
+				runningCount++
+			}
+		}
+		summaryParts = append(summaryParts, fmt.Sprintf("%d/%d app(s) installed, %d running", installedCount, len(appRecords), runningCount))
+	}
+	if len(commandRecords) > 0 {
+		installedCount := 0
+		for _, record := range commandRecords {
+			if record["installed"] == true {
+				installedCount++
+			}
+		}
+		summaryParts = append(summaryParts, fmt.Sprintf("%d/%d command(s) on PATH", installedCount, len(commandRecords)))
+	}
+
+	return OKResult("App capability scan complete: "+strings.Join(summaryParts, "; "), map[string]any{
+		"apps":     appRecords,
+		"commands": commandRecords,
+	}), nil
+}
+
+func lookupAppPath(ctx context.Context, appName string) (string, bool) {
+	target := strings.TrimSpace(appName)
+	if target == "" {
+		return "", false
+	}
+	if !strings.HasSuffix(strings.ToLower(target), ".app") {
+		target += ".app"
+	}
+
+	searchRoots := []string{"/Applications", "/System/Applications"}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		searchRoots = append(searchRoots, filepath.Join(home, "Applications"))
+	}
+	for _, root := range searchRoots {
+		candidate := filepath.Join(root, target)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, true
+		}
+	}
+
+	query := fmt.Sprintf(`kMDItemFSName == "%s"c && kMDItemContentType == "com.apple.application-bundle"`, target)
+	out, err := runCmd(ctx, "mdfind", query)
+	if err != nil || strings.TrimSpace(out) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(strings.Split(out, "\n")[0]), true
+}
+
+func lookupBundleID(ctx context.Context, appName string) (string, bool) {
+	out, err := runCmd(ctx, "osascript", "-e", fmt.Sprintf(`id of application %q`, appName))
+	if err != nil || strings.TrimSpace(out) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(out), true
+}
+
+func appIsRunning(ctx context.Context, appName string) (bool, bool) {
+	script := fmt.Sprintf(`tell application "System Events" to (name of processes) contains %q`, appName)
+	out, err := runCmd(ctx, "osascript", "-e", script)
+	if err != nil {
+		return false, false
+	}
+	return strings.TrimSpace(out) == "true", true
 }

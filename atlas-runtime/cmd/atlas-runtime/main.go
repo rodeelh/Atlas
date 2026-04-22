@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -401,6 +402,48 @@ func main() {
 		err error,
 	) {
 		return forgeSvc.PersistProposalFromJSON(specJSON, plansJSON, summary, rationale, contractJSON)
+	})
+	skillsRegistry.SetForgeInstallFn(func(proposalID string, enable bool) (name, skillID string, actionNames []string, err error) {
+		proposal := forge.GetProposal(config.SupportDir(), proposalID)
+		if proposal == nil {
+			return "", "", nil, fmt.Errorf("proposal not found: %s", proposalID)
+		}
+
+		target, err := forge.InstallProposalArtifacts(config.SupportDir(), *proposal)
+		if err != nil {
+			return "", "", nil, err
+		}
+
+		if target != nil && target.Type == "custom_skill" {
+			skillsRegistry.ReloadCustomSkill(config.SupportDir(), proposal.SkillID)
+		}
+
+		status := "installed"
+		if enable {
+			status = "enabled"
+		}
+		record, err := forge.BuildInstalledRecord(*proposal, status, target)
+		if err != nil {
+			return "", "", nil, err
+		}
+		if err := forge.SaveInstalled(config.SupportDir(), record); err != nil {
+			return "", "", nil, err
+		}
+		if _, err := forge.UpdateProposalStatus(config.SupportDir(), proposalID, status); err != nil {
+			return "", "", nil, err
+		}
+		features.SetForgeSkillState(config.SupportDir(), proposal.SkillID, status)
+
+		var actions []string
+		for _, raw := range proposal.ActionNames {
+			if name := strings.TrimSpace(raw); name != "" {
+				actions = append(actions, name)
+			}
+		}
+		if len(actions) == 0 {
+			actions = []string{"Installed Action"}
+		}
+		return proposal.Name, proposal.SkillID, actions, nil
 	})
 
 	// Wire approval resolver to Telegram bridge (allows inline approve/deny buttons).

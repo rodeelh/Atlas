@@ -20,11 +20,11 @@ import "sort"
 // least 200px and auto-expands when content overflows. Heights here control
 // the *minimum span* — choose values that match typical content for each size:
 //
-//   quarter (3 cols)   — single metric or KPI card:     1 row  ≈ 200px+
-//   third   (4 cols)   — small metric with context:     1 row  ≈ 200px+
-//   half    (6 cols)   — chart, list, grouped metrics:  2 rows ≈ 400px+
-//   tall    (6 cols)   — large chart or long list:      4 rows ≈ 800px+
-//   full    (12 cols)  — wide table, wide chart:        2 rows ≈ 400px+
+//	quarter (3 cols)   — single metric or KPI card:     1 row  ≈ 200px+
+//	third   (4 cols)   — small metric with context:     1 row  ≈ 200px+
+//	half    (6 cols)   — chart, list, grouped metrics:  2 rows ≈ 400px+
+//	tall    (6 cols)   — large chart or long list:      4 rows ≈ 800px+
+//	full    (12 cols)  — wide table, wide chart:        2 rows ≈ 400px+
 //
 // Unknown sizes default to half.
 func sizeExtent(size string, columns int) (int, int) {
@@ -139,4 +139,63 @@ func packGrid(widgets []Widget, columns int) []Widget {
 		}
 	}
 	return out
+}
+
+// appendPackedWidget preserves any existing valid layout, then places the new
+// widget in the next open slot that fits its size token.
+func appendPackedWidget(widgets []Widget, widget Widget, columns int) []Widget {
+	if columns <= 0 {
+		columns = 12
+	}
+	base := make([]Widget, len(widgets))
+	copy(base, widgets)
+	if err := validateGridLayout(base, columns); err != nil {
+		base = packGrid(base, columns)
+	}
+
+	gw, gh := sizeExtent(widget.Size, columns)
+	occupied := []uint64{}
+	ensureRow := func(row int) {
+		for len(occupied) <= row {
+			occupied = append(occupied, 0)
+		}
+	}
+	mark := func(row, col, w, h int) {
+		for r := row; r < row+h; r++ {
+			ensureRow(r)
+			for c := col; c < col+w; c++ {
+				occupied[r] |= uint64(1) << uint(c)
+			}
+		}
+	}
+	isFree := func(row, col, w, h int) bool {
+		for r := row; r < row+h; r++ {
+			ensureRow(r)
+			for c := col; c < col+w; c++ {
+				if occupied[r]&(uint64(1)<<uint(c)) != 0 {
+					return false
+				}
+			}
+		}
+		return true
+	}
+
+	for _, existing := range base {
+		if existing.GridW <= 0 || existing.GridH <= 0 {
+			continue
+		}
+		mark(existing.GridY, existing.GridX, existing.GridW, existing.GridH)
+	}
+
+	for row := 0; ; row++ {
+		for col := 0; col+gw <= columns; col++ {
+			if isFree(row, col, gw, gh) {
+				widget.GridX = col
+				widget.GridY = row
+				widget.GridW = gw
+				widget.GridH = gh
+				return append(base, widget)
+			}
+		}
+	}
 }

@@ -156,14 +156,17 @@ func TestApplyConfigToThoughts(t *testing.T) {
 	origProp := thoughts.ProposeThreshold
 	origNeg := thoughts.DiscardOnNegatives
 	origIgn := thoughts.DiscardOnIgnores
+	origUnleashed := thoughts.UnleashedAutoExecuteEnabled
 	defer func() {
 		thoughts.AutoExecuteThreshold = origAuto
 		thoughts.ProposeThreshold = origProp
 		thoughts.DiscardOnNegatives = origNeg
 		thoughts.DiscardOnIgnores = origIgn
+		thoughts.UnleashedAutoExecuteEnabled = origUnleashed
 	}()
 
 	cfg := config.Defaults()
+	cfg.AutonomyMode = config.AutonomyModeUnleashed
 	cfg.ThoughtAutoExecuteThreshold = 97
 	cfg.ThoughtProposeThreshold = 75
 	cfg.ThoughtDiscardOnNegatives = 4
@@ -182,11 +185,18 @@ func TestApplyConfigToThoughts(t *testing.T) {
 	if thoughts.DiscardOnIgnores != 5 {
 		t.Errorf("DiscardOnIgnores: got %d, want 5", thoughts.DiscardOnIgnores)
 	}
+	if !thoughts.UnleashedAutoExecuteEnabled {
+		t.Error("UnleashedAutoExecuteEnabled: got false, want true")
+	}
 }
 
 func TestApplyConfigToThoughts_ZeroValuesPreserveDefaults(t *testing.T) {
 	origAuto := thoughts.AutoExecuteThreshold
-	defer func() { thoughts.AutoExecuteThreshold = origAuto }()
+	origUnleashed := thoughts.UnleashedAutoExecuteEnabled
+	defer func() {
+		thoughts.AutoExecuteThreshold = origAuto
+		thoughts.UnleashedAutoExecuteEnabled = origUnleashed
+	}()
 
 	cfg := config.Defaults()
 	cfg.ThoughtAutoExecuteThreshold = 0 // zero means "keep default"
@@ -194,6 +204,9 @@ func TestApplyConfigToThoughts_ZeroValuesPreserveDefaults(t *testing.T) {
 
 	if thoughts.AutoExecuteThreshold != origAuto {
 		t.Errorf("zero config should preserve default, got %d", thoughts.AutoExecuteThreshold)
+	}
+	if thoughts.UnleashedAutoExecuteEnabled {
+		t.Error("sandboxed defaults should keep UnleashedAutoExecuteEnabled false")
 	}
 }
 

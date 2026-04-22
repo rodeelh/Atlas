@@ -350,11 +350,14 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	budget := cfg.SystemPromptRuneBudget()
 	mode := detectTurnMode(userMessage)
 
-	// Load MIND.md and apply selective section filtering.
-	base := cfg.BaseSystemPrompt
+	// The built-in base prompt is immutable runtime policy. MIND.md is a
+	// separate editable operator layer that can adapt without replacing the
+	// hard safety contract.
+	base := strings.TrimSpace(cfg.BaseSystemPrompt)
+	mindLayer := ""
 	if data, err := os.ReadFile(filepath.Join(supportDir, "MIND.md")); err == nil {
 		if s := strings.TrimSpace(string(data)); s != "" {
-			base = selectiveMindContent(s, userMessage)
+			mindLayer = selectiveMindContent(s, userMessage)
 		}
 	}
 
@@ -367,6 +370,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 		diary = features.DiaryContext(supportDir, 2)
 	}
 	contractBlock := responseContractBlock(mode)
+	autonomyBlock := autonomyPromptBlock(cfg)
 	capabilityPolicyCost := len([]rune(capabilityPolicyBlock)) + 50
 
 	var toolNotesBlock string
@@ -405,7 +409,7 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	}
 
 	// Calculate rune costs (including XML tags + separators).
-	identityCost := len([]rune(base)) + 40
+	identityCost := len([]rune(base)) + len([]rune(mindLayer)) + len([]rune(autonomyBlock)) + 90
 	credsCost := len([]rune(credsBlock)) + 35
 	memCost := len([]rune(memText)) + 50
 	skillsCost := len([]rune(skillsBlock)) + 40
@@ -501,6 +505,16 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 
 	sb.WriteString("<atlas_identity>\n")
 	sb.WriteString(base)
+	if mindLayer != "" {
+		sb.WriteString("\n\n<editable_operator_prompt>\n")
+		sb.WriteString(mindLayer)
+		sb.WriteString("\n</editable_operator_prompt>")
+	}
+	if autonomyBlock != "" {
+		sb.WriteString("\n\n<autonomy_mode>\n")
+		sb.WriteString(autonomyBlock)
+		sb.WriteString("\n</autonomy_mode>")
+	}
 	sb.WriteString("\n</atlas_identity>")
 
 	if credsBlock != "" {
@@ -555,9 +569,14 @@ func buildSystemPrompt(cfg config.RuntimeConfigSnapshot, db *storage.DB, support
 	sb.WriteString("- terminal.run_command: single commands with no shell features. Pass each argument as a separate element in args (e.g. command=\"brew\" args=[\"install\",\"pandoc\"]).\n")
 	sb.WriteString("- terminal.run_script: multi-step operations that need pipes, loops, conditionals, or chained commands.\n")
 	sb.WriteString("- Always call terminal.which first to check if a tool is installed before attempting to install it.\n")
+	sb.WriteString("- Use terminal.check_command when you need richer command diagnostics such as path, runnable status, or version output.\n")
+	sb.WriteString("- Use system.app_capabilities to verify whether local apps are installed or running before claiming an app route is unavailable.\n")
+	sb.WriteString("- Use fs.workspace_roots to verify where Atlas is allowed to read or write before declaring filesystem access blocked.\n")
 	sb.WriteString("- Never instruct the user to open a terminal or run a command manually when terminal skills are available.\n")
 	sb.WriteString("- Use terminal.run_as_admin for commands that need root/sudo (e.g. writing to /usr/local, system config changes). It triggers a macOS password dialog.\n")
 	sb.WriteString("- For long-running operations (builds, downloads, installs that take minutes), use terminal.run_background. The task runs asynchronously and you will automatically send a follow-up message when it finishes — you do not need to poll or wait. Tell the user you've started it in the background.\n")
+	sb.WriteString("- If the first implementation route fails, keep the original user goal fixed and try another viable route before treating the task as blocked.\n")
+	sb.WriteString("- In unleashed mode, when a capability is genuinely missing, inspect first, research second, Forge third, then retry the original task.\n")
 	sb.WriteString("- When creating Forge skills, a forge.orchestration.propose result with success=false/status=needs_revision is internal validation feedback. Revise the generated spec/plans and call the tool again; do not ask the user to try again. If two materially different revisions hit the same blocker, stop and explain the blocker clearly.\n")
 	sb.WriteString("</tool_rules>")
 

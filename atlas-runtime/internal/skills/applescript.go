@@ -3,7 +3,10 @@ package skills
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -195,6 +198,21 @@ func (r *Registry) registerAppleScript() {
 
 	r.register(SkillEntry{
 		Def: ToolDef{
+			Name:        "applescript.music_play_track",
+			Description: "Find and play a specific track in Music by title, optionally narrowing by artist.",
+			Properties: map[string]ToolParam{
+				"query":  {Description: "Track title or search phrase to play.", Type: "string"},
+				"artist": {Description: "Optional artist name to narrow the match.", Type: "string"},
+			},
+			Required: []string{"query"},
+		},
+		PermLevel:   "execute",
+		ActionClass: ActionClassExternalSideEffect,
+		Fn:          asMusicPlayTrack,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
 			Name:        "applescript.system_info",
 			Description: "Returns macOS version, hostname, and uptime.",
 			Properties:  map[string]ToolParam{},
@@ -207,7 +225,7 @@ func (r *Registry) registerAppleScript() {
 	r.register(SkillEntry{
 		Def: ToolDef{
 			Name:        "applescript.run_custom",
-			Description: "Runs a custom AppleScript and returns the output.",
+			Description: "Runs a custom AppleScript and returns the output. Use only as a fallback when no dedicated AppleScript tool matches the task.",
 			Properties: map[string]ToolParam{
 				"script": {Description: "The AppleScript code to execute", Type: "string"},
 			},
@@ -237,6 +255,21 @@ func (r *Registry) registerAppleScript() {
 
 	r.register(SkillEntry{
 		Def: ToolDef{
+			Name:        "applescript.messages_send",
+			Description: "Send an iMessage via the Messages app.",
+			Properties: map[string]ToolParam{
+				"to":   {Description: "Recipient phone number or email handle registered with iMessage", Type: "string"},
+				"body": {Description: "Message body text to send", Type: "string"},
+			},
+			Required: []string{"to", "body"},
+		},
+		PermLevel:   "execute",
+		ActionClass: ActionClassExternalSideEffect,
+		FnResult:    asMessagesSend,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
 			Name:        "applescript.calendar_list_calendars",
 			Description: "Returns a list of all available calendars in Calendar.app.",
 			Properties:  map[string]ToolParam{},
@@ -262,6 +295,47 @@ func (r *Registry) registerAppleScript() {
 
 func runAS(ctx context.Context, script string) (string, error) {
 	return runCmd(ctx, "osascript", "-e", script)
+}
+
+func runASCompiled(ctx context.Context, script string) (string, error) {
+	tmpDir, err := os.MkdirTemp("", "atlas-applescript-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sourcePath := filepath.Join(tmpDir, "script.applescript")
+	compiledPath := filepath.Join(tmpDir, "script.scpt")
+	if err := os.WriteFile(sourcePath, []byte(script), 0o600); err != nil {
+		return "", fmt.Errorf("write temp script: %w", err)
+	}
+	if _, err := runCmd(ctx, "osacompile", "-o", compiledPath, sourcePath); err != nil {
+		return "", fmt.Errorf("compile AppleScript: %w", err)
+	}
+	return runCmd(ctx, "osascript", compiledPath)
+}
+
+func dedicatedAppleScriptToolHint(script string) string {
+	normalized := strings.ToLower(strings.TrimSpace(script))
+	switch {
+	case strings.Contains(normalized, `tell application "music"`):
+		return "Use a dedicated Music tool instead of applescript.run_custom: applescript.music_read, applescript.music_control, or applescript.music_play_track."
+	case strings.Contains(normalized, `tell application "safari"`):
+		return "Use a dedicated Safari tool instead of applescript.run_custom: applescript.safari_read or applescript.safari_navigate."
+	case strings.Contains(normalized, `tell application "calendar"`):
+		return "Use a dedicated Calendar tool instead of applescript.run_custom: applescript.calendar_read, applescript.calendar_write, or applescript.calendar_list_calendars."
+	case strings.Contains(normalized, `tell application "reminders"`):
+		return "Use a dedicated Reminders tool instead of applescript.run_custom: applescript.reminders_read, applescript.reminders_write, or applescript.reminders_list_lists."
+	case strings.Contains(normalized, `tell application "mail"`):
+		return "Use a dedicated Mail tool instead of applescript.run_custom: applescript.mail_read, applescript.mail_wait_for_message, or applescript.mail_write."
+	case strings.Contains(normalized, `tell application "messages"`):
+		return "Use a dedicated Messages tool instead of applescript.run_custom: applescript.messages_send."
+	case strings.Contains(normalized, `tell application "notes"`):
+		return "Use a dedicated Notes tool instead of applescript.run_custom: applescript.notes_read or applescript.notes_write."
+	case strings.Contains(normalized, `tell application "contacts"`):
+		return "Use a dedicated Contacts tool instead of applescript.run_custom: applescript.contacts_read."
+	}
+	return ""
 }
 
 func asCalendarRead(ctx context.Context, args json.RawMessage) (string, error) {
@@ -932,6 +1006,57 @@ func asMusicControl(ctx context.Context, args json.RawMessage) (string, error) {
 	return fmt.Sprintf("Music: %s", p.Command), nil
 }
 
+func asMusicPlayTrack(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		Query  string `json:"query"`
+		Artist string `json:"artist"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || strings.TrimSpace(p.Query) == "" {
+		return "", fmt.Errorf("query is required")
+	}
+
+	queryJSON, _ := json.Marshal(strings.TrimSpace(p.Query))
+	artistJSON, _ := json.Marshal(strings.TrimSpace(p.Artist))
+	script := fmt.Sprintf(`
+set queryText to %s
+set artistText to %s
+
+tell application "Music"
+	set matchedTrack to missing value
+	repeat with t in every track of playlist "Library"
+		set trackName to ""
+		set trackArtist to ""
+		try
+			set trackName to name of t
+		end try
+		try
+			set trackArtist to artist of t
+		end try
+
+		if trackName contains queryText then
+			if artistText is "" or trackArtist contains artistText then
+				set matchedTrack to t
+				exit repeat
+			end if
+		end if
+	end repeat
+
+	if matchedTrack is missing value then
+		error "No matching Music track found for '" & queryText & "'."
+	end if
+
+	play matchedTrack
+	delay 0.2
+	return "Playing " & (name of matchedTrack) & " by " & (artist of matchedTrack)
+end tell`, string(queryJSON), string(artistJSON))
+
+	out, err := runAS(ctx, script)
+	if err != nil {
+		return "", fmt.Errorf("music play track failed: %w", err)
+	}
+	return out, nil
+}
+
 func asSystemInfo(ctx context.Context, _ json.RawMessage) (string, error) {
 	script := `
 set sysInfo to ""
@@ -959,8 +1084,11 @@ func asRunCustom(ctx context.Context, args json.RawMessage) (string, error) {
 	if err := json.Unmarshal(args, &p); err != nil || p.Script == "" {
 		return "", fmt.Errorf("script is required")
 	}
+	if hint := dedicatedAppleScriptToolHint(p.Script); hint != "" {
+		return "", errors.New(hint)
+	}
 
-	out, err := runAS(ctx, p.Script)
+	out, err := runASCompiled(ctx, p.Script)
 	if err != nil {
 		return "", fmt.Errorf("custom AppleScript failed: %w", err)
 	}
@@ -1032,6 +1160,55 @@ end tell`, p.Subject, p.Body, p.To, appleScriptAction)
 			"to":         p.To,
 			"subject":    p.Subject,
 			"sent":       p.Send,
+			"body_chars": len(p.Body),
+			"mutation":   mut.ToArtifact(),
+		},
+	}, nil
+}
+
+func asMessagesSend(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+	var p struct {
+		To   string `json:"to"`
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || strings.TrimSpace(p.To) == "" || strings.TrimSpace(p.Body) == "" {
+		return ErrResult("send iMessage", "arg validation", false,
+			fmt.Errorf("to and body are required")), nil
+	}
+
+	p.To = strings.TrimSpace(p.To)
+	p.Body = strings.TrimSpace(p.Body)
+
+	if IsDryRun(ctx) {
+		return DryRunResult(
+			fmt.Sprintf("would send iMessage to %s", p.To),
+			fmt.Sprintf("send iMessage to=%q body_chars=%d", p.To, len(p.Body)),
+			p.To,
+		), nil
+	}
+
+	script := fmt.Sprintf(`
+tell application "Messages"
+	set targetService to 1st service whose service type = iMessage
+	set targetBuddy to buddy %q of targetService
+	send %q to targetBuddy
+end tell`, p.To, p.Body)
+
+	if _, err := runAS(ctx, script); err != nil {
+		return ErrResult(
+			fmt.Sprintf("send iMessage to %s", p.To),
+			"AppleScript execution",
+			false, err,
+		), nil
+	}
+
+	mut := NewMutation("sent", fmt.Sprintf("iMessage to %s", p.To), "", fmt.Sprintf("to=%s body_chars=%d", p.To, len(p.Body)))
+	return ToolResult{
+		Success: true,
+		Summary: fmt.Sprintf("iMessage sent to %s", p.To),
+		Artifacts: map[string]any{
+			"to":         p.To,
+			"sent":       true,
 			"body_chars": len(p.Body),
 			"mutation":   mut.ToArtifact(),
 		},

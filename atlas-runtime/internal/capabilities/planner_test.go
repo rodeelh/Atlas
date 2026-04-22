@@ -138,7 +138,7 @@ func TestAnalyze_AskForPrerequisiteForAuthorizedChannel(t *testing.T) {
 	assertContains(t, analysis.MissingPrerequisites, "delivery.channel")
 }
 
-func TestAnalyze_ForgeNewWhenDeliveryCapabilityIsMissing(t *testing.T) {
+func TestAnalyze_RunExistingWhenEmailDeliveryCapabilityIsPresent(t *testing.T) {
 	dir := t.TempDir()
 	if err := runtimeskills.SaveFsRoots(dir, []runtimeskills.FsRoot{{ID: "root-1", Path: dir}}); err != nil {
 		t.Fatalf("SaveFsRoots: %v", err)
@@ -149,13 +149,42 @@ func TestAnalyze_ForgeNewWhenDeliveryCapabilityIsMissing(t *testing.T) {
 	}
 
 	analysis := Analyze("Email me a PDF report every Friday.", inventory)
+	if analysis.Decision != DecisionComposeExisting {
+		t.Fatalf("decision = %q, want %q", analysis.Decision, DecisionComposeExisting)
+	}
+	assertRequirementStatus(t, analysis, "file.create_pdf", StatusAvailable)
+	assertRequirementStatus(t, analysis, "delivery.email", StatusAvailable)
+	if len(analysis.MissingCapabilities) != 0 {
+		t.Fatalf("missing capabilities = %v, want none", analysis.MissingCapabilities)
+	}
+}
+
+func TestAnalyze_ForgeNewForCapabilityExpansionRequest(t *testing.T) {
+	inventory, err := List(t.TempDir(), nil, nil)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	analysis := Analyze("Can you figure out a way to connect to iMessage so Atlas can send and receive messages?", inventory)
 	if analysis.Decision != DecisionForgeNew {
 		t.Fatalf("decision = %q, want %q", analysis.Decision, DecisionForgeNew)
 	}
-	assertRequirementStatus(t, analysis, "file.create_pdf", StatusAvailable)
-	assertRequirementStatus(t, analysis, "delivery.email", StatusMissingCapability)
-	assertContains(t, analysis.MissingCapabilities, "delivery.email")
+	assertRequirementStatus(t, analysis, "forge.build", StatusAvailable)
 	assertContains(t, analysis.SuggestedGroups, "forge")
+}
+
+func TestAnalyze_RunExistingForIMessageSendRequest(t *testing.T) {
+	inventory, err := List(t.TempDir(), nil, nil)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	analysis := Analyze("Send a message to 646-425-7838 via iMessage.", inventory)
+	if analysis.Decision != DecisionRunExisting {
+		t.Fatalf("decision = %q, want %q", analysis.Decision, DecisionRunExisting)
+	}
+	assertRequirementStatus(t, analysis, "delivery.imessage", StatusAvailable)
+	assertContains(t, analysis.SuggestedGroups, "communication")
 }
 
 func assertRequirementStatus(t *testing.T, analysis Analysis, reqType string, want RequirementStatus) {

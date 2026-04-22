@@ -1,11 +1,9 @@
-// Dashboards screen (v2) — list saved dashboards and view widgets live.
+// Dashboards screen (v2) — list, create, and edit dashboards.
 //
-// Authoring is agent-driven through the dashboard.* skills in chat; this
-// screen is a viewer. Widgets render in a 12-column grid at positions the
-// backend packer committed. Data is driven by per-dashboard SSE: the
-// coordinator replays the latest event for every source on subscribe and
-// pushes an event each time a source refreshes. Widgets bind to a source
-// by name via `widget.bindings[0].source`.
+// Dashboards render in a 12-column grid. Data is driven by per-dashboard
+// SSE: the coordinator replays the latest event for every source on
+// subscribe and pushes an event each time a source refreshes. Widgets bind
+// to a source by name via `widget.bindings[0].source`.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
@@ -108,9 +106,16 @@ export default function Widget({ data }) {
 ] as const
 
 type DashboardClient = Pick<typeof api,
+  'createDashboardDraft' |
+  'createDashboardWidget' |
+  'createDashboardCodeWidget' |
+  'createDashboardAIWidget' |
+  'upsertDashboardSource' |
+  'deleteDashboardSource' |
   'dashboard' |
   'dashboards' |
   'deleteDashboard' |
+  'deleteDashboardWidget' |
   'editDashboardDraft' |
   'commitDashboardDraft' |
   'refreshDashboard' |
@@ -120,6 +125,18 @@ type DashboardClient = Pick<typeof api,
   'updateDashboardLayout' |
   'updateDashboardWidget'
 >
+
+interface WidgetLibraryItem {
+  key: string
+  label: string
+  description: string
+  size: DashboardSize
+  kind?: 'preset' | 'code' | 'ai'
+  preset?: DashboardPreset
+  title: string
+  options?: Record<string, unknown>
+  tsx?: string
+}
 
 type SourceHealth = 'loading' | 'ok' | 'stale' | 'error' | 'timeout'
 
@@ -162,6 +179,7 @@ interface WidgetCellProps {
   layoutEditing?: boolean
   onSelect?: (widget: DashboardWidget) => void
   onEdit?: (widget: DashboardWidget) => void
+  onDelete?: (widget: DashboardWidget) => void
   onInlineUpdate?: (widgetID: string, update: DashboardWidgetUpdate) => Promise<void>
   onAction?: (action: DashboardWidgetAction) => void
 }
@@ -183,6 +201,7 @@ function WidgetCell({
   layoutEditing,
   onSelect,
   onEdit,
+  onDelete,
   onInlineUpdate,
   onAction,
 }: WidgetCellProps): JSX.Element {
@@ -263,6 +282,14 @@ function WidgetCell({
     sourceError && sourceData !== undefined ? `Latest error: ${sourceError}` : '',
   ].filter(Boolean).join('\n')
   const canInlineEdit = !!canEdit && !!selected && !!onInlineUpdate
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const close = () => setMenuOpen(false)
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [menuOpen])
 
   return (
     <div
@@ -310,17 +337,44 @@ function WidgetCell({
             </div>
             {canEdit && !layoutEditing && (
               <div class="dashboard-widget-meta">
-                <button
-                  class="dashboard-widget-edit"
-                  type="button"
-                  aria-label={`Edit ${widget.title || widget.id}`}
-                  onClick={e => {
-                    e.stopPropagation()
-                    onEdit?.(widget)
-                  }}
-                >
-                  Edit
-                </button>
+                <div class="dashboard-widget-menu">
+                  <button
+                    class="btn btn-sm dashboard-widget-menu-trigger"
+                    type="button"
+                    aria-label={`Widget actions for ${widget.title || widget.id}`}
+                    aria-expanded={menuOpen}
+                    onClick={e => {
+                      e.stopPropagation()
+                      setMenuOpen(open => !open)
+                    }}
+                  >
+                    •••
+                  </button>
+                  {menuOpen && (
+                    <div class="dashboard-widget-menu-popover" onClick={e => e.stopPropagation()}>
+                      <button
+                        class="dashboard-widget-menu-item"
+                        type="button"
+                        onClick={() => {
+                          setMenuOpen(false)
+                          onEdit?.(widget)
+                        }}
+                      >
+                        Edit widget
+                      </button>
+                      <button
+                        class="dashboard-widget-menu-item dashboard-widget-menu-item-danger"
+                        type="button"
+                        onClick={() => {
+                          setMenuOpen(false)
+                          onDelete?.(widget)
+                        }}
+                      >
+                        Delete widget
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -538,6 +592,16 @@ function projectSourceDataForWidget(widget: DashboardWidget, data: unknown): unk
 
 const DASHBOARD_PRESETS: DashboardPreset[] = ['metric', 'table', 'line_chart', 'area_chart', 'bar_chart', 'pie_chart', 'donut_chart', 'scatter_chart', 'stacked_chart', 'list', 'markdown', 'timeline', 'heatmap', 'progress', 'gauge', 'status_grid', 'kpi_group']
 const DASHBOARD_SIZES: DashboardSize[] = ['quarter', 'third', 'half', 'tall', 'full']
+const WIDGET_LIBRARY: WidgetLibraryItem[] = [
+  { key: 'metric', label: 'Metric', description: 'Single KPI card for totals or point-in-time values.', size: 'quarter', kind: 'preset', preset: 'metric', title: 'Metric' },
+  { key: 'line_chart', label: 'Line Chart', description: 'Time series or trend view for a bound source.', size: 'half', kind: 'preset', preset: 'line_chart', title: 'Trend' },
+  { key: 'bar_chart', label: 'Bar Chart', description: 'Ranked comparisons across categories.', size: 'half', kind: 'preset', preset: 'bar_chart', title: 'Breakdown' },
+  { key: 'table', label: 'Table', description: 'Structured rows for logs, tasks, or records.', size: 'full', kind: 'preset', preset: 'table', title: 'Table' },
+  { key: 'list', label: 'List', description: 'Compact summary list with optional secondary text.', size: 'half', kind: 'preset', preset: 'list', title: 'List' },
+  { key: 'markdown', label: 'Markdown', description: 'Static note, summary, or guidance block.', size: 'half', kind: 'preset', preset: 'markdown', title: 'Notes', options: { text: '## Notes\n\nUse the inspector to bind this widget to data or edit the markdown directly.' } },
+  { key: 'ai', label: 'AI Widget', description: 'Describe the widget you want and Atlas will generate one draft widget from your prompt.', size: 'half', kind: 'ai', title: 'AI widget' },
+  { key: 'code', label: 'Code Widget', description: 'Custom TSX widget in the sandboxed dashboard frame.', size: 'half', kind: 'code', title: 'Custom widget', tsx: CODE_WIDGET_TEMPLATE },
+] as const
 
 function formatJSON(value: unknown): string {
   try { return JSON.stringify(value ?? {}, null, 2) }
@@ -550,6 +614,16 @@ function parseOptionsJSON(text: string): Record<string, unknown> {
   const parsed = JSON.parse(trimmed)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('Options must be a JSON object.')
+  }
+  return parsed as Record<string, unknown>
+}
+
+function parseObjectJSON(text: string, label: string): Record<string, unknown> {
+  const trimmed = text.trim()
+  if (!trimmed) return {}
+  const parsed = JSON.parse(trimmed)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object.`)
   }
   return parsed as Record<string, unknown>
 }
@@ -575,10 +649,381 @@ interface WidgetInspectorProps {
   saving: boolean
   error: string | null
   onSave: (widgetID: string, update: DashboardWidgetUpdate) => Promise<void>
+  onManageSources: () => void
   onClose: () => void
 }
 
-function WidgetInspector({ dashboard, widget, saving, error, onSave, onClose }: WidgetInspectorProps): JSX.Element {
+interface CreateDashboardDialogProps {
+  creating: boolean
+  error: string | null
+  onCreate: (input: { name: string; description: string }) => Promise<void>
+  onClose: () => void
+}
+
+function CreateDashboardDialog({ creating, error, onCreate, onClose }: CreateDashboardDialogProps): JSX.Element {
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+
+  async function submit(ev: Event) {
+    ev.preventDefault()
+    if (!name.trim() || creating) return
+    await onCreate({ name: name.trim(), description: description.trim() })
+  }
+
+  return (
+    <div class="dashboard-widget-inspector-backdrop" onClick={onClose}>
+      <div class="modal dashboard-widget-inspector-modal" onClick={e => e.stopPropagation()}>
+        <form class="dashboard-inspector-form" onSubmit={submit}>
+          <div class="modal-header dashboard-inspector-header">
+            <div class="dashboard-inspector-title-wrap">
+              <div>
+                <h3>New Dashboard</h3>
+                <span>Create an empty draft and start arranging widgets manually.</span>
+              </div>
+            </div>
+            <div class="dashboard-inspector-header-actions">
+              <button class="btn btn-sm" type="button" onClick={onClose}>Close</button>
+            </div>
+          </div>
+          <div class="modal-body dashboard-inspector-body">
+            <section class="dashboard-inspector-section">
+              <div class="dashboard-inspector-grid dashboard-inspector-grid-two">
+                <label class="dashboard-inspector-field dashboard-inspector-field-span-2">
+                  <span>Name</span>
+                  <input value={name} onInput={e => setName((e.currentTarget as HTMLInputElement).value)} placeholder="Executive overview" />
+                </label>
+                <label class="dashboard-inspector-field dashboard-inspector-field-span-2">
+                  <span>Description</span>
+                  <input value={description} onInput={e => setDescription((e.currentTarget as HTMLInputElement).value)} placeholder="What this dashboard is for" />
+                </label>
+              </div>
+            </section>
+            {error && (
+              <div class="dashboard-inspector-diagnostics" role="alert">
+                <p class="dashboard-inspector-error-label">Create failed</p>
+                <pre class="dashboard-inspector-error">{error}</pre>
+              </div>
+            )}
+          </div>
+          <div class="modal-footer dashboard-inspector-footer">
+            <button class="btn btn-sm" type="button" onClick={onClose}>Cancel</button>
+            <button class="btn btn-sm btn-primary" type="submit" disabled={creating || !name.trim()}>
+              {creating ? 'Creating…' : 'Create draft'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+interface AddWidgetDialogProps {
+  sourceCount: number
+  adding: boolean
+  error: string | null
+  onAdd: (item: WidgetLibraryItem) => Promise<void>
+  onManageSources: () => void
+  onClose: () => void
+}
+
+function AddWidgetDialog({ sourceCount, adding, error, onAdd, onManageSources, onClose }: AddWidgetDialogProps): JSX.Element {
+  return (
+    <div class="dashboard-widget-inspector-backdrop" onClick={onClose}>
+      <div class="modal dashboard-widget-inspector-modal" onClick={e => e.stopPropagation()}>
+        <div class="dashboard-inspector-form">
+          <div class="modal-header dashboard-inspector-header">
+            <div class="dashboard-inspector-title-wrap">
+              <div>
+                <h3>Add Widget</h3>
+                <span>Pick a preset to place on the draft, then drag and refine it in the inspector.</span>
+              </div>
+            </div>
+            <div class="dashboard-inspector-header-actions">
+              <button class="btn btn-sm" type="button" onClick={onManageSources}>Sources</button>
+              <button class="btn btn-sm" type="button" onClick={onClose}>Close</button>
+            </div>
+          </div>
+          <div class="modal-body dashboard-inspector-body">
+            {sourceCount === 0 && (
+              <div class="dashboard-inspector-callout">
+                <strong>No sources yet.</strong>
+                <span>You can still add markdown or code widgets, but data widgets will be much more useful once you create a source.</span>
+                <button class="btn btn-sm" type="button" onClick={onManageSources}>Create a source</button>
+              </div>
+            )}
+            <section class="dashboard-inspector-section">
+              <div class="dashboard-list">
+                {WIDGET_LIBRARY.map(item => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    class="card dashboard-list-card"
+                    onClick={() => void onAdd(item)}
+                    disabled={adding}
+                  >
+                    <div class="dashboard-list-icon"><DashboardIcon /></div>
+                    <div class="dashboard-list-meta">
+                      <strong>{item.label}</strong>
+                      <span class="dashboard-list-sub">{item.description}</span>
+                      <span class="dashboard-list-stats">Starts as a {item.size} widget{item.kind === 'ai' ? ' · prompt-generated' : item.preset ? ` · preset: ${item.preset}` : ' · custom code template'}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </section>
+            {error && (
+              <div class="dashboard-inspector-diagnostics" role="alert">
+                <p class="dashboard-inspector-error-label">Add widget failed</p>
+                <pre class="dashboard-inspector-error">{error}</pre>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+interface AIWidgetDialogProps {
+  dashboard: DashboardDefinition
+  creating: boolean
+  error: string | null
+  onCreate: (input: { prompt: string; source: string; title: string; size: DashboardSize }) => Promise<void>
+  onManageSources: () => void
+  onClose: () => void
+}
+
+interface SourceManagerDialogProps {
+  dashboard: DashboardDefinition
+  saving: boolean
+  error: string | null
+  onSave: (input: { name: string; kind: DashboardDefinition['sources'][number]['kind']; config: Record<string, unknown>; refreshMode: 'manual' | 'interval' | 'push'; intervalSeconds: number }) => Promise<void>
+  onDelete: (sourceName: string) => Promise<void>
+  onClose: () => void
+}
+
+function SourceManagerDialog({ dashboard, saving, error, onSave, onDelete, onClose }: SourceManagerDialogProps): JSX.Element {
+  const [editingName, setEditingName] = useState('')
+  const [name, setName] = useState('')
+  const [kind, setKind] = useState<DashboardDefinition['sources'][number]['kind']>('runtime')
+  const [refreshMode, setRefreshMode] = useState<'manual' | 'interval' | 'push'>('manual')
+  const [intervalSeconds, setIntervalSeconds] = useState('60')
+  const [configText, setConfigText] = useState('{\n  "endpoint": "/status"\n}')
+  const [localError, setLocalError] = useState<string | null>(null)
+
+  function loadSource(sourceName: string) {
+    const src = dashboard.sources.find(item => item.name === sourceName)
+    if (!src) return
+    setEditingName(src.name)
+    setName(src.name)
+    setKind(src.kind)
+    setRefreshMode((src.refresh?.mode ?? 'manual') as 'manual' | 'interval' | 'push')
+    setIntervalSeconds(String(src.refresh?.intervalSeconds ?? 60))
+    setConfigText(formatJSON(src.config ?? {}))
+    setLocalError(null)
+  }
+
+  function resetForm() {
+    setEditingName('')
+    setName('')
+    setKind('runtime')
+    setRefreshMode('manual')
+    setIntervalSeconds('60')
+    setConfigText('{\n  "endpoint": "/status"\n}')
+    setLocalError(null)
+  }
+
+  async function submit(ev: Event) {
+    ev.preventDefault()
+    setLocalError(null)
+    try {
+      const config = parseObjectJSON(configText, 'Config')
+      await onSave({
+        name: name.trim(),
+        kind,
+        config,
+        refreshMode,
+        intervalSeconds: Number(intervalSeconds) || 0,
+      })
+      resetForm()
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : 'Invalid source config.')
+    }
+  }
+
+  return (
+    <div class="dashboard-widget-inspector-backdrop" onClick={onClose}>
+      <div class="modal dashboard-widget-inspector-modal" onClick={e => e.stopPropagation()}>
+        <div class="dashboard-inspector-form">
+          <div class="modal-header dashboard-inspector-header">
+            <div class="dashboard-inspector-title-wrap">
+              <div>
+                <h3>Sources</h3>
+                <span>Add, edit, and remove the data feeds this draft uses.</span>
+              </div>
+            </div>
+            <div class="dashboard-inspector-header-actions">
+              <button class="btn btn-sm" type="button" onClick={onClose}>Close</button>
+            </div>
+          </div>
+          <div class="modal-body dashboard-inspector-body">
+            <section class="dashboard-inspector-section">
+              <div class="dashboard-source-list">
+                {dashboard.sources.length === 0 && <div class="dashboard-inspector-empty">No sources yet. Create one below.</div>}
+                {dashboard.sources.map(source => (
+                  <div key={source.name} class="dashboard-source-row">
+                    <div class="dashboard-source-row-meta">
+                      <strong>{source.name}</strong>
+                      <span>{source.kind} · {source.refresh?.mode ?? 'manual'}</span>
+                    </div>
+                    <div class="dashboard-source-row-actions">
+                      <button class="btn btn-sm" type="button" onClick={() => loadSource(source.name)}>Edit</button>
+                      <button class="btn btn-sm" type="button" onClick={() => void onDelete(source.name)} disabled={saving}>Delete</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+            <section class="dashboard-inspector-section">
+              <form class="dashboard-inspector-grid dashboard-inspector-grid-two" onSubmit={submit}>
+                <label class="dashboard-inspector-field">
+                  <span>Name</span>
+                  <input value={name} onInput={e => setName((e.currentTarget as HTMLInputElement).value)} placeholder="status" />
+                </label>
+                <label class="dashboard-inspector-field">
+                  <span>Kind</span>
+                  <select value={kind} onChange={e => setKind((e.currentTarget as HTMLSelectElement).value as DashboardDefinition['sources'][number]['kind'])}>
+                    <option value="runtime">runtime</option>
+                    <option value="skill">skill</option>
+                    <option value="sql">sql</option>
+                    <option value="chat_analytics">chat_analytics</option>
+                    <option value="gremlin">gremlin</option>
+                    <option value="live_compute">live_compute</option>
+                  </select>
+                </label>
+                <label class="dashboard-inspector-field">
+                  <span>Refresh</span>
+                  <select value={refreshMode} onChange={e => setRefreshMode((e.currentTarget as HTMLSelectElement).value as 'manual' | 'interval' | 'push')}>
+                    <option value="manual">manual</option>
+                    <option value="interval">interval</option>
+                    <option value="push">push</option>
+                  </select>
+                </label>
+                <label class="dashboard-inspector-field">
+                  <span>Interval seconds</span>
+                  <input value={intervalSeconds} onInput={e => setIntervalSeconds((e.currentTarget as HTMLInputElement).value)} disabled={refreshMode !== 'interval'} />
+                </label>
+                <label class="dashboard-inspector-field dashboard-inspector-field-span-2">
+                  <span>Config JSON</span>
+                  <textarea value={configText} rows={10} spellcheck={false} onInput={e => setConfigText((e.currentTarget as HTMLTextAreaElement).value)} />
+                </label>
+                <div class="dashboard-source-form-actions dashboard-inspector-field-span-2">
+                  {editingName && <button class="btn btn-sm" type="button" onClick={resetForm}>New source</button>}
+                  <button class="btn btn-sm btn-primary" type="submit" disabled={saving || !name.trim()}>
+                    {saving ? 'Saving…' : editingName ? 'Save source' : 'Add source'}
+                  </button>
+                </div>
+              </form>
+            </section>
+            {(localError || error) && (
+              <div class="dashboard-inspector-diagnostics" role="alert">
+                <p class="dashboard-inspector-error-label">Source manager</p>
+                <pre class="dashboard-inspector-error">{localError || error}</pre>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AIWidgetDialog({ dashboard, creating, error, onCreate, onManageSources, onClose }: AIWidgetDialogProps): JSX.Element {
+  const [prompt, setPrompt] = useState('')
+  const [source, setSource] = useState('')
+  const [title, setTitle] = useState('')
+  const [size, setSize] = useState<DashboardSize>('half')
+
+  async function submit(ev: Event) {
+    ev.preventDefault()
+    if (!prompt.trim() || creating) return
+    await onCreate({ prompt: prompt.trim(), source, title: title.trim(), size })
+  }
+
+  return (
+    <div class="dashboard-widget-inspector-backdrop" onClick={onClose}>
+      <div class="modal dashboard-widget-inspector-modal" onClick={e => e.stopPropagation()}>
+        <form class="dashboard-inspector-form" onSubmit={submit}>
+          <div class="modal-header dashboard-inspector-header">
+            <div class="dashboard-inspector-title-wrap">
+              <div>
+                <h3>AI Widget</h3>
+                <span>Generate one widget for this draft from a prompt, then refine it in the normal inspector.</span>
+              </div>
+            </div>
+            <div class="dashboard-inspector-header-actions">
+              <button class="btn btn-sm" type="button" onClick={onManageSources}>Sources</button>
+              <button class="btn btn-sm" type="button" onClick={onClose}>Close</button>
+            </div>
+          </div>
+          <div class="modal-body dashboard-inspector-body">
+            {dashboard.sources.length === 0 && (
+              <div class="dashboard-inspector-callout">
+                <strong>No sources yet.</strong>
+                <span>AI can generate a standalone widget, but binding to a source gives it much better context and produces more useful results.</span>
+                <button class="btn btn-sm" type="button" onClick={onManageSources}>Create a source</button>
+              </div>
+            )}
+            <section class="dashboard-inspector-section">
+              <div class="dashboard-inspector-grid dashboard-inspector-grid-two">
+                <label class="dashboard-inspector-field dashboard-inspector-field-span-2">
+                  <span>Prompt</span>
+                  <textarea
+                    value={prompt}
+                    rows={6}
+                    placeholder="Example: Create a clean KPI card that summarizes the latest system status and highlights the current count."
+                    onInput={e => setPrompt((e.currentTarget as HTMLTextAreaElement).value)}
+                  />
+                </label>
+                <label class="dashboard-inspector-field">
+                  <span>Source</span>
+                  <select value={source} onChange={e => setSource((e.currentTarget as HTMLSelectElement).value)}>
+                    <option value="">No source</option>
+                    {dashboard.sources.map(src => <option key={src.name} value={src.name}>{src.name}</option>)}
+                  </select>
+                </label>
+                <label class="dashboard-inspector-field">
+                  <span>Size hint</span>
+                  <select value={size} onChange={e => setSize((e.currentTarget as HTMLSelectElement).value as DashboardSize)}>
+                    {DASHBOARD_SIZES.map(value => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </label>
+                <label class="dashboard-inspector-field dashboard-inspector-field-span-2">
+                  <span>Title hint</span>
+                  <input value={title} placeholder="Optional title hint" onInput={e => setTitle((e.currentTarget as HTMLInputElement).value)} />
+                </label>
+              </div>
+            </section>
+            {error && (
+              <div class="dashboard-inspector-diagnostics" role="alert">
+                <p class="dashboard-inspector-error-label">Generation failed</p>
+                <pre class="dashboard-inspector-error">{error}</pre>
+              </div>
+            )}
+          </div>
+          <div class="modal-footer dashboard-inspector-footer">
+            <button class="btn btn-sm" type="button" onClick={onClose}>Cancel</button>
+            <button class="btn btn-sm btn-primary" type="submit" disabled={creating || !prompt.trim()}>
+              {creating ? 'Generating…' : 'Generate widget'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function WidgetInspector({ dashboard, widget, saving, error, onSave, onManageSources, onClose }: WidgetInspectorProps): JSX.Element {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [size, setSize] = useState<DashboardSize>('half')
@@ -703,6 +1148,13 @@ function WidgetInspector({ dashboard, widget, saving, error, onSave, onClose }: 
               <h4>Binding</h4>
               <span>Connect this widget to a source and optionally project a nested value.</span>
             </div>
+            {dashboard.sources.length === 0 && (
+              <div class="dashboard-inspector-callout compact">
+                <strong>No sources available for binding.</strong>
+                <span>Create one first, then come back and bind this widget.</span>
+                <button class="btn btn-sm" type="button" onClick={onManageSources}>Manage sources</button>
+              </div>
+            )}
             <div class="dashboard-inspector-grid dashboard-inspector-grid-two">
               <label class="dashboard-inspector-field">
                 <span>Source</span>
@@ -826,6 +1278,7 @@ export function DashboardDetail(
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState(false)
   const [pendingDelete, setPendingDelete] = useState(false)
+  const [pendingWidgetDelete, setPendingWidgetDelete] = useState<DashboardWidget | null>(null)
   const [editingWidgetID, setEditingWidgetID] = useState<string | null>(null)
   const [savingWidget, setSavingWidget] = useState(false)
   const [widgetSaveError, setWidgetSaveError] = useState<string | null>(null)
@@ -835,6 +1288,13 @@ export function DashboardDetail(
   const [layoutDirty, setLayoutDirty] = useState(false)
   const [drafting, setDrafting] = useState(false)
   const [publishing, setPublishing] = useState(false)
+  const [addingWidget, setAddingWidget] = useState(false)
+  const [addWidgetOpen, setAddWidgetOpen] = useState(false)
+  const [addWidgetError, setAddWidgetError] = useState<string | null>(null)
+  const [aiWidgetOpen, setAIWidgetOpen] = useState(false)
+  const [aiWidgetError, setAIWidgetError] = useState<string | null>(null)
+  const [sourceManagerOpen, setSourceManagerOpen] = useState(false)
+  const [sourceManagerError, setSourceManagerError] = useState<string | null>(null)
   const [sourceFilter, setSourceFilter] = useState<string | null>(null)
   const [interactionContext, setInteractionContext] = useState<Record<string, unknown>>({})
   const [drilldown, setDrilldown] = useState<DrilldownState | null>(null)
@@ -923,7 +1383,7 @@ export function DashboardDetail(
       float: true,
       animate: true,
       handle: '.dw-layout-drag-handle',
-      draggable: { cancel: 'input,textarea,button,select,option,.dashboard-widget-edit' },
+      draggable: { cancel: 'input,textarea,button,select,option,.dashboard-widget-menu,.dashboard-widget-menu-popover' },
       resizable: { handles: 'se', autoHide: false },
     }, gridElRef.current)
     gridRef.current = grid
@@ -1120,6 +1580,104 @@ export function DashboardDetail(
     }
   }
 
+  async function handleAddWidget(item: WidgetLibraryItem) {
+    if (!def || def.status !== 'draft') return
+    if (item.kind === 'ai') {
+      setAddWidgetOpen(false)
+      setAIWidgetError(null)
+      setAIWidgetOpen(true)
+      return
+    }
+    setAddingWidget(true)
+    setAddWidgetError(null)
+    try {
+      const updated = item.tsx
+        ? await client.createDashboardCodeWidget(def.id, {
+            title: item.title,
+            description: item.description,
+            size: item.size,
+            tsx: item.tsx,
+          })
+        : await client.createDashboardWidget(def.id, {
+            title: item.title,
+            description: item.description,
+            size: item.size,
+            preset: item.preset!,
+            options: item.options,
+          })
+      setDef(updated)
+      const created = updated.widgets[updated.widgets.length - 1]
+      if (created) {
+        setSelectedWidgetID(created.id)
+        setEditingWidgetID(created.id)
+      }
+      setLayoutEditing(true)
+      setAddWidgetOpen(false)
+      onChanged()
+    } catch (e) {
+      setAddWidgetError(e instanceof Error ? e.message : 'Failed to add widget.')
+    } finally {
+      setAddingWidget(false)
+    }
+  }
+
+  async function handleCreateAIWidget(input: { prompt: string; source: string; title: string; size: DashboardSize }) {
+    if (!def || def.status !== 'draft') return
+    setAddingWidget(true)
+    setAIWidgetError(null)
+    try {
+      const updated = await client.createDashboardAIWidget(def.id, {
+        prompt: input.prompt,
+        source: input.source || undefined,
+        title: input.title || undefined,
+        size: input.size,
+      })
+      setDef(updated)
+      const created = updated.widgets[updated.widgets.length - 1]
+      if (created) {
+        setSelectedWidgetID(created.id)
+        setEditingWidgetID(created.id)
+      }
+      setLayoutEditing(true)
+      setAIWidgetOpen(false)
+      onChanged()
+    } catch (e) {
+      setAIWidgetError(e instanceof Error ? e.message : 'Failed to generate widget.')
+    } finally {
+      setAddingWidget(false)
+    }
+  }
+
+  async function handleSaveSource(input: { name: string; kind: DashboardDefinition['sources'][number]['kind']; config: Record<string, unknown>; refreshMode: 'manual' | 'interval' | 'push'; intervalSeconds: number }) {
+    if (!def || def.status !== 'draft') return
+    setAddingWidget(true)
+    setSourceManagerError(null)
+    try {
+      const updated = await client.upsertDashboardSource(def.id, input)
+      setDef(updated)
+      onChanged()
+    } catch (e) {
+      setSourceManagerError(e instanceof Error ? e.message : 'Failed to save source.')
+    } finally {
+      setAddingWidget(false)
+    }
+  }
+
+  async function handleDeleteSource(sourceName: string) {
+    if (!def || def.status !== 'draft') return
+    setAddingWidget(true)
+    setSourceManagerError(null)
+    try {
+      const updated = await client.deleteDashboardSource(def.id, sourceName)
+      setDef(updated)
+      onChanged()
+    } catch (e) {
+      setSourceManagerError(e instanceof Error ? e.message : 'Failed to delete source.')
+    } finally {
+      setAddingWidget(false)
+    }
+  }
+
   async function handleToggleLayoutEditing() {
     if (!layoutEditing) {
       setLayoutEditing(true)
@@ -1144,6 +1702,22 @@ export function DashboardDetail(
     }
   }
 
+  async function confirmDeleteWidget() {
+    if (!def || !pendingWidgetDelete) return
+    const widgetID = pendingWidgetDelete.id
+    setPendingWidgetDelete(null)
+    try {
+      const updated = await client.deleteDashboardWidget(def.id, widgetID)
+      setDef(updated)
+      setSelectedWidgetID(current => current === widgetID ? null : current)
+      setEditingWidgetID(current => current === widgetID ? null : current)
+      setWidgetSaveError(null)
+      onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete widget.')
+    }
+  }
+
   return (
     <div class="screen">
       <PageHeader
@@ -1156,30 +1730,72 @@ export function DashboardDetail(
         actions={
           <>
             <button class="btn btn-sm" onClick={onBack}>← Back</button>
-            {def && def.status === 'live' && (
-              <button class="btn btn-sm" onClick={handleEditDraft} disabled={drafting}>
-                {drafting ? 'Preparing…' : 'Edit layout'}
-              </button>
-            )}
-            {def && def.status === 'draft' && (
-              <>
-                <button class={`btn btn-sm${layoutEditing ? ' btn-primary' : ''}`} onClick={handleToggleLayoutEditing}>
-                  {layoutEditing ? 'Done' : 'Arrange'}
-                </button>
-                <button class="btn btn-sm btn-primary" onClick={handlePublishDraft} disabled={publishing || savingLayout}>
-                  {publishing ? 'Publishing…' : 'Publish'}
-                </button>
-              </>
-            )}
-            {def && def.status === 'live' && <button class={`btn btn-sm${refreshError ? ' btn-danger' : ''}`} onClick={handleRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : refreshError ? 'Retry' : 'Refresh'}</button>}
-            {def && def.status === 'live' && <button class="btn btn-sm" onClick={() => setPendingDelete(true)}>Delete</button>}
           </>
         }
       />
       {error && <p class="error-banner">{error}</p>}
       {loading && <p class="empty-state">Loading dashboard…</p>}
+      {!loading && def && (
+        <div class="dashboard-detail-toolbar">
+          <div class="dashboard-detail-toolbar-meta">
+            <span class={`dashboard-status-badge ${def.status}`}>
+              {def.status === 'live' ? 'Live' : 'Draft'}
+            </span>
+            <span>{widgets.length} widget{widgets.length === 1 ? '' : 's'}</span>
+            <span>{def.sources.length} source{def.sources.length === 1 ? '' : 's'}</span>
+          </div>
+          <div class="dashboard-detail-toolbar-actions">
+            {def.status === 'live' && (
+              <>
+                <button class={`btn btn-sm${refreshError ? ' btn-danger' : ''}`} onClick={handleRefresh} disabled={refreshing}>
+                  {refreshing ? 'Refreshing…' : refreshError ? 'Retry' : 'Refresh'}
+                </button>
+                <button class="btn btn-sm" onClick={handleEditDraft} disabled={drafting}>
+                  {drafting ? 'Preparing…' : 'Edit layout'}
+                </button>
+                <button class="btn btn-sm" onClick={() => setPendingDelete(true)}>Delete</button>
+              </>
+            )}
+            {def.status === 'draft' && (
+              <>
+                <button class="btn btn-sm" onClick={() => { setSourceManagerError(null); setSourceManagerOpen(true) }}>
+                  Sources
+                </button>
+                <button class="btn btn-sm btn-primary" onClick={() => { setAddWidgetError(null); setAddWidgetOpen(true) }}>
+                  Add widget
+                </button>
+                <button class={`btn btn-sm${layoutEditing ? ' btn-primary' : ''}`} onClick={handleToggleLayoutEditing}>
+                  {layoutEditing ? 'Done arranging' : 'Arrange'}
+                </button>
+                <button class="btn btn-sm btn-primary" onClick={handlePublishDraft} disabled={publishing || savingLayout}>
+                  {publishing ? 'Publishing…' : 'Publish draft'}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
       {!loading && widgets.length === 0 && (
-        <p class="empty-state">{loadError ? 'Failed to load widgets.' : 'This dashboard has no widgets yet. Ask Atlas in chat to add some.'}</p>
+        isDraft ? (
+          <EmptyState
+            icon={<DashboardIcon />}
+            title="Start authoring this draft"
+            body="Start with a preset, a code widget, or create sources first so your data widgets have something to bind to."
+            action={
+              <div class="dashboard-empty-actions">
+                <button class="btn btn-sm btn-primary" onClick={() => { setAddWidgetError(null); setAddWidgetOpen(true) }}>Add first widget</button>
+                <button class="btn btn-sm" onClick={() => { setSourceManagerError(null); setSourceManagerOpen(true) }}>Manage sources</button>
+              </div>
+            }
+          />
+        ) : (
+          <EmptyState
+            icon={<DashboardIcon />}
+            title={loadError ? 'Dashboard unavailable' : 'No widgets published'}
+            body={loadError ? 'Atlas could not load this dashboard right now.' : 'This dashboard exists, but there are no widgets published on it yet.'}
+            action={<button class="btn btn-sm" onClick={handleRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh dashboard'}</button>}
+          />
+        )
       )}
       {!loading && (sourceFilter || Object.keys(interactionContext).length > 0) && (
         <div class="dashboard-context-bar">
@@ -1235,6 +1851,7 @@ export function DashboardDetail(
                     setEditingWidgetID(next.id)
                     setWidgetSaveError(null)
                   }}
+                  onDelete={(next) => setPendingWidgetDelete(next)}
                   onInlineUpdate={handleWidgetSave}
                   onAction={(action) => handleWidgetAction(w, action, sourceData)}
                 />
@@ -1244,7 +1861,12 @@ export function DashboardDetail(
         </div>
       )}
       {!loading && widgets.length > 0 && visibleWidgets.length === 0 && (
-        <p class="empty-state">No widgets match the current source filter.</p>
+        <EmptyState
+          icon={<DashboardIcon />}
+          title="No widgets match this view"
+          body="The current source filter is hiding every widget on this dashboard."
+          action={<button class="btn btn-sm" onClick={() => setSourceFilter(null)}>Clear filter</button>}
+        />
       )}
       {pendingDelete && def && (
         <ConfirmDialog
@@ -1254,6 +1876,16 @@ export function DashboardDetail(
           danger
           onConfirm={confirmDelete}
           onCancel={() => setPendingDelete(false)}
+        />
+      )}
+      {pendingWidgetDelete && (
+        <ConfirmDialog
+          title={`Delete "${pendingWidgetDelete.title || 'this widget'}"?`}
+          body="This widget will be removed from the draft dashboard."
+          confirmLabel="Delete"
+          danger
+          onConfirm={confirmDeleteWidget}
+          onCancel={() => setPendingWidgetDelete(null)}
         />
       )}
       {drilldown && (
@@ -1279,10 +1911,53 @@ export function DashboardDetail(
               saving={savingWidget}
               error={widgetSaveError}
               onSave={handleWidgetSave}
+              onManageSources={() => {
+                setEditingWidgetID(null)
+                setSourceManagerError(null)
+                setSourceManagerOpen(true)
+              }}
               onClose={() => setEditingWidgetID(null)}
             />
           </div>
         </div>
+      )}
+      {isDraft && addWidgetOpen && (
+        <AddWidgetDialog
+          sourceCount={def?.sources.length ?? 0}
+          adding={addingWidget}
+          error={addWidgetError}
+          onAdd={handleAddWidget}
+          onManageSources={() => {
+            setAddWidgetOpen(false)
+            setSourceManagerError(null)
+            setSourceManagerOpen(true)
+          }}
+          onClose={() => { if (!addingWidget) setAddWidgetOpen(false) }}
+        />
+      )}
+      {isDraft && def && aiWidgetOpen && (
+        <AIWidgetDialog
+          dashboard={def}
+          creating={addingWidget}
+          error={aiWidgetError}
+          onCreate={handleCreateAIWidget}
+          onManageSources={() => {
+            setAIWidgetOpen(false)
+            setSourceManagerError(null)
+            setSourceManagerOpen(true)
+          }}
+          onClose={() => { if (!addingWidget) setAIWidgetOpen(false) }}
+        />
+      )}
+      {isDraft && def && sourceManagerOpen && (
+        <SourceManagerDialog
+          dashboard={def}
+          saving={addingWidget}
+          error={sourceManagerError}
+          onSave={handleSaveSource}
+          onDelete={handleDeleteSource}
+          onClose={() => { if (!addingWidget) setSourceManagerOpen(false) }}
+        />
       )}
     </div>
   )
@@ -1294,6 +1969,9 @@ export function Dashboards({ client = api }: { client?: DashboardClient } = {}):
   const [items, setItems]     = useState<DashboardSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
   const [selectedID, setSelectedID] = useState<string | null>(null)
   const [initialLayoutEditing, setInitialLayoutEditing] = useState(false)
   const [filter, setFilter]   = useState<DashboardStatus | 'all'>('all')
@@ -1323,6 +2001,21 @@ export function Dashboards({ client = api }: { client?: DashboardClient } = {}):
     setSelectedID(id)
   }
 
+  async function handleCreateDashboard(input: { name: string; description: string }) {
+    setCreating(true)
+    setCreateError(null)
+    try {
+      const created = await client.createDashboardDraft(input)
+      await load()
+      setCreateOpen(false)
+      openDashboard(created.id, { layoutEditing: true })
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : 'Failed to create dashboard.')
+    } finally {
+      setCreating(false)
+    }
+  }
+
   const shown = useMemo(() =>
     filter === 'all' ? items : items.filter(i => i.status === filter),
     [items, filter])
@@ -1348,17 +2041,25 @@ export function Dashboards({ client = api }: { client?: DashboardClient } = {}):
     <div class="screen">
       <PageHeader
         title="Dashboards"
-        subtitle="Live data dashboards. Ask Atlas in chat to design one — this screen is a viewer."
+        subtitle="Create dashboards manually, refine drafts visually, or keep using Atlas to generate them for you."
         actions={
-          items.length > 0 ? (
-            <div class="dashboard-filter-group">
-              <button class={`btn btn-sm ${filter === 'all'   ? 'btn-primary' : ''}`} onClick={() => setFilter('all')}>All ({items.length})</button>
-              <button class={`btn btn-sm ${filter === 'live'  ? 'btn-primary' : ''}`} onClick={() => setFilter('live')}>Live ({liveCount})</button>
-              <button class={`btn btn-sm ${filter === 'draft' ? 'btn-primary' : ''}`} onClick={() => setFilter('draft')}>Drafts ({draftCount})</button>
-            </div>
-          ) : undefined
+          <button class="btn btn-sm btn-primary" onClick={() => { setCreateError(null); setCreateOpen(true) }}>New dashboard</button>
         }
       />
+
+      {!loading && items.length > 0 && (
+        <div class="dashboard-list-toolbar">
+          <div class="dashboard-list-toolbar-copy">
+            <strong>{shown.length}</strong>
+            <span>{shown.length === 1 ? 'dashboard in view' : 'dashboards in view'}</span>
+          </div>
+          <div class="segmented-ctrl dashboard-filter-group" aria-label="Dashboard filters">
+            <button class={`segmented-ctrl__btn ${filter === 'all' ? 'active' : ''}`} onClick={() => setFilter('all')}>All ({items.length})</button>
+            <button class={`segmented-ctrl__btn ${filter === 'live' ? 'active' : ''}`} onClick={() => setFilter('live')}>Live ({liveCount})</button>
+            <button class={`segmented-ctrl__btn ${filter === 'draft' ? 'active' : ''}`} onClick={() => setFilter('draft')}>Drafts ({draftCount})</button>
+          </div>
+        </div>
+      )}
 
       {error && <p class="error-banner">{error}</p>}
       {loading && <PageSpinner />}
@@ -1393,12 +2094,31 @@ export function Dashboards({ client = api }: { client?: DashboardClient } = {}):
         <EmptyState
           icon={<DashboardIcon />}
           title="No dashboards yet"
-          body="Ask Atlas in chat to build a dashboard for you. Agents author widgets, wire data sources, and commit the layout — this screen shows the result."
+          body="Start with an empty draft and add widgets yourself, or ask Atlas in chat to generate a dashboard for you."
+          action={<button class="btn btn-sm btn-primary" onClick={() => { setCreateError(null); setCreateOpen(true) }}>Create dashboard</button>}
         />
       )}
 
       {!loading && items.length > 0 && shown.length === 0 && (
-        <p class="empty-state">No dashboards match this filter.</p>
+        <EmptyState
+          icon={<DashboardIcon />}
+          title="No dashboards match this filter"
+          body="Try switching back to all dashboards or create a new draft."
+          action={
+            <div class="dashboard-empty-actions">
+              <button class="btn btn-sm" onClick={() => setFilter('all')}>Show all dashboards</button>
+              <button class="btn btn-sm btn-primary" onClick={() => { setCreateError(null); setCreateOpen(true) }}>New dashboard</button>
+            </div>
+          }
+        />
+      )}
+      {createOpen && (
+        <CreateDashboardDialog
+          creating={creating}
+          error={createError}
+          onCreate={handleCreateDashboard}
+          onClose={() => { if (!creating) setCreateOpen(false) }}
+        />
       )}
     </div>
   )

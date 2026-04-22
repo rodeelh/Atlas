@@ -13,6 +13,7 @@ package dashboards
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"strings"
 	"time"
 )
 
@@ -135,6 +136,13 @@ type Widget struct {
 	GridY int `json:"gridY"`
 	GridW int `json:"gridW"`
 	GridH int `json:"gridH"`
+}
+
+func (w Widget) TitleOrID() string {
+	if strings.TrimSpace(w.Title) != "" {
+		return w.Title
+	}
+	return w.ID
 }
 
 // LayoutHints controls the packer. Columns defaults to 12.

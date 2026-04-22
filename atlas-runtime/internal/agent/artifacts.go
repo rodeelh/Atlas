@@ -37,9 +37,17 @@ var artifactStore = struct {
 	tokens: make(map[string]artifactEntry, 64),
 }
 
+var hiddenArtifactBaseNames = map[string]bool{
+	"mind.md":     true,
+	"mind.md.bak": true,
+}
+
 // RegisterArtifact stores a local file path and returns a random download token.
 // Returns "" if the path does not exist or token generation fails.
 func RegisterArtifact(path string) string {
+	if !IsUserVisibleArtifactPath(path) {
+		return ""
+	}
 	if _, err := os.Stat(path); err != nil {
 		return ""
 	}
@@ -98,6 +106,9 @@ func ExtractPathsFromText(text string) []string {
 			continue
 		}
 		seen[m] = true
+		if !IsUserVisibleArtifactPath(m) {
+			continue
+		}
 		if _, err := os.Stat(m); err == nil {
 			out = append(out, m)
 		}
@@ -142,6 +153,9 @@ func ExtractArtifactPaths(artifacts map[string]any) []string {
 		if !artifactExtensions[ext] {
 			continue
 		}
+		if !IsUserVisibleArtifactPath(s) {
+			continue
+		}
 		if seen[s] {
 			continue
 		}
@@ -155,6 +169,22 @@ func ExtractArtifactPaths(artifacts map[string]any) []string {
 		}
 	}
 	return out
+}
+
+// IsUserVisibleArtifactPath reports whether a local file path is eligible to be
+// surfaced back to the user as a generated/downloadable artifact.
+// Internal operator/runtime files like MIND.md must never appear as chat files
+// even if a tool summary or assistant message mentions their path.
+func IsUserVisibleArtifactPath(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	base := strings.ToLower(filepath.Base(path))
+	if hiddenArtifactBaseNames[base] {
+		return false
+	}
+	return true
 }
 
 // MimeTypeForPath returns a best-effort MIME type string for the given file path.

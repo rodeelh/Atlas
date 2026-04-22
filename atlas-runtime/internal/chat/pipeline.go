@@ -45,6 +45,7 @@ type TurnState struct {
 	HistoryChars int
 	SystemPrompt string
 	CapPlan      capabilities.Analysis
+	TaskContext  string
 
 	// ── selectTools ──────────────────────────────────────────────────────
 	Selector      agent.ToolSelector
@@ -90,6 +91,7 @@ func (p *Pipeline) Run(ctx context.Context, req MessageRequest) (*TurnState, err
 		Req: req,
 		Cfg: p.svc.cfgStore.Load(),
 	}
+	s.Req.ToolPolicy = mergeToolPolicies(s.Req.ToolPolicy, autonomyToolPolicy(s.Cfg))
 
 	if err := p.prepareContext(ctx, s); err != nil {
 		return s, err
@@ -441,7 +443,8 @@ func (p *Pipeline) tryVisionDegradation(s *TurnState) bool {
 }
 
 func (p *Pipeline) buildInput(ctx context.Context, s *TurnState) {
-	capPlan, capPolicy := capabilityPolicy(s.Req.Message, config.SupportDir(), p.svc.db, p.svc.db)
+	s.TaskContext = taskContextFromHistory(s.History, s.Req.Message)
+	capPlan, capPolicy := capabilityPolicy(s.TaskContext, config.SupportDir(), p.svc.db, p.svc.db)
 	s.CapPlan = capPlan
 	var queryVec []float32
 	if shouldComputeHyDE(s.Cfg, s.Req.Message) {
@@ -457,7 +460,7 @@ func shouldComputeHyDE(cfg config.RuntimeConfigSnapshot, userMessage string) boo
 }
 
 func (p *Pipeline) selectTools(ctx context.Context, s *TurnState) {
-	s.Selector, s.SelectedTools, s.ToolMode = p.svc.selectTurnTools(ctx, s.Cfg, s.Req, s.turn, s.CapPlan)
+	s.Selector, s.SelectedTools, s.ToolMode = p.svc.selectTurnTools(ctx, s.Cfg, s.Req, s.turn, s.CapPlan, s.TaskContext)
 }
 
 func (p *Pipeline) execute(ctx context.Context, s *TurnState) {
@@ -471,7 +474,7 @@ func (p *Pipeline) execute(ctx context.Context, s *TurnState) {
 		ConvID:        s.ConvID,
 		TurnID:        s.TurnID,
 		Tools:         s.SelectedTools,
-		UserMessage:   s.Req.Message,
+		UserMessage:   s.TaskContext,
 		ToolPolicy:    s.Req.ToolPolicy,
 		Selector:      s.Selector,
 		Adapter:       agent.NewAdapter(s.Provider),

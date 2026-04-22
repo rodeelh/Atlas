@@ -89,30 +89,62 @@ func TestNeedsApproval_Read(t *testing.T) {
 }
 
 func TestNeedsApproval_LocalWrite(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"autonomyMode":"unleashed"}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 	r := newTestRegistry()
+	r.supportDir = dir
 	if r.NeedsApproval("test.write_local") {
-		t.Error("local_write should not require approval by default")
+		t.Error("local_write should not require approval in unleashed mode")
+	}
+}
+
+func TestNeedsApproval_SandboxedForcesApprovalOnWrites(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"autonomyMode":"sandboxed"}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	r := newTestRegistry()
+	r.supportDir = dir
+	if !r.NeedsApproval("test.write_local") {
+		t.Fatal("sandboxed mode should require approval for local writes")
 	}
 }
 
 func TestNeedsApproval_DestructiveLocal(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"autonomyMode":"unleashed"}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 	r := newTestRegistry()
-	if !r.NeedsApproval("test.destroy_local") {
-		t.Error("destructive_local should require approval")
+	r.supportDir = dir
+	if r.NeedsApproval("test.destroy_local") {
+		t.Error("destructive_local should not require approval in unleashed mode")
 	}
 }
 
 func TestNeedsApproval_External(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"autonomyMode":"unleashed"}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 	r := newTestRegistry()
-	if !r.NeedsApproval("test.external") {
-		t.Error("external_side_effect should require approval")
+	r.supportDir = dir
+	if r.NeedsApproval("test.external") {
+		t.Error("external_side_effect should not require approval in unleashed mode")
 	}
 }
 
 func TestNeedsApproval_Send(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"autonomyMode":"unleashed"}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 	r := newTestRegistry()
+	r.supportDir = dir
 	if !r.NeedsApproval("test.send") {
-		t.Error("send_publish_delete should require approval")
+		t.Error("send_publish_delete should still require approval in unleashed mode")
 	}
 }
 
@@ -143,6 +175,17 @@ func TestNeedsApproval_ForgeProposeIgnoresStaleAlwaysAskPolicy(t *testing.T) {
 	}
 	if r.NeedsApproval("forge.orchestration.propose") {
 		t.Fatal("forge proposal drafting should not require approval; final install remains user-reviewed")
+	}
+}
+
+func TestNeedsApproval_ApplescriptMusicPlayTrack_UnleashedNoApproval(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"autonomyMode":"unleashed"}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	r := NewRegistry(dir, nil, nil)
+	if r.NeedsApproval("applescript.music_play_track") {
+		t.Fatal("dedicated music track playback should not require approval in unleashed mode")
 	}
 }
 

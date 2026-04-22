@@ -89,6 +89,8 @@ func (s *SystemService) UpdateConfig(next config.RuntimeConfigSnapshot) (config.
 func validateRuntimeConfigUpdate(prev, next config.RuntimeConfigSnapshot) (config.RuntimeConfigSnapshot, error) {
 	var err error
 
+	next.AutonomyMode = config.NormalizeAutonomyMode(next.AutonomyMode)
+
 	next.LMStudioBaseURL, err = normalizeLocalBaseURL(next.LMStudioBaseURL, "http://localhost:1234", "lmStudioBaseURL")
 	if err != nil {
 		return config.RuntimeConfigSnapshot{}, err

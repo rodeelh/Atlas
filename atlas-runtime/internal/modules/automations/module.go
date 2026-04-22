@@ -14,6 +14,7 @@ import (
 
 	"atlas-runtime-go/internal/chat"
 	"atlas-runtime-go/internal/comms"
+	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/features"
 	"atlas-runtime-go/internal/logstore"
 	"atlas-runtime-go/internal/platform"
@@ -35,6 +36,7 @@ type Module struct {
 	workflows  platform.WorkflowStore
 	agent      platform.AgentRuntime
 	bus        platform.EventBus
+	cfg        platform.ConfigReader
 	delivery   AutomationDelivery
 	skills     *skills.Registry
 
@@ -83,6 +85,7 @@ func (m *Module) Register(host platform.Host) error {
 	m.workflows = host.Storage().Workflows()
 	m.agent = host.AgentRuntime()
 	m.bus = host.Bus()
+	m.cfg = host.Config()
 	if err := m.importLegacyDefinitions(false); err != nil {
 		return fmt.Errorf("import legacy automations: %w", err)
 	}
@@ -101,6 +104,13 @@ func (m *Module) Start(ctx context.Context) error {
 	m.schedulerMu.Unlock()
 	go m.schedulerLoop(runCtx)
 	return nil
+}
+
+func (m *Module) runtimeConfig() config.RuntimeConfigSnapshot {
+	if m == nil || m.cfg == nil {
+		return config.Defaults()
+	}
+	return m.cfg.Load()
 }
 
 func (m *Module) Stop(context.Context) error {
@@ -591,7 +601,7 @@ func (m *Module) prepareAutomationExecution(item features.GremlinItem, runID, co
 		if strings.TrimSpace(item.Prompt) != "" {
 			extraInstruction = basePrompt
 		}
-		prepared, err := workflowexec.PrepareRun(m.workflows, workflowID, workflowRunID, convID, "automation", automationInputValues(item), extraInstruction)
+		prepared, err := workflowexec.PrepareRunWithConfig(m.workflows, m.runtimeConfig(), workflowID, workflowRunID, convID, "automation", automationInputValues(item), extraInstruction)
 		if err != nil {
 			return automationExecutionPlan{}, err
 		}

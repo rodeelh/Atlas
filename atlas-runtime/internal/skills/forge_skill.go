@@ -139,6 +139,42 @@ func (r *Registry) registerForge() {
 			return forgeProposalToolResult(summary), nil
 		},
 	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name: "forge.orchestration.propose_and_install",
+			Description: "Create, validate, install, and enable a new Forge capability in one step. " +
+				"Use this in unleashed mode when Atlas needs the new capability to become usable in the current run. " +
+				"Input fields are identical to forge.orchestration.propose.",
+			Properties: map[string]ToolParam{
+				"kind": {
+					Description: "Same as forge.orchestration.propose.",
+					Type:        "string",
+					Enum:        []string{"api", "composed", "transform", "workflow", "local"},
+				},
+				"contract_json": {Description: "Same as forge.orchestration.propose.", Type: "string"},
+				"spec_json":     {Description: "Same as forge.orchestration.propose.", Type: "string"},
+				"plans_json":    {Description: "Same as forge.orchestration.propose.", Type: "string"},
+				"summary":       {Description: "Same as forge.orchestration.propose.", Type: "string"},
+				"rationale":     {Description: "Same as forge.orchestration.propose.", Type: "string"},
+			},
+			Required: []string{"spec_json", "plans_json", "summary"},
+		},
+		PermLevel: "draft",
+		FnResult: func(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+			summary, err := r.forgeOrchestrationProposeAndInstall(ctx, args)
+			if err != nil {
+				return ToolResult{}, err
+			}
+			if strings.HasPrefix(summary, "Forge capability installed and enabled.") {
+				return OKResult(summary, map[string]any{
+					"status":       "installed_and_enabled",
+					"user_visible": true,
+				}), nil
+			}
+			return forgeProposalToolResult(summary), nil
+		},
+	})
 }
 
 func forgeProposalToolResult(summary string) ToolResult {
@@ -168,6 +204,14 @@ func forgeProposalToolResult(summary string) ToolResult {
 // ── Execution ─────────────────────────────────────────────────────────────────
 
 func (r *Registry) forgeOrchestrationPropose(ctx context.Context, args json.RawMessage) (string, error) {
+	return r.forgeOrchestrationCreate(ctx, args, false)
+}
+
+func (r *Registry) forgeOrchestrationProposeAndInstall(ctx context.Context, args json.RawMessage) (string, error) {
+	return r.forgeOrchestrationCreate(ctx, args, true)
+}
+
+func (r *Registry) forgeOrchestrationCreate(ctx context.Context, args json.RawMessage, installNow bool) (string, error) {
 	var p struct {
 		Kind         string `json:"kind"`
 		ContractJSON string `json:"contract_json"`
@@ -299,6 +343,9 @@ func (r *Registry) forgeOrchestrationPropose(ctx context.Context, args json.RawM
 	if r.forgePersistFn == nil {
 		return "Forge is not yet ready — the runtime is still initialising. Wait briefly, then call forge.orchestration.propose again internally.", nil
 	}
+	if installNow && r.forgeInstallFn == nil {
+		return "Forge install is not yet ready — the runtime can draft proposals but cannot activate them right now. Wait briefly, then retry internally.", nil
+	}
 
 	// Persist the proposal.
 	id, name, skillID, riskLevel, actionNames, domains, err := r.forgePersistFn(
@@ -311,6 +358,25 @@ func (r *Registry) forgeOrchestrationPropose(ctx context.Context, args json.RawM
 	domainsNote := "no external domains"
 	if len(domains) > 0 {
 		domainsNote = strings.Join(domains, ", ")
+	}
+
+	if installNow {
+		installedName, installedSkillID, installedActions, err := r.forgeInstallFn(id, true)
+		if err != nil {
+			return fmt.Sprintf("Forge proposal was created but automatic install failed: %v\n\nUse the concrete install error above to repair the generated capability internally. Do not ask the user to try again.", err), nil
+		}
+		return fmt.Sprintf(`Forge capability installed and enabled.
+
+Proposal ID: %s
+Skill: %s (%s)
+Actions: %s
+Domains: %s
+Risk level: %s
+
+The new capability is now live in Atlas and can be used immediately.`,
+			id, installedName, installedSkillID,
+			strings.Join(installedActions, ", "),
+			domainsNote, riskLevel), nil
 	}
 
 	return fmt.Sprintf(`Forge proposal created.

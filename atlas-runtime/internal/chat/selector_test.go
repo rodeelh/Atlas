@@ -219,6 +219,19 @@ func TestNewSelector_PolicyScopesRegistry(t *testing.T) {
 	}
 }
 
+func TestNewSelector_UnleashedBroadensDefaultSurface(t *testing.T) {
+	reg := emptyRegistry()
+	ctx := context.Background()
+	cfg := config.RuntimeConfigSnapshot{AutonomyMode: config.AutonomyModeUnleashed}
+
+	for _, mode := range []string{"lazy", "llm", "heuristic"} {
+		sel := NewSelector(mode, nil, ctx, cfg, nil, "figure it out please", reg)
+		if got := typeName(sel); got != "*chat.scopedSelector" {
+			t.Errorf("NewSelector(%q, unleashed) = %s, want *chat.scopedSelector", mode, got)
+		}
+	}
+}
+
 func containsSubstr(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
 		func() bool {

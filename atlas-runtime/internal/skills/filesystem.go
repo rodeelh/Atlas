@@ -26,6 +26,8 @@ import (
 	_ "image/png"
 )
 
+import "atlas-runtime-go/internal/config"
+
 // errWalkLimit is returned by WalkDir callbacks to stop early once the result
 // cap is reached. Using a named sentinel avoids fragile string comparisons.
 var errWalkLimit = errors.New("walk limit reached")
@@ -112,6 +114,38 @@ func (r *Registry) registerFilesystem() {
 		PermLevel: "read",
 		Fn: func(ctx context.Context, args json.RawMessage) (string, error) {
 			return fsContentSearch(ctx, args, supportDir)
+		},
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "fs.workspace_roots",
+			Description: "List the approved filesystem roots Atlas may use, plus the default generated-files directory.",
+			Properties:  map[string]ToolParam{},
+			Required:    []string{},
+		},
+		PermLevel: "read",
+		FnResult: func(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+			roots, err := LoadFsRoots(supportDir)
+			if err != nil {
+				return ToolResult{}, err
+			}
+			entries := make([]map[string]any, 0, len(roots))
+			paths := make([]string, 0, len(roots))
+			for _, root := range roots {
+				entries = append(entries, map[string]any{"id": root.ID, "path": root.Path})
+				paths = append(paths, root.Path)
+			}
+			summary := fmt.Sprintf("Atlas has %d approved workspace root(s). Default generated-files directory: %s.", len(roots), config.FilesDir())
+			if len(roots) == 0 {
+				summary = "Atlas has no approved workspace roots yet. Default generated-files directory: " + config.FilesDir() + "."
+			}
+			return OKResult(summary, map[string]any{
+				"roots":                entries,
+				"rootPaths":            paths,
+				"hasApprovedRoots":     len(roots) > 0,
+				"defaultGeneratedPath": config.FilesDir(),
+			}), nil
 		},
 	})
 

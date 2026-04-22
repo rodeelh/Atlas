@@ -86,6 +86,57 @@ func TestModule_ListSkillsReturnsCurrentShape(t *testing.T) {
 	}
 }
 
+func TestModule_ListSkillsReflectsUnleashedApprovalDefaults(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	cfg := config.Defaults()
+	cfg.AutonomyMode = config.AutonomyModeUnleashed
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	host := platform.NewHost(stubConfig{}, platform.NewSQLiteStorage(db), nil, platform.NoopContextAssembler{}, platform.NewInProcessBus(8))
+	module := New(dir)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	r := chi.NewRouter()
+	host.ApplyProtected(r)
+	req := httptest.NewRequest(http.MethodGet, "/skills", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+
+	var body []map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	for _, rec := range body {
+		manifest, _ := rec["manifest"].(map[string]any)
+		switch manifest["id"] {
+		case "terminal-control":
+			assertActionPolicy(t, rec, "terminal.run_command", "auto_approve")
+			assertActionPolicy(t, rec, "terminal.run_as_admin", "always_ask")
+		case "applescript-automation":
+			assertActionPolicy(t, rec, "applescript.music_play_track", "auto_approve")
+			assertActionPolicy(t, rec, "applescript.run_custom", "always_ask")
+			assertActionPolicy(t, rec, "applescript.mail_write", "always_ask")
+		}
+	}
+}
+
 func assertActionPublicID(t *testing.T, rec map[string]any, actionID, want string) {
 	t.Helper()
 	actions, _ := rec["actions"].([]any)

@@ -6,10 +6,20 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
+
+	"atlas-runtime-go/internal/config"
 )
+
+var sandboxLockedActionPatterns = []string{
+	"forge.",
+	"atlas.update_operator_prompt",
+}
 
 func (r *Registry) registerInfo() {
 	r.register(SkillEntry{
@@ -20,7 +30,143 @@ func (r *Registry) registerInfo() {
 			Required:    []string{},
 		},
 		PermLevel: "read",
-		Fn:        atlasInfo,
+		FnResult: func(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+			snap := loadRuntimeSnapshot(r.supportDir)
+			mode := snap.EffectiveAutonomyMode()
+			return OKResult(
+				fmt.Sprintf("Atlas Go Runtime is running on %s/%s with %s autonomy.", runtime.GOOS, runtime.GOARCH, mode),
+				map[string]any{
+					"runtime":            "Atlas Go Runtime",
+					"go_version":         runtime.Version(),
+					"os":                 runtime.GOOS,
+					"arch":               runtime.GOARCH,
+					"autonomy_mode":      mode,
+					"tool_selection":     normalizedToolSelectionMode(snap),
+					"action_safety_mode": strings.TrimSpace(snap.ActionSafetyMode),
+				},
+			), nil
+		},
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "atlas.session_capabilities",
+			Description: "Inspect what Atlas can do in the current session: autonomy mode, tool selection posture, approval posture, and the high-level capabilities currently installed.",
+			Properties:  map[string]ToolParam{},
+			Required:    []string{},
+		},
+		PermLevel: "read",
+		FnResult: func(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+			snap := loadRuntimeSnapshot(r.supportDir)
+			mode := snap.EffectiveAutonomyMode()
+			groups := capabilityGroupNames(r.ToolCapabilityManifest())
+			summary := fmt.Sprintf(
+				"Session is %s with %s tool selection. Web research=%t, shell=%t, files=%t, browser=%t, forge=%t, iMessage=%t.",
+				mode,
+				normalizedToolSelectionMode(snap),
+				r.HasAction("web.research") || r.HasAction("websearch.query"),
+				r.HasAction("terminal.run_command"),
+				r.HasAction("fs.read_file"),
+				r.HasAction("browser.navigate"),
+				r.HasAction("forge.orchestration.propose"),
+				r.HasAction("applescript.messages_send"),
+			)
+			return OKResult(summary, map[string]any{
+				"autonomy_mode":                       mode,
+				"tool_selection_mode":                 normalizedToolSelectionMode(snap),
+				"action_safety_mode":                  strings.TrimSpace(snap.ActionSafetyMode),
+				"normal_non_read_actions_auto_run":    mode == config.AutonomyModeUnleashed,
+				"explicit_approval_actions":           []string{"send_publish_delete", "terminal.run_as_admin"},
+				"available_capability_groups":         groups,
+				"web_research_available":              r.HasAction("web.research") || r.HasAction("websearch.query"),
+				"shell_available":                     r.HasAction("terminal.run_command"),
+				"command_check_available":             r.HasAction("terminal.check_command"),
+				"filesystem_available":                r.HasAction("fs.read_file"),
+				"workspace_roots_available":           r.HasAction("fs.workspace_roots"),
+				"browser_available":                   r.HasAction("browser.navigate"),
+				"forge_available":                     r.HasAction("forge.orchestration.propose"),
+				"app_capabilities_available":          r.HasAction("system.app_capabilities"),
+				"operator_prompt_management":          r.HasAction("atlas.get_operator_prompt") && r.HasAction("atlas.update_operator_prompt"),
+				"imessage_available":                  r.HasAction("applescript.messages_send"),
+				"authorized_channel_bridge_available": r.HasAction("communication.send_message"),
+			}), nil
+		},
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "atlas.diagnose_blocker",
+			Description: "Diagnose why a specific Atlas action may be blocked, unavailable, approval-gated, or missing prerequisites in the current session.",
+			Properties: map[string]ToolParam{
+				"action": {Description: "Action ID to inspect, e.g. 'applescript.messages_send' or 'terminal.run_command'.", Type: "string"},
+			},
+			Required: []string{"action"},
+		},
+		PermLevel: "read",
+		FnResult: func(_ context.Context, args json.RawMessage) (ToolResult, error) {
+			var req struct {
+				Action string `json:"action"`
+			}
+			if err := json.Unmarshal(args, &req); err != nil || strings.TrimSpace(req.Action) == "" {
+				return ToolResult{}, fmt.Errorf("action is required")
+			}
+
+			actionID := r.Canonicalize(req.Action)
+			snap := loadRuntimeSnapshot(r.supportDir)
+			mode := snap.EffectiveAutonomyMode()
+			class := r.GetActionClass(actionID)
+			exists := r.HasAction(actionID)
+			approvalRequired := r.NeedsApproval(actionID)
+			reasons := []string{}
+			nextSteps := []string{}
+			status := "available"
+
+			if !exists {
+				status = "missing_tool"
+				reasons = append(reasons, "This action is not currently installed in Atlas.")
+				nextSteps = append(nextSteps, "Use an existing tool, add the capability, or Forge a new reusable skill if the gap is real.")
+			} else {
+				if mode == config.AutonomyModeSandboxed && matchesBlockedActionPattern(actionID, sandboxLockedActionPatterns) {
+					status = "sandbox_locked_surface"
+					reasons = append(reasons, "Sandboxed mode intentionally locks this self-modification surface.")
+					nextSteps = append(nextSteps, "Switch Atlas to unleashed mode if you want this self-modification surface available.")
+				}
+				if strings.HasPrefix(actionID, "fs.") {
+					if roots, err := LoadFsRoots(r.supportDir); err == nil && len(roots) == 0 {
+						status = "missing_prerequisite"
+						reasons = append(reasons, "No approved filesystem roots are configured yet.")
+						nextSteps = append(nextSteps, "Add or approve a filesystem root before using file tools.")
+					}
+				}
+				if approvalRequired {
+					if status == "available" {
+						status = "approval_required"
+					}
+					reasons = append(reasons, "This action currently requires explicit approval before Atlas should execute it.")
+					nextSteps = append(nextSteps, "Choose a lower-risk path or request approval for this exact action.")
+				}
+			}
+
+			if len(reasons) == 0 {
+				reasons = append(reasons, "No hard blocker is visible from the current runtime metadata for this action.")
+			}
+			if len(nextSteps) == 0 {
+				nextSteps = append(nextSteps, "Try the action directly and treat any runtime execution error as the next debugging signal.")
+			}
+
+			summary := fmt.Sprintf("Action %s is %s in %s mode.", actionID, status, mode)
+			return OKResult(summary, map[string]any{
+				"action":                 actionID,
+				"exists":                 exists,
+				"status":                 status,
+				"autonomy_mode":          mode,
+				"action_class":           string(class),
+				"permission_level":       r.PermissionLevel(actionID),
+				"approval_required":      approvalRequired,
+				"reasons":                reasons,
+				"recommended_next_steps": nextSteps,
+			}), nil
+		},
 	})
 
 }
@@ -100,11 +246,68 @@ func (r *Registry) registerInfoSkill() {
 
 // ── atlas.info ────────────────────────────────────────────────────────────────
 
-func atlasInfo(_ context.Context, _ json.RawMessage) (string, error) {
-	return fmt.Sprintf(
-		"Atlas Go Runtime — status: running | Go: %s | OS: %s/%s",
-		runtime.Version(), runtime.GOOS, runtime.GOARCH,
-	), nil
+func loadRuntimeSnapshot(supportDir string) config.RuntimeConfigSnapshot {
+	snap := config.Defaults()
+	if strings.TrimSpace(supportDir) == "" {
+		return snap
+	}
+	data, err := os.ReadFile(filepath.Join(supportDir, "config.json"))
+	if err != nil {
+		return snap
+	}
+	_ = json.Unmarshal(data, &snap)
+	return snap
+}
+
+func normalizedToolSelectionMode(snap config.RuntimeConfigSnapshot) string {
+	mode := strings.TrimSpace(snap.ToolSelectionMode)
+	if mode == "" {
+		if snap.EnableSmartToolSelection {
+			return "lazy"
+		}
+		return "off"
+	}
+	return mode
+}
+
+func capabilityGroupNames(manifest []ToolCapabilityGroupManifest) []string {
+	if len(manifest) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(manifest))
+	for _, item := range manifest {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func matchesBlockedActionPattern(actionID string, patterns []string) bool {
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		switch {
+		case strings.HasSuffix(pattern, "."):
+			if strings.HasPrefix(actionID, pattern) {
+				return true
+			}
+		case strings.HasSuffix(pattern, "*"):
+			if strings.HasPrefix(actionID, strings.TrimSuffix(pattern, "*")) {
+				return true
+			}
+		default:
+			if actionID == pattern {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ── info.current_time ─────────────────────────────────────────────────────────

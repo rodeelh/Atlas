@@ -1,35 +1,12 @@
 package thoughts
 
-// score.go implements the structural safety ceiling.
+// score.go implements the structural safety ceiling for nap-thought actions.
 //
-// The nap and dream cycle never write the score field directly. The model
-// proposes confidence (0–100) and value (0–100), and chooses an ActionClass.
-// Code multiplies these by the class's safety multiplier to produce the final
-// score. The multipliers are chosen so risky classes CANNOT reach the 95
-// auto-execute threshold no matter how confident or valuable the thought is.
-//
-// This is not a runtime check that can be bypassed. It is a math property of
-// the score function. An external_side_effect thought with confidence=100,
-// value=100, class=external_side_effect produces score = 100*100*0.93/100 = 93.
-// 93 < 95, so the dispatcher's auto-execute branch is mathematically closed
-// to anything except ClassRead.
-//
-// If you ever change the safety multipliers, the constraint that must hold is:
-//
-//	safety_multiplier[class] * 100 < AutoExecuteThreshold  for all class != read
-//
-// With AutoExecuteThreshold=95, the maximum safe multiplier for a non-read
-// class is 0.94. We leave a small buffer and cap the highest non-read class
-// at 0.97 (local_write) — still above 95 in theory if confidence and value
-// both hit 100, which is why local_write REQUIRES approval even at 97. It
-// just can't auto-execute because the dispatcher additionally checks class.
-//
-// To be strict about the "safety is a math property" claim, we want every
-// non-read class to fall strictly below 95 at maximum confidence and value.
-// That means the maximum multiplier is 0.94. We keep local_write at 0.94 so
-// the math forbids auto-execute across all non-read classes, not just the
-// obviously dangerous ones. The dispatcher's class check becomes redundant
-// belt-and-braces, exactly as intended.
+// Sandboxed mode keeps the original hard ceiling: only read thoughts can
+// mathematically clear the auto-execute threshold. Unleashed mode opens a
+// narrow second lane for background autonomy by allowing local_write and
+// external_side_effect thoughts to clear the threshold too, while still
+// keeping destructive_local and send_publish_delete structurally below it.
 
 // AutoExecuteThreshold is the minimum score at which the dispatcher will
 // auto-execute a thought's proposed action without user approval. Exposed as
@@ -42,12 +19,17 @@ var AutoExecuteThreshold = 95
 // runtime config override.
 var ProposeThreshold = 80
 
+// UnleashedAutoExecuteEnabled relaxes the background-thought ceiling so Atlas
+// can auto-execute selected non-read actions during naps when runtime autonomy
+// is explicitly unleashed. Sandboxed mode keeps the original read-only ceiling.
+var UnleashedAutoExecuteEnabled bool
+
 // safetyMultipliers maps each ActionClass to the fraction its max score is
 // capped at. read is 1.00 (no ceiling); every other class is strictly below
 // the value needed to hit 95 with confidence=value=100.
 //
 // Math check at compile time via TestSafetyCeiling in score_test.go.
-var safetyMultipliers = map[ActionClass]float64{
+var sandboxedSafetyMultipliers = map[ActionClass]float64{
 	ClassRead:               1.00, // 100 × 100 × 1.00 / 100 = 100 — can clear 95
 	ClassLocalWrite:         0.94, // 100 × 100 × 0.94 / 100 = 94  — cannot clear 95
 	ClassDestructiveLocal:   0.93, // 100 × 100 × 0.93 / 100 = 93  — cannot clear 95
@@ -55,11 +37,22 @@ var safetyMultipliers = map[ActionClass]float64{
 	ClassSendPublishDelete:  0.90, // 100 × 100 × 0.90 / 100 = 90  — cannot clear 95
 }
 
+var unleashedSafetyMultipliers = map[ActionClass]float64{
+	ClassRead:               1.00, // may auto-execute
+	ClassLocalWrite:         1.00, // may auto-execute in unleashed mode
+	ClassDestructiveLocal:   0.93, // still cannot auto-execute in background
+	ClassExternalSideEffect: 1.00, // may auto-execute in unleashed mode
+	ClassSendPublishDelete:  0.90, // explicit outbound send/publish still capped
+}
+
 // SafetyMultiplier returns the multiplier for a given action class. Unknown
 // classes return 0.0 — meaning their computed score is always 0, which is
 // the safest possible fallback for a class the system doesn't recognize.
 func SafetyMultiplier(class ActionClass) float64 {
-	return safetyMultipliers[class]
+	if UnleashedAutoExecuteEnabled {
+		return unleashedSafetyMultipliers[class]
+	}
+	return sandboxedSafetyMultipliers[class]
 }
 
 // ComputeScore returns the final score for a thought based on the model's
@@ -108,12 +101,22 @@ func MaxScoreForClass(class ActionClass) int {
 }
 
 // CanAutoExecute returns true if a thought at score s with action class c is
-// allowed to auto-execute. This is the single source of truth for the
-// dispatcher's auto-execute decision — score above threshold AND class is
-// read. The class check is belt-and-braces: the score alone is supposed to
-// be enough because of the structural ceiling, but we defend in depth.
+// allowed to auto-execute. Sandboxed mode only permits read-class thoughts.
+// Unleashed mode also permits local writes and external side effects, while
+// still excluding destructive local actions and explicit send/publish actions.
 func CanAutoExecute(s int, c ActionClass) bool {
-	return s >= AutoExecuteThreshold && c == ClassRead
+	if s < AutoExecuteThreshold {
+		return false
+	}
+	if UnleashedAutoExecuteEnabled {
+		switch c {
+		case ClassRead, ClassLocalWrite, ClassExternalSideEffect:
+			return true
+		default:
+			return false
+		}
+	}
+	return c == ClassRead
 }
 
 // ShouldPropose returns true if a thought at score s should be routed to the

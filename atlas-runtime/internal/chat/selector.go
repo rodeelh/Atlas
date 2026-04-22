@@ -25,6 +25,12 @@ func NewSelector(
 		registry = registry.FilteredByPatterns(policy.AllowedToolPrefixes)
 	}
 
+	// In unleashed mode, default chat turns should begin with the broad tool
+	// surface unless an explicit allowlist/trust boundary narrows them.
+	if cfg.IsUnleashed() && (policy == nil || len(policy.AllowedToolPrefixes) == 0) {
+		return &scopedSelector{registry: registry}
+	}
+
 	switch mode {
 	case "lazy":
 		return &lazySelector{ctx: ctx, cfg: cfg, turn: turn, msg: message, registry: registry}

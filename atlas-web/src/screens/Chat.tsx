@@ -1008,6 +1008,33 @@ const AttachIcon = () => (
   </svg>
 )
 
+const AttachmentChipIcon = ({ mimeType }: { mimeType: string }) => {
+  if (mimeType.startsWith('image/')) {
+    return (
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="2" y="2" width="12" height="12" rx="2.5" />
+        <circle cx="6" cy="6" r="1.1" />
+        <path d="M3.5 11l3-3 2.3 2.3 1.7-1.7 2 2.4" />
+      </svg>
+    )
+  }
+  if (mimeType === 'application/pdf') {
+    return (
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M9.5 1.5H4A1.5 1.5 0 0 0 2.5 3v10A1.5 1.5 0 0 0 4 14.5h8A1.5 1.5 0 0 0 13.5 13V5.5L9.5 1.5z" />
+        <path d="M9.5 1.5V5.5H13.5" />
+        <path d="M4.8 11.5h5.7" />
+      </svg>
+    )
+  }
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M9.5 1.5H4A1.5 1.5 0 0 0 2.5 3v10A1.5 1.5 0 0 0 4 14.5h8A1.5 1.5 0 0 0 13.5 13V5.5L9.5 1.5z" />
+      <path d="M9.5 1.5V5.5H13.5" />
+    </svg>
+  )
+}
+
 const CopyIcon = () => (
   <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <rect x="5" y="5" width="9" height="9" rx="1.5" />
@@ -1199,6 +1226,10 @@ export function Chat({ isActive = true, onUnreadReply }: {
   const dragCounterRef                          = useRef(0)
   // Proactive message composing indicator (background SSE turn in progress)
   const [proactiveComposing, setProactiveComposing] = useState(false)
+  const hasActiveAssistantOutput = useMemo(
+    () => proactiveComposing || sending || messages.some((msg) => msg.role === 'assistant' && msg.isTyping),
+    [messages, proactiveComposing, sending],
+  )
 
   const PROMPTS = [
     'Help me draft an email',
@@ -2669,7 +2700,13 @@ export function Chat({ isActive = true, onUnreadReply }: {
   // ── Render ─────────────────────────────────────────────────────────────────────
 
   return (
-    <div class="chat-screen">
+    <div
+      class={`chat-screen${dragOver ? ' drag-over' : ''}`}
+      onDragEnter={handleDragEnter as any}
+      onDragLeave={handleDragLeave as any}
+      onDragOver={handleDragOver as any}
+      onDrop={handleDrop as any}
+    >
       <PageHeader
         title="Chat"
         subtitle={activeModel ? <span>Model: {activeModel}{cloudHealthDot}</span> : ''}
@@ -2796,26 +2833,26 @@ export function Chat({ isActive = true, onUnreadReply }: {
         }
       />
 
+      {dragOver && (
+        <div class="chat-drop-overlay">
+          <div class="chat-drop-overlay-content">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <div class="chat-drop-overlay-text">
+              <strong>Drop to attach</strong>
+              <span>Images and PDFs will be added to your next message</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Messages */}
       <div
         ref={messagesRef}
-        class={`chat-messages${dragOver ? ' drag-over' : ''}`}
+        class="chat-messages"
         onClick={(e) => { handleCodeCopy(e as any); handleRunCode(e as any) }}
-        onDragEnter={handleDragEnter as any}
-        onDragLeave={handleDragLeave as any}
-        onDragOver={handleDragOver as any}
-        onDrop={handleDrop as any}
       >
-        {dragOver && (
-          <div class="chat-drop-overlay">
-            <div class="chat-drop-overlay-content">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-              </svg>
-              <span>Drop to attach</span>
-            </div>
-          </div>
-        )}
         <div class="chat-thread">
           {messages.length === 0 && (
             thoughtCount > 0 ? (
@@ -2979,20 +3016,28 @@ export function Chat({ isActive = true, onUnreadReply }: {
             </div>
           )}
 
-          <ErrorBanner error={error} onDismiss={() => setError(null)} />
+          <ErrorBanner error={error} onDismiss={() => setError(null)} small />
           <div ref={bottomRef} />
         </div>
       </div>
 
       <button
-        class={`chat-scroll-bottom-btn${showScrollBottom ? ' visible' : ''}`}
+        class={`chat-scroll-bottom-btn${showScrollBottom ? ' visible' : ''}${hasActiveAssistantOutput ? ' is-active' : ''}`}
         onClick={() => scrollToBottom(true)}
-        title="Scroll to bottom"
-        aria-label="Scroll to bottom"
+        title={hasActiveAssistantOutput ? 'Assistant is generating — scroll to latest' : 'Scroll to bottom'}
+        aria-label={hasActiveAssistantOutput ? 'Assistant is generating — scroll to latest' : 'Scroll to bottom'}
       >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4 6l4 4 4-4" />
-        </svg>
+        {hasActiveAssistantOutput ? (
+          <span class="chat-scroll-bottom-thinking" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+        ) : (
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 6l4 4 4-4" />
+          </svg>
+        )}
       </button>
 
       {/* Composer */}
@@ -3012,6 +3057,9 @@ export function Chat({ isActive = true, onUnreadReply }: {
             <div class="chat-attachment-chips">
               {attachments.map((att, i) => (
                 <div key={i} class="chat-attachment-chip">
+                  <span class="chat-attachment-glyph" aria-hidden="true">
+                    <AttachmentChipIcon mimeType={att.mimeType} />
+                  </span>
                   <span class="chat-attachment-name">{att.filename}</span>
                   <button
                     class="chat-attachment-remove"

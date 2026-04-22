@@ -4,11 +4,16 @@ import type {
   Approval,
   AudioProviderModelSet,
   CapabilityRecord,
+  DashboardAIWidgetCreateRequest,
+  DashboardCodeWidgetCreateRequest,
+  DashboardCreateRequest,
   DashboardDefinition,
   DashboardLayoutUpdate,
   DashboardRefreshEvent,
   DashboardStatus,
+  DashboardSourceCreateRequest,
   DashboardSummary,
+  DashboardWidgetCreateRequest,
   DashboardWidgetData,
   DashboardWidgetUpdate,
   EngineDownloadStatus,
@@ -64,16 +69,21 @@ import type {
 export type {
   AIModelRecord,
   APIKeyStatus,
+  DashboardAIWidgetCreateRequest,
+  DashboardCodeWidgetCreateRequest,
+  DashboardCreateRequest,
   DashboardDefinition,
   DashboardLayoutUpdate,
   DashboardDataSourceBinding,
   DashboardPreset,
   DashboardRefreshEvent,
   DashboardSize,
+  DashboardSourceCreateRequest,
   DashboardStatus,
   DashboardSummary,
   DashboardWidget,
   DashboardWidgetCode,
+  DashboardWidgetCreateRequest,
   DashboardWidgetData,
   DashboardWidgetMode,
   DashboardWidgetUpdate,
@@ -421,9 +431,11 @@ export const api = {
   approveWorkflowRun: (runID: string) => post<WorkflowRun>(`/workflows/runs/${encodeURIComponent(runID)}/approve`, {}),
   denyWorkflowRun: (runID: string) => post<WorkflowRun>(`/workflows/runs/${encodeURIComponent(runID)}/deny`, {}),
 
-  // Dashboards (v2) — agents are the primary author; UI is viewer-only.
+  // Dashboards (v2)
   dashboards: (status?: DashboardStatus) =>
     get<DashboardSummary[]>(status ? `/dashboards?status=${encodeURIComponent(status)}` : '/dashboards'),
+  createDashboardDraft: (input: DashboardCreateRequest) =>
+    post<DashboardDefinition>('/dashboards', input),
   dashboard: (id: string) =>
     get<DashboardDefinition>(`/dashboards/${encodeURIComponent(id)}`),
   deleteDashboard: (id: string) =>
@@ -432,6 +444,18 @@ export const api = {
     post<DashboardDefinition>(`/dashboards/${encodeURIComponent(id)}/draft`, {}),
   commitDashboardDraft: (id: string) =>
     post<DashboardDefinition>(`/dashboards/${encodeURIComponent(id)}/commit`, {}),
+  createDashboardWidget: (dashboardID: string, input: DashboardWidgetCreateRequest) =>
+    post<DashboardDefinition>(`/dashboards/${encodeURIComponent(dashboardID)}/widgets`, input),
+  createDashboardCodeWidget: (dashboardID: string, input: DashboardCodeWidgetCreateRequest) =>
+    post<DashboardDefinition>(`/dashboards/${encodeURIComponent(dashboardID)}/code-widgets`, input),
+  createDashboardAIWidget: (dashboardID: string, input: DashboardAIWidgetCreateRequest) =>
+    post<DashboardDefinition>(`/dashboards/${encodeURIComponent(dashboardID)}/ai-widget`, input),
+  upsertDashboardSource: (dashboardID: string, input: DashboardSourceCreateRequest) =>
+    post<DashboardDefinition>(`/dashboards/${encodeURIComponent(dashboardID)}/sources`, input),
+  deleteDashboardSource: (dashboardID: string, sourceName: string) =>
+    request<DashboardDefinition>(`/dashboards/${encodeURIComponent(dashboardID)}/sources/${encodeURIComponent(sourceName)}`, { method: 'DELETE' }),
+  deleteDashboardWidget: (dashboardID: string, widgetID: string) =>
+    request<DashboardDefinition>(`/dashboards/${encodeURIComponent(dashboardID)}/widgets/${encodeURIComponent(widgetID)}`, { method: 'DELETE' }),
   updateDashboardLayout: (dashboardID: string, update: DashboardLayoutUpdate) =>
     request<DashboardDefinition>(
       `/dashboards/${encodeURIComponent(dashboardID)}/layout`,

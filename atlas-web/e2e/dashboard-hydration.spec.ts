@@ -1,4 +1,15 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+
+async function openWidgetAction(page: Page, widgetTitle: string, actionLabel: 'Edit widget' | 'Delete widget') {
+  const widget = page.locator('.dw-cell').filter({ hasText: widgetTitle })
+  await widget.getByRole('button', { name: new RegExp(`Widget actions for ${widgetTitle}`, 'i') }).click()
+  await page.getByRole('button', { name: actionLabel, exact: true }).click()
+}
+
+async function openWidgetMenu(page: Page, widgetTitle: string) {
+  const widget = page.locator('.dw-cell').filter({ hasText: widgetTitle })
+  await widget.getByRole('button', { name: new RegExp(`Widget actions for ${widgetTitle}`, 'i') }).click()
+}
 
 test('dashboard hydration renders presets, source errors, and refresh recovery', async ({ page }) => {
   await page.goto('/web/dashboard-hydration.e2e.html')
@@ -78,7 +89,7 @@ test('draft dashboards expose a widget inspector and save explicit edits', async
 
   await expect(page.getByText('Draft editing is enabled.')).toBeVisible()
 
-  await page.locator('.dw-cell').filter({ hasText: 'Draft metric' }).getByRole('button', { name: /Edit/i }).click()
+  await openWidgetAction(page, 'Draft metric', 'Edit widget')
   await expect(page.getByRole('heading', { name: 'Widget' })).toBeVisible()
   await expect(page.getByRole('textbox', { name: 'Title', exact: true })).toHaveValue('Draft metric')
 
@@ -98,7 +109,7 @@ test('draft code widgets surface compile errors and save valid TSX', async ({ pa
   await page.goto('/web/dashboard-hydration.e2e.html')
 
   await page.getByRole('button', { name: /Draft Customizer Smoke/i }).click()
-  await page.locator('.dw-cell').filter({ hasText: 'Draft code' }).getByRole('button', { name: /Edit/i }).click()
+  await openWidgetAction(page, 'Draft code', 'Edit widget')
   await expect(page.getByText('Code widget metadata')).toBeVisible()
   await expect(page.getByRole('textbox', { name: 'Widget TSX' })).toBeVisible()
 
@@ -130,6 +141,28 @@ test('live dashboards open an editable snap-grid draft layout', async ({ page })
 
   await page.getByRole('button', { name: 'Done' }).click()
   await expect(page.locator('.dashboard-grid-stack.grid-stack')).toHaveCount(0)
+})
+
+test('draft authoring shortcuts open source management and widget actions stay available from the widget menu', async ({ page }) => {
+  await page.goto('/web/dashboard-hydration.e2e.html')
+
+  await page.getByRole('button', { name: /Draft Customizer Smoke/i }).click()
+  await page.getByRole('button', { name: 'Add widget' }).click()
+  await expect(page.getByRole('heading', { name: 'Add Widget' })).toBeVisible()
+  await page.locator('.dashboard-widget-inspector-modal').getByRole('button', { name: 'Sources', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Sources' })).toBeVisible()
+  await page.getByRole('button', { name: 'Close' }).click()
+
+  await page.getByRole('button', { name: 'Add widget' }).click()
+  await page.locator('.dashboard-widget-inspector-modal .dashboard-list-card').filter({ hasText: 'AI Widget' }).click()
+  await expect(page.getByRole('heading', { name: 'AI Widget' })).toBeVisible()
+  await page.locator('.dashboard-widget-inspector-modal').getByRole('button', { name: 'Sources', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Sources' })).toBeVisible()
+  await page.getByRole('button', { name: 'Close' }).click()
+
+  await openWidgetMenu(page, 'Draft metric')
+  await expect(page.getByRole('button', { name: 'Edit widget', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Delete widget', exact: true })).toBeVisible()
 })
 
 test('code widgets can request safe dashboard interactions', async ({ page }) => {

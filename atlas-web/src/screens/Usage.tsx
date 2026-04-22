@@ -382,21 +382,21 @@ export function Usage() {
       <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: '12px', alignItems: 'stretch' }}>
 
         {/* Summary: 4 stats in a row */}
-        <div class="card" style={{ flex: 1 }}>
+        <div class="card usage-summary-card" style={{ flex: 1 }}>
           <div class="card-header">
             <span class="card-title">Summary</span>
           </div>
           {(() => {
             const activeDays = summary ? summary.dailySeries.filter(d => d.turnCount > 0).length : 0
             return (
-              <div class="stat-grid">
+              <div class="stat-grid usage-stat-grid">
                 {/* Row 1 — cost */}
-                <div class="stat-cell">
+                <div class="stat-cell usage-stat-cell">
                   <div class="stat-label">Total Spent</div>
                   <div class="stat-value">{summary ? fmtCost(summary.totalCostUSD) : '—'}</div>
                   <div class="stat-note">estimated</div>
                 </div>
-                <div class="stat-cell">
+                <div class="stat-cell usage-stat-cell">
                   <div class="stat-label">Avg Cost / Event</div>
                   <div class="stat-value">
                     {summary && summary.turnCount > 0
@@ -405,7 +405,7 @@ export function Usage() {
                   </div>
                   <div class="stat-note">per LLM call</div>
                 </div>
-                <div class="stat-cell">
+                <div class="stat-cell usage-stat-cell">
                   <div class="stat-label">Daily Avg Cost</div>
                   <div class="stat-value">
                     {summary && activeDays > 0
@@ -414,20 +414,20 @@ export function Usage() {
                   </div>
                   <div class="stat-note">on active days</div>
                 </div>
-                <div class="stat-cell">
+                <div class="stat-cell usage-stat-cell">
                   <div class="stat-label">Events</div>
                   <div class="stat-value">{summary ? String(summary.turnCount) : '—'}</div>
                   <div class="stat-note">chat, agent & background</div>
                 </div>
                 {/* Row 2 — tokens */}
-                <div class="stat-cell">
+                <div class="stat-cell usage-stat-cell">
                   <div class="stat-label">Active Days</div>
                   <div class="stat-value">{summary ? String(activeDays) : '—'}</div>
                   <div class="stat-note">
                     {summary ? `of ${summary.dailySeries.length} in range` : ''}
                   </div>
                 </div>
-                <div class="stat-cell">
+                <div class="stat-cell usage-stat-cell">
                   <div class="stat-label">Input Tokens</div>
                   <div class="stat-value">{summary ? fmtTokens(summary.totalInputTokens) : '—'}</div>
                   <div class="stat-note">
@@ -436,12 +436,12 @@ export function Usage() {
                       : 'prompt'}
                   </div>
                 </div>
-                <div class="stat-cell">
+                <div class="stat-cell usage-stat-cell">
                   <div class="stat-label">Output Tokens</div>
                   <div class="stat-value">{summary ? fmtTokens(summary.totalOutputTokens) : '—'}</div>
                   <div class="stat-note">completion</div>
                 </div>
-                <div class="stat-cell">
+                <div class="stat-cell usage-stat-cell">
                   <div class="stat-label">Avg Tokens / Event</div>
                   <div class="stat-value">
                     {summary && summary.turnCount > 0

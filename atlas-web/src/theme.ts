@@ -38,6 +38,8 @@ export interface ThemeConfig {
 }
 
 const STORAGE_KEY = 'atlas.theme'
+export const AUTONOMY_MODE_STORAGE_KEY = 'atlas.autonomyMode'
+export type AutonomyMode = 'sandboxed' | 'unleashed'
 
 export const DEFAULT_ACCENT = '#4D86C8'
 
@@ -307,6 +309,32 @@ export function loadTheme(): ThemeConfig {
 
 export function saveTheme(config: ThemeConfig): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(config))
+}
+
+export function loadAutonomyMode(): AutonomyMode {
+  try {
+    return localStorage.getItem(AUTONOMY_MODE_STORAGE_KEY) === 'unleashed' ? 'unleashed' : 'sandboxed'
+  } catch {
+    return 'sandboxed'
+  }
+}
+
+export function saveAutonomyMode(mode: AutonomyMode): void {
+  try {
+    localStorage.setItem(AUTONOMY_MODE_STORAGE_KEY, mode)
+  } catch {
+    /* ignore persistence failures */
+  }
+}
+
+export function themeConfigForAutonomyMode(config: ThemeConfig, autonomyMode: AutonomyMode): ThemeConfig {
+  if (autonomyMode !== 'unleashed') return config
+  return {
+    ...config,
+    preset: 'terminal',
+    mode: 'dark',
+    accent: '#00F5D4',
+  }
 }
 
 // ── Application ──────────────────────────────────────────────

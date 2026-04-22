@@ -11,10 +11,12 @@ interface EmptyStateProps {
 export function EmptyState({ icon, title, body, action, class: className }: EmptyStateProps) {
   return (
     <div class={`card empty-state${className ? ' ' + className : ''}`}>
-      <div class="empty-icon">{icon}</div>
-      <h3>{title}</h3>
-      {body && <p>{body}</p>}
-      {action}
+      <div class="empty-state-inner">
+        <div class="empty-icon">{icon}</div>
+        <h3>{title}</h3>
+        {body && <p>{body}</p>}
+        {action}
+      </div>
     </div>
   )
 }

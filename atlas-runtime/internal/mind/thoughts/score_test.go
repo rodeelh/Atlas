@@ -9,6 +9,10 @@ import (
 // auto-execute threshold, no matter what confidence and value the model
 // proposes. This is the property the whole trust model depends on.
 func TestSafetyCeiling(t *testing.T) {
+	origUnleashed := UnleashedAutoExecuteEnabled
+	UnleashedAutoExecuteEnabled = false
+	defer func() { UnleashedAutoExecuteEnabled = origUnleashed }()
+
 	nonReadClasses := []ActionClass{
 		ClassLocalWrite,
 		ClassDestructiveLocal,
@@ -53,6 +57,10 @@ func TestComputeScore_Read(t *testing.T) {
 }
 
 func TestComputeScore_NonRead(t *testing.T) {
+	origUnleashed := UnleashedAutoExecuteEnabled
+	UnleashedAutoExecuteEnabled = false
+	defer func() { UnleashedAutoExecuteEnabled = origUnleashed }()
+
 	// For every non-read class, confirm max(score) < 95.
 	cases := []struct {
 		class           ActionClass
@@ -108,6 +116,10 @@ func TestComputeScore_UnknownClass(t *testing.T) {
 }
 
 func TestCanAutoExecute(t *testing.T) {
+	origUnleashed := UnleashedAutoExecuteEnabled
+	UnleashedAutoExecuteEnabled = false
+	defer func() { UnleashedAutoExecuteEnabled = origUnleashed }()
+
 	cases := []struct {
 		score int
 		class ActionClass
@@ -119,6 +131,31 @@ func TestCanAutoExecute(t *testing.T) {
 		{95, ClassLocalWrite, false}, // class check blocks even at threshold
 		{100, ClassDestructiveLocal, false},
 		{100, ClassExternalSideEffect, false},
+		{100, ClassSendPublishDelete, false},
+	}
+	for _, tc := range cases {
+		got := CanAutoExecute(tc.score, tc.class)
+		if got != tc.want {
+			t.Errorf("CanAutoExecute(%d, %s) = %t, want %t",
+				tc.score, tc.class, got, tc.want)
+		}
+	}
+}
+
+func TestCanAutoExecute_UnleashedAllowsSelectedNonReadClasses(t *testing.T) {
+	origUnleashed := UnleashedAutoExecuteEnabled
+	UnleashedAutoExecuteEnabled = true
+	defer func() { UnleashedAutoExecuteEnabled = origUnleashed }()
+
+	cases := []struct {
+		score int
+		class ActionClass
+		want  bool
+	}{
+		{95, ClassRead, true},
+		{95, ClassLocalWrite, true},
+		{100, ClassExternalSideEffect, true},
+		{100, ClassDestructiveLocal, false},
 		{100, ClassSendPublishDelete, false},
 	}
 	for _, tc := range cases {
@@ -154,6 +191,10 @@ func TestShouldPropose(t *testing.T) {
 }
 
 func TestSafetyCeiling_ExhaustiveSweep(t *testing.T) {
+	origUnleashed := UnleashedAutoExecuteEnabled
+	UnleashedAutoExecuteEnabled = false
+	defer func() { UnleashedAutoExecuteEnabled = origUnleashed }()
+
 	// Sweep every (confidence, value) pair for every non-read class and
 	// assert no point reaches 95. This is the belt-and-braces version of
 	// TestSafetyCeiling — proves the ceiling by exhaustion, not just at
@@ -173,6 +214,19 @@ func TestSafetyCeiling_ExhaustiveSweep(t *testing.T) {
 						c, v, class, got, AutoExecuteThreshold)
 				}
 			}
+		}
+	}
+}
+
+func TestUnleashedSafetyCeiling_ExcludesDestructiveAndSendClasses(t *testing.T) {
+	origUnleashed := UnleashedAutoExecuteEnabled
+	UnleashedAutoExecuteEnabled = true
+	defer func() { UnleashedAutoExecuteEnabled = origUnleashed }()
+
+	for _, class := range []ActionClass{ClassDestructiveLocal, ClassSendPublishDelete} {
+		max := MaxScoreForClass(class)
+		if max >= AutoExecuteThreshold {
+			t.Fatalf("class %q reached score %d in unleashed mode; want < %d", class, max, AutoExecuteThreshold)
 		}
 	}
 }

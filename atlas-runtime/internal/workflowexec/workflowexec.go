@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"atlas-runtime-go/internal/config"
 	"atlas-runtime-go/internal/storage"
 )
 
@@ -31,6 +32,10 @@ type PreparedRun struct {
 
 // PrepareRun creates a workflow run record and returns the composed prompt for the agent.
 func PrepareRun(store Store, workflowID, runID, conversationID, triggerSource string, inputValues map[string]string, extraInstruction string) (PreparedRun, error) {
+	return PrepareRunWithConfig(store, config.Defaults(), workflowID, runID, conversationID, triggerSource, inputValues, extraInstruction)
+}
+
+func PrepareRunWithConfig(store Store, cfg config.RuntimeConfigSnapshot, workflowID, runID, conversationID, triggerSource string, inputValues map[string]string, extraInstruction string) (PreparedRun, error) {
 	workflowID = strings.TrimSpace(workflowID)
 	if workflowID == "" {
 		return PreparedRun{}, fmt.Errorf("workflow ID is required")
@@ -50,7 +55,7 @@ func PrepareRun(store Store, workflowID, runID, conversationID, triggerSource st
 		return PreparedRun{}, fmt.Errorf("corrupt workflow definition %s: %w", workflowID, err)
 	}
 
-	prompt := ComposePrompt(def, inputValues, extraInstruction)
+	prompt := ComposePromptWithConfig(cfg, def, inputValues, extraInstruction)
 	started := time.Now().UTC()
 	workflowName := stringField(def, "name")
 	if workflowName == "" {
@@ -114,6 +119,10 @@ func PrepareRun(store Store, workflowID, runID, conversationID, triggerSource st
 
 // ComposePrompt resolves the workflow prompt and appends optional inputs/instructions.
 func ComposePrompt(def map[string]any, inputValues map[string]string, extraInstruction string) string {
+	return ComposePromptWithConfig(config.Defaults(), def, inputValues, extraInstruction)
+}
+
+func ComposePromptWithConfig(cfg config.RuntimeConfigSnapshot, def map[string]any, inputValues map[string]string, extraInstruction string) string {
 	workflowPrompt := stringField(def, "promptTemplate")
 	if strings.TrimSpace(workflowPrompt) == "" {
 		workflowPrompt = stringField(def, "prompt")
@@ -132,7 +141,7 @@ func ComposePrompt(def map[string]any, inputValues map[string]string, extraInstr
 	if steps := promptSteps(def); len(steps) > 0 {
 		parts = append(parts, "Workflow steps:\n"+strings.Join(steps, "\n"))
 	}
-	if scope := trustScopeInstructions(def); scope != "" {
+	if scope := trustScopeInstructions(cfg, def); scope != "" {
 		parts = append(parts, "Workflow trust scope:\n"+scope)
 	}
 	if len(inputValues) > 0 {
@@ -261,7 +270,7 @@ func workflowStepItems(raw any) []any {
 	}
 }
 
-func trustScopeInstructions(def map[string]any) string {
+func trustScopeInstructions(cfg config.RuntimeConfigSnapshot, def map[string]any) string {
 	scope, ok := def["trustScope"].(map[string]any)
 	if !ok {
 		return ""
@@ -274,10 +283,18 @@ func trustScopeInstructions(def map[string]any) string {
 		parts = append(parts, "Allowed apps/tools: "+strings.Join(apps, ", "))
 	}
 	if sensitive, ok := scope["allowsSensitiveRead"].(bool); ok && !sensitive {
-		parts = append(parts, "Do not read sensitive data unless the user explicitly provides it in this run.")
+		if cfg.IsUnleashed() {
+			parts = append(parts, "Sensitive data access is permitted in unleashed mode when needed to complete the workflow safely.")
+		} else {
+			parts = append(parts, "Do not read sensitive data unless the user explicitly provides it in this run.")
+		}
 	}
 	if liveWrite, ok := scope["allowsLiveWrite"].(bool); ok && !liveWrite {
-		parts = append(parts, "Do not perform live writes or external side effects unless the runtime action-safety policy separately allows them.")
+		if cfg.IsUnleashed() {
+			parts = append(parts, "Live writes and external side effects are permitted in unleashed mode when needed to complete the workflow.")
+		} else {
+			parts = append(parts, "Do not perform live writes or external side effects unless the runtime action-safety policy separately allows them.")
+		}
 	}
 	return strings.Join(parts, "\n")
 }

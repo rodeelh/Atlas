@@ -36,9 +36,16 @@ func (s *stubAgentRuntime) HandleMessage(_ context.Context, req chat.MessageRequ
 
 func (s *stubAgentRuntime) Resume(string, bool) {}
 
-type stubConfig struct{}
+type stubConfig struct {
+	snap config.RuntimeConfigSnapshot
+}
 
-func (stubConfig) Load() config.RuntimeConfigSnapshot { return config.Defaults() }
+func (s stubConfig) Load() config.RuntimeConfigSnapshot {
+	if s.snap.PersonaName == "" && s.snap.BaseSystemPrompt == "" && s.snap.RuntimePort == 0 {
+		return config.Defaults()
+	}
+	return s.snap
+}
 
 func TestModule_RunWorkflowCreatesRunAndRoutesPrompt(t *testing.T) {
 	dir := t.TempDir()
@@ -331,6 +338,54 @@ func TestModule_RunWorkflowPropagatesTrustScopeToolPolicy(t *testing.T) {
 	}
 	if len(stub.lastReq.ToolPolicy.AllowedToolPrefixes) != 1 || stub.lastReq.ToolPolicy.AllowedToolPrefixes[0] != "fs." {
 		t.Fatalf("unexpected allowed prefixes: %+v", stub.lastReq.ToolPolicy.AllowedToolPrefixes)
+	}
+}
+
+func TestModule_RunWorkflowUnleashedLiftsTrustScopeWriteRestrictions(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := features.AppendWorkflowDefinition(dir, map[string]any{
+		"id":             "wf-unleashed",
+		"name":           "Unleashed Policy Review",
+		"promptTemplate": "Send the update through the authorized bridge",
+		"trustScope": map[string]any{
+			"approvedRootPaths":   []string{"/tmp/atlas-approved"},
+			"allowedApps":         []string{"communications"},
+			"allowsSensitiveRead": false,
+			"allowsLiveWrite":     false,
+		},
+	}); err != nil {
+		t.Fatalf("AppendWorkflowDefinition: %v", err)
+	}
+
+	stub := &stubAgentRuntime{}
+	stub.response.Response.AssistantMessage = "done"
+	cfg := config.Defaults()
+	cfg.AutonomyMode = config.AutonomyModeUnleashed
+	host := platform.NewHost(stubConfig{snap: cfg}, platform.NewSQLiteStorage(db), stub, platform.NoopContextAssembler{}, platform.NewInProcessBus(8))
+	module := New(dir)
+	if err := module.Register(host); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if _, err := module.runWorkflowSync(context.Background(), "wf-unleashed", nil, "test"); err != nil {
+		t.Fatalf("runWorkflowSync: %v", err)
+	}
+	if stub.lastReq.ToolPolicy == nil || !stub.lastReq.ToolPolicy.Enabled {
+		t.Fatalf("expected workflow tool policy, got %+v", stub.lastReq.ToolPolicy)
+	}
+	if !stub.lastReq.ToolPolicy.AllowsLiveWrite || !stub.lastReq.ToolPolicy.AllowsSensitiveRead {
+		t.Fatalf("expected unleashed workflow policy to allow live writes and sensitive reads, got %+v", stub.lastReq.ToolPolicy)
+	}
+	if len(stub.lastReq.ToolPolicy.AllowedToolPrefixes) != 0 {
+		t.Fatalf("expected unleashed workflow policy to drop allowed-tool restrictions, got %+v", stub.lastReq.ToolPolicy.AllowedToolPrefixes)
+	}
+	if len(stub.lastReq.ToolPolicy.ApprovedRootPaths) != 0 {
+		t.Fatalf("expected unleashed workflow policy to drop approved-root restrictions, got %+v", stub.lastReq.ToolPolicy.ApprovedRootPaths)
 	}
 }
 

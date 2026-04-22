@@ -232,6 +232,7 @@ type RuntimeConfigSnapshot struct {
 	SlackEnabled    bool   `json:"slackEnabled"`
 
 	BaseSystemPrompt        string `json:"baseSystemPrompt"`
+	AutonomyMode            string `json:"autonomyMode"`
 	MaxAgentIterations      int    `json:"maxAgentIterations"`
 	ConversationWindowLimit int    `json:"conversationWindowLimit"`
 	ActionSafetyMode        string `json:"actionSafetyMode"`
@@ -310,24 +311,25 @@ func (c RuntimeConfigSnapshot) SystemPromptRuneBudget() int {
 // RuntimeConfigSnapshot.init() so cold-start behaviour is identical.
 func Defaults() RuntimeConfigSnapshot {
 	return RuntimeConfigSnapshot{
-		RuntimePort:             1984,
-		OnboardingCompleted:     false,
-		PersonaName:             "Atlas",
-		UserName:                "",
-		DiscordEnabled:          false,
-		DiscordClientID:         "",
-		WhatsAppEnabled:         false,
-		SlackEnabled:            false,
-		BaseSystemPrompt:        fallbackSystemPrompt,
-		MaxAgentIterations:      3,
-		ConversationWindowLimit: 15,
-		ActionSafetyMode:        "ask_only_for_risky_actions",
-		ModelContextWindow:      0,
+		RuntimePort:              1984,
+		OnboardingCompleted:      false,
+		PersonaName:              "Atlas",
+		UserName:                 "",
+		DiscordEnabled:           false,
+		DiscordClientID:          "",
+		WhatsAppEnabled:          false,
+		SlackEnabled:             false,
+		BaseSystemPrompt:         fallbackSystemPrompt,
+		AutonomyMode:             AutonomyModeSandboxed,
+		MaxAgentIterations:       3,
+		ConversationWindowLimit:  15,
+		ActionSafetyMode:         "ask_only_for_risky_actions",
+		ModelContextWindow:       0,
 		EnableSmartToolSelection: true,
-		ToolSelectionMode:       "lazy",
+		ToolSelectionMode:        "lazy",
 		WebResearchUseJinaReader: false,
-		RemoteAccessEnabled:     false,
-		TailscaleEnabled:        false,
+		RemoteAccessEnabled:      false,
+		TailscaleEnabled:         false,
 
 		TelegramConfig: TelegramConfig{
 			TelegramEnabled:                 false,
@@ -464,6 +466,7 @@ Never pretend to remember things you do not actually know or store.
 Only call registered Atlas tools when they are needed.
 Respect approval boundaries:
 - read tools may run automatically only within the allowed local scope
-- draft tools may require approval depending on policy
-- execute tools always require explicit approval
+- draft and execute tools follow the active autonomy mode and per-action policy
+- sandboxed mode keeps non-read actions approval-gated by default
+- unleashed mode may execute normal actions directly, but privileged/admin actions or explicit send/publish actions can still require approval
 If approval is needed, request the tool through a structured tool call instead of pretending the action completed.`

@@ -11,6 +11,7 @@ import (
 )
 
 func applyConfigToThoughtsImpl(cfg config.RuntimeConfigSnapshot) {
+	thoughts.UnleashedAutoExecuteEnabled = cfg.IsUnleashed()
 	if cfg.ThoughtAutoExecuteThreshold > 0 {
 		thoughts.AutoExecuteThreshold = cfg.ThoughtAutoExecuteThreshold
 	}

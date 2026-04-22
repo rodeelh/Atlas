@@ -216,6 +216,7 @@ type LoopConfig struct {
 type ToolPolicy struct {
 	ApprovedRootPaths   []string
 	AllowedToolPrefixes []string
+	DeniedToolPrefixes  []string
 	AllowsSensitiveRead bool
 	AllowsLiveWrite     bool
 	Enabled             bool
@@ -969,6 +970,10 @@ func (l *Loop) blockedByToolPolicy(policy *ToolPolicy, tc OAIToolCall) (toolPoli
 	}
 	actionID := l.Skills.Canonicalize(tc.Function.Name)
 	block := toolPolicyBlock{ToolCallID: tc.ID, ActionID: tc.Function.Name}
+	if len(policy.DeniedToolPrefixes) > 0 && hasAllowedToolPrefix(actionID, policy.DeniedToolPrefixes) {
+		block.Reason = fmt.Sprintf("current autonomy policy blocks tool %s", actionID)
+		return block, true
+	}
 	if len(policy.AllowedToolPrefixes) > 0 && !hasAllowedToolPrefix(actionID, policy.AllowedToolPrefixes) && !isCoreTool(actionID) {
 		block.Reason = fmt.Sprintf("workflow trust scope does not allow tool %s", actionID)
 		return block, true
@@ -1007,7 +1012,6 @@ func firstRequestToolsCall(calls []OAIToolCall) (OAIToolCall, bool) {
 	}
 	return OAIToolCall{}, false
 }
-
 
 func appendRequestToolsDef(tools []map[string]any) []map[string]any {
 	for _, tool := range tools {

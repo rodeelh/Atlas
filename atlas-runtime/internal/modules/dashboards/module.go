@@ -31,6 +31,7 @@ type Module struct {
 	skillExec        SkillExecutor
 	db               *sql.DB
 	liveRunner       LiveComputeRunner
+	widgetAuthor     AIWidgetAuthor
 	providerResolver func() (agent.ProviderConfig, error)
 }
 
@@ -73,6 +74,9 @@ func (m *Module) Start(context.Context) error {
 	if m.liveRunner == nil {
 		m.liveRunner = NewAILiveComputeRunner(m.providerConfigFromAgent)
 	}
+	if m.widgetAuthor == nil {
+		m.widgetAuthor = NewAIWidgetGenerator(m.providerConfigFromAgent)
+	}
 	return nil
 }
 
@@ -106,6 +110,9 @@ func (m *Module) SetDatabase(db *sql.DB) { m.db = db }
 
 // SetLiveComputeRunner injects the live_compute runner.
 func (m *Module) SetLiveComputeRunner(r LiveComputeRunner) { m.liveRunner = r }
+
+// SetAIWidgetAuthor injects the prompt-driven widget generator.
+func (m *Module) SetAIWidgetAuthor(author AIWidgetAuthor) { m.widgetAuthor = author }
 
 // SetProviderResolver injects the AI provider resolver.
 func (m *Module) SetProviderResolver(fn func() (agent.ProviderConfig, error)) {

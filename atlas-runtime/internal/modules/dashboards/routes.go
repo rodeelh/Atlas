@@ -5,12 +5,19 @@ package dashboards
 // Public surface (all under /dashboards and gated by session auth):
 //
 //   GET    /dashboards                       list
+//   POST   /dashboards                       create empty draft
 //   GET    /dashboards/{id}                  fetch one
 //   DELETE /dashboards/{id}                  delete
 //   POST   /dashboards/{id}/draft            create/resume editable draft
 //   POST   /dashboards/{id}/commit           publish a draft dashboard
 //   PATCH  /dashboards/{id}/layout           update draft widget grid positions
+//   POST   /dashboards/{id}/widgets          add a preset widget to a draft
+//   POST   /dashboards/{id}/code-widgets     add a code widget to a draft
+//   POST   /dashboards/{id}/ai-widget        add one AI-authored widget to a draft
+//   POST   /dashboards/{id}/sources          add or replace a draft source
+//   DELETE /dashboards/{id}/sources/{source} delete a draft source
 //   PATCH  /dashboards/{id}/widgets/{widgetId} update a draft widget
+//   DELETE /dashboards/{id}/widgets/{widgetId} delete a draft widget
 //   POST   /dashboards/{id}/sources/{source}/refresh refresh one source
 //   POST   /dashboards/{id}/resolve          resolve a widget's data (one-shot)
 //   POST   /dashboards/{id}/refresh          force all sources to refresh
@@ -34,12 +41,19 @@ import (
 
 func (m *Module) registerRoutes(r chi.Router) {
 	r.Get("/dashboards", m.listDashboards)
+	r.Post("/dashboards", m.createDashboard)
 	r.Get("/dashboards/{id}", m.getDashboard)
 	r.Delete("/dashboards/{id}", m.deleteDashboard)
 	r.Post("/dashboards/{id}/draft", m.editDashboardDraft)
 	r.Post("/dashboards/{id}/commit", m.commitDashboardDraft)
 	r.Patch("/dashboards/{id}/layout", m.updateDashboardLayout)
+	r.Post("/dashboards/{id}/widgets", m.createDashboardWidget)
+	r.Post("/dashboards/{id}/code-widgets", m.createDashboardCodeWidget)
+	r.Post("/dashboards/{id}/ai-widget", m.createDashboardAIWidget)
+	r.Post("/dashboards/{id}/sources", m.upsertDashboardSource)
+	r.Delete("/dashboards/{id}/sources/{source}", m.deleteDashboardSource)
 	r.Patch("/dashboards/{id}/widgets/{widgetId}", m.updateDashboardWidget)
+	r.Delete("/dashboards/{id}/widgets/{widgetId}", m.deleteDashboardWidget)
 	r.Post("/dashboards/{id}/sources/{source}/refresh", m.refreshDashboardSource)
 	r.Post("/dashboards/{id}/resolve", m.resolveWidget)
 	r.Post("/dashboards/{id}/refresh", m.refreshDashboard)
@@ -56,6 +70,23 @@ func (m *Module) listDashboards(w http.ResponseWriter, r *http.Request) {
 		out = append(out, SummaryFor(d))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (m *Module) createDashboard(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	created, err := m.createDraftDashboard(req.Name, req.Description)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
 }
 
 func (m *Module) getDashboard(w http.ResponseWriter, r *http.Request) {
@@ -141,6 +172,183 @@ func (m *Module) updateDashboardLayout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
+func (m *Module) createDashboardWidget(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req struct {
+		Title       string              `json:"title"`
+		Description string              `json:"description"`
+		Size        string              `json:"size"`
+		Group       string              `json:"group"`
+		Preset      string              `json:"preset"`
+		Bindings    []DataSourceBinding `json:"bindings"`
+		Options     map[string]any      `json:"options"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	updated, _, err := m.addDraftWidget(id, Widget{
+		Title:       req.Title,
+		Description: req.Description,
+		Size:        req.Size,
+		Group:       req.Group,
+		Bindings:    req.Bindings,
+		Code: WidgetCode{
+			Mode:    ModePreset,
+			Preset:  req.Preset,
+			Options: req.Options,
+		},
+	})
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "is not a draft") {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, updated)
+}
+
+func (m *Module) createDashboardCodeWidget(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req struct {
+		Title       string              `json:"title"`
+		Description string              `json:"description"`
+		Size        string              `json:"size"`
+		Group       string              `json:"group"`
+		Bindings    []DataSourceBinding `json:"bindings"`
+		TSX         string              `json:"tsx"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	updated, _, err := m.addDraftWidget(id, Widget{
+		Title:       req.Title,
+		Description: req.Description,
+		Size:        req.Size,
+		Group:       req.Group,
+		Bindings:    req.Bindings,
+		Code: WidgetCode{
+			Mode: ModeCode,
+			TSX:  req.TSX,
+		},
+	})
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "is not a draft") {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, updated)
+}
+
+func (m *Module) createDashboardAIWidget(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req struct {
+		Prompt string `json:"prompt"`
+		Source string `json:"source"`
+		Title  string `json:"title"`
+		Size   string `json:"size"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Prompt) == "" {
+		writeError(w, http.StatusBadRequest, "prompt is required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	updated, _, err := m.addAIWidget(ctx, id, AIWidgetPromptRequest{
+		Prompt:     req.Prompt,
+		SourceName: req.Source,
+		TitleHint:  req.Title,
+		SizeHint:   req.Size,
+	})
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "is not a draft") {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, updated)
+}
+
+func (m *Module) upsertDashboardSource(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req struct {
+		Name            string         `json:"name"`
+		Kind            string         `json:"kind"`
+		Config          map[string]any `json:"config"`
+		RefreshMode     string         `json:"refreshMode"`
+		IntervalSeconds int            `json:"intervalSeconds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	updated, err := m.upsertDraftSource(id, DataSource{
+		Name:   req.Name,
+		Kind:   req.Kind,
+		Config: req.Config,
+		Refresh: RefreshPolicy{
+			Mode:            req.RefreshMode,
+			IntervalSeconds: req.IntervalSeconds,
+		},
+	})
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "is not a draft") {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (m *Module) deleteDashboardSource(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	sourceName := chi.URLParam(r, "source")
+	updated, err := m.deleteDraftSource(id, sourceName)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "is not a draft") {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
 // updateDashboardWidget updates one widget on a draft dashboard.
 // Body accepts the same editable fields as dashboard.update_widget and returns
 // the full dashboard definition so the viewer can refresh from server state.
@@ -153,6 +361,25 @@ func (m *Module) updateDashboardWidget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	updated, err := m.updateDraftWidget(id, widgetID, req)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "is not a draft") {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (m *Module) deleteDashboardWidget(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	widgetID := chi.URLParam(r, "widgetId")
+	updated, err := m.deleteDraftWidget(id, widgetID)
 	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return

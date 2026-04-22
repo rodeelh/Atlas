@@ -29,6 +29,7 @@ func TestSystemService_UpdateConfigClampsBoundsAndReportsRestart(t *testing.T) {
 	svc := NewSystemService(cfgStore, runtime.NewService(1984), db)
 	next := initial
 	next.RuntimePort = 1985
+	next.AutonomyMode = "UNLEASHED"
 	next.MaxParallelAgents = 99
 	next.WorkerMaxIterations = 0
 
@@ -44,6 +45,9 @@ func TestSystemService_UpdateConfigClampsBoundsAndReportsRestart(t *testing.T) {
 	}
 	if updated.WorkerMaxIterations != 1 {
 		t.Fatalf("expected WorkerMaxIterations clamp to 1, got %d", updated.WorkerMaxIterations)
+	}
+	if updated.AutonomyMode != config.AutonomyModeUnleashed {
+		t.Fatalf("expected autonomy mode to normalize, got %q", updated.AutonomyMode)
 	}
 }
 

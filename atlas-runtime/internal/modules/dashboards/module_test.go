@@ -8,6 +8,20 @@ import (
 	"testing"
 )
 
+type stubAIWidgetAuthor struct {
+	lastReq AIWidgetPromptRequest
+	spec    GeneratedWidgetSpec
+	err     error
+}
+
+func (s *stubAIWidgetAuthor) Generate(_ context.Context, req AIWidgetPromptRequest) (GeneratedWidgetSpec, error) {
+	s.lastReq = req
+	if s.err != nil {
+		return GeneratedWidgetSpec{}, s.err
+	}
+	return s.spec, nil
+}
+
 func newTestModule(t *testing.T) *Module {
 	t.Helper()
 	dir := t.TempDir()
@@ -72,6 +86,212 @@ func TestCreateDraftThenCommitFlow(t *testing.T) {
 	}
 	if len(d.Widgets) != 1 || d.Widgets[0].GridW == 0 {
 		t.Fatalf("expected packed widget, got %+v", d.Widgets)
+	}
+}
+
+func TestCreateDraftDashboardHTTPHelper(t *testing.T) {
+	m := newTestModule(t)
+	created, err := m.createDraftDashboard("Manual", "Created without the agent")
+	if err != nil {
+		t.Fatalf("createDraftDashboard: %v", err)
+	}
+	if created.Status != StatusDraft {
+		t.Fatalf("expected draft status, got %q", created.Status)
+	}
+	if created.Name != "Manual" || created.Description != "Created without the agent" {
+		t.Fatalf("unexpected dashboard payload: %+v", created)
+	}
+	if created.Layout.Columns != 12 {
+		t.Fatalf("expected 12 columns, got %d", created.Layout.Columns)
+	}
+}
+
+func TestAddDraftWidgetPlacesNewWidgetWithoutClobberingLayout(t *testing.T) {
+	m := newTestModule(t)
+	saved, err := m.store.Save(Dashboard{
+		ID:     "draft-manual",
+		Name:   "Draft Manual",
+		Status: StatusDraft,
+		Layout: LayoutHints{Columns: 12},
+		Widgets: []Widget{
+			{
+				ID:    "existing",
+				Title: "Existing",
+				Size:  SizeHalf,
+				Code:  WidgetCode{Mode: ModePreset, Preset: PresetMetric},
+				GridX: 0, GridY: 0, GridW: 6, GridH: 2,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("store.Save: %v", err)
+	}
+
+	updated, widget, err := m.addDraftWidget(saved.ID, Widget{
+		Title: "Markdown",
+		Size:  SizeHalf,
+		Code: WidgetCode{
+			Mode:    ModePreset,
+			Preset:  PresetMarkdown,
+			Options: map[string]any{"text": "Hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("addDraftWidget: %v", err)
+	}
+	if len(updated.Widgets) != 2 {
+		t.Fatalf("expected 2 widgets, got %d", len(updated.Widgets))
+	}
+	if updated.Widgets[0].GridX != 0 || updated.Widgets[0].GridY != 0 {
+		t.Fatalf("existing widget moved unexpectedly: %+v", updated.Widgets[0])
+	}
+	if widget.GridX != 6 || widget.GridY != 0 || widget.GridW != 6 || widget.GridH != 2 {
+		t.Fatalf("new widget was not placed in next open slot: %+v", widget)
+	}
+}
+
+func TestAddAIWidgetAddsPresetWidgetToDraft(t *testing.T) {
+	m := newTestModule(t)
+	author := &stubAIWidgetAuthor{
+		spec: GeneratedWidgetSpec{
+			Mode:   ModePreset,
+			Title:  "AI Summary",
+			Size:   SizeHalf,
+			Preset: PresetMarkdown,
+			Options: map[string]any{
+				"text": "## Summary\n\nGenerated from a prompt.",
+			},
+		},
+	}
+	m.SetAIWidgetAuthor(author)
+	draft, err := m.createDraftDashboard("AI Draft", "")
+	if err != nil {
+		t.Fatalf("createDraftDashboard: %v", err)
+	}
+
+	updated, widget, err := m.addAIWidget(context.Background(), draft.ID, AIWidgetPromptRequest{
+		Prompt: "Create a concise summary card",
+	})
+	if err != nil {
+		t.Fatalf("addAIWidget: %v", err)
+	}
+	if len(updated.Widgets) != 1 {
+		t.Fatalf("expected one widget, got %d", len(updated.Widgets))
+	}
+	if widget.Code.Mode != ModePreset || widget.Code.Preset != PresetMarkdown {
+		t.Fatalf("unexpected widget code: %+v", widget.Code)
+	}
+	if author.lastReq.Prompt != "Create a concise summary card" {
+		t.Fatalf("prompt was not forwarded: %+v", author.lastReq)
+	}
+}
+
+func TestAddAIWidgetResolvesRequestedSource(t *testing.T) {
+	m := newTestModule(t)
+	author := &stubAIWidgetAuthor{
+		spec: GeneratedWidgetSpec{
+			Mode:   ModePreset,
+			Title:  "Status",
+			Size:   SizeQuarter,
+			Preset: PresetMetric,
+			Options: map[string]any{
+				"path": "count",
+			},
+		},
+	}
+	m.SetAIWidgetAuthor(author)
+	draft, err := m.createDraftDashboard("With Source", "")
+	if err != nil {
+		t.Fatalf("createDraftDashboard: %v", err)
+	}
+	draft.Sources = []DataSource{{
+		Name:   "status",
+		Kind:   SourceKindRuntime,
+		Config: map[string]any{"endpoint": "/status"},
+		Refresh: RefreshPolicy{
+			Mode: RefreshManual,
+		},
+	}}
+	if _, err := m.store.Save(draft); err != nil {
+		t.Fatalf("store.Save: %v", err)
+	}
+
+	updated, widget, err := m.addAIWidget(context.Background(), draft.ID, AIWidgetPromptRequest{
+		Prompt:     "Show the current count as a KPI",
+		SourceName: "status",
+	})
+	if err != nil {
+		t.Fatalf("addAIWidget: %v", err)
+	}
+	if len(updated.Widgets) != 1 || len(widget.Bindings) != 1 || widget.Bindings[0].Source != "status" {
+		t.Fatalf("expected widget bound to status source, got %+v", widget)
+	}
+	sourceData, ok := author.lastReq.SourceData.(map[string]any)
+	if !ok || sourceData["count"] == nil {
+		t.Fatalf("expected resolved source sample in request, got %+v", author.lastReq.SourceData)
+	}
+}
+
+func TestUpsertDraftSourceAndDelete(t *testing.T) {
+	m := newTestModule(t)
+	draft, err := m.createDraftDashboard("Sources", "")
+	if err != nil {
+		t.Fatalf("createDraftDashboard: %v", err)
+	}
+
+	updated, err := m.upsertDraftSource(draft.ID, DataSource{
+		Name:   "status",
+		Kind:   SourceKindRuntime,
+		Config: map[string]any{"endpoint": "/status"},
+		Refresh: RefreshPolicy{
+			Mode: RefreshManual,
+		},
+	})
+	if err != nil {
+		t.Fatalf("upsertDraftSource: %v", err)
+	}
+	if len(updated.Sources) != 1 || updated.Sources[0].Name != "status" {
+		t.Fatalf("expected saved source, got %+v", updated.Sources)
+	}
+
+	updated, err = m.deleteDraftSource(draft.ID, "status")
+	if err != nil {
+		t.Fatalf("deleteDraftSource: %v", err)
+	}
+	if len(updated.Sources) != 0 {
+		t.Fatalf("expected source deletion, got %+v", updated.Sources)
+	}
+}
+
+func TestDeleteDraftSourceRejectsBoundSource(t *testing.T) {
+	m := newTestModule(t)
+	saved, err := m.store.Save(Dashboard{
+		ID:     "draft-source-guard",
+		Name:   "Draft Source Guard",
+		Status: StatusDraft,
+		Layout: LayoutHints{Columns: 12},
+		Sources: []DataSource{{
+			Name:   "status",
+			Kind:   SourceKindRuntime,
+			Config: map[string]any{"endpoint": "/status"},
+			Refresh: RefreshPolicy{
+				Mode: RefreshManual,
+			},
+		}},
+		Widgets: []Widget{{
+			ID:       "widget-1",
+			Title:    "Status card",
+			Size:     SizeQuarter,
+			Bindings: []DataSourceBinding{{Source: "status"}},
+			Code:     WidgetCode{Mode: ModePreset, Preset: PresetMetric},
+			GridX:    0, GridY: 0, GridW: 3, GridH: 1,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("store.Save: %v", err)
+	}
+	if _, err := m.deleteDraftSource(saved.ID, "status"); err == nil || !strings.Contains(err.Error(), "still used") {
+		t.Fatalf("expected bound-source rejection, got %v", err)
 	}
 }
 

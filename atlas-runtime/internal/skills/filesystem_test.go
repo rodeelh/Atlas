@@ -3,6 +3,7 @@ package skills
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -160,6 +161,33 @@ func TestFilesystemBinaryAndFormatCreators(t *testing.T) {
 			t.Fatalf("expected PNG signature")
 		}
 	})
+}
+
+func TestFilesystemWorkspaceRootsReportsApprovedRoots(t *testing.T) {
+	supportDir := t.TempDir()
+	rootDir := filepath.Join(supportDir, "approved")
+	if err := os.MkdirAll(rootDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(rootDir): %v", err)
+	}
+	if err := SaveFsRoots(supportDir, []FsRoot{{ID: "root1", Path: rootDir}}); err != nil {
+		t.Fatalf("SaveFsRoots: %v", err)
+	}
+
+	r := NewRegistry(supportDir, nil, nil)
+	result, err := r.Execute(context.Background(), "fs.workspace_roots", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	if got := result.Artifacts["hasApprovedRoots"]; got != true {
+		t.Fatalf("hasApprovedRoots = %v, want true", got)
+	}
+	roots, ok := result.Artifacts["rootPaths"].([]string)
+	if !ok || len(roots) != 1 || roots[0] != rootDir {
+		t.Fatalf("rootPaths = %#v, want [%q]", result.Artifacts["rootPaths"], rootDir)
+	}
 }
 
 func min(a, b int) int {

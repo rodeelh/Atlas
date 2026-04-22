@@ -1,9 +1,9 @@
 import { render } from 'preact'
 import { App } from './App'
 import './styles.css'
-import { loadTheme, applyTheme } from './theme'
+import { loadTheme, applyTheme, loadAutonomyMode, themeConfigForAutonomyMode } from './theme'
 
-// Apply persisted theme before first paint — prevents flash of wrong theme
-applyTheme(loadTheme())
+// Apply the last known theme + autonomy override before first paint.
+applyTheme(themeConfigForAutonomyMode(loadTheme(), loadAutonomyMode()))
 
 render(<App />, document.getElementById('app')!)

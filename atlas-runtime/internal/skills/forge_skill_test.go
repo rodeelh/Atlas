@@ -145,6 +145,66 @@ func TestForgeOrchestrationProposeValidationFailureIsRepairableToolFailure(t *te
 	}
 }
 
+func TestForgeOrchestrationProposeAndInstallInstallsCapability(t *testing.T) {
+	reg := NewRegistry(t.TempDir(), nil, nil)
+	reg.SetForgePersistFn(func(_, _, _, _, _ string) (
+		id, name, skillID, riskLevel string,
+		actionNames, domains []string,
+		err error,
+	) {
+		return "proposal-2", "Messages Relay", "messages-relay", "medium", []string{"Send Message"}, nil, nil
+	})
+	reg.SetForgeInstallFn(func(proposalID string, enable bool) (name, skillID string, actionNames []string, err error) {
+		if proposalID != "proposal-2" || !enable {
+			t.Fatalf("unexpected install request: proposalID=%q enable=%v", proposalID, enable)
+		}
+		return "Messages Relay", "messages-relay", []string{"Send Message"}, nil
+	})
+
+	spec := map[string]any{
+		"id":          "messages-relay",
+		"name":        "Messages Relay",
+		"description": "Sends messages through a local macOS relay.",
+		"category":    "communication",
+		"riskLevel":   "medium",
+		"tags":        []string{"messages"},
+		"actions": []map[string]any{{
+			"id":              "send-message",
+			"name":            "Send Message",
+			"description":     "Send a message through the relay.",
+			"permissionLevel": "draft",
+			"testCases": []map[string]any{{
+				"args":          map[string]any{"handle": "+16464257838", "message": "hello"},
+				"expectSuccess": true,
+			}},
+		}},
+	}
+	plans := []map[string]any{{
+		"actionID": "send-message",
+		"type":     "local",
+		"localPlan": map[string]any{
+			"interpreter": "osascript",
+			"script":      "return \"ok\"",
+		},
+	}}
+	specJSON, _ := json.Marshal(spec)
+	plansJSON, _ := json.Marshal(plans)
+	args, _ := json.Marshal(map[string]any{
+		"kind":       "local",
+		"spec_json":  string(specJSON),
+		"plans_json": string(plansJSON),
+		"summary":    "Adds a local messages relay.",
+	})
+
+	out, err := reg.Execute(context.Background(), "forge.orchestration.propose_and_install", args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !out.Success || !strings.Contains(out.Summary, "Forge capability installed and enabled") {
+		t.Fatalf("unexpected result: %+v", out)
+	}
+}
+
 func TestForgeValidateLocalPlansRejectsBuiltInFileGenerationTasks(t *testing.T) {
 	plans := []forgetypes.ForgeActionPlan{
 		{

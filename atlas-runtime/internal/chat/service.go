@@ -111,7 +111,6 @@ type conversationSummary struct {
 // summaryTTL is how long a cached conversation summary stays valid.
 const summaryTTL = 10 * time.Minute
 
-
 type Service struct {
 	db                *storage.DB
 	cfgStore          *config.Store
@@ -456,7 +455,6 @@ func openRouterModelSupportsImage(apiKey, model string) (supported bool, known b
 	return false, false, nil
 }
 
-
 // buildTrimmedHistoryNote generates the compact context note prepended when
 // older messages are trimmed from the conversation window. Returns a cached
 // summary if available and still valid, otherwise builds an excerpt-based
@@ -756,6 +754,7 @@ func (s *Service) selectTurnTools(
 	req MessageRequest,
 	turn *turnContext,
 	capabilityPlan capabilities.Analysis,
+	taskContext string,
 ) (sel agent.ToolSelector, selectedTools []map[string]any, toolMode string) {
 	toolMode = cfg.ToolSelectionMode
 	if toolMode == "" {
@@ -808,8 +807,15 @@ func (s *Service) selectTurnTools(
 		}
 	}
 
-	sel = NewSelector(toolMode, req.ToolPolicy, ctx, cfg, turn, req.Message, s.registry)
-	selectedTools = applyCapabilityPlanToolHints(s.registry, sel.Initial(), req.Message, capabilityPlan)
+	selectorMessage := req.Message
+	if strings.TrimSpace(taskContext) != "" {
+		selectorMessage = taskContext
+	}
+	sel = NewSelector(toolMode, req.ToolPolicy, ctx, cfg, turn, selectorMessage, s.registry)
+	selectedTools = applyCapabilityPlanToolHints(s.registry, sel.Initial(), selectorMessage, capabilityPlan)
+	if req.ToolPolicy != nil {
+		selectedTools = filterToolDefsByDeniedPatterns(selectedTools, req.ToolPolicy.DeniedToolPrefixes)
+	}
 
 	// LLM mode: record activity after selection so the engine idle-timer resets.
 	if toolMode == "llm" {

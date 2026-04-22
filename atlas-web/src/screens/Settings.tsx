@@ -4,6 +4,7 @@ import { api, type RuntimeConfig } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { PageSpinner } from '../components/PageSpinner'
 import { PINDialog } from '../components/PINDialog'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { toast } from '../toast'
 import { ErrorBanner } from '../components/ErrorBanner'
 import type { RuntimeConfigUpdateResponse, StorageStats } from '../api/client'
@@ -44,6 +45,8 @@ export function Settings() {
   const [prefs, setPrefs] = useState<UserPreferences | null>(null)
   const [restartPhase, setRestartPhase] = useState<RestartPhase | null>(null)
   const [restartStatus, setRestartStatus] = useState('Restarting Atlas…')
+  const [autonomySaving, setAutonomySaving] = useState(false)
+  const [showUnleashConfirm, setShowUnleashConfirm] = useState(false)
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
   const [storageCleaning, setStorageCleaning] = useState(false)
   const [locking, setLocking] = useState(false)
@@ -139,6 +142,25 @@ export function Settings() {
     }
   }
 
+  const saveAutonomyMode = async (autonomyMode: 'sandboxed' | 'unleashed') => {
+    setAutonomySaving(true)
+    setError(null)
+    try {
+      const result: RuntimeConfigUpdateResponse = await api.updateConfig({ autonomyMode })
+      setConfig((prev) => (prev ? { ...prev, autonomyMode: result.config.autonomyMode } : result.config))
+      setDraft((prev) => (prev ? { ...prev, autonomyMode: result.config.autonomyMode } : result.config))
+      setRestartRequired(result.restartRequired)
+      window.dispatchEvent(new CustomEvent('atlas:autonomy-mode-changed', {
+        detail: { autonomyMode: result.config.autonomyMode },
+      }))
+      toast.success(autonomyMode === 'unleashed' ? 'Atlas is now unleashed.' : 'Atlas returned to sandboxed mode.')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update autonomy mode.')
+    } finally {
+      setAutonomySaving(false)
+    }
+  }
+
   const restartAtlas = () => setRestartPhase('confirm')
 
   const confirmRestart = async () => {
@@ -210,6 +232,20 @@ export function Settings() {
           onCancel={() => setRestartPhase(null)}
         />,
         document.body
+      )}
+      {showUnleashConfirm && (
+        <ConfirmDialog
+          title="Switch Atlas to unleashed mode?"
+          body="Atlas will move out of the default sandbox and gain access to self-improvement surfaces. It can update its editable operator prompt, research capability gaps online, and draft Forge extensions when you explicitly ask it to push past the current toolset. The built-in safety layer still stays in place, but Atlas will act with much higher agency."
+          confirmLabel="Switch to unleashed"
+          cancelLabel="Keep sandboxed"
+          danger
+          onConfirm={() => {
+            setShowUnleashConfirm(false)
+            void saveAutonomyMode('unleashed')
+          }}
+          onCancel={() => setShowUnleashConfirm(false)}
+        />
       )}
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
       {restartRequired && (
@@ -337,6 +373,52 @@ export function Settings() {
       </SettingsGroup>
 
       <SettingsGroup title="Behavior">
+        <div class="settings-autonomy-panel">
+          <div class="settings-autonomy-header">
+            <div>
+              <div class="settings-label">Autonomy</div>
+              <div class="settings-sublabel">Choose whether Atlas stays in a restricted sandbox or can actively extend its own capabilities.</div>
+            </div>
+            {autonomySaving && <span class="badge badge-blue">Updating…</span>}
+          </div>
+
+          <div class="settings-autonomy-grid">
+            <button
+              class={`settings-autonomy-card${(draft.autonomyMode ?? 'sandboxed') === 'sandboxed' ? ' active' : ''}`}
+              onClick={() => void saveAutonomyMode('sandboxed')}
+              disabled={autonomySaving || (draft.autonomyMode ?? 'sandboxed') === 'sandboxed'}
+            >
+              <div class="settings-autonomy-card-topline">
+                <span class="settings-autonomy-card-eyebrow">Default</span>
+                {(draft.autonomyMode ?? 'sandboxed') === 'sandboxed' && <span class="badge badge-green">Live</span>}
+              </div>
+              <strong class="settings-autonomy-card-title">Sandboxed</strong>
+              <p class="settings-autonomy-card-copy">Atlas stays inside the default production envelope. Non-read actions remain approval-gated, and self-improvement surfaces stay off during normal chat turns.</p>
+              <span class="settings-autonomy-card-cta">{(draft.autonomyMode ?? 'sandboxed') === 'sandboxed' ? 'Current mode' : 'Return to sandbox'}</span>
+            </button>
+
+            <button
+              class={`settings-autonomy-card settings-autonomy-card-danger${(draft.autonomyMode ?? 'sandboxed') === 'unleashed' ? ' active' : ''}`}
+              onClick={() => {
+                if ((draft.autonomyMode ?? 'sandboxed') === 'unleashed') return
+                setShowUnleashConfirm(true)
+              }}
+              disabled={autonomySaving}
+            >
+              <div class="settings-autonomy-card-topline">
+                <span class="settings-autonomy-card-eyebrow">High agency</span>
+                {(draft.autonomyMode ?? 'sandboxed') === 'unleashed' && <span class="badge badge-red">Live</span>}
+              </div>
+              <strong class="settings-autonomy-card-title">Unleashed</strong>
+              <p class="settings-autonomy-card-copy">Atlas can operate with much higher agency. When you explicitly push it beyond the current sandbox, it can research missing capabilities, update its editable prompt layer, and draft Forge-based extensions.</p>
+              <span class="settings-autonomy-card-cta">{(draft.autonomyMode ?? 'sandboxed') === 'unleashed' ? 'Current mode' : 'Unleash Atlas'}</span>
+            </button>
+          </div>
+
+          <div class="settings-autonomy-note">
+            Sandboxed mode hard-locks self-improvement surfaces by default. Unleashed mode re-opens them for deliberate operator use, while the built-in safety prompt remains immutable.
+          </div>
+        </div>
         <SettingsRow label="Memory" sublabel="Extract and persist facts from conversations" mobileSplit>
           <ToggleField checked={draft.memoryEnabled} onChange={(v) => update('memoryEnabled', v)} />
         </SettingsRow>
@@ -349,11 +431,17 @@ export function Settings() {
             <option value={10}>10 — maximum</option>
           </select>
         </SettingsRow>}
-        <SettingsRow label="Action safety" sublabel="When Atlas should stop and ask before taking action">
+        <SettingsRow
+          label="Action safety"
+          sublabel={(draft.autonomyMode ?? 'sandboxed') === 'unleashed'
+            ? 'When Atlas should stop and ask before taking action'
+            : 'Sandboxed mode already requires approval for non-read actions.'}
+        >
           <select
             class="input"
             value={draft.actionSafetyMode}
             onChange={(e) => update('actionSafetyMode', (e.target as HTMLSelectElement).value)}
+            disabled={(draft.autonomyMode ?? 'sandboxed') !== 'unleashed'}
           >
             <option value="always_ask_before_actions">Ask every time</option>
             <option value="ask_only_for_risky_actions">Ask for risky actions</option>

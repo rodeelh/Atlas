@@ -50,7 +50,7 @@ func (m *Module) registerAgentActions() {
 		// This is intentionally auto-approved: it can only target channels the
 		// user has already authorized by chatting with Atlas through a bridge.
 		PermLevel:   "execute",
-		ActionClass: skills.ActionClassLocalWrite,
+		ActionClass: skills.ActionClassExternalSideEffect,
 		FnResult:    m.agentSendMessage,
 	})
 }

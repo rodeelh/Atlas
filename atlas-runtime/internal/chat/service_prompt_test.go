@@ -2,6 +2,7 @@ package chat
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -107,6 +108,45 @@ func TestBuildSystemPromptAddsResponseContract(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Mode: research") {
 		t.Fatalf("expected research response contract, got: %q", prompt)
+	}
+}
+
+func TestBuildSystemPromptKeepsBasePromptAndEditableMindLayer(t *testing.T) {
+	cfg := storageTestDefaults()
+	supportDir := t.TempDir()
+	mind := `# Mind of Atlas
+
+## Who I Am
+Adaptive operator layer`
+	if err := os.WriteFile(filepath.Join(supportDir, "MIND.md"), []byte(mind), 0o600); err != nil {
+		t.Fatalf("write MIND.md: %v", err)
+	}
+
+	prompt := buildSystemPrompt(cfg, nil, supportDir, "Help me adjust how you behave.", "", nil)
+	if !strings.Contains(prompt, "Base prompt for Atlas") {
+		t.Fatalf("expected base prompt to remain in system prompt, got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "<editable_operator_prompt>") || !strings.Contains(prompt, "Adaptive operator layer") {
+		t.Fatalf("expected editable operator layer in system prompt, got: %q", prompt)
+	}
+}
+
+func TestBuildSystemPromptAddsUnleashedMissionPrompt(t *testing.T) {
+	cfg := storageTestDefaults()
+	cfg.AutonomyMode = config.AutonomyModeUnleashed
+
+	prompt := buildSystemPrompt(cfg, nil, t.TempDir(), "Figure out how to connect Atlas to iMessage and make it work.", "", nil)
+	if !strings.Contains(prompt, "You are in Atlas unleashed mode") {
+		t.Fatalf("expected unleashed mission prompt, got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Default to execution, adaptation, and persistence") {
+		t.Fatalf("expected unleashed execution doctrine, got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "treat capability-building as part of the job") {
+		t.Fatalf("expected unleashed capability doctrine, got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "system.app_capabilities") || !strings.Contains(prompt, "terminal.check_command") || !strings.Contains(prompt, "fs.workspace_roots") {
+		t.Fatalf("expected unleashed prompt to mention operator introspection tools, got: %q", prompt)
 	}
 }
 

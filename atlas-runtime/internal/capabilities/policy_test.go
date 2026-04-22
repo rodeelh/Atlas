@@ -23,6 +23,15 @@ func TestBuildPolicy_ForgeNewIncludesMissingCapabilities(t *testing.T) {
 	if !strings.Contains(policy.PromptBlock, "delivery.email") {
 		t.Fatalf("expected missing capability in prompt block: %q", policy.PromptBlock)
 	}
+	if !strings.Contains(policy.PromptBlock, "engineering work to close the gap") {
+		t.Fatalf("expected action-oriented forge guidance in prompt block: %q", policy.PromptBlock)
+	}
+	if !strings.Contains(policy.PromptBlock, "research the gap online when needed") {
+		t.Fatalf("expected online research guidance in forge policy: %q", policy.PromptBlock)
+	}
+	if !strings.Contains(policy.PromptBlock, "forge.orchestration.propose_and_install") {
+		t.Fatalf("expected live install guidance in forge policy: %q", policy.PromptBlock)
+	}
 }
 
 func TestBuildPolicy_AskPrerequisiteIncludesMissingPrereqs(t *testing.T) {

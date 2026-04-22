@@ -19,7 +19,7 @@ func (r *Registry) registerTerminal() {
 	r.register(SkillEntry{
 		Def: ToolDef{
 			Name:        "terminal.run_command",
-			Description: "Run any command by executable name and argument list. Executed directly (no shell), so each arg is a separate element — no quoting or escaping needed. Returns combined stdout+stderr and exit code. Always requires user approval.",
+			Description: "Run any command by executable name and argument list. Executed directly (no shell), so each arg is a separate element — no quoting or escaping needed. Returns combined stdout+stderr and exit code. In sandboxed mode this requires approval; in unleashed mode Atlas may execute it directly.",
 			Properties: map[string]ToolParam{
 				"command": {
 					Description: "The executable to run (e.g. 'brew', 'git', 'python3', 'curl')",
@@ -45,7 +45,7 @@ func (r *Registry) registerTerminal() {
 	r.register(SkillEntry{
 		Def: ToolDef{
 			Name:        "terminal.run_script",
-			Description: "Execute a multi-line shell script via /bin/zsh. Supports pipes, redirects, loops, and zsh syntax. For tools that need shell initialization (nvm, rbenv, pyenv, conda), prefix the script with 'source ~/.zshrc'. Always requires user approval.",
+			Description: "Execute a multi-line shell script via /bin/zsh. Supports pipes, redirects, loops, and zsh syntax. For tools that need shell initialization (nvm, rbenv, pyenv, conda), prefix the script with 'source ~/.zshrc'. In sandboxed mode this requires approval; in unleashed mode Atlas may execute it directly.",
 			Properties: map[string]ToolParam{
 				"script": {
 					Description: "Shell script to execute (passed to /bin/sh -c)",
@@ -138,7 +138,7 @@ func (r *Registry) registerTerminal() {
 	r.register(SkillEntry{
 		Def: ToolDef{
 			Name:        "terminal.run_background",
-			Description: "Start a command in the background and return immediately. Atlas will send a follow-up message in this conversation when the command finishes, including exit code and output. Use for long-running operations (builds, downloads, package installs) so the user isn't left waiting. Always requires user approval.",
+			Description: "Start a command in the background and return immediately. Atlas will send a follow-up message in this conversation when the command finishes, including exit code and output. Use for long-running operations (builds, downloads, package installs) so the user isn't left waiting. In sandboxed mode this requires approval; in unleashed mode Atlas may execute it directly.",
 			Properties: map[string]ToolParam{
 				"command": {
 					Description: "The executable to run (e.g. 'brew', 'npm', 'git')",
@@ -186,6 +186,27 @@ func (r *Registry) registerTerminal() {
 		},
 		PermLevel: "read",
 		Fn:        terminalWhich,
+	})
+
+	r.register(SkillEntry{
+		Def: ToolDef{
+			Name:        "terminal.check_command",
+			Description: "Check whether a command exists, where it resolves on PATH, whether it is runnable, and what version string it reports.",
+			Properties: map[string]ToolParam{
+				"command": {
+					Description: "Command name to inspect, for example 'python3', 'osascript', or 'brew'",
+					Type:        "string",
+				},
+				"versionArgs": {
+					Description: "Optional explicit version arguments, for example ['--version'] or ['-v']",
+					Type:        "array",
+					Items:       &ToolParam{Type: "string"},
+				},
+			},
+			Required: []string{"command"},
+		},
+		PermLevel: "read",
+		FnResult:  terminalCheckCommand,
 	})
 }
 
@@ -539,6 +560,65 @@ func terminalWhich(ctx context.Context, args json.RawMessage) (string, error) {
 		return "command not found: " + p.Command, nil
 	}
 	return strings.TrimSpace(out), nil
+}
+
+func terminalCheckCommand(_ context.Context, args json.RawMessage) (ToolResult, error) {
+	var p struct {
+		Command     string   `json:"command"`
+		VersionArgs []string `json:"versionArgs"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || strings.TrimSpace(p.Command) == "" {
+		return ToolResult{}, fmt.Errorf("command is required")
+	}
+
+	command := strings.TrimSpace(p.Command)
+	path, err := exec.LookPath(command)
+	if err != nil {
+		return OKResult("Command is not installed on PATH: "+command, map[string]any{
+			"command":   command,
+			"installed": false,
+			"runnable":  false,
+		}), nil
+	}
+
+	artifacts := map[string]any{
+		"command":   command,
+		"installed": true,
+		"runnable":  true,
+		"path":      path,
+	}
+
+	versionArgSets := [][]string{}
+	if len(p.VersionArgs) > 0 {
+		versionArgSets = append(versionArgSets, p.VersionArgs)
+	} else {
+		versionArgSets = append(versionArgSets, []string{"--version"}, []string{"-version"}, []string{"version"}, []string{"-v"})
+	}
+
+	for _, versionArgs := range versionArgSets {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cmd := exec.CommandContext(ctx, path, versionArgs...)
+		out, runErr := cmd.CombinedOutput()
+		cancel()
+		if runErr != nil {
+			continue
+		}
+		if line := firstOutputLine(strings.TrimSpace(string(out))); line != "" {
+			artifacts["version"] = line
+			artifacts["versionArgsUsed"] = versionArgs
+			break
+		}
+	}
+
+	return OKResult("Command is installed and runnable: "+command, artifacts), nil
+}
+
+func firstOutputLine(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	return strings.TrimSpace(strings.Split(s, "\n")[0])
 }
 
 func terminalRunAsAdmin(_ context.Context, args json.RawMessage) (string, error) {
